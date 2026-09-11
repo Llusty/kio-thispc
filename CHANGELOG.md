@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.19.0.3
+
+- Usunięto dynamiczne zwiększanie wysokości pojedynczego zaznaczonego kafelka.
+- Pełna nazwa zaznaczonego elementu jest wyświetlana jako nakładka, bez przesuwania sąsiednich rzędów.
+- Tryb `Pełne nazwy` ma stałą wysokość kafelków na trzy linie tekstu.
+- Nakładka śledzi przewijanie, zmianę rozmiaru oraz bieżące zaznaczenie.
+
+
+## 0.19.0.3
+
+- poprawiono pełną nazwę zaznaczonego elementu: sizeHint sprawdza rzeczywisty selectionModel, więc bardzo długie nazwy dostają wysokość potrzebną do zawijania;
+- poprawiono geometrię po przywróceniu sesji: pasek kart i aktywny panel są ponownie układane po pierwszym przebiegu event loop, dzięki czemu niebieska linia jest od razu na właściwej wysokości;
+- przywracanie kart, Split View i przełącznik „Pełne nazwy” pozostają bez zmian.
+
+
+## 0.19.0.1
+
+- hotfix pełnych nazw zaznaczonych elementów w widoku ikon/listy;
+- delegat rysuje element bezpośrednio przez styl Qt, dzięki czemu `ElideNone` i `WrapText` nie są ponownie nadpisywane przez bazowy `QStyledItemDelegate::paint()`;
+- bardzo długie nazwy po zaznaczeniu mogą teraz rozwinąć się na tyle wierszy, ile potrzebują;
+- przełącznik **Pełne nazwy** oraz przywracanie sesji pozostają bez zmian.
+
+
+## 0.19.0
+
+- dodano przywracanie sesji: karty, aktywna karta i historia nawigacji;
+- stan Split View jest zapisywany per karta wraz z lokalizacją, trybem widoku i sortowaniem;
+- zapisany stan splittera przywraca szerokości paneli;
+- jawny argument startowy pomija przywracanie poprzedniej sesji;
+- zaznaczony element w widoku ikon rozwija pełną nazwę;
+- dodano zapamiętywany przełącznik `Pełne nazwy` na pasku czynności;
+- dodano przełącznik `Przywracaj poprzednią sesję` w menu Widok;
+- zachowano funkcje 0.18.0, w tym natywną obsługę konfliktów KIO.
+
+
 ## 0.18.0
 
 - włączono interaktywną obsługę konfliktów KIO dla kopiowania i przenoszenia;

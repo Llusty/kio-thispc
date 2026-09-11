@@ -13,22 +13,24 @@ This ordering prioritizes core file-manager correctness, safety and maintainabil
   - active-pane shortcuts/context menus;
   - cycle protection and Undo integration.
 
-## Current release candidate
-### 0.18.0 — Copy/move conflict handling
+### 0.18.0 — Copy/move conflict handling ✅ user-confirmed
 - interactive KIO/KIOWidgets conflict UI for clipboard, Drag & Drop and Send To;
 - overwrite / skip / rename or suggested new name;
-- multiple-item decisions such as overwrite-all / skip-all when offered by KIO;
-- source/destination size and timestamp comparison in the conflict UI;
+- remembered decisions for multiple conflicts;
+- source/destination size and timestamp comparison;
 - nested conflicts handled by `KIO::CopyJob`;
-- conflict cancellation treated as a normal cancelled operation.
+- clean cancellation without a second error dialog.
+
+## Current release candidate
+### 0.19.0 — Session restore + full names
+- restore tabs, active tab, locations and primary navigation history;
+- restore Split View per tab, including right-pane location/view/sort state;
+- restore splitter widths;
+- option in View to reopen the previous session;
+- selected icon expands to show its full wrapped name;
+- toolbar toggle `Full names` / `Pełne nazwy` persists across launches.
 
 ## Planned releases
-### 0.19.0 — Session restore
-- restore tabs, active tab, locations and navigation state;
-- restore Split View and splitter sizes;
-- restore per-pane view modes;
-- option to reopen the previous session;
-- recent closed tabs across the session where practical.
 
 ### 0.20.0 — Quick Access / Favorites / Recent
 - pin/unpin folders;

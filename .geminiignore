@@ -1,0 +1,14 @@
+# Build output and generated archives are noise for code analysis.
+/build/
+/build-test/
+/cmake-build-*/
+*.zip
+*.tar.gz
+*.tgz
+*.o
+*.so
+CMakeCache.txt
+CMakeFiles/
+
+# Preserve handoff screenshots because they document the current UI bug.
+!handoff/screenshots/**

@@ -1,4 +1,15 @@
-# kio-thispc 0.18.0
+# kio-thispc 0.19.0.3
+
+
+## 0.19.0.3 — sesja i pełne nazwy
+
+- Aplikacja zapisuje i przywraca otwarte karty, aktywną kartę oraz historię Wstecz/Dalej.
+- Stan Split View jest przechowywany per karta: lokalizacja, tryb widoku, sortowanie i włączenie panelu.
+- Szerokości paneli są odtwarzane z zapisanego stanu splittera.
+- Zaznaczony element w widoku ikon pokazuje pełną, zawijaną nazwę.
+- Przełącznik **Pełne nazwy** na pasku czynności wymusza pełne nazwy dla wszystkich elementów i zapamiętuje ustawienie.
+- Menu **Widok** zawiera przełącznik **Przywracaj poprzednią sesję**.
+- Jawne uruchomienie z argumentem ścieżki/URL otwiera wskazaną lokalizację zamiast poprzedniej sesji.
 
 
 ## 0.18.0 — inteligentna obsługa konfliktów
@@ -61,7 +72,7 @@ Funkcje z 0.15.4 — kompaktowy popup operacji, dynamiczna wysokość, anulowani
 ```bash
 cd ~/Pobrane
 rm -rf kio-thispc
-unzip kio-thispc-0.18.0.zip
+unzip kio-thispc-0.19.0.3.zip
 cd kio-thispc
 chmod +x install.sh
 ./install.sh
@@ -77,3 +88,8 @@ thispc-view
 ## Hotfix 0.16.0.1
 
 Naprawiono cofanie zmiany nazwy. Operacja rename jest rejestrowana jako `KIO::moveAs()` przez `FileUndoManager::recordCopyJob()`, dzięki czemu Undo odtwarza poprzednią nazwę zamiast przechodzić do wcześniejszej operacji.
+
+
+## 0.19.0.3
+
+Poprawiono wyświetlanie pełnej nazwy zaznaczonego elementu. Długie nazwy są teraz rzeczywiście zawijane bez ponownego skracania przez styl Qt.

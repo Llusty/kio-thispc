@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=Ten komputer
+Name[en]=This PC
+Comment=Foldery użytkownika oraz urządzenia i dyski w stylu Windows 11
+Comment[en]=User folders and devices/drives in a Windows-11-like view
+Exec=thispc-view
+Icon=computer
+Terminal=false
+Categories=System;FileTools;Utility;
+Keywords=files;drives;disk;computer;this pc;
+Keywords[pl]=pliki;dyski;komputer;ten komputer;
+StartupNotify=true
+X-KDE-StartupNotify=true

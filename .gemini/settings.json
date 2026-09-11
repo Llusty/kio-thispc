@@ -1,0 +1,11 @@
+{
+  "general": {
+    "defaultApprovalMode": "default"
+  },
+  "context": {
+    "fileFiltering": {
+      "respectGitIgnore": true,
+      "respectGeminiIgnore": true
+    }
+  }
+}

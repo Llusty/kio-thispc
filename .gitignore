@@ -1,0 +1,13 @@
+/build/
+/build-*/
+*.user
+*.swp
+*.swo
+*~
+compile_commands.json
+.cache/
+.idea/
+.vscode/
+
+# Gemini CLI transient files
+.gemini/tmp/

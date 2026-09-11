@@ -98,3 +98,8 @@ thispc-view
 ```
 
 For Codex, prefer working directly in a Git checkout and running `./scripts/build.sh` after edits instead of repeatedly creating ZIPs.
+
+
+## Current state — 0.19.0
+
+0.18.0 conflict handling is user-confirmed. 0.19.0 adds persistent session restore (tabs, active tab, primary history, per-tab Split View location/view/sort state and splitter widths) plus full-name UX. Selected icon/list items expand their name; the `Pełne nazwy` toolbar toggle makes full names persistent for all items.

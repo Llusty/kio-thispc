@@ -1,0 +1,1968 @@
+diff -ruN '--exclude=.git' '--exclude=AGENTS.md' '--exclude=PROJECT_CONTEXT.md' '--exclude=ROADMAP.md' '--exclude=DEVELOPMENT.md' '--exclude=TEST_CHECKLIST.md' '--exclude=TASK_0.17_DRAG_DROP.md' '--exclude=CODEX_START.md' '--exclude=handoff' '--exclude=docs' '--exclude=scripts' /mnt/data/_stable016/kio-thispc/CHANGELOG.md /mnt/data/kio-thispc-0.17.0.4/CHANGELOG.md
+--- /mnt/data/_stable016/kio-thispc/CHANGELOG.md	1980-01-01 00:00:00.000000000 +0000
++++ /mnt/data/kio-thispc-0.17.0.4/CHANGELOG.md	2026-09-10 16:57:54.844503171 +0000
+@@ -1,5 +1,53 @@
+ # Changelog
+ 
++## 0.17.0.4
++
++- hotfix kompilacji po 0.17.0.3;
++- usunięto błędnie wstawiony filtr Drag & Drop z `BreadcrumbFrame`;
++- filtr `viewport()` został przeniesiony do właściwego `DirectoryListWidget`;
++- `DirectoryTreeWidget` pozostaje bez zmian, ponieważ miał poprawną implementację;
++- zachowanie dropu na puste tło/folder pozostaje zgodne z założeniami 0.17.0.3.
++
++
++## 0.17.0.3
++
++- hotfix dropu na główny obszar katalogu;
++- zdarzenia DragEnter/DragMove/Drop są przechwytywane bezpośrednio z viewportu;
++- upuszczenie na pustym tle oznacza upuszczenie do aktualnego katalogu;
++- upuszczenie na folder nadal kieruje operację do tego folderu;
++- poprawka obejmuje Ikony, Listę, Szczegóły i Split View.
++
++
++## 0.17.0.2
++
++- hotfix uruchamiania Drag & Drop z widoku plików;
++- przeciąganie jest teraz inicjowane jawnie po przekroczeniu `QApplication::startDragDistance()`;
++- kliknięcie LPM nadal zaznacza element, ale ruch myszy z elementu nie przechodzi już w gumowe zaznaczanie obszaru;
++- poprawka obejmuje widok ikon/listy i widok Szczegóły, również w Split View.
++
++
++## 0.17.0.1
++
++- hotfix kompilacji Qt6 dla Drag & Drop;
++- poprawiono dwa wywołania `QMimeData::setData()`: nazwa MIME używa teraz `QStringLiteral`;
++- funkcjonalność Drag & Drop z 0.17.0 pozostaje bez zmian.
++
++
++## 0.17.0
++
++- pełne przeciągnij i upuść dla plików i folderów;
++- drag & drop między głównym panelem i Split View;
++- obsługa przeciągania między oknami thispc-view oraz z/do Dolphina i pulpitu przez standardowe `text/uri-list`;
++- upuszczanie na foldery w widoku, foldery i dyski na stronie „Ten komputer”, sidebar oraz karty;
++- karta pod kursorem jest automatycznie aktywowana po krótkim przytrzymaniu;
++- folder pod kursorem jest automatycznie otwierany po 850 ms (spring-loaded folders);
++- Ctrl+drag = kopiuj, Shift+drag = przenieś, Alt lub Ctrl+Shift = dowiązanie;
++- bez modyfikatora: przenieś na tym samym systemie plików, kopiuj pomiędzy różnymi systemami plików;
++- przeciągnięcie do Kosza przenosi lokalne elementy do Kosza i działa z Cofnij;
++- widoczne obramowanie celu upuszczania oraz miniatura przeciąganych elementów z licznikiem;
++- blokada przenoszenia folderu do niego samego/podfolderu;
++- operacje DnD są rejestrowane przez menedżer operacji i FileUndoManager.
++
+ ## 0.16.0.1
+ 
+ - hotfix Cofnij/Ponów dla zmiany nazwy;
+@@ -28,7 +76,7 @@
+ - automatyczne ograniczenie pozycji do dostępnego obszaru ekranu;
+ - czytelny numer wersji w prawym dolnym rogu (`palette(window-text)`).
+ 
+-## 0.15.4
++## 0.15.3
+ 
+ - przebudowano popup operacji z `QMenu/QWidgetAction` na własny `Qt::Popup`;
+ - dynamiczna wysokość jest liczona z rzeczywistych kart operacji;
+diff -ruN '--exclude=.git' '--exclude=AGENTS.md' '--exclude=PROJECT_CONTEXT.md' '--exclude=ROADMAP.md' '--exclude=DEVELOPMENT.md' '--exclude=TEST_CHECKLIST.md' '--exclude=TASK_0.17_DRAG_DROP.md' '--exclude=CODEX_START.md' '--exclude=handoff' '--exclude=docs' '--exclude=scripts' /mnt/data/_stable016/kio-thispc/CMakeLists.txt /mnt/data/kio-thispc-0.17.0.4/CMakeLists.txt
+--- /mnt/data/_stable016/kio-thispc/CMakeLists.txt	1980-01-01 00:00:00.000000000 +0000
++++ /mnt/data/kio-thispc-0.17.0.4/CMakeLists.txt	2026-09-10 16:48:03.100928339 +0000
+@@ -1,6 +1,6 @@
+ cmake_minimum_required(VERSION 3.16)
+ 
+-project(kio-thispc VERSION 0.16.0.1 LANGUAGES CXX)
++project(kio-thispc VERSION 0.17.0.4 LANGUAGES CXX)
+ 
+ set(QT_MIN_VERSION "6.5.0")
+ set(KF_MIN_VERSION "6.17.0")
+diff -ruN '--exclude=.git' '--exclude=AGENTS.md' '--exclude=PROJECT_CONTEXT.md' '--exclude=ROADMAP.md' '--exclude=DEVELOPMENT.md' '--exclude=TEST_CHECKLIST.md' '--exclude=TASK_0.17_DRAG_DROP.md' '--exclude=CODEX_START.md' '--exclude=handoff' '--exclude=docs' '--exclude=scripts' /mnt/data/_stable016/kio-thispc/README.md /mnt/data/kio-thispc-0.17.0.4/README.md
+--- /mnt/data/_stable016/kio-thispc/README.md	1980-01-01 00:00:00.000000000 +0000
++++ /mnt/data/kio-thispc-0.17.0.4/README.md	2026-09-10 16:57:54.860502477 +0000
+@@ -1,41 +1,57 @@
+-# kio-thispc 0.16.0.1
++# kio-thispc 0.17.0.4
+ 
+-0.16.0.1 dodaje natywne **Cofnij / Ponów** dla operacji plikowych, oparte na `KIO::FileUndoManager` z KDE Frameworks.
++`thispc-view` to lekki menedżer plików Qt/KDE z widokiem „Ten komputer”, kartami, Split View, operacjami KIO, właściwościami/uprawnieniami, menedżerem operacji oraz Cofnij/Ponów.
+ 
+-## Cofnij / Ponów
++## Nowość w 0.17.0 — pełne Drag & Drop
++
++Przeciągnij i upuść działa teraz jako pełnoprawny sposób wykonywania operacji plikowych:
+ 
+-Obsługiwane są operacje wykonywane przez `thispc-view`:
++- pomiędzy folderami w głównym widoku;
++- pomiędzy głównym panelem i Split View;
++- pomiędzy dwoma oknami `thispc-view`;
++- z Dolphina / pulpitu Plasma do `thispc-view` i w drugą stronę poprzez standardowe URL-e Qt/KDE;
++- na folder w bieżącym widoku;
++- na folder lub dysk na stronie „Ten komputer”;
++- na folder lub dysk w sidebarze;
++- na kartę — po ok. 650 ms karta pod kursorem jest automatycznie aktywowana;
++- na folder — po ok. 850 ms folder zostaje automatycznie otwarty, dzięki czemu można kontynuować przeciąganie głębiej w strukturę katalogów;
++- do Kosza — lokalne pliki/foldery są przenoszone do `trash:/` i operację można cofnąć.
+ 
+-- kopiowanie;
+-- przenoszenie;
+-- zmiana nazwy;
+-- przenoszenie do Kosza i przywracanie przy cofnięciu;
+-- tworzenie folderu;
+-- tworzenie nowego pliku.
++Sterowanie jest zbliżone do Windows Explorera:
+ 
+-Historia jest przechowywana w bieżącej sesji aplikacji. KIO sam zapisuje dane potrzebne do bezpiecznego odwrócenia operacji. Przy cofaniu kopiowania potrafi również ostrzec, gdy skopiowany plik został później zmodyfikowany.
++- bez modyfikatora: **przenieś** w obrębie tego samego systemu plików, **kopiuj** pomiędzy różnymi systemami plików;
++- `Ctrl` + przeciąganie: wymuś **kopiowanie**;
++- `Shift` + przeciąganie: wymuś **przenoszenie**;
++- `Alt` lub `Ctrl+Shift` + przeciąganie: utwórz **dowiązanie**.
+ 
+-## Sterowanie
++Cel upuszczania otrzymuje wyraźne obramowanie. Przy przeciąganiu wielu elementów miniatura pokazuje ich liczbę. Aplikacja blokuje próbę przeniesienia folderu do niego samego lub jednego z jego podfolderów.
+ 
+-Na górnym pasku poleceń znajdują się dwie nowe ikony:
++Operacje wykonywane przez Drag & Drop są podłączone do istniejącego menedżera operacji oraz `KIO::FileUndoManager`, więc kopiowanie/przenoszenie/dowiązania można cofać tam, gdzie KIO na to pozwala.
+ 
+-- **Cofnij** — `Ctrl+Z`;
+-- **Ponów** — `Ctrl+Y` lub `Ctrl+Shift+Z`.
++## Cofnij / Ponów
+ 
+-Przyciski aktywują się tylko wtedy, gdy dana operacja jest dostępna, a ich podpowiedzi pokazują aktualną akcję KIO do cofnięcia lub ponowienia. Po zakończeniu cofania/ponawiania oba panele katalogów są automatycznie odświeżane.
++Funkcje z 0.16.0.1 pozostają bez zmian:
+ 
+-Funkcje z 0.15.4 — kompaktowy popup operacji, dynamiczna wysokość, anulowanie zadań, numer wersji oraz poprawki NTFS/fuseblk — pozostają bez zmian.
++- `Ctrl+Z` — Cofnij;
++- `Ctrl+Y` lub `Ctrl+Shift+Z` — Ponów;
++- kopiowanie, przenoszenie, zmiana nazwy, Kosz, tworzenie plików/folderów są rejestrowane w historii bieżącej sesji.
+ 
+ ## Wymagania
+ 
+-0.16.0.1 wymaga **KDE Frameworks 6.17 lub nowszego**, ponieważ obsługa `redo()` w `KIO::FileUndoManager` jest dostępna od KF 6.17. Na testowanej konfiguracji KF 6.29 warunek jest spełniony.
++- Qt 6.5+;
++- KDE Frameworks 6.17+;
++- KIO Core + KIO Widgets;
++- KF6 Solid;
++- ECM.
++
++KF6 6.17+ jest wymagane przez natywne `redo()` w `KIO::FileUndoManager`.
+ 
+ ## Instalacja
+ 
+ ```bash
+ cd ~/Pobrane
+ rm -rf kio-thispc
+-unzip kio-thispc-0.16.0.1.zip
++unzip kio-thispc-0.17.0.4.zip
+ cd kio-thispc
+ chmod +x install.sh
+ ./install.sh
+@@ -47,7 +63,18 @@
+ thispc-view
+ ```
+ 
++## Sugerowany test 0.17.0
++
++1. Otwórz dwa różne foldery w Split View i przeciągnij plik między panelami.
++2. Sprawdź `Ctrl+drag` oraz `Shift+drag`.
++3. Przeciągnij plik na folder w sidebarze.
++4. Przeciągnij plik z Dolphina do `thispc-view`, a następnie z `thispc-view` do Dolphina/pulpitu.
++5. Przytrzymaj przeciągany plik nad kartą oraz nad folderem i sprawdź automatyczne przełączanie/otwieranie.
++6. Przeciągnij lokalny plik do Kosza i sprawdź `Ctrl+Z`.
++
++Konflikty nazw podczas kopiowania/przenoszenia są zaplanowane jako osobny etap następnej wersji roadmapy.
++
+ 
+-## Hotfix 0.16.0.1
++## Hotfix 0.17.0.4
+ 
+-Naprawiono cofanie zmiany nazwy. Operacja rename jest rejestrowana jako `KIO::moveAs()` przez `FileUndoManager::recordCopyJob()`, dzięki czemu Undo odtwarza poprzednią nazwę zamiast przechodzić do wcześniejszej operacji.
++Naprawiono błąd kompilacji Qt6 w dwóch nowych miejscach Drag & Drop: `QMimeData::setData()` otrzymuje nazwę MIME jako `QStringLiteral`.
+diff -ruN '--exclude=.git' '--exclude=AGENTS.md' '--exclude=PROJECT_CONTEXT.md' '--exclude=ROADMAP.md' '--exclude=DEVELOPMENT.md' '--exclude=TEST_CHECKLIST.md' '--exclude=TASK_0.17_DRAG_DROP.md' '--exclude=CODEX_START.md' '--exclude=handoff' '--exclude=docs' '--exclude=scripts' /mnt/data/_stable016/kio-thispc/UPDATE.md /mnt/data/kio-thispc-0.17.0.4/UPDATE.md
+--- /mnt/data/_stable016/kio-thispc/UPDATE.md	1980-01-01 00:00:00.000000000 +0000
++++ /mnt/data/kio-thispc-0.17.0.4/UPDATE.md	2026-09-10 16:57:54.828503864 +0000
+@@ -1,12 +1,12 @@
+-# Aktualizacja do 0.16.0.1
++# Aktualizacja do 0.17.0.4
+ 
+ ```bash
+ cd ~/Pobrane
+ rm -rf kio-thispc
+-unzip kio-thispc-0.16.0.1.zip
++unzip kio-thispc-0.17.0.4.zip
+ cd kio-thispc
+ chmod +x install.sh
+ ./install.sh
+ ```
+ 
+-0.16.0.1 naprawia Cofnij/Ponów dla zmiany nazwy.
++0.17.0.4 naprawia błąd kompilacji Qt6 w obsłudze Drag & Drop.
+diff -ruN '--exclude=.git' '--exclude=AGENTS.md' '--exclude=PROJECT_CONTEXT.md' '--exclude=ROADMAP.md' '--exclude=DEVELOPMENT.md' '--exclude=TEST_CHECKLIST.md' '--exclude=TASK_0.17_DRAG_DROP.md' '--exclude=CODEX_START.md' '--exclude=handoff' '--exclude=docs' '--exclude=scripts' /mnt/data/_stable016/kio-thispc/install.sh /mnt/data/kio-thispc-0.17.0.4/install.sh
+--- /mnt/data/_stable016/kio-thispc/install.sh	1980-01-01 00:00:00.000000000 +0000
++++ /mnt/data/kio-thispc-0.17.0.4/install.sh	2026-09-10 16:48:03.101101331 +0000
+@@ -3,7 +3,7 @@
+ 
+ cd "$(dirname "$0")"
+ 
+-echo "==> kio-thispc 0.16.0.1"
++echo "==> kio-thispc 0.17.0.4"
+ echo "==> Czysty build"
+ rm -rf build
+ 
+diff -ruN '--exclude=.git' '--exclude=AGENTS.md' '--exclude=PROJECT_CONTEXT.md' '--exclude=ROADMAP.md' '--exclude=DEVELOPMENT.md' '--exclude=TEST_CHECKLIST.md' '--exclude=TASK_0.17_DRAG_DROP.md' '--exclude=CODEX_START.md' '--exclude=handoff' '--exclude=docs' '--exclude=scripts' /mnt/data/_stable016/kio-thispc/src/thispcview.cpp /mnt/data/kio-thispc-0.17.0.4/src/thispcview.cpp
+--- /mnt/data/_stable016/kio-thispc/src/thispcview.cpp	1980-01-01 00:00:00.000000000 +0000
++++ /mnt/data/kio-thispc-0.17.0.4/src/thispcview.cpp	2026-09-10 16:48:03.099951742 +0000
+@@ -2,7 +2,7 @@
+  * thispc-view - a lightweight KDE/Qt file browser with a Windows-like
+  * "This PC" home page, backed by KIO.
+  *
+- * Version 0.16.0.1
++ * Version 0.17.0.4
+  * SPDX-License-Identifier: MIT
+  */
+ 
+@@ -34,6 +34,7 @@
+ #include <QDrag>
+ #include <QDragEnterEvent>
+ #include <QDragMoveEvent>
++#include <QDragLeaveEvent>
+ #include <QDropEvent>
+ #include <QDesktopServices>
+ #include <QDialog>
+@@ -70,6 +71,7 @@
+ #include <QMimeType>
+ #include <QMouseEvent>
+ #include <QPainter>
++#include <QPen>
+ #include <QPair>
+ #include <QPalette>
+ #include <QPointer>
+@@ -610,6 +612,175 @@
+     return url.scheme() == QStringLiteral("thispcsearch");
+ }
+ 
++
++bool canAcceptFileDrop(const QUrl &destination)
++{
++    if (!destination.isValid()
++        || sameLocation(destination, kThisPcUrl)
++        || isSearchLocation(destination)) {
++        return false;
++    }
++
++    const QString scheme = destination.scheme().toLower();
++    return scheme != QStringLiteral("remote")
++        && scheme != QStringLiteral("filenamesearch");
++}
++
++QUrl parentUrlForDropSource(const QUrl &sourceRaw)
++{
++    const QUrl source = normalizedUrl(sourceRaw);
++    if (!source.isValid()) {
++        return {};
++    }
++
++    if (source.isLocalFile()) {
++        return QUrl::fromLocalFile(
++            QFileInfo(source.toLocalFile()).absolutePath());
++    }
++
++    QUrl parent = source;
++    QString path = parent.path();
++    while (path.size() > 1 && path.endsWith(QLatin1Char('/'))) {
++        path.chop(1);
++    }
++
++    const int slash = path.lastIndexOf(QLatin1Char('/'));
++    parent.setPath(slash <= 0 ? QStringLiteral("/") : path.left(slash));
++    parent.setQuery(QString());
++    parent.setFragment(QString());
++    return parent;
++}
++
++bool allDropSourcesAlreadyInDestination(
++    const QList<QUrl> &urls,
++    const QUrl &destination)
++{
++    if (urls.isEmpty()) {
++        return false;
++    }
++
++    for (const QUrl &url : urls) {
++        if (!sameLocation(parentUrlForDropSource(url), destination)) {
++            return false;
++        }
++    }
++
++    return true;
++}
++
++bool dropWouldCreateCycle(
++    const QList<QUrl> &urls,
++    const QUrl &destination)
++{
++    for (const QUrl &source : urls) {
++        if (sameLocation(source, destination)
++            || isWithinLocation(destination, source)) {
++            return true;
++        }
++    }
++    return false;
++}
++
++bool dropSourcesShareStorageWithDestination(
++    const QList<QUrl> &urls,
++    const QUrl &destination)
++{
++    const QString destinationPath =
++        localPathForFileOrAdmin(destination);
++    if (destinationPath.isEmpty() || urls.isEmpty()) {
++        return false;
++    }
++
++    QStorageInfo destinationStorage(destinationPath);
++    if (!destinationStorage.isValid()) {
++        return false;
++    }
++
++    for (const QUrl &source : urls) {
++        const QString sourcePath = localPathForFileOrAdmin(source);
++        if (sourcePath.isEmpty()) {
++            return false;
++        }
++
++        QStorageInfo sourceStorage(sourcePath);
++        if (!sourceStorage.isValid()) {
++            return false;
++        }
++
++        const QByteArray sourceDevice = sourceStorage.device();
++        const QByteArray destinationDevice = destinationStorage.device();
++
++        if (!sourceDevice.isEmpty() && !destinationDevice.isEmpty()) {
++            if (sourceDevice != destinationDevice) {
++                return false;
++            }
++        } else if (QDir::cleanPath(sourceStorage.rootPath())
++                   != QDir::cleanPath(destinationStorage.rootPath())) {
++            return false;
++        }
++    }
++
++    return true;
++}
++
++Qt::DropAction preferredDropAction(
++    const QList<QUrl> &urls,
++    const QUrl &destination,
++    Qt::KeyboardModifiers modifiers)
++{
++    if (destination.scheme() == QStringLiteral("trash")) {
++        return Qt::MoveAction;
++    }
++
++    if ((modifiers.testFlag(Qt::ControlModifier)
++         && modifiers.testFlag(Qt::ShiftModifier))
++        || modifiers.testFlag(Qt::AltModifier)) {
++        return Qt::LinkAction;
++    }
++
++    if (modifiers.testFlag(Qt::ControlModifier)) {
++        return Qt::CopyAction;
++    }
++
++    if (modifiers.testFlag(Qt::ShiftModifier)) {
++        return Qt::MoveAction;
++    }
++
++    return dropSourcesShareStorageWithDestination(urls, destination)
++        ? Qt::MoveAction
++        : Qt::CopyAction;
++}
++
++QPixmap dragPixmapForItems(
++    const QIcon &icon,
++    int count,
++    const QPalette &palette)
++{
++    QPixmap pixmap(64, 64);
++    pixmap.fill(Qt::transparent);
++
++    QPainter painter(&pixmap);
++    icon.paint(&painter, QRect(4, 12, 44, 44));
++
++    if (count > 1) {
++        const QRect badgeRect(38, 2, 24, 24);
++        painter.setPen(Qt::NoPen);
++        painter.setBrush(palette.highlight());
++        painter.drawEllipse(badgeRect);
++        painter.setPen(palette.highlightedText().color());
++        QFont font = painter.font();
++        font.setBold(true);
++        font.setPointSize(std::max(7, font.pointSize() - 1));
++        painter.setFont(font);
++        painter.drawText(
++            badgeRect,
++            Qt::AlignCenter,
++            count > 99 ? QStringLiteral("99+") : QString::number(count));
++    }
++
++    return pixmap;
++}
++
+ QUrl filenameSearchUrl(
+     const QString &query,
+     const QUrl &root)
+@@ -945,10 +1116,15 @@
+         setCursor(Qt::PointingHandCursor);
+         setFocusPolicy(Qt::StrongFocus);
+         setAttribute(Qt::WA_Hover, true);
++        setAcceptDrops(canAcceptFileDrop(m_url));
+     }
+ 
+ Q_SIGNALS:
+     void activated(const QUrl &url);
++    void urlsDropped(
++        const QList<QUrl> &urls,
++        const QUrl &destination,
++        Qt::KeyboardModifiers modifiers);
+ 
+ protected:
+     void mousePressEvent(QMouseEvent *event) override
+@@ -980,13 +1156,92 @@
+         QFrame::keyPressEvent(event);
+     }
+ 
+-protected:
++    void dragEnterEvent(QDragEnterEvent *event) override
++    {
++        if (!event->mimeData()->hasUrls()
++            || !canAcceptFileDrop(m_url)
++            || dropWouldCreateCycle(event->mimeData()->urls(), m_url)) {
++            event->ignore();
++            return;
++        }
++
++        setDropTarget(true);
++        event->setDropAction(
++            preferredDropAction(
++                event->mimeData()->urls(),
++                m_url,
++                event->modifiers()));
++        event->accept();
++    }
++
++    void dragMoveEvent(QDragMoveEvent *event) override
++    {
++        if (!event->mimeData()->hasUrls()
++            || !canAcceptFileDrop(m_url)
++            || dropWouldCreateCycle(event->mimeData()->urls(), m_url)) {
++            setDropTarget(false);
++            event->ignore();
++            return;
++        }
++
++        setDropTarget(true);
++        event->setDropAction(
++            preferredDropAction(
++                event->mimeData()->urls(),
++                m_url,
++                event->modifiers()));
++        event->accept();
++    }
++
++    void dragLeaveEvent(QDragLeaveEvent *event) override
++    {
++        setDropTarget(false);
++        event->accept();
++    }
++
++    void dropEvent(QDropEvent *event) override
++    {
++        setDropTarget(false);
++
++        if (!event->mimeData()->hasUrls()
++            || !canAcceptFileDrop(m_url)
++            || dropWouldCreateCycle(event->mimeData()->urls(), m_url)) {
++            event->ignore();
++            return;
++        }
++
++        const Qt::DropAction action =
++            preferredDropAction(
++                event->mimeData()->urls(),
++                m_url,
++                event->modifiers());
++
++        Q_EMIT urlsDropped(
++            event->mimeData()->urls(),
++            m_url,
++            event->modifiers());
++
++        event->setDropAction(action);
++        event->accept();
++    }
++
+     QUrl targetUrl() const
+     {
+         return m_url;
+     }
+ 
+ private:
++    void setDropTarget(bool enabled)
++    {
++        if (property("dropTarget").toBool() == enabled) {
++            return;
++        }
++        setProperty("dropTarget", enabled);
++        style()->unpolish(this);
++        style()->polish(this);
++        update();
++    }
++
+     QUrl m_url;
+ };
+ 
+@@ -1031,6 +1286,7 @@
+         setIconSize(QSize(18, 18));
+         setMinimumHeight(31);
+         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
++        setAcceptDrops(canAcceptFileDrop(m_url));
+ 
+         connect(this, &QPushButton::clicked, this, [this] {
+             Q_EMIT activated(m_url);
+@@ -1055,13 +1311,15 @@
+     void openInNewTabRequested(const QUrl &url, bool makeCurrent);
+     void openInNewWindowRequested(const QUrl &url);
+     void openInSplitPaneRequested(const QUrl &url);
++    void urlsDropped(
++        const QList<QUrl> &urls,
++        const QUrl &destination,
++        Qt::KeyboardModifiers modifiers);
+ 
+ protected:
+     void mousePressEvent(QMouseEvent *event) override
+     {
+         if (event->button() == Qt::MiddleButton) {
+-            // Browser/file-manager convention: middle click opens a
+-            // background tab and keeps the current tab selected.
+             Q_EMIT openInNewTabRequested(m_url, false);
+             event->accept();
+             return;
+@@ -1070,6 +1328,72 @@
+         QPushButton::mousePressEvent(event);
+     }
+ 
++    void dragEnterEvent(QDragEnterEvent *event) override
++    {
++        if (!event->mimeData()->hasUrls()
++            || !canAcceptFileDrop(m_url)
++            || dropWouldCreateCycle(event->mimeData()->urls(), m_url)) {
++            event->ignore();
++            return;
++        }
++
++        setDropTarget(true);
++        event->setDropAction(
++            preferredDropAction(
++                event->mimeData()->urls(),
++                m_url,
++                event->modifiers()));
++        event->accept();
++    }
++
++    void dragMoveEvent(QDragMoveEvent *event) override
++    {
++        if (!event->mimeData()->hasUrls()
++            || !canAcceptFileDrop(m_url)
++            || dropWouldCreateCycle(event->mimeData()->urls(), m_url)) {
++            setDropTarget(false);
++            event->ignore();
++            return;
++        }
++
++        setDropTarget(true);
++        event->setDropAction(
++            preferredDropAction(
++                event->mimeData()->urls(),
++                m_url,
++                event->modifiers()));
++        event->accept();
++    }
++
++    void dragLeaveEvent(QDragLeaveEvent *event) override
++    {
++        setDropTarget(false);
++        event->accept();
++    }
++
++    void dropEvent(QDropEvent *event) override
++    {
++        setDropTarget(false);
++        if (!event->mimeData()->hasUrls()
++            || !canAcceptFileDrop(m_url)
++            || dropWouldCreateCycle(event->mimeData()->urls(), m_url)) {
++            event->ignore();
++            return;
++        }
++
++        const Qt::DropAction action =
++            preferredDropAction(
++                event->mimeData()->urls(),
++                m_url,
++                event->modifiers());
++        Q_EMIT urlsDropped(
++            event->mimeData()->urls(),
++            m_url,
++            event->modifiers());
++        event->setDropAction(action);
++        event->accept();
++    }
++
+     void contextMenuEvent(QContextMenuEvent *event) override
+     {
+         QMenu menu(this);
+@@ -1112,6 +1436,17 @@
+     }
+ 
+ private:
++    void setDropTarget(bool enabled)
++    {
++        if (property("dropTarget").toBool() == enabled) {
++            return;
++        }
++        setProperty("dropTarget", enabled);
++        style()->unpolish(this);
++        style()->polish(this);
++        update();
++    }
++
+     QUrl m_url;
+ };
+ 
+@@ -1128,6 +1463,7 @@
+         setCursor(Qt::PointingHandCursor);
+         setFocusPolicy(Qt::StrongFocus);
+         setToolTip(driveTooltip(drive));
++        setAcceptDrops(canAcceptFileDrop(m_drive.targetUrl));
+ 
+         auto *layout = new QHBoxLayout(this);
+         layout->setContentsMargins(8, 4, 8, 4);
+@@ -1184,6 +1520,10 @@
+     void openInNewTabRequested(const QUrl &url, bool makeCurrent);
+     void openInNewWindowRequested(const QUrl &url);
+     void openInSplitPaneRequested(const QUrl &url);
++    void urlsDropped(
++        const QList<QUrl> &urls,
++        const QUrl &destination,
++        Qt::KeyboardModifiers modifiers);
+ 
+ protected:
+     void mousePressEvent(QMouseEvent *event) override
+@@ -1217,6 +1557,73 @@
+         QFrame::keyPressEvent(event);
+     }
+ 
++    void dragEnterEvent(QDragEnterEvent *event) override
++    {
++        const QUrl destination = m_drive.targetUrl;
++        if (!event->mimeData()->hasUrls()
++            || !canAcceptFileDrop(destination)
++            || dropWouldCreateCycle(event->mimeData()->urls(), destination)) {
++            event->ignore();
++            return;
++        }
++        setDropTarget(true);
++        event->setDropAction(
++            preferredDropAction(
++                event->mimeData()->urls(),
++                destination,
++                event->modifiers()));
++        event->accept();
++    }
++
++    void dragMoveEvent(QDragMoveEvent *event) override
++    {
++        const QUrl destination = m_drive.targetUrl;
++        if (!event->mimeData()->hasUrls()
++            || !canAcceptFileDrop(destination)
++            || dropWouldCreateCycle(event->mimeData()->urls(), destination)) {
++            setDropTarget(false);
++            event->ignore();
++            return;
++        }
++        setDropTarget(true);
++        event->setDropAction(
++            preferredDropAction(
++                event->mimeData()->urls(),
++                destination,
++                event->modifiers()));
++        event->accept();
++    }
++
++    void dragLeaveEvent(QDragLeaveEvent *event) override
++    {
++        setDropTarget(false);
++        event->accept();
++    }
++
++    void dropEvent(QDropEvent *event) override
++    {
++        setDropTarget(false);
++        const QUrl destination = m_drive.targetUrl;
++        if (!event->mimeData()->hasUrls()
++            || !canAcceptFileDrop(destination)
++            || dropWouldCreateCycle(event->mimeData()->urls(), destination)) {
++            event->ignore();
++            return;
++        }
++
++        const Qt::DropAction action =
++            preferredDropAction(
++                event->mimeData()->urls(),
++                destination,
++                event->modifiers());
++        Q_EMIT urlsDropped(
++            event->mimeData()->urls(),
++            destination,
++            event->modifiers());
++        event->setDropAction(action);
++        event->accept();
++    }
++
+     void contextMenuEvent(QContextMenuEvent *event) override
+     {
+         QMenu menu(this);
+@@ -1282,6 +1689,17 @@
+     }
+ 
+ private:
++    void setDropTarget(bool enabled)
++    {
++        if (property("dropTarget").toBool() == enabled) {
++            return;
++        }
++        setProperty("dropTarget", enabled);
++        style()->unpolish(this);
++        style()->polish(this);
++        update();
++    }
++
+     DriveInfo m_drive;
+ };
+ 
+@@ -1499,9 +1917,23 @@
+         setDragEnabled(true);
+         setAcceptDrops(true);
+         viewport()->setAcceptDrops(true);
+-        setDropIndicatorShown(true);
++        viewport()->installEventFilter(this);
++        setDropIndicatorShown(false);
+         setDragDropMode(QAbstractItemView::DragDrop);
+         setDefaultDropAction(Qt::CopyAction);
++
++        m_hoverTimer = new QTimer(this);
++        m_hoverTimer->setSingleShot(true);
++        m_hoverTimer->setInterval(850);
++        connect(
++            m_hoverTimer,
++            &QTimer::timeout,
++            this,
++            [this] {
++                if (m_hoverDirectory.isValid()) {
++                    Q_EMIT directoryHoverRequested(m_hoverDirectory);
++                }
++            });
+     }
+ 
+     void setDropDirectory(const QUrl &url)
+@@ -1513,15 +1945,101 @@
+     void urlsDropped(
+         const QList<QUrl> &urls,
+         const QUrl &destination,
+-        const QPoint &globalPosition);
++        Qt::KeyboardModifiers modifiers);
++    void directoryHoverRequested(const QUrl &url);
+ 
+ protected:
++    bool eventFilter(QObject *watched, QEvent *event) override
++    {
++        if (watched == viewport()) {
++            switch (event->type()) {
++            case QEvent::DragEnter: {
++                auto *dragEvent =
++                    static_cast<QDragEnterEvent *>(event);
++                if (dragEvent->mimeData()->hasUrls()) {
++                    dragEnterEvent(dragEvent);
++                    return true;
++                }
++                break;
++            }
++            case QEvent::DragMove: {
++                auto *dragEvent =
++                    static_cast<QDragMoveEvent *>(event);
++                if (dragEvent->mimeData()->hasUrls()) {
++                    dragMoveEvent(dragEvent);
++                    return true;
++                }
++                break;
++            }
++            case QEvent::Drop: {
++                auto *dropEventObject =
++                    static_cast<QDropEvent *>(event);
++                if (dropEventObject->mimeData()->hasUrls()) {
++                    dropEvent(dropEventObject);
++                    return true;
++                }
++                break;
++            }
++            case QEvent::DragLeave:
++                dragLeaveEvent(
++                    static_cast<QDragLeaveEvent *>(event));
++                return true;
++            default:
++                break;
++            }
++        }
++
++        return QListWidget::eventFilter(watched, event);
++    }
++
++    void mousePressEvent(QMouseEvent *event) override
++    {
++        const QPoint position = event->position().toPoint();
++        m_dragCandidate =
++            event->button() == Qt::LeftButton
++            && itemAt(position) != nullptr;
++        m_dragStartPosition = position;
++
++        QListWidget::mousePressEvent(event);
++    }
++
++    void mouseMoveEvent(QMouseEvent *event) override
++    {
++        if (m_dragCandidate
++            && event->buttons().testFlag(Qt::LeftButton)) {
++            const QPoint position = event->position().toPoint();
++            if ((position - m_dragStartPosition).manhattanLength()
++                >= QApplication::startDragDistance()) {
++                m_dragCandidate = false;
++                startDrag(
++                    Qt::CopyAction
++                    | Qt::MoveAction
++                    | Qt::LinkAction);
++                return;
++            }
++
++            // The press started on an item. Until the drag threshold is
++            // reached, do not let QListView switch to rubber-band selection.
++            event->accept();
++            return;
++        }
++
++        QListWidget::mouseMoveEvent(event);
++    }
++
++    void mouseReleaseEvent(QMouseEvent *event) override
++    {
++        m_dragCandidate = false;
++        QListWidget::mouseReleaseEvent(event);
++    }
++
+     void startDrag(Qt::DropActions supportedActions) override
+     {
+         Q_UNUSED(supportedActions)
+ 
+         QList<QUrl> urls;
+-        for (QListWidgetItem *item : selectedItems()) {
++        const QList<QListWidgetItem *> items = selectedItems();
++        for (QListWidgetItem *item : items) {
+             const QUrl url(item->data(Qt::UserRole).toString());
+             if (url.isValid()) {
+                 urls.push_back(url);
+@@ -1534,30 +2052,94 @@
+ 
+         auto *mimeData = new QMimeData;
+         mimeData->setUrls(urls);
++        mimeData->setData(
++            QStringLiteral("application/x-thispc-drag"),
++            QByteArrayLiteral("1"));
+ 
+         QDrag drag(this);
+         drag.setMimeData(mimeData);
++        if (!items.isEmpty()) {
++            drag.setPixmap(
++                dragPixmapForItems(
++                    items.first()->icon(),
++                    urls.size(),
++                    palette()));
++            drag.setHotSpot(QPoint(18, 24));
++        }
++
++        const Qt::KeyboardModifiers modifiers =
++            QApplication::keyboardModifiers();
++        Qt::DropAction defaultAction = Qt::CopyAction;
++        if (modifiers.testFlag(Qt::ShiftModifier)
++            && !modifiers.testFlag(Qt::ControlModifier)) {
++            defaultAction = Qt::MoveAction;
++        } else if (modifiers.testFlag(Qt::AltModifier)
++                   || (modifiers.testFlag(Qt::ControlModifier)
++                       && modifiers.testFlag(Qt::ShiftModifier))) {
++            defaultAction = Qt::LinkAction;
++        }
++
+         drag.exec(
+-            Qt::CopyAction | Qt::MoveAction,
+-            Qt::CopyAction);
++            Qt::CopyAction | Qt::MoveAction | Qt::LinkAction,
++            defaultAction);
+     }
+ 
+     void dragEnterEvent(QDragEnterEvent *event) override
+     {
+-        if (event->mimeData()->hasUrls()) {
+-            event->acceptProposedAction();
++        if (!event->mimeData()->hasUrls()) {
++            QListWidget::dragEnterEvent(event);
+             return;
+         }
+-        QListWidget::dragEnterEvent(event);
++
++        event->setDropAction(
++            preferredDropAction(
++                event->mimeData()->urls(),
++                m_dropDirectory,
++                event->modifiers()));
++        event->accept();
+     }
+ 
+     void dragMoveEvent(QDragMoveEvent *event) override
+     {
+-        if (event->mimeData()->hasUrls()) {
+-            event->acceptProposedAction();
++        if (!event->mimeData()->hasUrls()) {
++            QListWidget::dragMoveEvent(event);
+             return;
+         }
+-        QListWidget::dragMoveEvent(event);
++
++        QListWidgetItem *target = itemAt(event->position().toPoint());
++        QUrl destination = m_dropDirectory;
++        int targetRow = -1;
++
++        if (target && target->data(Qt::UserRole + 1).toBool()) {
++            const QUrl targetUrl(target->data(Qt::UserRole).toString());
++            if (targetUrl.isValid()) {
++                destination = targetUrl;
++                targetRow = row(target);
++            }
++        }
++
++        if (!canAcceptFileDrop(destination)
++            || dropWouldCreateCycle(event->mimeData()->urls(), destination)) {
++            clearDropFeedback();
++            event->ignore();
++            return;
++        }
++
++        setDropFeedback(targetRow, targetRow < 0);
++        scheduleDirectoryHover(targetRow >= 0 ? destination : QUrl());
++
++        event->setDropAction(
++            preferredDropAction(
++                event->mimeData()->urls(),
++                destination,
++                event->modifiers()));
++        event->accept();
++    }
++
++    void dragLeaveEvent(QDragLeaveEvent *event) override
++    {
++        clearDropFeedback();
++        event->accept();
+     }
+ 
+     void dropEvent(QDropEvent *event) override
+@@ -1567,38 +2149,113 @@
+             return;
+         }
+ 
++        QListWidgetItem *target = itemAt(event->position().toPoint());
+         QUrl destination = m_dropDirectory;
+-        QListWidgetItem *target =
+-            itemAt(event->position().toPoint());
+ 
+-        if (target
+-            && target->data(Qt::UserRole + 1).toBool()) {
+-            const QUrl targetUrl(
+-                target->data(Qt::UserRole).toString());
++        if (target && target->data(Qt::UserRole + 1).toBool()) {
++            const QUrl targetUrl(target->data(Qt::UserRole).toString());
+             if (targetUrl.isValid()) {
+                 destination = targetUrl;
+             }
+         }
+ 
+-        if (!destination.isValid()) {
++        clearDropFeedback();
++
++        if (!canAcceptFileDrop(destination)
++            || dropWouldCreateCycle(event->mimeData()->urls(), destination)) {
+             event->ignore();
+             return;
+         }
+ 
+-        const QPoint globalPosition =
+-            viewport()->mapToGlobal(
+-                event->position().toPoint());
++        const Qt::DropAction action =
++            preferredDropAction(
++                event->mimeData()->urls(),
++                destination,
++                event->modifiers());
+ 
+         Q_EMIT urlsDropped(
+             event->mimeData()->urls(),
+             destination,
+-            globalPosition);
++            event->modifiers());
+ 
+-        event->acceptProposedAction();
++        event->setDropAction(action);
++        event->accept();
++    }
++
++    void paintEvent(QPaintEvent *event) override
++    {
++        QListWidget::paintEvent(event);
++
++        if (m_dropTargetRow < 0 && !m_dropOverBackground) {
++            return;
++        }
++
++        QPainter painter(viewport());
++        QPen pen(palette().highlight().color(), 2);
++        pen.setStyle(Qt::SolidLine);
++        painter.setPen(pen);
++        painter.setBrush(Qt::NoBrush);
++
++        if (m_dropTargetRow >= 0) {
++            if (QListWidgetItem *item = this->item(m_dropTargetRow)) {
++                painter.drawRoundedRect(
++                    visualItemRect(item).adjusted(1, 1, -2, -2),
++                    6,
++                    6);
++            }
++        } else {
++            painter.drawRoundedRect(
++                viewport()->rect().adjusted(2, 2, -3, -3),
++                6,
++                6);
++        }
+     }
+ 
+ private:
++    void setDropFeedback(int row, bool background)
++    {
++        if (m_dropTargetRow == row
++            && m_dropOverBackground == background) {
++            return;
++        }
++        m_dropTargetRow = row;
++        m_dropOverBackground = background;
++        viewport()->update();
++    }
++
++    void scheduleDirectoryHover(const QUrl &url)
++    {
++        if (url.isValid()
++            && sameLocation(url, m_hoverDirectory)
++            && m_hoverTimer->isActive()) {
++            return;
++        }
++
++        m_hoverTimer->stop();
++        m_hoverDirectory = url;
++        if (m_hoverDirectory.isValid()) {
++            m_hoverTimer->start();
++        }
++    }
++
++    void clearDropFeedback()
++    {
++        m_dropTargetRow = -1;
++        m_dropOverBackground = false;
++        m_hoverDirectory = {};
++        if (m_hoverTimer) {
++            m_hoverTimer->stop();
++        }
++        viewport()->update();
++    }
++
+     QUrl m_dropDirectory;
++    int m_dropTargetRow = -1;
++    bool m_dropOverBackground = false;
++    QTimer *m_hoverTimer = nullptr;
++    QUrl m_hoverDirectory;
++    QPoint m_dragStartPosition;
++    bool m_dragCandidate = false;
+ };
+ 
+ class DirectoryTreeWidget : public QTreeWidget
+@@ -1612,9 +2269,23 @@
+         setDragEnabled(true);
+         setAcceptDrops(true);
+         viewport()->setAcceptDrops(true);
+-        setDropIndicatorShown(true);
++        viewport()->installEventFilter(this);
++        setDropIndicatorShown(false);
+         setDragDropMode(QAbstractItemView::DragDrop);
+         setDefaultDropAction(Qt::CopyAction);
++
++        m_hoverTimer = new QTimer(this);
++        m_hoverTimer->setSingleShot(true);
++        m_hoverTimer->setInterval(850);
++        connect(
++            m_hoverTimer,
++            &QTimer::timeout,
++            this,
++            [this] {
++                if (m_hoverDirectory.isValid()) {
++                    Q_EMIT directoryHoverRequested(m_hoverDirectory);
++                }
++            });
+     }
+ 
+     void setDropDirectory(const QUrl &url)
+@@ -1626,17 +2297,100 @@
+     void urlsDropped(
+         const QList<QUrl> &urls,
+         const QUrl &destination,
+-        const QPoint &globalPosition);
++        Qt::KeyboardModifiers modifiers);
++    void directoryHoverRequested(const QUrl &url);
+ 
+ protected:
++    bool eventFilter(QObject *watched, QEvent *event) override
++    {
++        if (watched == viewport()) {
++            switch (event->type()) {
++            case QEvent::DragEnter: {
++                auto *dragEvent =
++                    static_cast<QDragEnterEvent *>(event);
++                if (dragEvent->mimeData()->hasUrls()) {
++                    dragEnterEvent(dragEvent);
++                    return true;
++                }
++                break;
++            }
++            case QEvent::DragMove: {
++                auto *dragEvent =
++                    static_cast<QDragMoveEvent *>(event);
++                if (dragEvent->mimeData()->hasUrls()) {
++                    dragMoveEvent(dragEvent);
++                    return true;
++                }
++                break;
++            }
++            case QEvent::Drop: {
++                auto *dropEventObject =
++                    static_cast<QDropEvent *>(event);
++                if (dropEventObject->mimeData()->hasUrls()) {
++                    dropEvent(dropEventObject);
++                    return true;
++                }
++                break;
++            }
++            case QEvent::DragLeave:
++                dragLeaveEvent(
++                    static_cast<QDragLeaveEvent *>(event));
++                return true;
++            default:
++                break;
++            }
++        }
++
++        return QTreeWidget::eventFilter(watched, event);
++    }
++
++    void mousePressEvent(QMouseEvent *event) override
++    {
++        const QPoint position = event->position().toPoint();
++        m_dragCandidate =
++            event->button() == Qt::LeftButton
++            && itemAt(position) != nullptr;
++        m_dragStartPosition = position;
++
++        QTreeWidget::mousePressEvent(event);
++    }
++
++    void mouseMoveEvent(QMouseEvent *event) override
++    {
++        if (m_dragCandidate
++            && event->buttons().testFlag(Qt::LeftButton)) {
++            const QPoint position = event->position().toPoint();
++            if ((position - m_dragStartPosition).manhattanLength()
++                >= QApplication::startDragDistance()) {
++                m_dragCandidate = false;
++                startDrag(
++                    Qt::CopyAction
++                    | Qt::MoveAction
++                    | Qt::LinkAction);
++                return;
++            }
++
++            event->accept();
++            return;
++        }
++
++        QTreeWidget::mouseMoveEvent(event);
++    }
++
++    void mouseReleaseEvent(QMouseEvent *event) override
++    {
++        m_dragCandidate = false;
++        QTreeWidget::mouseReleaseEvent(event);
++    }
++
+     void startDrag(Qt::DropActions supportedActions) override
+     {
+         Q_UNUSED(supportedActions)
+ 
+         QList<QUrl> urls;
+-        for (QTreeWidgetItem *item : selectedItems()) {
+-            const QUrl url(
+-                item->data(0, Qt::UserRole).toString());
++        const QList<QTreeWidgetItem *> items = selectedItems();
++        for (QTreeWidgetItem *item : items) {
++            const QUrl url(item->data(0, Qt::UserRole).toString());
+             if (url.isValid()) {
+                 urls.push_back(url);
+             }
+@@ -1648,30 +2402,94 @@
+ 
+         auto *mimeData = new QMimeData;
+         mimeData->setUrls(urls);
++        mimeData->setData(
++            QStringLiteral("application/x-thispc-drag"),
++            QByteArrayLiteral("1"));
+ 
+         QDrag drag(this);
+         drag.setMimeData(mimeData);
++        if (!items.isEmpty()) {
++            drag.setPixmap(
++                dragPixmapForItems(
++                    items.first()->icon(0),
++                    urls.size(),
++                    palette()));
++            drag.setHotSpot(QPoint(18, 24));
++        }
++
++        const Qt::KeyboardModifiers modifiers =
++            QApplication::keyboardModifiers();
++        Qt::DropAction defaultAction = Qt::CopyAction;
++        if (modifiers.testFlag(Qt::ShiftModifier)
++            && !modifiers.testFlag(Qt::ControlModifier)) {
++            defaultAction = Qt::MoveAction;
++        } else if (modifiers.testFlag(Qt::AltModifier)
++                   || (modifiers.testFlag(Qt::ControlModifier)
++                       && modifiers.testFlag(Qt::ShiftModifier))) {
++            defaultAction = Qt::LinkAction;
++        }
++
+         drag.exec(
+-            Qt::CopyAction | Qt::MoveAction,
+-            Qt::CopyAction);
++            Qt::CopyAction | Qt::MoveAction | Qt::LinkAction,
++            defaultAction);
+     }
+ 
+     void dragEnterEvent(QDragEnterEvent *event) override
+     {
+-        if (event->mimeData()->hasUrls()) {
+-            event->acceptProposedAction();
++        if (!event->mimeData()->hasUrls()) {
++            QTreeWidget::dragEnterEvent(event);
+             return;
+         }
+-        QTreeWidget::dragEnterEvent(event);
++
++        event->setDropAction(
++            preferredDropAction(
++                event->mimeData()->urls(),
++                m_dropDirectory,
++                event->modifiers()));
++        event->accept();
+     }
+ 
+     void dragMoveEvent(QDragMoveEvent *event) override
+     {
+-        if (event->mimeData()->hasUrls()) {
+-            event->acceptProposedAction();
++        if (!event->mimeData()->hasUrls()) {
++            QTreeWidget::dragMoveEvent(event);
++            return;
++        }
++
++        QTreeWidgetItem *target = itemAt(event->position().toPoint());
++        QUrl destination = m_dropDirectory;
++        int dropTargetRow = -1;
++
++        if (target && target->data(0, Qt::UserRole + 1).toBool()) {
++            const QUrl targetUrl(target->data(0, Qt::UserRole).toString());
++            if (targetUrl.isValid()) {
++                destination = targetUrl;
++                dropTargetRow = indexOfTopLevelItem(target);
++            }
++        }
++
++        if (!canAcceptFileDrop(destination)
++            || dropWouldCreateCycle(event->mimeData()->urls(), destination)) {
++            clearDropFeedback();
++            event->ignore();
+             return;
+         }
+-        QTreeWidget::dragMoveEvent(event);
++
++        setDropFeedback(dropTargetRow, dropTargetRow < 0);
++        scheduleDirectoryHover(dropTargetRow >= 0 ? destination : QUrl());
++
++        event->setDropAction(
++            preferredDropAction(
++                event->mimeData()->urls(),
++                destination,
++                event->modifiers()));
++        event->accept();
++    }
++
++    void dragLeaveEvent(QDragLeaveEvent *event) override
++    {
++        clearDropFeedback();
++        event->accept();
+     }
+ 
+     void dropEvent(QDropEvent *event) override
+@@ -1681,42 +2499,209 @@
+             return;
+         }
+ 
++        QTreeWidgetItem *target = itemAt(event->position().toPoint());
+         QUrl destination = m_dropDirectory;
+-        QTreeWidgetItem *target =
+-            itemAt(event->position().toPoint());
+ 
+-        if (target
+-            && target->data(
+-                0,
+-                Qt::UserRole + 1).toBool()) {
+-            const QUrl targetUrl(
+-                target->data(
+-                    0,
+-                    Qt::UserRole).toString());
++        if (target && target->data(0, Qt::UserRole + 1).toBool()) {
++            const QUrl targetUrl(target->data(0, Qt::UserRole).toString());
+             if (targetUrl.isValid()) {
+                 destination = targetUrl;
+             }
+         }
+ 
+-        if (!destination.isValid()) {
++        clearDropFeedback();
++
++        if (!canAcceptFileDrop(destination)
++            || dropWouldCreateCycle(event->mimeData()->urls(), destination)) {
+             event->ignore();
+             return;
+         }
+ 
+-        const QPoint globalPosition =
+-            viewport()->mapToGlobal(
+-                event->position().toPoint());
++        const Qt::DropAction action =
++            preferredDropAction(
++                event->mimeData()->urls(),
++                destination,
++                event->modifiers());
+ 
+         Q_EMIT urlsDropped(
+             event->mimeData()->urls(),
+             destination,
+-            globalPosition);
++            event->modifiers());
+ 
+-        event->acceptProposedAction();
++        event->setDropAction(action);
++        event->accept();
++    }
++
++    void paintEvent(QPaintEvent *event) override
++    {
++        QTreeWidget::paintEvent(event);
++
++        if (m_dropTargetRow < 0 && !m_dropOverBackground) {
++            return;
++        }
++
++        QPainter painter(viewport());
++        QPen pen(palette().highlight().color(), 2);
++        painter.setPen(pen);
++        painter.setBrush(Qt::NoBrush);
++
++        if (m_dropTargetRow >= 0) {
++            if (QTreeWidgetItem *item = topLevelItem(m_dropTargetRow)) {
++                painter.drawRoundedRect(
++                    visualItemRect(item).adjusted(1, 1, -2, -2),
++                    4,
++                    4);
++            }
++        } else {
++            painter.drawRoundedRect(
++                viewport()->rect().adjusted(2, 2, -3, -3),
++                6,
++                6);
++        }
+     }
+ 
+ private:
++    void setDropFeedback(int row, bool background)
++    {
++        if (m_dropTargetRow == row
++            && m_dropOverBackground == background) {
++            return;
++        }
++        m_dropTargetRow = row;
++        m_dropOverBackground = background;
++        viewport()->update();
++    }
++
++    void scheduleDirectoryHover(const QUrl &url)
++    {
++        if (url.isValid()
++            && sameLocation(url, m_hoverDirectory)
++            && m_hoverTimer->isActive()) {
++            return;
++        }
++
++        m_hoverTimer->stop();
++        m_hoverDirectory = url;
++        if (m_hoverDirectory.isValid()) {
++            m_hoverTimer->start();
++        }
++    }
++
++    void clearDropFeedback()
++    {
++        m_dropTargetRow = -1;
++        m_dropOverBackground = false;
++        m_hoverDirectory = {};
++        if (m_hoverTimer) {
++            m_hoverTimer->stop();
++        }
++        viewport()->update();
++    }
++
+     QUrl m_dropDirectory;
++    int m_dropTargetRow = -1;
++    bool m_dropOverBackground = false;
++    QTimer *m_hoverTimer = nullptr;
++    QUrl m_hoverDirectory;
++    QPoint m_dragStartPosition;
++    bool m_dragCandidate = false;
++};
++
++class ExplorerTabBar : public QTabBar
++{
++    Q_OBJECT
++
++public:
++    explicit ExplorerTabBar(QWidget *parent = nullptr)
++        : QTabBar(parent)
++    {
++        setAcceptDrops(true);
++        m_hoverTimer = new QTimer(this);
++        m_hoverTimer->setSingleShot(true);
++        m_hoverTimer->setInterval(650);
++        connect(
++            m_hoverTimer,
++            &QTimer::timeout,
++            this,
++            [this] {
++                if (m_hoverTab >= 0 && m_hoverTab < count()) {
++                    setCurrentIndex(m_hoverTab);
++                }
++            });
++    }
++
++Q_SIGNALS:
++    void urlsDropped(
++        const QList<QUrl> &urls,
++        int tabIndex,
++        Qt::KeyboardModifiers modifiers);
++
++protected:
++    void dragEnterEvent(QDragEnterEvent *event) override
++    {
++        if (!event->mimeData()->hasUrls()) {
++            QTabBar::dragEnterEvent(event);
++            return;
++        }
++        event->acceptProposedAction();
++    }
++
++    void dragMoveEvent(QDragMoveEvent *event) override
++    {
++        if (!event->mimeData()->hasUrls()) {
++            QTabBar::dragMoveEvent(event);
++            return;
++        }
++
++        const int index = tabAt(event->position().toPoint());
++        if (index < 0) {
++            clearHoverTab();
++            event->ignore();
++            return;
++        }
++
++        if (m_hoverTab != index) {
++            m_hoverTab = index;
++            m_hoverTimer->start();
++        }
++
++        event->acceptProposedAction();
++    }
++
++    void dragLeaveEvent(QDragLeaveEvent *event) override
++    {
++        clearHoverTab();
++        event->accept();
++    }
++
++    void dropEvent(QDropEvent *event) override
++    {
++        const int index = tabAt(event->position().toPoint());
++        clearHoverTab();
++
++        if (!event->mimeData()->hasUrls() || index < 0) {
++            event->ignore();
++            return;
++        }
++
++        Q_EMIT urlsDropped(
++            event->mimeData()->urls(),
++            index,
++            event->modifiers());
++        event->acceptProposedAction();
++    }
++
++private:
++    void clearHoverTab()
++    {
++        m_hoverTab = -1;
++        if (m_hoverTimer) {
++            m_hoverTimer->stop();
++        }
++    }
++
++    QTimer *m_hoverTimer = nullptr;
++    int m_hoverTab = -1;
+ };
+ 
+ 
+@@ -2201,6 +3186,25 @@
+             this,
+             &SplitBrowserPane::urlsDropped);
+ 
++        connect(
++            m_list,
++            &DirectoryListWidget::directoryHoverRequested,
++            this,
++            [this](const QUrl &url) {
++                if (url.isValid() && !sameLocation(url, m_currentUrl)) {
++                    navigateTo(url, true);
++                }
++            });
++        connect(
++            m_details,
++            &DirectoryTreeWidget::directoryHoverRequested,
++            this,
++            [this](const QUrl &url) {
++                if (url.isValid() && !sameLocation(url, m_currentUrl)) {
++                    navigateTo(url, true);
++                }
++            });
++
+         applyViewMode();
+         updateSortIcon();
+         updateNavigationButtons();
+@@ -2322,7 +3326,7 @@
+     void urlsDropped(
+         const QList<QUrl> &urls,
+         const QUrl &destination,
+-        const QPoint &globalPosition);
++        Qt::KeyboardModifiers modifiers);
+ 
+ private:
+     QString friendlyLocationText(
+@@ -2961,6 +3965,8 @@
+                     file.name,
+                     m_list);
+ 
++            listItem->setFlags(
++                listItem->flags() | Qt::ItemIsDragEnabled);
+             listItem->setData(
+                 Qt::UserRole,
+                 file.url.toString());
+@@ -2998,6 +4004,8 @@
+             detailsItem->setIcon(
+                 0,
+                 icon);
++            detailsItem->setFlags(
++                detailsItem->flags() | Qt::ItemIsDragEnabled);
+             detailsItem->setData(
+                 0,
+                 Qt::UserRole,
+@@ -3474,6 +4482,10 @@
+     background: palette(alternate-base);
+     border: 1px solid palette(highlight);
+ }
++QPushButton#sidebarButton[dropTarget="true"] {
++    background: palette(alternate-base);
++    border: 2px solid palette(highlight);
++}
+ 
+ QFrame#sidebarDrive {
+     border: 1px solid transparent;
+@@ -3488,6 +4500,14 @@
+     border: 1px solid palette(highlight);
+     background: palette(alternate-base);
+ }
++QFrame#sidebarDrive[dropTarget="true"] {
++    border: 2px solid palette(highlight);
++    background: palette(alternate-base);
++}
++QFrame#thispcCard[dropTarget="true"] {
++    border: 2px solid palette(highlight);
++    background: palette(alternate-base);
++}
+ 
+ QFrame#breadcrumbFrame {
+     border: 1px solid palette(mid);
+@@ -4950,7 +5970,7 @@
+         tabLayout->setContentsMargins(4, 0, 2, 0);
+         tabLayout->setSpacing(0);
+ 
+-        m_tabBar = new QTabBar(m_tabStrip);
++        m_tabBar = new ExplorerTabBar(m_tabStrip);
+         m_tabBar->setObjectName(QStringLiteral("explorerTabs"));
+         m_tabBar->setTabsClosable(true);
+         m_tabBar->setMovable(true);
+@@ -5013,6 +6033,31 @@
+             this,
+             &ThisPcWindow::showTabContextMenu);
+ 
++        connect(
++            m_tabBar,
++            &ExplorerTabBar::urlsDropped,
++            this,
++            [this](
++                const QList<QUrl> &urls,
++                int tabIndex,
++                Qt::KeyboardModifiers modifiers) {
++                if (tabIndex < 0 || tabIndex >= m_tabs.size()) {
++                    return;
++                }
++
++                const QUrl destination = m_tabs.at(tabIndex).currentUrl;
++                if (!canAcceptFileDrop(destination)) {
++                    statusBar()->showMessage(
++                        trLocal(
++                            "Do tej karty nie można upuścić plików.",
++                            "Files cannot be dropped onto this tab."),
++                        3500);
++                    return;
++                }
++
++                handleDroppedUrls(urls, destination, modifiers);
++            });
++
+         m_contentSplitter = new QSplitter(Qt::Horizontal, rightPane);
+         m_contentSplitter->setObjectName(QStringLiteral("contentSplitter"));
+         m_contentSplitter->setChildrenCollapsible(false);
+@@ -5154,7 +6199,7 @@
+         statusBar()->setSizeGripEnabled(true);
+ 
+         m_versionLabel = new QLabel(
+-            QStringLiteral("v0.16.0.1"),
++            QStringLiteral("v0.17.0.4"),
+             this);
+         m_versionLabel->setObjectName(
+             QStringLiteral("versionLabel"));
+@@ -6127,6 +7172,11 @@
+                 [this](const QUrl &url) {
+                     navigateTo(url, true);
+                 });
++            connect(
++                card,
++                &ClickableFrame::urlsDropped,
++                this,
++                &ThisPcWindow::handleDroppedUrls);
+ 
+             foldersGrid->addWidget(
+                 card,
+@@ -6421,6 +7471,25 @@
+             this,
+             &ThisPcWindow::handleDroppedUrls);
+ 
++        connect(
++            m_directoryList,
++            &DirectoryListWidget::directoryHoverRequested,
++            this,
++            [this](const QUrl &url) {
++                if (url.isValid() && !sameLocation(url, m_currentUrl)) {
++                    navigateTo(url, true);
++                }
++            });
++        connect(
++            m_directoryDetails,
++            &DirectoryTreeWidget::directoryHoverRequested,
++            this,
++            [this](const QUrl &url) {
++                if (url.isValid() && !sameLocation(url, m_currentUrl)) {
++                    navigateTo(url, true);
++                }
++            });
++
+         auto addDirectoryShortcut =
+             [this](const QKeySequence &sequence,
+                    auto callback) {
+@@ -6626,6 +7695,11 @@
+             &SidebarButton::openInSplitPaneRequested,
+             this,
+             &ThisPcWindow::openInSplitPane);
++        connect(
++            button,
++            &SidebarButton::urlsDropped,
++            this,
++            &ThisPcWindow::handleDroppedUrls);
+ 
+         layout->addWidget(button);
+         m_staticSidebarButtons.push_back(button);
+@@ -8585,6 +9659,8 @@
+                     file.name,
+                     m_directoryList);
+ 
++            listItem->setFlags(
++                listItem->flags() | Qt::ItemIsDragEnabled);
+             listItem->setData(
+                 Qt::UserRole,
+                 file.url.toString());
+@@ -8619,6 +9695,8 @@
+                     });
+ 
+             detailsItem->setIcon(0, icon);
++            detailsItem->setFlags(
++                detailsItem->flags() | Qt::ItemIsDragEnabled);
+             detailsItem->setData(
+                 0,
+                 Qt::UserRole,
+@@ -12092,57 +13170,129 @@
+     }
+ 
+     void handleDroppedUrls(
+-        const QList<QUrl> &urls,
++        const QList<QUrl> &rawUrls,
+         const QUrl &destination,
+-        const QPoint &globalPosition)
++        Qt::KeyboardModifiers modifiers)
+     {
+-        if (urls.isEmpty() || !destination.isValid()) {
++        if (rawUrls.isEmpty() || !canAcceptFileDrop(destination)) {
+             return;
+         }
+ 
+-        QMenu menu(this);
++        QList<QUrl> urls;
++        QSet<QString> seen;
++        for (const QUrl &url : rawUrls) {
++            if (!url.isValid()) {
++                continue;
++            }
++            const QString key = normalizedUrl(url).toString();
++            if (seen.contains(key)) {
++                continue;
++            }
++            seen.insert(key);
++            urls.push_back(url);
++        }
+ 
+-        QAction *copyHere = menu.addAction(
+-            themedIcon(QStringLiteral("edit-copy")),
+-            trLocal("Kopiuj tutaj", "Copy here"));
++        if (urls.isEmpty()) {
++            return;
++        }
++
++        if (dropWouldCreateCycle(urls, destination)) {
++            QMessageBox::information(
++                this,
++                trLocal("Przeciągnij i upuść", "Drag and drop"),
++                trLocal(
++                    "Nie można przenieść folderu do niego samego ani do jednego z jego podfolderów.",
++                    "A folder cannot be moved into itself or one of its subfolders."));
++            return;
++        }
+ 
+-        QAction *moveHere = menu.addAction(
+-            themedIcon(QStringLiteral("go-jump")),
+-            trLocal("Przenieś tutaj", "Move here"));
++        const Qt::DropAction action =
++            preferredDropAction(urls, destination, modifiers);
+ 
+-        menu.addSeparator();
+-        QAction *cancel = menu.addAction(
+-            trLocal("Anuluj", "Cancel"));
++        if (action == Qt::MoveAction
++            && allDropSourcesAlreadyInDestination(urls, destination)) {
++            statusBar()->showMessage(
++                trLocal(
++                    "Elementy już znajdują się w tym folderze.",
++                    "The items are already in this folder."),
++                3500);
++            return;
++        }
+ 
+-        QAction *chosen = menu.exec(globalPosition);
++        if (destination.scheme() == QStringLiteral("trash")) {
++            for (const QUrl &url : urls) {
++                if (!url.isLocalFile()) {
++                    QMessageBox::information(
++                        this,
++                        trLocal("Kosz", "Trash"),
++                        trLocal(
++                            "Do Kosza można przeciągać tylko lokalne pliki i foldery.",
++                            "Only local files and folders can be dragged to Trash."));
++                    return;
++                }
++            }
+ 
+-        if (!chosen || chosen == cancel) {
++            KIO::CopyJob *job =
++                KIO::trash(urls, KIO::HideProgressInfo);
++            job->setUiDelegate(nullptr);
++            recordFileJobForUndo(
++                KIO::FileUndoManager::Trash,
++                urls,
++                QUrl(QStringLiteral("trash:/")),
++                job);
++            watchFileOperation(
++                job,
++                trLocal("Przeniesiono do Kosza", "Moved to Trash"),
++                false,
++                trLocal("Przenoszenie do Kosza", "Moving to Trash"));
+             return;
+         }
+ 
+-        KIO::CopyJob *job =
+-            chosen == moveHere
+-                ? KIO::move(
+-                    urls,
+-                    destination,
+-                    KIO::HideProgressInfo)
+-                : KIO::copy(
+-                    urls,
+-                    destination,
+-                    KIO::HideProgressInfo);
++        KIO::CopyJob *job = nullptr;
++        QString completedMessage;
++        QString operationTitle;
++
++        if (action == Qt::MoveAction) {
++            job = KIO::move(urls, destination, KIO::HideProgressInfo);
++            completedMessage =
++                trLocal("Przenoszenie zakończone", "Move completed");
++            operationTitle = trLocal("Przenoszenie", "Moving");
++        } else if (action == Qt::LinkAction) {
++            job = KIO::link(urls, destination, KIO::HideProgressInfo);
++            completedMessage =
++                trLocal("Utworzono dowiązanie", "Link created");
++            operationTitle =
++                trLocal("Tworzenie dowiązania", "Creating link");
++        } else {
++            job = KIO::copy(urls, destination, KIO::HideProgressInfo);
++            completedMessage =
++                trLocal("Kopiowanie zakończone", "Copy completed");
++            operationTitle = trLocal("Kopiowanie", "Copying");
++        }
++
++        if (!job) {
++            return;
++        }
+ 
+         job->setUiDelegate(nullptr);
+         recordCopyJobForUndo(job);
+ 
++        const QString actionText =
++            action == Qt::MoveAction
++                ? trLocal("Przenieś do", "Move to")
++                : action == Qt::LinkAction
++                    ? trLocal("Utwórz dowiązanie w", "Create link in")
++                    : trLocal("Kopiuj do", "Copy to");
++        statusBar()->showMessage(
++            QStringLiteral("%1: %2")
++                .arg(actionText, urlForDisplay(destination)),
++            2500);
++
+         watchFileOperation(
+             job,
+-            chosen == moveHere
+-                ? trLocal("Przenoszenie zakończone", "Move completed")
+-                : trLocal("Kopiowanie zakończone", "Copy completed"),
++            completedMessage,
+             false,
+-            chosen == moveHere
+-                ? trLocal("Przenoszenie", "Moving")
+-                : trLocal("Kopiowanie", "Copying"));
++            operationTitle);
+     }
+ 
+     void setDirectoryViewMode(int mode)
+@@ -12884,6 +14034,11 @@
+                 [this](const QUrl &url) {
+                     navigateTo(url, true);
+                 });
++            connect(
++                card,
++                &ClickableFrame::urlsDropped,
++                this,
++                &ThisPcWindow::handleDroppedUrls);
+ 
+             m_drivesGrid->addWidget(
+                 card,
+@@ -12930,6 +14085,11 @@
+                 &SidebarDriveButton::openInSplitPaneRequested,
+                 this,
+                 &ThisPcWindow::openInSplitPane);
++            connect(
++                button,
++                &SidebarDriveButton::urlsDropped,
++                this,
++                &ThisPcWindow::handleDroppedUrls);
+ 
+             m_devicesLayout->addWidget(button);
+             m_driveSidebarButtons.push_back(button);
+@@ -12996,7 +14156,7 @@
+     SidebarButton *m_thisPcButton = nullptr;
+ 
+     QFrame *m_tabStrip = nullptr;
+-    QTabBar *m_tabBar = nullptr;
++    ExplorerTabBar *m_tabBar = nullptr;
+     QToolButton *m_newTabButton = nullptr;
+     QList<TabState> m_tabs;
+     QList<TabState> m_closedTabs;
+@@ -13076,7 +14236,7 @@
+     QCoreApplication::setApplicationName(
+         QStringLiteral("thispc-view"));
+     QCoreApplication::setApplicationVersion(
+-        QStringLiteral("0.16.0.1"));
++        QStringLiteral("0.17.0.4"));
+ 
+     app.setApplicationDisplayName(
+         isPolish()

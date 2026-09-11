@@ -1,0 +1,52 @@
+{
+    "KDE-KIO-Protocols": {
+        "thispc": {
+            "Class": ":local",
+            "ExtraNames": [
+                "Free",
+                "Capacity",
+                "Used",
+                "Filesystem",
+                "Mount point"
+            ],
+            "ExtraNames[pl]": [
+                "Wolne",
+                "Pojemność",
+                "Zajęte",
+                "System plików",
+                "Punkt montowania"
+            ],
+            "ExtraTypes": [
+                "QString",
+                "QString",
+                "QString",
+                "QString",
+                "QString"
+            ],
+            "Icon": "computer",
+            "copyFromFile": false,
+            "copyToFile": false,
+            "deleting": false,
+            "input": "none",
+            "linking": false,
+            "listing": [
+                "Name",
+                "Type",
+                "Size",
+                "Extra1",
+                "Extra2",
+                "Extra3",
+                "Extra4",
+                "Extra5"
+            ],
+            "makedir": false,
+            "maxInstances": 1,
+            "maxInstancesPerHost": 1,
+            "moving": false,
+            "output": "filesystem",
+            "protocol": "thispc",
+            "reading": true,
+            "writing": false
+        }
+    }
+}
