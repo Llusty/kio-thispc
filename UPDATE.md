@@ -1,22 +1,21 @@
-# Aktualizacja do 0.19.0.3
+# Aktualizacja do 0.19.0.4
 
 ```bash
 cd ~/Pobrane
 rm -rf kio-thispc
-unzip kio-thispc-0.19.0.3.zip
+unzip kio-thispc-0.19.0.4.zip
 cd kio-thispc
 chmod +x install.sh
 ./install.sh
 ```
 
-## 0.19.0.3 — przywracanie sesji i pełne nazwy
+## 0.19.0.4 — stabilny układ nazw w widoku ikon
 
-- przywracanie kart oraz aktywnej karty po ponownym uruchomieniu;
-- zapisywanie historii Wstecz/Dalej dla kart;
-- przywracanie Split View, lokalizacji prawego panelu, jego trybu widoku i sortowania;
-- zachowanie szerokości Split View przez istniejący stan splittera;
-- uruchomienie `thispc-view <ścieżka/URL>` celowo pomija przywracanie sesji;
-- zaznaczony element w widoku ikon rozwija pełną nazwę zamiast kończyć ją wielokropkiem;
-- nowy przełącznik `Pełne nazwy` na pasku czynności pokazuje pełne nazwy stale;
-- ustawienie `Pełne nazwy` jest zapamiętywane;
-- w menu `Widok` dostępna jest opcja `Przywracaj poprzednią sesję`.
+- stała, sztywna geometria siatki w IconMode (`gridSize` + `uniformItemSizes`);
+- zaznaczenie elementu nigdy nie zmienia `sizeHint()` ani nie przesuwa rzędów poniżej;
+- formatowanie tekstu przez `QTextLayout` z obsługą `WrapAtWordBoundaryOrAnywhere`;
+- maksymalnie 2 linie w trybie standardowym (ostatnia linia poprawnie elidowana);
+- maksymalnie 4 linie w trybie „Pełne nazwy” z zachowaniem jednolitej wysokości kafelków;
+- pełna, nieobcięta nazwa zaznaczonego elementu rysowana jako callout na poziomie viewportu po bazowym `paintEvent`;
+- całkowite usunięcie starej nakładki QLabel;
+- brak zmian w trybach ListMode oraz DetailsMode.

@@ -2,7 +2,7 @@
  * thispc-view - a lightweight KDE/Qt file browser with a Windows-like
  * "This PC" home page, backed by KIO.
  *
- * Version 0.19.0.3
+ * Version 0.19.0.4
  * SPDX-License-Identifier: MIT
  */
 
@@ -104,6 +104,7 @@
 #include <QTabBar>
 #include <QTabWidget>
 #include <QTextDocument>
+#include <QTextLayout>
 #include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
@@ -1667,61 +1668,121 @@ public:
         const QStyleOptionViewItem &option,
         const QModelIndex &index) const override
     {
-        QStyleOptionViewItem adjusted(option);
-        initStyleOption(&adjusted, index);
-
-        // Keep the normal grid geometry stable.  Selection no longer changes
-        // an item's size: a separate overlay owned by DirectoryListWidget
-        // displays the complete name of the current selected item.
-        if (m_alwaysShowFullNames) {
-            adjusted.textElideMode = Qt::ElideNone;
-            adjusted.features.setFlag(QStyleOptionViewItem::WrapText, true);
-        } else {
-            adjusted.textElideMode = Qt::ElideRight;
-            adjusted.features.setFlag(QStyleOptionViewItem::WrapText, false);
+        if (!m_view || m_view->viewMode() != QListView::IconMode) {
+            QStyledItemDelegate::paint(painter, option, index);
+            return;
         }
 
-        const QWidget *widget = adjusted.widget;
-        QStyle *style = widget
-            ? widget->style()
-            : QApplication::style();
-        style->drawControl(
-            QStyle::CE_ItemViewItem,
-            &adjusted,
-            painter,
-            widget);
+        QStyleOptionViewItem opt(option);
+        initStyleOption(&opt, index);
+
+        const QString fullText = opt.text;
+        opt.text.clear();
+
+        const QWidget *widget = opt.widget;
+        QStyle *style = widget ? widget->style() : QApplication::style();
+
+        // 1. Draw cell background, selection/hover highlight, focus rect and decoration icon
+        style->drawControl(QStyle::CE_ItemViewItem, &opt, painter, widget);
+
+        // 2. Determine text area
+        QRect textRect = style->subElementRect(QStyle::SE_ItemViewItemText, &opt, widget);
+        if (!textRect.isValid() || textRect.isEmpty()) {
+            const int iconBottom = opt.rect.top() + opt.decorationSize.height() + 4;
+            textRect = QRect(opt.rect.left() + 4, iconBottom, opt.rect.width() - 8, opt.rect.bottom() - iconBottom);
+        }
+
+        if (fullText.isEmpty() || textRect.width() <= 0 || textRect.height() <= 0) {
+            return;
+        }
+
+        // 3. Layout text with QTextLayout using WrapAtWordBoundaryOrAnywhere
+        const int maxLines = m_alwaysShowFullNames ? 4 : 2;
+        const QFontMetrics fm(opt.font);
+
+        QTextLayout layout(fullText, opt.font);
+        QTextOption textOpt;
+        textOpt.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+        textOpt.setAlignment(Qt::AlignHCenter | Qt::AlignTop);
+        layout.setTextOption(textOpt);
+
+        layout.beginLayout();
+        struct LineDrawInfo {
+            QString text;
+            bool isElided = false;
+        };
+        QList<LineDrawInfo> linesToDraw;
+
+        while (true) {
+            QTextLine line = layout.createLine();
+            if (!line.isValid()) {
+                break;
+            }
+            line.setLineWidth(textRect.width());
+
+            if (linesToDraw.size() + 1 == maxLines) {
+                const int textStart = line.textStart();
+                const bool hasMore = (textStart + line.textLength()) < fullText.length();
+                if (hasMore) {
+                    const QString remainder = fullText.mid(textStart);
+                    const QString elided = fm.elidedText(remainder, Qt::ElideRight, textRect.width());
+                    linesToDraw.append({elided, true});
+                } else {
+                    linesToDraw.append({fullText.mid(textStart, line.textLength()), false});
+                }
+                break;
+            } else {
+                linesToDraw.append({fullText.mid(line.textStart(), line.textLength()), false});
+            }
+        }
+        layout.endLayout();
+
+        // 4. Draw text lines
+        const QPalette::ColorGroup cg = (opt.state & QStyle::State_Enabled)
+            ? ((opt.state & QStyle::State_Active) ? QPalette::Active : QPalette::Inactive)
+            : QPalette::Disabled;
+        const QPalette::ColorRole role = (opt.state & QStyle::State_Selected)
+            ? QPalette::HighlightedText
+            : QPalette::Text;
+        const QColor textColor = opt.palette.color(cg, role);
+
+        painter->save();
+        painter->setFont(opt.font);
+        painter->setPen(textColor);
+
+        const int lineHeight = fm.lineSpacing();
+        for (int i = 0; i < linesToDraw.size(); ++i) {
+            const auto &info = linesToDraw.at(i);
+            const QRect lineRect(
+                textRect.left(),
+                textRect.top() + i * lineHeight,
+                textRect.width(),
+                lineHeight);
+            painter->drawText(lineRect, Qt::AlignHCenter | Qt::AlignVCenter, info.text);
+        }
+        painter->restore();
     }
 
     QSize sizeHint(
         const QStyleOptionViewItem &option,
         const QModelIndex &index) const override
     {
-        QStyleOptionViewItem adjusted(option);
-        initStyleOption(&adjusted, index);
-
         if (!m_view) {
-            return QStyledItemDelegate::sizeHint(adjusted, index);
+            return QStyledItemDelegate::sizeHint(option, index);
         }
 
-        const QFontMetrics metrics(adjusted.font);
-        constexpr int fullNameLines = 3;
-
         if (m_view->viewMode() == QListView::ListMode) {
+            QStyleOptionViewItem adjusted(option);
+            initStyleOption(&adjusted, index);
+            const QFontMetrics metrics(adjusted.font);
             const int width = qMax(180, m_view->viewport()->width() - 16);
-            const int compactHeight = qMax(36, metrics.lineSpacing() + 14);
-            const int fullHeight = qMax(
-                compactHeight,
-                fullNameLines * metrics.lineSpacing() + 12);
-            return QSize(
-                width,
-                m_alwaysShowFullNames ? fullHeight : compactHeight);
+            const int height = qMax(32, metrics.lineSpacing() + 10);
+            return QSize(width, height);
         }
 
         constexpr int itemWidth = 136;
-        constexpr int compactHeight = 108;
-        const int fullHeight = qMax(
-            compactHeight,
-            64 + 10 + fullNameLines * metrics.lineSpacing() + 14);
+        constexpr int compactHeight = 116;
+        constexpr int fullHeight = 150;
         return QSize(
             itemWidth,
             m_alwaysShowFullNames ? fullHeight : compactHeight);
@@ -1744,22 +1805,7 @@ public:
         setItemDelegate(m_nameDelegate);
         setTextElideMode(Qt::ElideRight);
         setWordWrap(true);
-
-        m_nameOverlay = new QLabel(viewport());
-        m_nameOverlay->setObjectName(QStringLiteral("selectedNameOverlay"));
-        m_nameOverlay->setWordWrap(true);
-        m_nameOverlay->setAlignment(Qt::AlignHCenter | Qt::AlignTop);
-        m_nameOverlay->setAttribute(Qt::WA_TransparentForMouseEvents);
-        m_nameOverlay->setTextInteractionFlags(Qt::NoTextInteraction);
-        m_nameOverlay->setMargin(4);
-        m_nameOverlay->setStyleSheet(QStringLiteral(
-            "QLabel#selectedNameOverlay {"
-            " background: palette(base);"
-            " color: palette(text);"
-            " border: 1px solid palette(highlight);"
-            " border-radius: 4px;"
-            " }"));
-        m_nameOverlay->hide();
+        updateGridGeometry();
 
         connect(
             this,
@@ -1767,15 +1813,29 @@ public:
             this,
             [this] {
                 viewport()->update();
-                updateNameOverlay();
             });
         connect(
             this,
             &QListWidget::currentItemChanged,
             this,
             [this] {
-                updateNameOverlay();
+                viewport()->update();
             });
+    }
+
+    void updateGridGeometry()
+    {
+        if (viewMode() == QListView::IconMode) {
+            constexpr int itemWidth = 136;
+            constexpr int compactHeight = 116;
+            constexpr int fullHeight = 150;
+            const int itemHeight = alwaysShowFullNames() ? fullHeight : compactHeight;
+            setGridSize(QSize(itemWidth, itemHeight));
+            setUniformItemSizes(true);
+        } else {
+            setGridSize(QSize());
+            setUniformItemSizes(false);
+        }
     }
 
     void setAlwaysShowFullNames(bool enabled)
@@ -1783,9 +1843,8 @@ public:
         if (m_nameDelegate) {
             m_nameDelegate->setAlwaysShowFullNames(enabled);
         }
-        QTimer::singleShot(0, this, [this] {
-            updateNameOverlay();
-        });
+        updateGridGeometry();
+        viewport()->update();
     }
 
     bool alwaysShowFullNames() const
@@ -1807,6 +1866,96 @@ Q_SIGNALS:
         Qt::KeyboardModifiers modifiers);
 
 protected:
+    void paintEvent(QPaintEvent *event) override
+    {
+        QListWidget::paintEvent(event);
+
+        if (viewMode() != QListView::IconMode) {
+            return;
+        }
+
+        if (state() == QAbstractItemView::EditingState) {
+            return;
+        }
+
+        QListWidgetItem *item = currentItem();
+        if (!item || !item->isSelected()) {
+            return;
+        }
+
+        const QRect itemRect = visualItemRect(item);
+        if (!itemRect.isValid() || !viewport()->rect().intersects(itemRect)) {
+            return;
+        }
+
+        const QString text = item->text();
+        if (text.isEmpty()) {
+            return;
+        }
+
+        const int maxGridLines = alwaysShowFullNames() ? 4 : 2;
+        const int calloutWidth = qMax(124, itemRect.width() - 4);
+        const int innerWidth = calloutWidth - 12;
+
+        QTextLayout layout(text, font());
+        QTextOption opt;
+        opt.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+        opt.setAlignment(Qt::AlignHCenter | Qt::AlignTop);
+        layout.setTextOption(opt);
+
+        layout.beginLayout();
+        qreal textHeight = 0;
+        int lineCount = 0;
+        while (true) {
+            QTextLine line = layout.createLine();
+            if (!line.isValid()) {
+                break;
+            }
+            line.setLineWidth(innerWidth);
+            line.setPosition(QPointF(6, textHeight));
+            textHeight += line.height();
+            lineCount++;
+        }
+        layout.endLayout();
+
+        const bool needsCallout = (lineCount > maxGridLines)
+            || (lineCount > 1)
+            || (fontMetrics().horizontalAdvance(text) > innerWidth);
+        if (!needsCallout) {
+            return;
+        }
+
+        int calloutX = itemRect.center().x() - calloutWidth / 2;
+        calloutX = qBound(2, calloutX, qMax(2, viewport()->width() - calloutWidth - 2));
+
+        const int iconBottom = itemRect.top() + iconSize().height() + 4;
+        const int calloutHeight = qRound(textHeight) + 8;
+        int calloutY = qBound(2, iconBottom, qMax(2, viewport()->height() - calloutHeight - 2));
+
+        const QRect calloutRect(calloutX, calloutY, calloutWidth, calloutHeight);
+
+        QPainter painter(viewport());
+        if (!painter.isActive()) {
+            return;
+        }
+        painter.setRenderHint(QPainter::Antialiasing, true);
+
+        const QPalette pal = palette();
+        const QColor bgColor = pal.color(QPalette::Base);
+        const QColor borderColor = pal.color(QPalette::Highlight);
+        const QColor textColor = pal.color(QPalette::Text);
+
+        painter.setPen(QPen(borderColor, 1.2));
+        painter.setBrush(bgColor);
+        painter.drawRoundedRect(
+            QRectF(calloutRect).adjusted(0.5, 0.5, -0.5, -0.5),
+            4.0,
+            4.0);
+
+        painter.setPen(textColor);
+        layout.draw(&painter, QPointF(calloutRect.left(), calloutRect.top() + 4));
+    }
+
     void startDrag(Qt::DropActions supportedActions) override
     {
         Q_UNUSED(supportedActions)
@@ -1907,123 +2056,22 @@ protected:
     void scrollContentsBy(int dx, int dy) override
     {
         QListWidget::scrollContentsBy(dx, dy);
-        updateNameOverlay();
+        viewport()->update();
     }
 
     void resizeEvent(QResizeEvent *event) override
     {
         QListWidget::resizeEvent(event);
-        updateNameOverlay();
+        viewport()->update();
     }
 
     void showEvent(QShowEvent *event) override
     {
         QListWidget::showEvent(event);
-        QTimer::singleShot(0, this, [this] {
-            updateNameOverlay();
-        });
+        viewport()->update();
     }
 
 private:
-    bool selectedNameNeedsOverlay(QListWidgetItem *item) const
-    {
-        if (!item || !m_nameOverlay || !viewport()) {
-            return false;
-        }
-
-        const QString text = item->text();
-        if (text.isEmpty()) {
-            return false;
-        }
-
-        const QFontMetrics metrics(font());
-        if (viewMode() == QListView::ListMode) {
-            const QRect rect = visualItemRect(item);
-            const int available = qMax(40, rect.width() - iconSize().width() - 24);
-            if (!alwaysShowFullNames()) {
-                return metrics.horizontalAdvance(text) > available;
-            }
-            const QRect fullRect = metrics.boundingRect(
-                QRect(0, 0, available, 10000),
-                Qt::TextWordWrap | Qt::AlignLeft,
-                text);
-            return fullRect.height() > 3 * metrics.lineSpacing();
-        }
-
-        constexpr int textWidth = 124;
-        if (!alwaysShowFullNames()) {
-            return metrics.horizontalAdvance(text) > textWidth;
-        }
-        const QRect fullRect = metrics.boundingRect(
-            QRect(0, 0, textWidth, 10000),
-            Qt::TextWordWrap | Qt::AlignHCenter,
-            text);
-        return fullRect.height() > 3 * metrics.lineSpacing();
-    }
-
-    void updateNameOverlay()
-    {
-        if (!m_nameOverlay || !viewport()) {
-            return;
-        }
-
-        QListWidgetItem *item = currentItem();
-        if (!item || !item->isSelected() || !selectedNameNeedsOverlay(item)) {
-            m_nameOverlay->hide();
-            return;
-        }
-
-        const QRect itemRect = visualItemRect(item);
-        if (!itemRect.isValid() || !viewport()->rect().intersects(itemRect)) {
-            m_nameOverlay->hide();
-            return;
-        }
-
-        const QString text = item->text();
-        const QFontMetrics metrics(font());
-        int overlayWidth = 0;
-        int overlayX = 0;
-        int overlayY = 0;
-        Qt::Alignment alignment = Qt::AlignHCenter | Qt::AlignTop;
-
-        if (viewMode() == QListView::ListMode) {
-            overlayWidth = qMin(
-                qMax(260, itemRect.width() - iconSize().width()),
-                qMax(120, viewport()->width() - 12));
-            overlayX = qBound(
-                4,
-                itemRect.left() + iconSize().width() + 8,
-                qMax(4, viewport()->width() - overlayWidth - 4));
-            overlayY = itemRect.top() + 2;
-            alignment = Qt::AlignLeft | Qt::AlignTop;
-        } else {
-            overlayWidth = qMax(120, itemRect.width() - 4);
-            overlayX = qBound(
-                2,
-                itemRect.center().x() - overlayWidth / 2,
-                qMax(2, viewport()->width() - overlayWidth - 2));
-            overlayY = itemRect.top() + iconSize().height() + 10;
-        }
-
-        const QRect textRect = metrics.boundingRect(
-            QRect(0, 0, qMax(40, overlayWidth - 10), 10000),
-            Qt::TextWordWrap | alignment,
-            text);
-        const int overlayHeight = qMax(
-            metrics.lineSpacing() + 10,
-            textRect.height() + 10);
-
-        m_nameOverlay->setAlignment(alignment);
-        m_nameOverlay->setText(text);
-        m_nameOverlay->setGeometry(
-            overlayX,
-            overlayY,
-            overlayWidth,
-            overlayHeight);
-        m_nameOverlay->raise();
-        m_nameOverlay->show();
-    }
-
     QUrl dropDestinationAt(const QPoint &position) const
     {
         QUrl destination = m_dropDirectory;
@@ -2041,7 +2089,6 @@ private:
 
     QUrl m_dropDirectory;
     ExplorerNameDelegate *m_nameDelegate = nullptr;
-    QLabel *m_nameOverlay = nullptr;
 };
 
 class DirectoryTreeWidget : public QTreeWidget
@@ -3673,10 +3720,8 @@ private:
             m_list->setWrapping(true);
             m_list->setIconSize(
                 QSize(64, 64));
-            m_list->setGridSize(QSize());
             m_list->setSpacing(3);
-            m_list->setUniformItemSizes(
-                false);
+            m_list->updateGridGeometry();
             m_viewStack->setCurrentWidget(
                 m_list);
             m_viewButton->setIcon(
@@ -3691,10 +3736,8 @@ private:
             m_list->setWrapping(false);
             m_list->setIconSize(
                 QSize(24, 24));
-            m_list->setGridSize(QSize());
             m_list->setSpacing(1);
-            m_list->setUniformItemSizes(
-                false);
+            m_list->updateGridGeometry();
             m_viewStack->setCurrentWidget(
                 m_list);
             m_viewButton->setIcon(
@@ -5758,7 +5801,7 @@ private:
         statusBar()->setSizeGripEnabled(true);
 
         m_versionLabel = new QLabel(
-            QStringLiteral("v0.19.0.3"),
+            QStringLiteral("v0.19.0.4"),
             this);
         m_versionLabel->setObjectName(
             QStringLiteral("versionLabel"));
@@ -12695,9 +12738,8 @@ private:
             m_directoryList->setWrapping(true);
             m_directoryList->setIconSize(
                 QSize(64, 64));
-            m_directoryList->setGridSize(QSize());
             m_directoryList->setSpacing(3);
-            m_directoryList->setUniformItemSizes(false);
+            m_directoryList->updateGridGeometry();
             m_directoryViewStack->setCurrentWidget(
                 m_directoryList);
 
@@ -12714,9 +12756,8 @@ private:
             m_directoryList->setWrapping(false);
             m_directoryList->setIconSize(
                 QSize(24, 24));
-            m_directoryList->setGridSize(QSize());
             m_directoryList->setSpacing(1);
-            m_directoryList->setUniformItemSizes(false);
+            m_directoryList->updateGridGeometry();
             m_directoryViewStack->setCurrentWidget(
                 m_directoryList);
 
@@ -13588,7 +13629,7 @@ int main(int argc, char **argv)
     QCoreApplication::setApplicationName(
         QStringLiteral("thispc-view"));
     QCoreApplication::setApplicationVersion(
-        QStringLiteral("0.19.0.3"));
+        QStringLiteral("0.19.0.4"));
 
     app.setApplicationDisplayName(
         isPolish()

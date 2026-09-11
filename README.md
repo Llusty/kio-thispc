@@ -1,4 +1,16 @@
-# kio-thispc 0.19.0.3
+# kio-thispc 0.19.0.4
+
+
+## 0.19.0.4 — poprawka układu nazw w widoku ikon
+
+- Sztywna, jednolita siatka kafelków w IconMode: zaznaczenie elementu nigdy nie przesuwa sąsiednich rzędów.
+- Własny layout tekstu przez `QTextLayout` z `WrapAtWordBoundaryOrAnywhere` — nazwy bez spacji (np. `VID_20260122.mp4`, `kio-thispc-0.19.0.4.zip`) zawijają się poprawnie bez obcinania z boku.
+- W trybie normalnym: maksymalnie 2 linie tekstu, ostatnia elidowana `…`.
+- W trybie **Pełne nazwy**: jednakowa, stała wysokość wszystkich kafelków z maksymalnie 4 liniami.
+- Pełna nazwa zaznaczonego elementu pokazywana jako callout rysowany bezpośrednio na viewporcie po bazowym `paintEvent` — bez osobnego widgetu QLabel.
+- Callout trzyma się granic viewportu (prawy i dolny margines), nie przechwytuje myszy.
+- Usunięto `QLabel#selectedNameOverlay` i całą poprzednią logikę nakładki.
+- Tryby **Lista** i **Szczegóły** bez zmian.
 
 
 ## 0.19.0.3 — sesja i pełne nazwy
@@ -72,7 +84,7 @@ Funkcje z 0.15.4 — kompaktowy popup operacji, dynamiczna wysokość, anulowani
 ```bash
 cd ~/Pobrane
 rm -rf kio-thispc
-unzip kio-thispc-0.19.0.3.zip
+unzip kio-thispc-0.19.0.4.zip
 cd kio-thispc
 chmod +x install.sh
 ./install.sh
@@ -90,6 +102,6 @@ thispc-view
 Naprawiono cofanie zmiany nazwy. Operacja rename jest rejestrowana jako `KIO::moveAs()` przez `FileUndoManager::recordCopyJob()`, dzięki czemu Undo odtwarza poprzednią nazwę zamiast przechodzić do wcześniejszej operacji.
 
 
-## 0.19.0.3
+## 0.19.0.4
 
-Poprawiono wyświetlanie pełnej nazwy zaznaczonego elementu. Długie nazwy są teraz rzeczywiście zawijane bez ponownego skracania przez styl Qt.
+Poprawiono układ nazw plików w widoku ikon: sztywna siatka, `QTextLayout`, viewport-level callout. Opis zmian — patrz sekcja na górze.

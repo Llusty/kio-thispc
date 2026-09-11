@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.19.0.4
+
+- Sztywna, jednolita geometria siatki (`setGridSize` + `setUniformItemSizes(true)`) w IconMode — zaznaczenie elementu nigdy nie zmienia `sizeHint()` ani nie przesuwa innych rzędów.
+- Tekst nazwy pliku renderowany przez `QTextLayout` z `QTextOption::WrapAtWordBoundaryOrAnywhere`; poprawne zawijanie dla nazw bez spacji (znaki `_`, `-`, cyfry, Unicode).
+- W normalnym trybie ikon: maksymalnie 2 linie tekstu z elipsą `…` na ostatniej linii.
+- W trybie „Pełne nazwy": jednakowa, stała wysokość wszystkich kafelków z maksymalnie 4 liniami tekstu.
+- Pełna nazwa zaznaczonego elementu wyświetlana jako callout rysowany na poziomie viewportu w `DirectoryListWidget::paintEvent()` — po bazowym `QListWidget::paintEvent()`.
+- Callout zakotwiczony do `visualItemRect()`, ograniczony do granic viewportu, zawsze nad innymi elementami, bez przechwytywania myszy.
+- Usunięto `QLabel#selectedNameOverlay`, `selectedNameNeedsOverlay()`, `updateNameOverlay()` oraz magiczne stałe (124 px tekstWidth).
+- Tryby ListMode i DetailsMode bez zmian.
+
+
 ## 0.19.0.3
 
 - Usunięto dynamiczne zwiększanie wysokości pojedynczego zaznaczonego kafelka.
