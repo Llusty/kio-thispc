@@ -100,6 +100,8 @@ thispc-view
 For Codex, prefer working directly in a Git checkout and running `./scripts/build.sh` after edits instead of repeatedly creating ZIPs.
 
 
-## Current state — 0.19.0
+## Current state — 0.20.0
 
-0.18.0 conflict handling is user-confirmed. 0.19.0 adds persistent session restore (tabs, active tab, primary history, per-tab Split View location/view/sort state and splitter widths) plus full-name UX. Selected icon/list items expand their name; the `Pełne nazwy` toolbar toggle makes full names persistent for all items.
+0.18.0 conflict handling is user-confirmed. 0.19.x adds persistent session restore (tabs, active tab, primary history, per-tab Split View location/view/sort state and splitter widths) plus full-name UX. 0.19.0.4 stabilizes IconMode with fixed row geometry, bounded multi-line names and a selected full-name callout that does not reflow rows.
+
+0.20.0 adds persistent Quick Access / Favorites in the sidebar. Folders can be pinned/unpinned, reordered by Drag & Drop and restored in the same order after restart. A persistent Recent section records recently visited locations. Optional recent-file tracking is deferred; the next roadmap task is 0.21.0 architecture refactor + stabilization.

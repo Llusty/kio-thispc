@@ -2,7 +2,7 @@
  * thispc-view - a lightweight KDE/Qt file browser with a Windows-like
  * "This PC" home page, backed by KIO.
  *
- * Version 0.19.0.4
+ * Version 0.20.0
  * SPDX-License-Identifier: MIT
  */
 
@@ -1192,6 +1192,13 @@ Q_SIGNALS:
     void openInNewTabRequested(const QUrl &url, bool makeCurrent);
     void openInNewWindowRequested(const QUrl &url);
     void openInSplitPaneRequested(const QUrl &url);
+    void removeFromQuickAccessRequested(const QUrl &url);
+
+public:
+    void setQuickAccessEntry(bool enabled)
+    {
+        m_quickAccessEntry = enabled;
+    }
 
 protected:
     void mousePressEvent(QMouseEvent *event) override
@@ -1233,6 +1240,16 @@ protected:
                 "Otwórz w drugim panelu",
                 "Open in other pane"));
 
+        QAction *removeQuickAccessAction = nullptr;
+        if (m_quickAccessEntry) {
+            menu.addSeparator();
+            removeQuickAccessAction = menu.addAction(
+                themedIcon(QStringLiteral("list-remove")),
+                trLocal(
+                    "Odepnij od Szybkiego dostępu",
+                    "Unpin from Quick access"));
+        }
+
         QAction *chosen = menu.exec(event->globalPos());
 
         if (chosen == openAction) {
@@ -1243,6 +1260,10 @@ protected:
             Q_EMIT openInNewWindowRequested(m_url);
         } else if (chosen == splitPaneAction) {
             Q_EMIT openInSplitPaneRequested(m_url);
+        } else if (
+            removeQuickAccessAction
+            && chosen == removeQuickAccessAction) {
+            Q_EMIT removeFromQuickAccessRequested(m_url);
         }
 
         event->accept();
@@ -1250,6 +1271,100 @@ protected:
 
 private:
     QUrl m_url;
+    bool m_quickAccessEntry = false;
+};
+
+class QuickAccessSidebarButton : public SidebarButton
+{
+    Q_OBJECT
+
+public:
+    QuickAccessSidebarButton(
+        const QString &text,
+        const QString &iconName,
+        const QUrl &url,
+        QWidget *parent = nullptr)
+        : SidebarButton(text, iconName, url, parent)
+    {
+        setQuickAccessEntry(true);
+        setAcceptDrops(true);
+    }
+
+Q_SIGNALS:
+    void moveRequested(
+        const QUrl &source,
+        const QUrl &target,
+        bool insertAfter);
+
+protected:
+    void mousePressEvent(QMouseEvent *event) override
+    {
+        if (event->button() == Qt::LeftButton) {
+            m_dragStart = event->position().toPoint();
+        }
+        SidebarButton::mousePressEvent(event);
+    }
+
+    void mouseMoveEvent(QMouseEvent *event) override
+    {
+        if (!(event->buttons() & Qt::LeftButton)
+            || (event->position().toPoint() - m_dragStart).manhattanLength()
+                < QApplication::startDragDistance()) {
+            SidebarButton::mouseMoveEvent(event);
+            return;
+        }
+
+        auto *drag = new QDrag(this);
+        auto *mime = new QMimeData;
+        mime->setData(
+            QStringLiteral("application/x-thispc-quick-access"),
+            url().toString(QUrl::FullyEncoded).toUtf8());
+        drag->setMimeData(mime);
+        drag->setPixmap(icon().pixmap(18, 18));
+        drag->exec(Qt::MoveAction);
+    }
+
+    void dragEnterEvent(QDragEnterEvent *event) override
+    {
+        if (event->mimeData()->hasFormat(
+                QStringLiteral("application/x-thispc-quick-access"))) {
+            event->acceptProposedAction();
+            return;
+        }
+        event->ignore();
+    }
+
+    void dragMoveEvent(QDragMoveEvent *event) override
+    {
+        if (event->mimeData()->hasFormat(
+                QStringLiteral("application/x-thispc-quick-access"))) {
+            event->acceptProposedAction();
+            return;
+        }
+        event->ignore();
+    }
+
+    void dropEvent(QDropEvent *event) override
+    {
+        const QByteArray encoded = event->mimeData()->data(
+            QStringLiteral("application/x-thispc-quick-access"));
+        const QUrl source = normalizedUrl(
+            QUrl(QString::fromUtf8(encoded)));
+
+        if (!source.isValid() || sameLocation(source, url())) {
+            event->ignore();
+            return;
+        }
+
+        const bool insertAfter =
+            event->position().y() > height() / 2.0;
+        Q_EMIT moveRequested(source, url(), insertAfter);
+        event->setDropAction(Qt::MoveAction);
+        event->accept();
+    }
+
+private:
+    QPoint m_dragStart;
 };
 
 class SidebarDriveButton : public QFrame
@@ -2999,6 +3114,7 @@ Q_SIGNALS:
         const QUrl &url);
     void openInNewWindowRequested(
         const QUrl &url);
+    void locationChanged(const QUrl &url);
     void stateChanged();
     void urlsDropped(
         const QList<QUrl> &urls,
@@ -3269,6 +3385,7 @@ private:
         m_currentUrl = url;
         loadDirectory(url);
         updateNavigationButtons();
+        Q_EMIT locationChanged(m_currentUrl);
         Q_EMIT stateChanged();
     }
 
@@ -3283,6 +3400,7 @@ private:
             m_history.at(m_historyIndex);
         loadDirectory(m_currentUrl);
         updateNavigationButtons();
+        Q_EMIT locationChanged(m_currentUrl);
         Q_EMIT stateChanged();
     }
 
@@ -3299,6 +3417,7 @@ private:
             m_history.at(m_historyIndex);
         loadDirectory(m_currentUrl);
         updateNavigationButtons();
+        Q_EMIT locationChanged(m_currentUrl);
         Q_EMIT stateChanged();
     }
 
@@ -5740,6 +5859,15 @@ private:
             &ThisPcWindow::openInNewWindow);
         connect(
             m_splitPane,
+            &SplitBrowserPane::locationChanged,
+            this,
+            [this](const QUrl &url) {
+                if (!m_tabRestoreInProgress) {
+                    recordRecentLocation(url);
+                }
+            });
+        connect(
+            m_splitPane,
             &SplitBrowserPane::urlsDropped,
             this,
             &ThisPcWindow::handleDroppedUrls);
@@ -5801,14 +5929,14 @@ private:
         statusBar()->setSizeGripEnabled(true);
 
         m_versionLabel = new QLabel(
-            QStringLiteral("v0.19.0.4"),
+            QStringLiteral("v0.20.0"),
             this);
         m_versionLabel->setObjectName(
             QStringLiteral("versionLabel"));
         m_versionLabel->setToolTip(
             trLocal(
-                "Wersja thispc-view 0.16.0",
-                "thispc-view version 0.16.0"));
+                "Wersja thispc-view 0.20.0",
+                "thispc-view version 0.20.0"));
         statusBar()->addPermanentWidget(m_versionLabel);
     }
 
@@ -7130,8 +7258,334 @@ private:
                         [this] { showSelectedProperties(); });
     }
 
+    bool canQuickAccessLocation(const QUrl &rawUrl) const
+    {
+        if (!rawUrl.isValid()) {
+            return false;
+        }
+
+        const QUrl url = normalizedUrl(rawUrl);
+        if (!url.isValid()
+            || sameLocation(url, kThisPcUrl)
+            || isSearchLocation(url)) {
+            return false;
+        }
+
+        return KProtocolManager::supportsListing(url);
+    }
+
+    bool isQuickAccessPinned(const QUrl &rawUrl) const
+    {
+        if (!rawUrl.isValid()) {
+            return false;
+        }
+
+        const QUrl url = normalizedUrl(rawUrl);
+        for (const QUrl &favorite : m_quickAccessUrls) {
+            if (sameLocation(favorite, url)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void loadQuickAccessState()
+    {
+        QSettings settings;
+
+        auto decodeUnique = [](const QStringList &values) {
+            QList<QUrl> urls;
+            for (const QString &value : values) {
+                const QUrl url = normalizedUrl(QUrl(value));
+                if (!url.isValid()) {
+                    continue;
+                }
+
+                bool duplicate = false;
+                for (const QUrl &existing : std::as_const(urls)) {
+                    if (sameLocation(existing, url)) {
+                        duplicate = true;
+                        break;
+                    }
+                }
+                if (!duplicate) {
+                    urls.push_back(url);
+                }
+            }
+            return urls;
+        };
+
+        m_quickAccessUrls = decodeUnique(
+            settings.value(
+                QStringLiteral("quickAccess/favorites"))
+                .toStringList());
+
+        m_recentLocationUrls = decodeUnique(
+            settings.value(
+                QStringLiteral("quickAccess/recentLocations"))
+                .toStringList());
+        while (m_recentLocationUrls.size() > 10) {
+            m_recentLocationUrls.removeLast();
+        }
+    }
+
+    static QStringList encodedUrlList(const QList<QUrl> &urls)
+    {
+        QStringList values;
+        values.reserve(urls.size());
+        for (const QUrl &url : urls) {
+            values.push_back(
+                url.toString(QUrl::FullyEncoded));
+        }
+        return values;
+    }
+
+    void saveQuickAccessUrls()
+    {
+        QSettings settings;
+        settings.setValue(
+            QStringLiteral("quickAccess/favorites"),
+            encodedUrlList(m_quickAccessUrls));
+    }
+
+    void saveRecentLocations()
+    {
+        QSettings settings;
+        settings.setValue(
+            QStringLiteral("quickAccess/recentLocations"),
+            encodedUrlList(m_recentLocationUrls));
+    }
+
+    void connectSidebarButton(SidebarButton *button)
+    {
+        connect(
+            button,
+            &SidebarButton::activated,
+            this,
+            [this](const QUrl &target) {
+                navigateTo(target, true);
+            });
+
+        connect(
+            button,
+            &SidebarButton::openInNewTabRequested,
+            this,
+            [this](const QUrl &target, bool makeCurrent) {
+                createNewTab(target, makeCurrent);
+            });
+
+        connect(
+            button,
+            &SidebarButton::openInNewWindowRequested,
+            this,
+            &ThisPcWindow::openInNewWindow);
+        connect(
+            button,
+            &SidebarButton::openInSplitPaneRequested,
+            this,
+            &ThisPcWindow::openInSplitPane);
+    }
+
+    void rebuildQuickAccess()
+    {
+        if (!m_quickAccessLayout) {
+            return;
+        }
+
+        clearLayout(m_quickAccessLayout);
+        m_quickAccessButtons.clear();
+
+        for (const QUrl &url : std::as_const(m_quickAccessUrls)) {
+            auto *button = new QuickAccessSidebarButton(
+                displayNameForLocation(url),
+                QStringLiteral("folder-favorites"),
+                url,
+                m_sidebar);
+            connectSidebarButton(button);
+
+            connect(
+                button,
+                &SidebarButton::removeFromQuickAccessRequested,
+                this,
+                [this](const QUrl &target) {
+                    unpinQuickAccessLocation(target);
+                });
+
+            connect(
+                button,
+                &QuickAccessSidebarButton::moveRequested,
+                this,
+                &ThisPcWindow::moveQuickAccessLocation);
+
+            m_quickAccessLayout->addWidget(button);
+            m_quickAccessButtons.push_back(button);
+        }
+    }
+
+    void rebuildRecentLocations()
+    {
+        if (!m_recentLocationsLayout) {
+            return;
+        }
+
+        clearLayout(m_recentLocationsLayout);
+
+        for (const QUrl &url : std::as_const(m_recentLocationUrls)) {
+            auto *button = new SidebarButton(
+                displayNameForLocation(url),
+                QStringLiteral("document-open-recent"),
+                url,
+                m_sidebar);
+            connectSidebarButton(button);
+            m_recentLocationsLayout->addWidget(button);
+        }
+    }
+
+    void pinQuickAccessLocation(const QUrl &rawUrl)
+    {
+        if (!canQuickAccessLocation(rawUrl)
+            || isQuickAccessPinned(rawUrl)) {
+            return;
+        }
+
+        m_quickAccessUrls.push_back(normalizedUrl(rawUrl));
+        saveQuickAccessUrls();
+        rebuildQuickAccess();
+        updateSidebarCurrent();
+
+        statusBar()->showMessage(
+            trLocal(
+                "Przypięto folder do Szybkiego dostępu.",
+                "Folder pinned to Quick access."),
+            3000);
+    }
+
+    void unpinQuickAccessLocation(const QUrl &rawUrl)
+    {
+        const QUrl url = normalizedUrl(rawUrl);
+        for (int i = 0; i < m_quickAccessUrls.size(); ++i) {
+            if (!sameLocation(m_quickAccessUrls.at(i), url)) {
+                continue;
+            }
+
+            m_quickAccessUrls.removeAt(i);
+            saveQuickAccessUrls();
+            rebuildQuickAccess();
+            updateSidebarCurrent();
+
+            statusBar()->showMessage(
+                trLocal(
+                    "Odpięto folder od Szybkiego dostępu.",
+                    "Folder unpinned from Quick access."),
+                3000);
+            return;
+        }
+    }
+
+    void toggleQuickAccessLocation(const QUrl &url)
+    {
+        if (isQuickAccessPinned(url)) {
+            unpinQuickAccessLocation(url);
+        } else {
+            pinQuickAccessLocation(url);
+        }
+    }
+
+    void moveQuickAccessLocation(
+        const QUrl &rawSource,
+        const QUrl &rawTarget,
+        bool insertAfter)
+    {
+        const QUrl source = normalizedUrl(rawSource);
+        const QUrl target = normalizedUrl(rawTarget);
+
+        int sourceIndex = -1;
+        int targetIndex = -1;
+        for (int i = 0; i < m_quickAccessUrls.size(); ++i) {
+            if (sameLocation(m_quickAccessUrls.at(i), source)) {
+                sourceIndex = i;
+            }
+            if (sameLocation(m_quickAccessUrls.at(i), target)) {
+                targetIndex = i;
+            }
+        }
+
+        if (sourceIndex < 0
+            || targetIndex < 0
+            || sourceIndex == targetIndex) {
+            return;
+        }
+
+        const QUrl moved = m_quickAccessUrls.takeAt(sourceIndex);
+        if (sourceIndex < targetIndex) {
+            --targetIndex;
+        }
+        if (insertAfter) {
+            ++targetIndex;
+        }
+
+        targetIndex = std::clamp(
+            targetIndex,
+            0,
+            static_cast<int>(m_quickAccessUrls.size()));
+        m_quickAccessUrls.insert(targetIndex, moved);
+
+        saveQuickAccessUrls();
+        rebuildQuickAccess();
+        updateSidebarCurrent();
+    }
+
+    void recordRecentLocation(const QUrl &rawUrl)
+    {
+        if (!rawUrl.isValid()) {
+            return;
+        }
+
+        const QUrl url = normalizedUrl(rawUrl);
+        if (!url.isValid()
+            || sameLocation(url, kThisPcUrl)
+            || isSearchLocation(url)
+            || !KProtocolManager::supportsListing(url)) {
+            return;
+        }
+
+        for (int i = m_recentLocationUrls.size() - 1; i >= 0; --i) {
+            if (sameLocation(m_recentLocationUrls.at(i), url)) {
+                m_recentLocationUrls.removeAt(i);
+            }
+        }
+
+        m_recentLocationUrls.prepend(url);
+        while (m_recentLocationUrls.size() > 10) {
+            m_recentLocationUrls.removeLast();
+        }
+
+        saveRecentLocations();
+        rebuildRecentLocations();
+    }
+
     void buildSidebar()
     {
+        loadQuickAccessState();
+
+        auto *quickAccessSection =
+            new CollapsibleSection(
+                trLocal("Szybki dostęp", "Quick access"),
+                QStringLiteral("quickAccess"),
+                m_sidebar);
+        m_sidebarLayout->addWidget(quickAccessSection);
+        m_quickAccessLayout = quickAccessSection->contentLayout();
+        rebuildQuickAccess();
+
+        auto *recentSection =
+            new CollapsibleSection(
+                trLocal("Ostatnie", "Recent"),
+                QStringLiteral("recent"),
+                m_sidebar);
+        m_sidebarLayout->addWidget(recentSection);
+        m_recentLocationsLayout = recentSection->contentLayout();
+        rebuildRecentLocations();
+
         auto *placesSection =
             new CollapsibleSection(
                 trLocal("Miejsca", "Places"),
@@ -7243,32 +7697,7 @@ private:
         auto *button =
             new SidebarButton(name, iconName, url, m_sidebar);
 
-        connect(
-            button,
-            &SidebarButton::activated,
-            this,
-            [this](const QUrl &target) {
-                navigateTo(target, true);
-            });
-
-        connect(
-            button,
-            &SidebarButton::openInNewTabRequested,
-            this,
-            [this](const QUrl &target, bool makeCurrent) {
-                createNewTab(target, makeCurrent);
-            });
-
-        connect(
-            button,
-            &SidebarButton::openInNewWindowRequested,
-            this,
-            &ThisPcWindow::openInNewWindow);
-        connect(
-            button,
-            &SidebarButton::openInSplitPaneRequested,
-            this,
-            &ThisPcWindow::openInSplitPane);
+        connectSidebarButton(button);
 
         layout->addWidget(button);
         m_staticSidebarButtons.push_back(button);
@@ -9017,6 +9446,7 @@ private:
             if (m_historyIndex >= 0
                 && m_historyIndex < m_history.size()
                 && sameLocation(m_history.at(m_historyIndex), url)) {
+                recordRecentLocation(url);
                 loadLocation(url);
                 return;
             }
@@ -9029,6 +9459,7 @@ private:
             m_historyIndex = m_history.size() - 1;
         }
 
+        recordRecentLocation(url);
         loadLocation(url);
     }
 
@@ -11782,6 +12213,24 @@ private:
             openSplitAction->setEnabled(
                 !isSearchLocation(context.directory));
 
+            QAction *quickAccessAction = nullptr;
+            if (canQuickAccessLocation(context.directory)) {
+                const bool pinned =
+                    isQuickAccessPinned(context.directory);
+                quickAccessAction = backgroundMenu.addAction(
+                    themedIcon(
+                        pinned
+                            ? QStringLiteral("list-remove")
+                            : QStringLiteral("folder-favorites")),
+                    pinned
+                        ? trLocal(
+                            "Odepnij od Szybkiego dostępu",
+                            "Unpin from Quick access")
+                        : trLocal(
+                            "Przypnij do Szybkiego dostępu",
+                            "Pin to Quick access"));
+            }
+
             QAction *openTerminal =
                 backgroundMenu.addAction(
                     themedIcon(QStringLiteral("utilities-terminal")),
@@ -11822,6 +12271,10 @@ private:
                 openInNewWindow(context.directory);
             } else if (chosen == openSplitAction) {
                 openInOtherPane(context.id, context.directory);
+            } else if (
+                quickAccessAction
+                && chosen == quickAccessAction) {
+                toggleQuickAccessLocation(context.directory);
             } else if (chosen == openTerminal) {
                 openTerminalAt(context.directory);
             } else if (
@@ -11873,6 +12326,23 @@ private:
                 trLocal(
                     "Otwórz w drugim panelu",
                     "Open in other pane"));
+        }
+
+        QAction *quickAccessAction = nullptr;
+        if (single && isDir && canQuickAccessLocation(url)) {
+            const bool pinned = isQuickAccessPinned(url);
+            quickAccessAction = menu.addAction(
+                themedIcon(
+                    pinned
+                        ? QStringLiteral("list-remove")
+                        : QStringLiteral("folder-favorites")),
+                pinned
+                    ? trLocal(
+                        "Odepnij od Szybkiego dostępu",
+                        "Unpin from Quick access")
+                    : trLocal(
+                        "Przypnij do Szybkiego dostępu",
+                        "Pin to Quick access"));
         }
 
         QAction *openDolphinAction = menu.addAction(
@@ -12015,6 +12485,10 @@ private:
             openSplitPaneAction
             && chosen == openSplitPaneAction) {
             openInOtherPane(context.id, url);
+        } else if (
+            quickAccessAction
+            && chosen == quickAccessAction) {
+            toggleQuickAccessLocation(url);
         } else if (chosen == openDolphinAction) {
             openInDolphin(url);
         } else if (
@@ -13186,6 +13660,24 @@ private:
             }
         }
 
+        for (QuickAccessSidebarButton *button :
+             std::as_const(m_quickAccessButtons)) {
+            button->setCurrent(false);
+
+            if (!button->url().isValid()) {
+                continue;
+            }
+
+            if (isWithinLocation(effectiveLocation, button->url())) {
+                const int depth = locationDepth(button->url());
+                if (depth > bestDepth) {
+                    bestDepth = depth;
+                    bestStatic = button;
+                    bestDrive = nullptr;
+                }
+            }
+        }
+
         for (SidebarButton *button :
              std::as_const(m_staticSidebarButtons)) {
             button->setCurrent(false);
@@ -13240,8 +13732,9 @@ private Q_SLOTS:
         }
 
         --m_historyIndex;
-        loadLocation(
-            m_history.at(m_historyIndex));
+        const QUrl url = m_history.at(m_historyIndex);
+        recordRecentLocation(url);
+        loadLocation(url);
     }
 
     void goForward()
@@ -13253,8 +13746,9 @@ private Q_SLOTS:
         }
 
         ++m_historyIndex;
-        loadLocation(
-            m_history.at(m_historyIndex));
+        const QUrl url = m_history.at(m_historyIndex);
+        recordRecentLocation(url);
+        loadLocation(url);
     }
 
     void goUp()
@@ -13397,6 +13891,8 @@ private Q_SLOTS:
             m_drives = m_pendingDrives;
             rebuildDriveGrid();
             rebuildSidebarDevices();
+            rebuildQuickAccess();
+            rebuildRecentLocations();
             rebuildBreadcrumbs();
             updateSidebarCurrent();
         });
@@ -13543,7 +14039,12 @@ private:
 
     QFrame *m_sidebar = nullptr;
     QVBoxLayout *m_sidebarLayout = nullptr;
+    QVBoxLayout *m_quickAccessLayout = nullptr;
+    QVBoxLayout *m_recentLocationsLayout = nullptr;
     QVBoxLayout *m_devicesLayout = nullptr;
+    QList<QUrl> m_quickAccessUrls;
+    QList<QUrl> m_recentLocationUrls;
+    QList<QuickAccessSidebarButton *> m_quickAccessButtons;
     QList<SidebarButton *> m_staticSidebarButtons;
     QList<SidebarDriveButton *> m_driveSidebarButtons;
     SidebarButton *m_thisPcButton = nullptr;
@@ -13629,7 +14130,7 @@ int main(int argc, char **argv)
     QCoreApplication::setApplicationName(
         QStringLiteral("thispc-view"));
     QCoreApplication::setApplicationVersion(
-        QStringLiteral("0.19.0.4"));
+        QStringLiteral("0.20.0"));
 
     app.setApplicationDisplayName(
         isPolish()

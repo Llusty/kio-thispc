@@ -1,5 +1,15 @@
-# kio-thispc 0.19.0.4
+# kio-thispc 0.20.0
 
+
+## 0.20.0 — Szybki dostęp / Ulubione / Ostatnie
+
+- Dodano sekcję **Szybki dostęp** w lewym panelu.
+- Foldery można przypinać i odpinać z menu kontekstowego.
+- Przypięte foldery można porządkować metodą Drag & Drop.
+- Kolejność i lista przypiętych folderów są zapisywane w `QSettings` i przywracane po ponownym uruchomieniu.
+- Dodano sekcję **Ostatnie** z ostatnio odwiedzanymi lokalizacjami.
+- Historia ostatnich lokalizacji jest zapisywana między uruchomieniami i aktualizowana przez normalną nawigację aplikacji.
+- Funkcje 0.19.0.4, w tym stały układ nazw w widoku ikon i pełna nazwa zaznaczonego elementu bez przesuwania rzędów, pozostają bez zmian.
 
 ## 0.19.0.4 — poprawka układu nazw w widoku ikon
 
@@ -84,7 +94,7 @@ Funkcje z 0.15.4 — kompaktowy popup operacji, dynamiczna wysokość, anulowani
 ```bash
 cd ~/Pobrane
 rm -rf kio-thispc
-unzip kio-thispc-0.19.0.4.zip
+unzip kio-thispc-0.20.0.zip
 cd kio-thispc
 chmod +x install.sh
 ./install.sh

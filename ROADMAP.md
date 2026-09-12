@@ -21,22 +21,26 @@ This ordering prioritizes core file-manager correctness, safety and maintainabil
 - nested conflicts handled by `KIO::CopyJob`;
 - clean cancellation without a second error dialog.
 
-## Current release candidate
-### 0.19.0 — Session restore + full names
+## Completed releases
+
+### 0.19.0.4 — Session restore + full names ✅ user-confirmed
 - restore tabs, active tab, locations and primary navigation history;
 - restore Split View per tab, including right-pane location/view/sort state;
 - restore splitter widths;
 - option in View to reopen the previous session;
 - selected icon expands to show its full wrapped name;
-- toolbar toggle `Full names` / `Pełne nazwy` persists across launches.
+- toolbar toggle `Full names` / `Pełne nazwy` persists across launches;
+- fixed rigid IconMode grid and bounded multi-line filename layout;
+- selected full-name callout no longer changes row geometry.
+
+### 0.20.0 — Quick Access / Favorites / Recent ✅ user-confirmed
+- pin/unpin folders;
+- drag reorder with persistent ordering;
+- favorites / Quick Access in sidebar;
+- persistent recent locations;
+- optional recent files deferred.
 
 ## Planned releases
-
-### 0.20.0 — Quick Access / Favorites / Recent
-- pin/unpin folders;
-- drag reorder;
-- favorites in sidebar;
-- recent locations and optionally recent files.
 
 ### 0.21.0 — Architecture refactor + stabilization
 Split the monolithic view into maintainable components such as:

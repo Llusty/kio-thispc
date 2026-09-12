@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.20.0
+
+- dodano `Szybki dostęp` / Favorites do lewego panelu;
+- dodano przypinanie i odpinanie folderów z menu kontekstowego;
+- dodano zmianę kolejności przypiętych folderów przez Drag & Drop;
+- lista i kolejność przypiętych folderów są zapisywane przez `QSettings`;
+- dodano sekcję `Ostatnie` z ostatnio odwiedzanymi lokalizacjami;
+- historia ostatnich lokalizacji jest zapisywana między uruchomieniami;
+- zachowano działanie nawigacji głównego panelu i Split View oraz stabilny layout nazw z 0.19.0.4;
+- opcjonalne `Recent files` pozostawiono poza zakresem 0.20.0.
+
 ## 0.19.0.4
 
 - Sztywna, jednolita geometria siatki (`setGridSize` + `setUniformItemSizes(true)`) w IconMode — zaznaczenie elementu nigdy nie zmienia `sizeHint()` ani nie przesuwa innych rzędów.
