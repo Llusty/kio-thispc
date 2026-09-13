@@ -146,7 +146,7 @@ static void testWindow(bool split)
     if (QDir(QStringLiteral("/dev/shm")).exists()) {
         QTemporaryDir otherStorage(QStringLiteral("/dev/shm/thispc-drop-policy-XXXXXX"));
         if (otherStorage.isValid()
-            && !localPathsShareStorage(source.toLocalFile(), otherStorage.path())) {
+            && !directory_view_detail::localPathsShareStorage(source.toLocalFile(), otherStorage.path())) {
             verify(
                 dropActionForUrls(
                     {source},

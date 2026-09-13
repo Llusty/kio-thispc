@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.21.0
+
+- przeprowadzono zachowawczy refaktor architektury `thispc-view` bez celowych zmian zachowania;
+- wydzielono `DirectoryView`, `SplitBrowserPane`, `Sidebar`, `SessionManager`, `OperationManager`, `UndoController`, `PropertiesDialog`, `SearchController` i `FileActions`;
+- dodano wspólne helpery i typy w `browsercommon.h`;
+- zredukowano `src/thispcview.cpp` z około 14 178 do około 7 250 linii;
+- ograniczono duplikację logiki widoków i operacji pomiędzy panelem głównym i Split View;
+- dodano testy `PropertiesDialog`, `SearchController` i `FileActions` oraz rozszerzono istniejące testy paneli i Drag & Drop kart;
+- finalna walidacja automatyczna przechodzi 577 asercji, w tym realne KIO create/copy/move/rename/Trash, konflikty i Undo/Redo;
+- pełny test manualny na KDE/CachyOS potwierdził brak regresji;
+- zachowano format ustawień, stan sesji, Quick Access/Recent oraz layout nazw plików z poprzednich wydań.
+
 ## 0.20.0
 
 - dodano `Szybki dostęp` / Favorites do lewego panelu;

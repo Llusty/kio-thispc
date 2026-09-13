@@ -1,5 +1,16 @@
-# kio-thispc 0.20.0
+# kio-thispc 0.21.0
 
+
+## 0.21.0 — refaktor architektury i stabilizacja
+
+- Rozbito monolityczny `src/thispcview.cpp` na mniejsze, odpowiedzialne moduły bez zmiany zachowania użytkowego.
+- Wydzielono: `DirectoryView`, `SplitBrowserPane`, `Sidebar`, `SessionManager`, `OperationManager`, `UndoController`, `PropertiesDialog`, `SearchController` i `FileActions`.
+- Wspólne typy i helpery przeniesiono do `browsercommon.h`, ograniczając duplikację między panelem głównym i Split View.
+- `src/thispcview.cpp` zmniejszył się z około 14 178 do około 7 250 linii.
+- Dodano testy dla `PropertiesDialog`, wyszukiwania i operacji plikowych oraz rozszerzono testy paneli i Drag & Drop kart.
+- Finalny zestaw automatyczny przechodzi 577 asercji, w tym realne operacje KIO, konflikty, Trash i Undo/Redo.
+- Pełny test manualny na KDE/CachyOS został zakończony bez regresji.
+- Zachowano wszystkie funkcje 0.20.0 oraz stabilny układ nazw z 0.19.0.4.
 
 ## 0.20.0 — Szybki dostęp / Ulubione / Ostatnie
 
@@ -94,7 +105,7 @@ Funkcje z 0.15.4 — kompaktowy popup operacji, dynamiczna wysokość, anulowani
 ```bash
 cd ~/Pobrane
 rm -rf kio-thispc
-unzip kio-thispc-0.20.0.zip
+unzip kio-thispc-0.21.0.zip
 cd kio-thispc
 chmod +x install.sh
 ./install.sh

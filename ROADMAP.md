@@ -40,23 +40,16 @@ This ordering prioritizes core file-manager correctness, safety and maintainabil
 - persistent recent locations;
 - optional recent files deferred.
 
+### 0.21.0 — Architecture refactor + stabilization ✅ user-confirmed
+- extracted `DirectoryView`, `SplitBrowserPane`, `Sidebar`, `SessionManager`, `OperationManager`, `UndoController`, `PropertiesDialog`, `SearchController` and `FileActions`;
+- moved shared browser helpers/types to `browsercommon.h`;
+- reduced duplication between primary and split panes;
+- reduced `src/thispcview.cpp` from roughly 14,178 to roughly 7,250 lines;
+- added/expanded regression tests for pane actions, tab Drag & Drop, Properties, search and file actions;
+- 577 automated assertions pass;
+- full manual KDE/CachyOS acceptance passed without regressions.
+
 ## Planned releases
-
-### 0.21.0 — Architecture refactor + stabilization
-Split the monolithic view into maintainable components such as:
-- `ThisPcWindow`
-- `DirectoryView`
-- `SplitBrowserPane`
-- `Sidebar`
-- `OperationManager`
-- `OperationPopup`
-- `UndoController`
-- `PropertiesDialog`
-- `SearchController`
-- `SessionManager`
-- `FileActions`
-
-Goal: reduce duplication between primary/split panes and make subsequent features safer.
 
 ### 0.22.0 — Advanced transfer window
 A normal movable/minimizable top-level window, inspired by Windows file operation details:

@@ -16,7 +16,7 @@ The goal is not to replace KDE with Windows UI. The goal is a familiar Explorer-
 - future rich transfer window, previews, search, device/network integration, etc.
 
 ## Last confirmed stable version
-**0.16.0.1** is the clean baseline and is checked out on `main` in this handoff repository.
+**0.21.0** is the current user-confirmed stable release candidate on `main`.
 
 User-confirmed working behavior includes:
 - navigation and address/breadcrumb controls;
@@ -54,7 +54,7 @@ A bottom operation panel was rejected visually. It evolved into a compact top-ri
 ### 0.16.x — Undo/Redo
 Implemented with `KIO::FileUndoManager`. Initial manual rename recording failed: Undo consumed Rename without restoring the old name, then the next Undo tried to remove the previously created folder. 0.16.0.1 fixed rename by using `KIO::moveAs()` + `recordCopyJob()`. User confirmed rename Undo/Redo and Trash restoration work.
 
-## Current development issue: 0.17 Drag & Drop
+## Historical development note: 0.17 Drag & Drop
 The user requested complete Explorer-like Drag & Drop. Several 0.17 hotfixes were attempted after 0.16.0.1.
 
 Observed state by 0.17.0.4:
@@ -72,18 +72,20 @@ See:
 - branch `reference/failed-0.17.0.4`
 
 ## Main source layout today
-The codebase is intentionally still simple but `src/thispcview.cpp` has grown very large. Important conceptual areas include:
-- address/breadcrumb widgets;
-- clickable drive/sidebar frames;
-- directory list/tree widgets;
-- `SplitBrowserPane`;
-- `ThisPcWindow`;
-- operation manager/popup;
-- Properties/permissions;
-- search and file actions;
-- `KIO::FileUndoManager` integration.
+The 0.21.0 refactor split the former monolithic `src/thispcview.cpp` into focused modules while keeping `ThisPcWindow` as the coordinator:
+- `browsercommon.h` — shared types/helpers;
+- `directoryview.h` — directory widgets, filename delegate and shared view behavior;
+- `splitbrowserpane.h` — secondary pane;
+- `sidebar.h` — Places/Remote/Devices, Quick Access and Recent;
+- `sessionmanager.h` — persisted tabs/history/split state;
+- `operationmanager.h` — KIO job tracking and operation popup;
+- `undocontroller.h` — KIO Undo/Redo integration;
+- `propertiesdialog.h` — Properties, permissions, admin/NTFS behavior;
+- `searchcontroller.h` — search lifecycle, filters and result integration;
+- `fileactions.h` — create/copy/move/rename/trash/conflict actions;
+- `thispcview.cpp` — main window orchestration and remaining UI/navigation logic.
 
-A later roadmap milestone explicitly refactors this monolith before even larger features are added.
+The refactor reduced `src/thispcview.cpp` from roughly 14,178 to roughly 7,250 lines and is intended to make later roadmap features safer to add.
 
 ## User workflow
 Typical installation/test cycle:
@@ -100,8 +102,10 @@ thispc-view
 For Codex, prefer working directly in a Git checkout and running `./scripts/build.sh` after edits instead of repeatedly creating ZIPs.
 
 
-## Current state — 0.20.0
+## Current state — 0.21.0
 
-0.18.0 conflict handling is user-confirmed. 0.19.x adds persistent session restore (tabs, active tab, primary history, per-tab Split View location/view/sort state and splitter widths) plus full-name UX. 0.19.0.4 stabilizes IconMode with fixed row geometry, bounded multi-line names and a selected full-name callout that does not reflow rows.
+0.18.0 conflict handling is user-confirmed. 0.19.x adds persistent session restore and the stable full-name/IconMode layout. 0.20.0 adds persistent Quick Access / Favorites and Recent locations.
 
-0.20.0 adds persistent Quick Access / Favorites in the sidebar. Folders can be pinned/unpinned, reordered by Drag & Drop and restored in the same order after restart. A persistent Recent section records recently visited locations. Optional recent-file tracking is deferred; the next roadmap task is 0.21.0 architecture refactor + stabilization.
+0.21.0 completes the architecture refactor and stabilization milestone. Major responsibilities were extracted from `src/thispcview.cpp` into dedicated modules without changing the user-facing behavior or settings format. The final automated suite passes 577 assertions, including real KIO operations, conflicts, Trash and Undo/Redo, and the user completed full manual KDE/CachyOS acceptance without regressions.
+
+The next roadmap milestone is 0.22.0 — Advanced transfer window.

@@ -1,13 +1,23 @@
-# Aktualizacja do 0.20.0
+# Aktualizacja do 0.21.0
 
 ```bash
 cd ~/Pobrane
 rm -rf kio-thispc
-unzip kio-thispc-0.20.0.zip
+unzip kio-thispc-0.21.0.zip
 cd kio-thispc
 chmod +x install.sh
 ./install.sh
 ```
+
+## 0.21.0 — refaktor architektury i stabilizacja
+
+- wydzielono główne komponenty z `src/thispcview.cpp` do osobnych modułów;
+- ograniczono duplikację pomiędzy panelem głównym i Split View;
+- zachowano kompatybilność ustawień i przywracania sesji;
+- dodano/rozszerzono testy paneli, Drag & Drop kart, `PropertiesDialog`, wyszukiwania i `FileActions`;
+- finalny zestaw automatyczny: 577 zaliczonych asercji;
+- pełny test manualny KDE/CachyOS zakończony bez regresji;
+- brak zmian wymagających migracji ustawień użytkownika.
 
 ## 0.20.0 — Szybki dostęp / Ulubione / Ostatnie
 

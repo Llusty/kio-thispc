@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(kio-thispc VERSION 0.20.0 LANGUAGES CXX)
+project(kio-thispc VERSION 0.21.0 LANGUAGES CXX)
 
 set(QT_MIN_VERSION "6.5.0")
 set(KF_MIN_VERSION "6.17.0")
@@ -55,6 +55,16 @@ install(
 # ---------------------------------------------------------------------------
 add_executable(thispc-view
     src/thispcview.cpp
+    src/browsercommon.h
+    src/directoryview.h
+    src/fileactions.h
+    src/operationmanager.h
+    src/propertiesdialog.h
+    src/sidebar.h
+    src/searchcontroller.h
+    src/sessionmanager.h
+    src/undocontroller.h
+    src/splitbrowserpane.h
 )
 
 target_link_libraries(thispc-view PRIVATE

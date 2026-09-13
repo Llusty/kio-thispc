@@ -4,10 +4,10 @@
 Develop `thispc-view`, a lightweight native Qt/KDE file manager inspired by Windows 11 Explorer while retaining KDE/KIO integration and the `thispc:/` KIO worker backend.
 
 ## Current baseline
-- Work from `main`, which is the last user-confirmed stable release: **0.16.0.1**.
+- Work from the local `main` checkout. HEAD is the last stable release, **0.20.0**; the working tree contains the uncommitted **0.21.0 refactor through step 10**.
 - Do **not** start new implementation from the failed 0.17.0.4 code.
 - A reference branch named `reference/failed-0.17.0.4` and a patch under `handoff/` preserve the failed Drag & Drop attempt for inspection only.
-- The current development task is documented in `TASK_0.17_DRAG_DROP.md`.
+- The current development task is documented in `TASK_0.21_REFACTOR.md`. `TASK_0.17_DRAG_DROP.md` remains the Drag & Drop regression reference.
 
 ## User environment
 Target the user's actual local environment first:
