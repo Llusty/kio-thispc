@@ -49,23 +49,30 @@ This ordering prioritizes core file-manager correctness, safety and maintainabil
 - 577 automated assertions pass;
 - full manual KDE/CachyOS acceptance passed without regressions.
 
+### 0.22.0 — Advanced transfer window ✅ user-confirmed
+- normal movable/minimizable window opens automatically for active operations;
+- current file, source/destination summary, processed/total size, prominent percentage, current/average speed and ETA;
+- bounded speed-over-time graph;
+- multiple simultaneous operations in one dynamically sized window;
+- responsive expandable details and per-operation cancellation;
+- automatic close after the last active operation finishes;
+- compact popup remains the operation-history view;
+- misleading KIO-based pause was rejected during manual acceptance and removed.
+
 ## Planned releases
 
-### 0.22.0 — Advanced transfer window
-A normal movable/minimizable top-level window, inspired by Windows file operation details:
-- current file;
-- source/destination;
-- total/processed size;
-- percentage;
-- current and average speed;
-- ETA;
-- speed-over-time graph/histogram;
-- multiple simultaneous operations;
-- cancellation;
-- expandable/collapsible details;
-- existing compact popup remains as quick overview and can open the detailed window.
+### 0.23.0 — Native local transfer engine
+- chunked local copy with real pause/resume at a known byte offset;
+- cross-device move built on verified copy followed by source removal;
+- safe partial-file handling and cleanup/recovery after cancellation or failure;
+- conflicts, overwrite/rename/skip decisions, directories, links, permissions and timestamps;
+- disk-full, disconnect and I/O error handling;
+- progress integration with the 0.22.0 detailed window and compact history;
+- Undo/Redo integration where the completed operation is safely reversible;
+- keep KIO for remote URLs and operations where it remains the appropriate backend;
+- integrity and interruption tests before replacing any existing local KIO path.
 
-### 0.23.0 — Archives + richer New menu
+### 0.24.0 — Archives + richer New menu
 Archives:
 - native KDE/Ark-oriented integration;
 - ZIP / 7z / tar.gz where backend support exists;
@@ -76,7 +83,7 @@ New:
 - folder, empty file, text, Markdown;
 - user templates.
 
-### 0.24.0 — Preview pane
+### 0.25.0 — Preview pane
 - images, PDF, text/Markdown, JSON/XML;
 - audio/video metadata;
 - EXIF;
@@ -84,10 +91,10 @@ New:
 - folder summary;
 - toggle shortcut such as Alt+P.
 
-### 0.25.0 — Quick Look on Space
+### 0.26.0 — Quick Look on Space
 Large temporary preview without opening the associated app.
 
-### 0.26.0 — Batch rename
+### 0.27.0 — Batch rename
 - prefix/suffix;
 - numbering;
 - replace text;
@@ -96,30 +103,30 @@ Large temporary preview without opening the associated app.
 - preview before apply;
 - Undo support.
 
-### 0.27.0 — Advanced search
+### 0.28.0 — Advanced search
 - type/name/extension/date/size filters;
 - files-only/folders-only;
 - saved searches;
 - Baloo acceleration when available, current search fallback otherwise.
 
-### 0.28.0 — Grouping and per-folder view settings
+### 0.29.0 — Grouping and per-folder view settings
 - group by type/date/size;
 - Today/Yesterday/This week/etc.;
 - remember icon/list/details mode per folder.
 
-### 0.29.0 — Split View synchronization
+### 0.30.0 — Split View synchronization
 - compare left/right;
 - same / only-left / only-right / changed;
 - preview synchronization plan;
 - copy differences left/right;
 - safe sync execution.
 
-### 0.30.0 — File/folder comparison
+### 0.31.0 — File/folder comparison
 - external Meld/KDiff3 integration first;
 - folder difference view;
 - optional hashes for stronger comparisons.
 
-### 0.31.0 — Drives and devices
+### 0.32.0 — Drives and devices
 - mount/unmount/eject;
 - removable media;
 - MTP;
@@ -127,23 +134,23 @@ Large temporary preview without opening the associated app.
 - filesystem/mount details;
 - sensible SMART integration where available.
 
-### 0.32.0 — Network
+### 0.33.0 — Network
 - SMB, SFTP, FTP, WebDAV via KIO where appropriate;
 - saved remote locations;
 - network discovery where reliable.
 
-### 0.33.0 — Disk usage analyzer
+### 0.34.0 — Disk usage analyzer
 - biggest directories/files;
 - background scan;
 - top-N views;
 - optional treemap later.
 
-### 0.34.0 — Duplicates + checksums
+### 0.35.0 — Duplicates + checksums
 - SHA-256 / SHA-1 / MD5 utilities;
 - duplicate discovery by size then hash;
 - safe review before removal/move.
 
-### 0.35.0 — Advanced Properties / ACL
+### 0.36.0 — Advanced Properties / ACL
 - POSIX ACL;
 - owner/group/inode/filesystem/mount;
 - atime/mtime/ctime;
@@ -151,21 +158,21 @@ Large temporary preview without opening the associated app.
 - EXIF/media metadata;
 - continue verified NTFS behavior rather than blanket assumptions.
 
-### 0.36.0 — Administrator fallback for failed operations
+### 0.37.0 — Administrator fallback for failed operations
 When a normal operation receives permission denied, offer a targeted `admin://` retry instead of requiring an entire window to run elevated.
 
-### 0.37.0 — Transfer queue/control
+### 0.38.0 — Transfer queue/control
 - serial vs parallel;
 - concurrency limit;
 - priorities/order;
-- pause/resume only where the backend genuinely supports it.
+- queue-wide control and priorities on top of backends that genuinely support them.
 
-### 0.38.0 — Notifications + operation history
+### 0.39.0 — Notifications + operation history
 - Plasma notification for long/background completions;
 - recent operation log with source/destination/result;
 - retry where meaningful.
 
-### 0.39.0 — Plugin / Service Action architecture
+### 0.40.0 — Plugin / Service Action architecture
 Allow new context-menu actions and integrations without editing the core window source.
 
 ## Before 1.0

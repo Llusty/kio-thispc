@@ -19,6 +19,12 @@
 - [ ] sorting works
 - [ ] search still works
 - [ ] operation popup opens and remains positioned mostly to the right
+- [ ] starting an operation automatically opens the detailed operation window
+- [ ] one and multiple simultaneous operations size the detailed window correctly
+- [ ] current file, bytes, prominent percentage, speed, average, ETA and graph update
+- [ ] Mniej/Szczegóły and Cancel respond during a fast transfer
+- [ ] completed operations disappear from the detailed window but remain in compact history
+- [ ] the detailed window closes after the final active operation
 - [ ] version label is visible on dark theme
 
 ## File operations

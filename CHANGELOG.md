@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.22.0
+
+- dodano normalne, nieblokujące okno szczegółów aktywnych operacji, otwierane automatycznie po rozpoczęciu zadania;
+- wiele równoległych operacji jest łączonych w jednym oknie o dynamicznej wysokości i ograniczonej wysokości przewijania;
+- dodano bieżący plik, źródło/cel w podsumowaniu, ilość przetworzonych danych, duży procent, prędkość bieżącą i średnią oraz ETA;
+- dodano wykres prędkości z ograniczoną historią 120 próbek;
+- dodano zwijanie szczegółów z zachowaniem stanu podczas odświeżania;
+- ujednolicono anulowanie zadań pomiędzy oknem szczegółów i kompaktowym panelem;
+- okno szczegółów pokazuje wyłącznie aktywne zadania i zamyka się po zakończeniu ostatniego, a kompaktowy panel zachowuje historię;
+- odświeżanie interfejsu jest grupowane i nie zastępuje przycisków w trakcie kliknięcia;
+- świadomie usunięto pozorną pauzę opartą na `KIO::CopyJob::suspend()`; prawdziwa pauza wymaga planowanego lokalnego silnika transferów 0.23.0;
+- zestaw automatyczny obejmuje osobny pakiet testów `OperationManager`.
+
 ## 0.21.0
 
 - przeprowadzono zachowawczy refaktor architektury `thispc-view` bez celowych zmian zachowania;

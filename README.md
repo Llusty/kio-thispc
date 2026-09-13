@@ -1,4 +1,13 @@
-# kio-thispc 0.21.0
+# kio-thispc 0.22.0
+
+## 0.22.0 — zaawansowane okno transferów
+
+- Aktywne operacje automatycznie otwierają wspólne, niewielkie okno szczegółów.
+- Okno pokazuje bieżący plik, postęp, ilość danych, prędkość bieżącą i średnią, ETA oraz wykres prędkości.
+- Wysokość dopasowuje się do liczby równoległych operacji, a po zakończeniu ostatniej okno zamyka się automatycznie.
+- Szczegóły można zwijać i rozwijać, a każdą obsługiwaną operację można anulować.
+- Kompaktowy panel na pasku narzędzi pozostaje miejscem podglądu historii.
+- Prawdziwa pauza została przeniesiona do planowanego lokalnego silnika transferów 0.23.0; `KIO::CopyJob::suspend()` nie zatrzymuje niezawodnie bieżącego transferu lokalnego.
 
 
 ## 0.21.0 — refaktor architektury i stabilizacja
@@ -105,7 +114,7 @@ Funkcje z 0.15.4 — kompaktowy popup operacji, dynamiczna wysokość, anulowani
 ```bash
 cd ~/Pobrane
 rm -rf kio-thispc
-unzip kio-thispc-0.21.0.zip
+unzip kio-thispc-0.22.0.zip
 cd kio-thispc
 chmod +x install.sh
 ./install.sh

@@ -17,6 +17,7 @@ group.add_argument('--tabs', action='store_true', help='run tab drag/drop tests 
 group.add_argument('--properties', action='store_true', help='run real PropertiesDialog tests')
 group.add_argument('--search', action='store_true', help='run real KIO search and cancellation tests')
 group.add_argument('--actions', action='store_true', help='run real FileActions and Undo tests')
+group.add_argument('--operations', action='store_true', help='run OperationManager state tests')
 group.add_argument('--all', action='store_true', help='run every regression suite')
 options = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
@@ -60,8 +61,8 @@ with tempfile.TemporaryDirectory(prefix='thispc-pane-tests-') as tmp, tempfile.T
     (tmp / 'src').mkdir()
     for header in (root / 'src').glob('*.h'):
         (tmp / 'src' / header.name).write_text(expose(file_actions if header.name == 'fileactions.h' else header.read_text()))
-    suites = {'panes': 'pane-actions.cpp', 'tabs': 'tab-drag-drop.cpp', 'properties': 'properties-dialog.cpp', 'search': 'search-controller.cpp', 'actions': 'file-actions.cpp'}
-    selected = list(suites) if options.all else ['actions' if options.actions else 'tabs' if options.tabs else 'properties' if options.properties else 'search' if options.search else 'panes']
+    suites = {'panes': 'pane-actions.cpp', 'tabs': 'tab-drag-drop.cpp', 'properties': 'properties-dialog.cpp', 'search': 'search-controller.cpp', 'actions': 'file-actions.cpp', 'operations': 'operation-manager.cpp'}
+    selected = list(suites) if options.all else ['operations' if options.operations else 'actions' if options.actions else 'tabs' if options.tabs else 'properties' if options.properties else 'search' if options.search else 'panes']
     combined = prelude + source
     for suite in selected:
         disk_data = Path(disk_tmp) / suite
@@ -111,5 +112,7 @@ target_link_libraries(pane-test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Pri
                    XDG_CONFIG_HOME=str(tmp / suite / 'config'), XDG_CACHE_HOME=str(tmp / suite / 'cache'),
                    XDG_DATA_HOME=str(disk_data / 'data'), THISPC_TEST_FILES=str(disk_data),
                    LANG='C.UTF-8', LC_ALL='C.UTF-8')
-        subprocess.run(['dbus-run-session', '--config-file=' + str(bus_config), '--',
-                        str(tmp / 'build/pane-test'), suite], env=env, check=True, timeout=60)
+        command = [str(tmp / 'build/pane-test'), suite]
+        if suite != 'operations':
+            command = ['dbus-run-session', '--config-file=' + str(bus_config), '--'] + command
+        subprocess.run(command, env=env, check=True, timeout=60)

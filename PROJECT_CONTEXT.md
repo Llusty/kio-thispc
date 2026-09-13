@@ -13,10 +13,10 @@ The goal is not to replace KDE with Windows UI. The goal is a familiar Explorer-
 - native file operations and properties;
 - operation progress UI;
 - Undo/Redo;
-- future rich transfer window, previews, search, device/network integration, etc.
+- rich transfer UI, future native local transfer engine, previews, search, device/network integration, etc.
 
 ## Last confirmed stable version
-**0.21.0** is the current user-confirmed stable release candidate on `main`.
+**0.22.0** is the current user-confirmed release candidate on `main`.
 
 User-confirmed working behavior includes:
 - navigation and address/breadcrumb controls;
@@ -29,6 +29,9 @@ User-confirmed working behavior includes:
 - tabs, new-window behavior and reopen closed tab;
 - Split View with independent right pane state;
 - operation manager popup on the right side of the application;
+- automatic detailed window for active operations with graph, speed, ETA and prominent progress;
+- multiple simultaneous operations combined in one dynamically sized window;
+- automatic detailed-window close after the last active operation;
 - dynamic operation list height with scrollbar at the cap;
 - visible application version in the bottom-right status area;
 - Undo/Redo through `KIO::FileUndoManager`, including fixed rename Undo in 0.16.0.1.
@@ -102,10 +105,12 @@ thispc-view
 For Codex, prefer working directly in a Git checkout and running `./scripts/build.sh` after edits instead of repeatedly creating ZIPs.
 
 
-## Current state — 0.21.0
+## Current state — 0.22.0
 
 0.18.0 conflict handling is user-confirmed. 0.19.x adds persistent session restore and the stable full-name/IconMode layout. 0.20.0 adds persistent Quick Access / Favorites and Recent locations.
 
 0.21.0 completes the architecture refactor and stabilization milestone. Major responsibilities were extracted from `src/thispcview.cpp` into dedicated modules without changing the user-facing behavior or settings format. The final automated suite passes 577 assertions, including real KIO operations, conflicts, Trash and Undo/Redo, and the user completed full manual KDE/CachyOS acceptance without regressions.
 
-The next roadmap milestone is 0.22.0 — Advanced transfer window.
+0.22.0 adds the user-confirmed advanced transfer window while retaining the compact popup as operation history. The detailed window opens automatically, shows active operations only, combines concurrent work, provides current/average speed, ETA, a bounded graph and prominent progress, and closes after the final active operation.
+
+Manual testing showed that `KIO::CopyJob::suspend()` can report a suspended state while its local worker continues copying and buffers progress. The misleading pause control was removed from 0.22.0. The next roadmap milestone is 0.23.0 — Native local transfer engine, which will implement chunked local I/O and real pause/resume while preserving KIO for remote and appropriate operations.

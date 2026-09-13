@@ -4,10 +4,10 @@
 Develop `thispc-view`, a lightweight native Qt/KDE file manager inspired by Windows 11 Explorer while retaining KDE/KIO integration and the `thispc:/` KIO worker backend.
 
 ## Current baseline
-- Work from the local `main` checkout. HEAD is the last stable release, **0.20.0**; the working tree contains the uncommitted **0.21.0 refactor through step 10**.
+- Work from the local `main` checkout. The current release candidate is **0.22.0 — Advanced transfer window**.
 - Do **not** start new implementation from the failed 0.17.0.4 code.
 - A reference branch named `reference/failed-0.17.0.4` and a patch under `handoff/` preserve the failed Drag & Drop attempt for inspection only.
-- The current development task is documented in `TASK_0.21_REFACTOR.md`. `TASK_0.17_DRAG_DROP.md` remains the Drag & Drop regression reference.
+- The next planned feature is **0.23.0 — Native local transfer engine**. `TASK_0.21_REFACTOR.md` and `TASK_0.17_DRAG_DROP.md` remain historical regression references.
 
 ## User environment
 Target the user's actual local environment first:
@@ -83,6 +83,7 @@ Known NTFS background is documented in `docs/DECISIONS.md`; do not "simplify" it
 - Preserve the current Windows-Explorer-inspired layout without trying to clone Windows pixel-for-pixel.
 - Keep interactions unsurprising for KDE users and interoperable with Dolphin/Plasma where practical.
 - Long-running operations must remain cancellable and must not freeze the UI.
+- Do not expose `KIO::CopyJob::suspend()` as exact local pause; manual 0.22 testing proved that worker I/O/progress can continue and be buffered. Real pause belongs to the chunked 0.23 local transfer engine.
 
 ## Drag & Drop rules for 0.17
 Do not guess from screenshots alone. Verify actual Qt event flow on the user's runtime.

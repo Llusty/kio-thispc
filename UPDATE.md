@@ -1,13 +1,24 @@
-# Aktualizacja do 0.21.0
+# Aktualizacja do 0.22.0
 
 ```bash
 cd ~/Pobrane
 rm -rf kio-thispc
-unzip kio-thispc-0.21.0.zip
+unzip kio-thispc-0.22.0.zip
 cd kio-thispc
 chmod +x install.sh
 ./install.sh
 ```
+
+## 0.22.0 — zaawansowane okno transferów
+
+- automatyczne, osobne okno szczegółów dla aktywnych operacji;
+- wspólna prezentacja wielu równoległych zadań i wysokość dopasowana do ich liczby;
+- bieżący plik, źródło/cel w podsumowaniu, rozmiar, czytelny procent, prędkość bieżąca i średnia oraz ETA;
+- wykres prędkości z ograniczoną historią próbek;
+- zwijanie szczegółów i anulowanie pojedynczych operacji;
+- automatyczne zamknięcie po zakończeniu ostatniego zadania;
+- dotychczasowy kompaktowy panel nadal przechowuje historię operacji;
+- brak migracji ustawień użytkownika.
 
 ## 0.21.0 — refaktor architektury i stabilizacja
 
