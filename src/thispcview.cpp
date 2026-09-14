@@ -712,6 +712,11 @@ QFrame#breadcrumbFrame {
     border-radius: 6px;
     background: palette(base);
 }
+QFrame#breadcrumbFrame[active="true"],
+QFrame#splitBreadcrumbFrame[active="true"] {
+    border-color: palette(highlight);
+    background: palette(alternate-base);
+}
 QToolButton#searchFilterButton {
     border: 1px solid palette(mid);
     border-radius: 6px;
@@ -793,6 +798,7 @@ QWidget#primaryBrowserPane[active="true"],
 QFrame#splitBrowserPane[active="true"] {
     border-top: 2px solid palette(highlight);
 }
+QFrame#primaryPaneHeader,
 QFrame#splitPaneHeader {
     background: palette(window);
     border-bottom: 1px solid palette(mid);
@@ -1066,6 +1072,16 @@ class ThisPcWindow : public QMainWindow
                 widget->update();
             }
         }
+        if (m_breadcrumbFrame) {
+            const bool active = m_activePane == PaneId::Primary;
+            m_breadcrumbFrame->setProperty("active", active);
+            m_breadcrumbFrame->style()->unpolish(m_breadcrumbFrame);
+            m_breadcrumbFrame->style()->polish(m_breadcrumbFrame);
+        }
+        if (m_splitPane) {
+            m_splitPane->setAddressActive(m_activePane == PaneId::Split);
+        }
+        updateSidebarCurrent();
         updateFileActionStates();
     }
 
@@ -1308,7 +1324,10 @@ private:
             m_breadcrumbFrame,
             &BreadcrumbFrame::clicked,
             this,
-            &ThisPcWindow::beginAddressEdit);
+            [this] {
+                setActivePane(PaneId::Primary);
+                beginAddressEdit(PaneId::Primary);
+            });
         m_breadcrumbLayout = new QHBoxLayout(m_breadcrumbFrame);
         m_breadcrumbLayout->setContentsMargins(4, 2, 4, 2);
         m_breadcrumbLayout->setSpacing(1);
@@ -1322,7 +1341,15 @@ private:
 
         m_addressStack->addWidget(m_breadcrumbFrame);
         m_addressStack->addWidget(m_addressEdit);
-        toolbar->addWidget(m_addressStack);
+        // The address control is created here with the navigation actions but
+        // is placed above the primary pane in buildCentralUi(). In Split View
+        // each pane therefore owns an equally wide part of the address row.
+
+        auto *navigationSpacer = new QWidget(toolbar);
+        navigationSpacer->setSizePolicy(
+            QSizePolicy::Expanding,
+            QSizePolicy::Preferred);
+        toolbar->addWidget(navigationSpacer);
 
         m_searchEdit = new QLineEdit(toolbar);
         m_searchEdit->setObjectName(QStringLiteral("searchEdit"));
@@ -1617,7 +1644,7 @@ private:
             locationAction,
             &QAction::triggered,
             this,
-            &ThisPcWindow::beginAddressEdit);
+            [this] { beginAddressEdit(m_activePane); });
 
         connect(
             m_addressEdit,
@@ -1630,7 +1657,7 @@ private:
                 m_addressStack->setCurrentWidget(m_breadcrumbFrame);
 
                 if (target.isValid()) {
-                    navigateTo(target, true);
+                    navigatePane(PaneId::Primary, target);
                 }
             });
 
@@ -1667,12 +1694,21 @@ private:
         updateSearchControls();
     }
 
-    void beginAddressEdit()
+    void beginAddressEdit(PaneId pane)
     {
+        if (pane == PaneId::Split
+            && m_splitPane
+            && m_splitPane->isVisible()) {
+            setActivePane(PaneId::Split);
+            m_splitPane->beginAddressEdit();
+            return;
+        }
+
         if (!m_addressEdit || !m_addressStack) {
             return;
         }
 
+        setActivePane(PaneId::Primary);
         m_addressEdit->setText(
             urlForDisplay(m_currentUrl));
         m_addressStack->setCurrentWidget(
@@ -2119,6 +2155,17 @@ private:
             this,
             &ThisPcWindow::setSplitViewEnabled);
 
+        m_swapPanesAction = toolbar->addAction(
+            themedIcon(QStringLiteral("object-flip-horizontal"),
+                       QStringLiteral("transform-move")),
+            trLocal("Zamień panele", "Swap panes"));
+        m_swapPanesAction->setToolTip(trLocal(
+            "Zamień lokalizacje lewego i prawego panelu",
+            "Swap the locations of the left and right panes"));
+        m_swapPanesAction->setVisible(false);
+        connect(m_swapPanesAction, &QAction::triggered,
+                this, &ThisPcWindow::swapSplitPanes);
+
         // 0.15.1: compact operation history lives at the far-right edge of
         // the command bar and opens as a Brave-like popup.
         buildOperationManager(toolbar);
@@ -2142,7 +2189,7 @@ private:
             &SidebarPanel::activated,
             this,
             [this](const QUrl &url) {
-                navigateTo(url, true);
+                navigatePane(m_activePane, url);
             });
         connect(
             m_sidebar,
@@ -2160,7 +2207,9 @@ private:
             m_sidebar,
             &SidebarPanel::openInSplitPaneRequested,
             this,
-            &ThisPcWindow::openInSplitPane);
+            [this](const QUrl &url) {
+                openInOtherPane(m_activePane, url);
+            });
         connect(
             m_sidebar,
             &SidebarPanel::openInDolphinRequested,
@@ -2271,6 +2320,16 @@ private:
         primaryLayout->setContentsMargins(0, 0, 0, 0);
         primaryLayout->setSpacing(0);
 
+        auto *primaryAddressHeader = new QFrame(m_primaryPane);
+        primaryAddressHeader->setObjectName(
+            QStringLiteral("primaryPaneHeader"));
+        auto *primaryAddressLayout = new QHBoxLayout(primaryAddressHeader);
+        primaryAddressLayout->setContentsMargins(8, 6, 8, 6);
+        primaryAddressLayout->setSpacing(4);
+        m_addressStack->setParent(primaryAddressHeader);
+        primaryAddressLayout->addWidget(m_addressStack, 1);
+        primaryLayout->addWidget(primaryAddressHeader);
+
         m_contentStack = new QStackedWidget(m_primaryPane);
         primaryLayout->addWidget(m_contentStack, 1);
         m_contentSplitter->addWidget(m_primaryPane);
@@ -2350,11 +2409,16 @@ private:
                 if (!m_tabRestoreInProgress) {
                     syncActiveTabState();
                 }
+                if (m_activePane == PaneId::Split) {
+                    updateSidebarCurrent();
+                }
                 updateFileActionStates();
             });
 
         connect(m_splitPane, &SplitBrowserPane::selectionChanged,
                 this, &ThisPcWindow::updateFileActionStates);
+        connect(m_splitPane, &SplitBrowserPane::activated,
+                this, [this] { setActivePane(PaneId::Split); });
         connect(m_splitPane, &SplitBrowserPane::contextMenuRequested,
                 this, [this](bool details, const QPoint &pos) {
                     showPaneContextMenu(PaneId::Split, details, pos);
@@ -3322,6 +3386,10 @@ private:
             QSignalBlocker blocker(m_splitViewAction);
             m_splitViewAction->setChecked(enabled);
         }
+        if (m_swapPanesAction) {
+            m_swapPanesAction->setVisible(enabled);
+            m_swapPanesAction->setEnabled(enabled);
+        }
 
         if (enabled) {
             QUrl target = m_currentUrl;
@@ -3443,7 +3511,7 @@ private:
                     return;
                 }
 
-                if (m_splitPane->viewHasFocus()) {
+                if (m_activePane == PaneId::Split) {
                     focusPrimaryPane();
                 } else {
                     m_splitPane->focusView();
@@ -3807,6 +3875,10 @@ private:
         if (m_splitViewAction) {
             QSignalBlocker blocker(m_splitViewAction);
             m_splitViewAction->setChecked(state.splitEnabled);
+        }
+        if (m_swapPanesAction) {
+            m_swapPanesAction->setVisible(state.splitEnabled);
+            m_swapPanesAction->setEnabled(state.splitEnabled);
         }
         if (state.splitEnabled) {
             m_splitPane->show();
@@ -6065,6 +6137,23 @@ private:
         const bool split = paneContext().id == PaneId::Split;
         const int mode = split ? m_splitPane->viewMode() : m_directoryViewMode;
         const int sort = split ? m_splitPane->sortKey() : m_sortKey;
+        const bool ascending = split
+            ? m_splitPane->sortAscending()
+            : m_sortAscending;
+        if (m_viewButton) {
+            static const QStringList icons = {
+                QStringLiteral("view-list-icons"),
+                QStringLiteral("view-list-text"),
+                QStringLiteral("view-list-details")
+            };
+            m_viewButton->setIcon(themedIcon(icons.at(mode)));
+        }
+        if (m_sortButton) {
+            m_sortButton->setIcon(themedIcon(
+                ascending
+                    ? QStringLiteral("view-sort-ascending")
+                    : QStringLiteral("view-sort-descending")));
+        }
         if (m_viewButton && m_viewButton->menu()) {
             for (auto *action : m_viewButton->menu()->actions()) {
                 if (action->data().isValid()) {
@@ -6591,8 +6680,9 @@ private:
                 &QToolButton::clicked,
                 this,
                 [this, url] {
+                    setActivePane(PaneId::Primary);
                     if (sameLocation(url, m_currentUrl)) {
-                        beginAddressEdit();
+                        beginAddressEdit(PaneId::Primary);
                     } else {
                         navigateTo(url, true);
                     }
@@ -6856,12 +6946,17 @@ private:
             return;
         }
 
-        QUrl effectiveLocation = m_currentUrl;
-        if (isSearchLocation(m_currentUrl)) {
+        const bool split = m_activePane == PaneId::Split
+            && m_splitPane && m_splitPane->isVisible();
+        QUrl effectiveLocation = split
+            ? m_splitPane->currentUrl()
+            : m_currentUrl;
+        if (!split
+            && isSearchLocation(effectiveLocation)) {
             if (m_searchScopeMode == 2) {
                 effectiveLocation = kThisPcUrl;
             } else {
-                const QUrl base = searchBaseFromUrl(m_currentUrl);
+                const QUrl base = searchBaseFromUrl(effectiveLocation);
                 if (base.isValid()) {
                     effectiveLocation = base;
                 }
@@ -7108,6 +7203,7 @@ private:
     QToolButton *m_viewButton = nullptr;
     QToolButton *m_sortButton = nullptr;
     QAction *m_splitViewAction = nullptr;
+    QAction *m_swapPanesAction = nullptr;
     QAction *m_showHiddenAction = nullptr;
     QAction *m_thumbnailsAction = nullptr;
     QAction *m_fullNamesAction = nullptr;

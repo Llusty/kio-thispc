@@ -74,11 +74,12 @@ This ordering prioritizes core file-manager correctness, safety and maintainabil
 
 ## Planned releases
 
-### 0.24.0 — Resizable and scrollable sidebar
-- expanding Quick Access, Recent, Places, Remote or Devices does not change the application window height;
-- the sidebar gains its own vertical scrollbar whenever expanded content does not fit;
-- the divider between the sidebar and file view can be dragged to change sidebar width;
-- the chosen sidebar width persists across launches.
+### 0.24.0 — Sidebar & Split View UX
+- Stage 1: equal Split View panes, two aligned breadcrumbs and one shared toolbar/sidebar routed to the active pane;
+- Stage 1 preserves pane swap/close, navigation, View and Sort while removing the asymmetric secondary mini-toolbar;
+- later stage: Drag & Drop into sidebar destinations;
+- later stage: vertical sidebar scrolling, resizable width and persisted width;
+- later stage: full Search and `thispc:/` presentation parity between panes.
 
 ### 0.25.0 — Archives + richer New menu
 Archives:

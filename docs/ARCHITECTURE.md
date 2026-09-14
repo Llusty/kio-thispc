@@ -23,6 +23,13 @@ ThisPcWindow wires the components to navigation and UI. FileActions receives
 source/destination snapshots; the window retains pane selection, drag/drop
 policy and operation completion/error presentation.
 
+Split View uses one shared command/navigation toolbar whose actions resolve
+through the active `PaneContext`. The sidebar follows the same active-pane
+routing. Each `QSplitter` child owns its address section directly above its
+browser content, so both addresses remain visible and track the exact width of
+their respective panes. The secondary pane keeps its independent URL/history,
+view and sort state without presenting a second navigation toolbar.
+
 ### `src/thispc.json`
 KIO worker plugin metadata.
 

@@ -80,6 +80,125 @@ int main(int argc, char **argv)
     };
     fill(window.m_directoryList, window.m_directoryDetails, left);
     fill(window.m_splitPane->listView(), window.m_splitPane->detailsView(), right);
+
+    // Stage 1: both panes own one equally aligned address section while all
+    // shared controls keep operating on the pane selected by the user.
+    app.processEvents();
+    auto *primaryHeader = window.findChild<QFrame *>(QStringLiteral("primaryPaneHeader"));
+    auto *splitHeader = window.m_splitPane->findChild<QFrame *>(QStringLiteral("splitPaneHeader"));
+    verify(primaryHeader && splitHeader, "both pane address headers exist");
+    verify(primaryHeader->isVisible() && splitHeader->isVisible(), "both pane addresses stay visible in Split View");
+    verify(primaryHeader->width() == window.m_primaryPane->width()
+               && splitHeader->width() == window.m_splitPane->width(),
+           "address sections exactly match their pane widths");
+    verify(primaryHeader->mapToGlobal(QPoint()).x() == window.m_primaryPane->mapToGlobal(QPoint()).x()
+               && splitHeader->mapToGlobal(QPoint()).x() == window.m_splitPane->mapToGlobal(QPoint()).x(),
+           "address sections align with their pane edges");
+    window.m_contentSplitter->setSizes({430, 670});
+    app.processEvents();
+    verify(primaryHeader->width() == window.m_primaryPane->width()
+               && splitHeader->width() == window.m_splitPane->width(),
+           "address sections continue matching panes after divider resize");
+    verify(!window.m_splitPane->m_backButton->isVisible()
+               && !window.m_splitPane->m_forwardButton->isVisible()
+               && !window.m_splitPane->m_upButton->isVisible()
+               && !window.m_splitPane->m_viewButton->isVisible()
+               && !window.m_splitPane->m_sortButton->isVisible()
+               && !window.m_splitPane->m_swapButton->isVisible()
+               && !window.m_splitPane->m_closeButton->isVisible(),
+           "asymmetric split mini-toolbar is removed");
+    verify(window.m_swapPanesAction->isVisible(), "swap remains available in the shared toolbar");
+
+    window.setActivePane(ThisPcWindow::PaneId::Primary);
+    QTest::mouseClick(window.m_splitPane->m_breadcrumbButton, Qt::LeftButton);
+    app.processEvents();
+    verify(window.m_activePane == ThisPcWindow::PaneId::Split,
+           "clicking right breadcrumb activates right pane");
+    QTest::keyClick(window.m_splitPane->m_addressEdit, Qt::Key_Escape);
+    window.m_breadcrumbFrame->clicked();
+    app.processEvents();
+    verify(window.m_activePane == ThisPcWindow::PaneId::Primary,
+           "clicking left breadcrumb activates left pane");
+    QTest::keyClick(window.m_addressEdit, Qt::Key_Escape);
+
+    window.setActivePane(ThisPcWindow::PaneId::Split);
+    QTest::keyClick(&window, Qt::Key_L, Qt::ControlModifier);
+    app.processEvents();
+    verify(window.m_activePane == ThisPcWindow::PaneId::Split
+               && window.m_splitPane->m_locationStack->currentWidget() == window.m_splitPane->m_addressEdit,
+           "Ctrl+L edits the active right address without switching panes");
+    QTest::keyClick(window.m_splitPane->m_addressEdit, Qt::Key_Escape);
+
+    const QUrl sidebarTarget = QUrl::fromLocalFile(files.path() + "/sidebar-target");
+    QDir().mkpath(sidebarTarget.toLocalFile());
+    window.m_sidebar->activated(sidebarTarget);
+    verify(window.m_activePane == ThisPcWindow::PaneId::Split
+               && window.m_splitPane->currentUrl() == sidebarTarget
+               && window.m_currentUrl == left,
+           "sidebar navigates right active pane and preserves pane selection");
+    const QUrl otherPaneTarget = QUrl::fromLocalFile(files.path() + "/other-pane-target");
+    QDir().mkpath(otherPaneTarget.toLocalFile());
+    window.m_sidebar->openInSplitPaneRequested(otherPaneTarget);
+    verify(window.m_activePane == ThisPcWindow::PaneId::Split
+               && window.m_currentUrl == otherPaneTarget
+               && window.m_splitPane->currentUrl() == sidebarTarget,
+           "sidebar Open in other pane targets left from active right pane");
+    window.navigateTo(left, false);
+    window.m_splitPane->setCurrentUrl(right, true);
+
+    const QUrl nested = QUrl::fromLocalFile(right.toLocalFile() + "/nested");
+    QDir().mkpath(nested.toLocalFile());
+    window.m_splitPane->setCurrentUrl(nested, true);
+    window.m_backAction->trigger();
+    verify(window.m_activePane == ThisPcWindow::PaneId::Split
+               && window.m_splitPane->currentUrl() == right,
+           "shared Back operates on right pane");
+    window.m_forwardAction->trigger();
+    verify(window.m_splitPane->currentUrl() == nested, "shared Forward operates on right pane");
+    window.m_upAction->trigger();
+    verify(window.m_splitPane->currentUrl() == right, "shared Up operates on right pane");
+    window.m_refreshAction->trigger();
+    verify(window.m_activePane == ThisPcWindow::PaneId::Split,
+           "shared Refresh preserves active pane");
+
+    for (auto *action : window.m_viewButton->menu()->actions()) {
+        if (action->data().toInt() == 2) action->trigger();
+    }
+    verify(window.m_splitPane->viewMode() == 2
+               && window.m_activePane == ThisPcWindow::PaneId::Split,
+           "shared View changes right pane without switching it");
+    for (auto *action : window.m_sortButton->menu()->actions()) {
+        if (action->data().toInt() == 3) action->trigger();
+    }
+    verify(window.m_splitPane->sortKey() == 3
+               && window.m_activePane == ThisPcWindow::PaneId::Split,
+           "shared Sort changes right pane without switching it");
+
+    window.m_searchEdit->setFocus();
+    QTest::keyClick(&window, Qt::Key_F6);
+    app.processEvents();
+    verify(window.m_activePane == ThisPcWindow::PaneId::Primary,
+           "F6 moves from right to left even when toolbar has focus");
+    QTest::keyClick(&window, Qt::Key_F6);
+    app.processEvents();
+    verify(window.m_activePane == ThisPcWindow::PaneId::Split,
+           "F6 moves from left to right symmetrically");
+
+    // Restore the fixture state used by the existing parity matrix.
+    window.setDirectoryViewMode(0);
+    window.m_splitPane->setViewMode(0);
+    window.m_splitPane->setSortState(0, true);
+    window.m_splitPane->setCurrentUrl(right, false);
+    if (window.m_directoryJob) {
+        window.m_directoryJob->kill();
+        window.m_directoryJob = nullptr;
+    }
+    if (window.m_splitPane->m_job) {
+        window.m_splitPane->m_job->kill();
+        window.m_splitPane->m_job = nullptr;
+    }
+    fill(window.m_directoryList, window.m_directoryDetails, left);
+    fill(window.m_splitPane->listView(), window.m_splitPane->detailsView(), right);
     auto focus = [&](QAbstractItemView *view) {
         window.activateWindow(); view->setFocus(); app.processEvents();
     };

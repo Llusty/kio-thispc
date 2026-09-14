@@ -155,7 +155,7 @@ public:
             new QLabel(m_breadcrumbFrame);
         m_breadcrumbIcon->setFixedSize(18, 18);
         m_breadcrumbIcon->setAlignment(Qt::AlignCenter);
-        breadcrumbLayout->addWidget(m_breadcrumbIcon);
+        m_breadcrumbIcon->hide();
 
         m_breadcrumbButton =
             new QToolButton(m_breadcrumbFrame);
@@ -163,7 +163,7 @@ public:
             QStringLiteral("splitBreadcrumbButton"));
         m_breadcrumbButton->setAutoRaise(true);
         m_breadcrumbButton->setToolButtonStyle(
-            Qt::ToolButtonTextOnly);
+            Qt::ToolButtonTextBesideIcon);
         m_breadcrumbButton->setSizePolicy(
             QSizePolicy::Expanding,
             QSizePolicy::Preferred);
@@ -343,6 +343,20 @@ public:
         m_closeButton->setAutoRaise(true);
         headerLayout->addWidget(m_closeButton);
 
+        // Split View uses the window's single command/navigation toolbar.
+        // Keep these objects temporarily for the existing internal state
+        // plumbing, but remove the asymmetric controls from presentation.
+        for (QWidget *control : {
+                 static_cast<QWidget *>(m_backButton),
+                 static_cast<QWidget *>(m_forwardButton),
+                 static_cast<QWidget *>(m_upButton),
+                 static_cast<QWidget *>(m_viewButton),
+                 static_cast<QWidget *>(m_sortButton),
+                 static_cast<QWidget *>(m_swapButton),
+                 static_cast<QWidget *>(m_closeButton)}) {
+            control->hide();
+        }
+
         outer->addWidget(header);
 
         // --------------------------------------------------------------
@@ -464,6 +478,7 @@ public:
             &QToolButton::clicked,
             this,
             [this] {
+                Q_EMIT activated();
                 m_addressEdit->setText(
                     urlForDisplay(
                         m_currentUrl));
@@ -479,6 +494,7 @@ public:
             &QLineEdit::returnPressed,
             this,
             [this] {
+                Q_EMIT activated();
                 const QUrl target =
                     urlFromUserText(
                         m_addressEdit->text());
@@ -574,6 +590,27 @@ public:
     void navigateBack() { goBack(); }
     void navigateForward() { goForward(); }
     void navigateUp() { goUp(); }
+
+    void beginAddressEdit()
+    {
+        Q_EMIT activated();
+        m_addressEdit->setText(urlForDisplay(m_currentUrl));
+        m_locationStack->setCurrentWidget(m_addressEdit);
+        m_addressEdit->setFocus(Qt::ShortcutFocusReason);
+        m_addressEdit->selectAll();
+    }
+
+    void setAddressActive(bool active)
+    {
+        if (!m_breadcrumbFrame
+            || m_breadcrumbFrame->property("active").toBool() == active) {
+            return;
+        }
+        m_breadcrumbFrame->setProperty("active", active);
+        m_breadcrumbFrame->style()->unpolish(m_breadcrumbFrame);
+        m_breadcrumbFrame->style()->polish(m_breadcrumbFrame);
+        m_breadcrumbFrame->update();
+    }
 
     QUrl currentUrl() const
     {
@@ -679,6 +716,7 @@ public:
     }
 
 Q_SIGNALS:
+    void activated();
     void selectionChanged();
     void contextMenuRequested(bool details, const QPoint &position);
     void closeRequested();
@@ -866,10 +904,8 @@ private:
             urlForDisplay(
                 m_currentUrl));
 
-        m_breadcrumbIcon->setPixmap(
-            locationIcon(
-                m_currentUrl).pixmap(
-                    16, 16));
+        m_breadcrumbButton->setIcon(
+            locationIcon(m_currentUrl));
 
         m_title->setText(
             friendlyTitle(
