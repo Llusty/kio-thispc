@@ -1,13 +1,28 @@
-# Aktualizacja do 0.22.0
+# Aktualizacja do 0.23.0
 
 ```bash
 cd ~/Pobrane
 rm -rf kio-thispc
-unzip kio-thispc-0.22.0.zip
+unzip kio-thispc-0.23.0.zip
 cd kio-thispc
 chmod +x install.sh
 ./install.sh
 ```
+
+## 0.23.0 — natywny lokalny silnik transferów
+
+- rzeczywiste Pause/Resume dla obsługiwanych lokalnych transferów;
+- bezpieczne pliki częściowe `.thispc-part` i kontrolowany cleanup;
+- natywne konflikty Nadpisz / Zmień nazwę / Pomiń;
+- katalogi, wiele źródeł i symlinki z agregowanym postępem;
+- zachowanie permissions, timestampów i celów symlinków;
+- cross-filesystem Move oraz natywne Undo/Redo plików i drzew;
+- KIO pozostaje backendem dla zdalnych i niewspieranych przypadków;
+- obsługa disk-full, device-loss i błędów I/O bez crasha;
+- pionowa skala prędkości histogramu i rozmiar pliku w tooltipie;
+- pełna walidacja automatyczna: **842/842 asercji**;
+- pełna walidacja manualna KDE/CachyOS zakończona pomyślnie;
+- brak migracji ustawień użytkownika.
 
 ## 0.22.0 — zaawansowane okno transferów
 

@@ -17,6 +17,40 @@ int main(int argc, char **argv)
     const QUrl right = QUrl::fromLocalFile(files.path() + "/right");
     QDir().mkpath(left.toLocalFile());
     QDir().mkpath(right.toLocalFile());
+
+    DirectoryListWidget tooltipList;
+    DirectoryTreeWidget tooltipDetails;
+    tooltipDetails.setColumnCount(4);
+    FileInfo tooltipFile;
+    tooltipFile.name = QStringLiteral("sample.bin");
+    tooltipFile.url = childUrlWithName(left, tooltipFile.name);
+    tooltipFile.isDir = false;
+    tooltipFile.size = 32LL * 1024 * 1024 * 1024;
+    addDirectoryFileItems(
+        &tooltipList,
+        &tooltipDetails,
+        tooltipFile,
+        QIcon(),
+        QStringLiteral("File"),
+        formatFileSize(tooltipFile.size, false),
+        QStringLiteral("Today"));
+    verify(tooltipList.item(0)->toolTip().contains(formatFileSize(tooltipFile.size, false))
+               && tooltipDetails.topLevelItem(0)->toolTip(0).contains(formatFileSize(tooltipFile.size, false)),
+           "file tooltips include the formatted file size in list and details views");
+
+    FileInfo tooltipDirectory = tooltipFile;
+    tooltipDirectory.name = QStringLiteral("folder");
+    tooltipDirectory.url = childUrlWithName(left, tooltipDirectory.name);
+    tooltipDirectory.isDir = true;
+    tooltipDirectory.size = -1;
+    verify(!directoryItemToolTip(
+                tooltipDirectory,
+                QStringLiteral("Folder"),
+                QStringLiteral("—"),
+                QStringLiteral("Today"))
+                .contains(trLocal("Rozmiar", "Size") + QStringLiteral(":")),
+           "directory tooltips do not trigger or advertise recursive size calculation");
+
     ThisPcWindow window(left);
     window.show();
     window.activateWindow();

@@ -18,7 +18,14 @@ group.add_argument('--properties', action='store_true', help='run real Propertie
 group.add_argument('--search', action='store_true', help='run real KIO search and cancellation tests')
 group.add_argument('--actions', action='store_true', help='run real FileActions and Undo tests')
 group.add_argument('--operations', action='store_true', help='run OperationManager state tests')
+group.add_argument('--local-transfer', action='store_true', help='run native local copy pause/resume tests')
+group.add_argument('--transfer-plan', action='store_true', help='run native directory transfer planning tests')
+group.add_argument('--local-move', action='store_true', help='run safe native move and history tests')
 group.add_argument('--all', action='store_true', help='run every regression suite')
+group.add_argument('--suites', nargs='+', choices=[
+    'panes', 'tabs', 'properties', 'search', 'actions', 'operations',
+    'local_transfer', 'transfer_plan', 'local_move', 'local_tree', 'tree_history'],
+    help='build once and run only the selected regression suites')
 options = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
 source = (root / 'src/thispcview.cpp').read_text()
@@ -34,10 +41,10 @@ def intercept(text, signature, marker, statement):
 for signature, marker, statement in [
     ('    void trashSelected(', '        KIO::CopyJob *job =', 'dispatch = {"trash", urls, {}};'),
     ('    void renameSelected(', '        KIO::CopyJob *job =', 'dispatch = {"rename", {source}, destination};'),
-    ('    void pasteClipboardInto(', '        KIO::CopyJob *job =', 'dispatch = {cut ? "move" : "copy", urls, destination};'),
+    ('    void pasteClipboardInto(', '        if (startNativeSingleFileTransfer(', 'dispatch = {cut ? "move" : "copy", urls, destination};'),
     ('    void createNewFolder(', '        KIO::MkdirJob *job =', 'dispatch = {"mkdir", {}, destination};'),
     ('    void createNewFile(', '        KIO::StoredTransferJob *job =', 'dispatch = {"create", {}, destination};'),
-    ('    void transfer(', '        KIO::CopyJob *job =', 'dispatch = {action == Qt::MoveAction ? "move" : "copy", urls, destination};'),
+    ('    void transfer(', '        if (startNativeSingleFileTransfer(', 'dispatch = {action == Qt::MoveAction ? "move" : "copy", urls, destination};'),
 ]:
     file_actions = intercept(file_actions, signature, marker, statement)
 source = intercept(source, '    void showPropertiesDialog(', '        PropertiesDialog::show(',
@@ -50,6 +57,11 @@ source = expose(source)
 source = source.replace('int main(int argc, char **argv)', 'int applicationMain(int argc, char **argv)')
 prelude = '''#include <QtTest>
 #include <KIO/RenameDialog>
+#include "localfilecopyjob.h"
+#include "localfilemovejob.h"
+#include "localtransferplan.h"
+#include "localtransferjob.h"
+#include "localtreehistory.h"
 struct Dispatch { QString kind; QList<QUrl> sources; QUrl destination; };
 static Dispatch dispatch;
 static bool interceptFileJobs = true;
@@ -61,8 +73,8 @@ with tempfile.TemporaryDirectory(prefix='thispc-pane-tests-') as tmp, tempfile.T
     (tmp / 'src').mkdir()
     for header in (root / 'src').glob('*.h'):
         (tmp / 'src' / header.name).write_text(expose(file_actions if header.name == 'fileactions.h' else header.read_text()))
-    suites = {'panes': 'pane-actions.cpp', 'tabs': 'tab-drag-drop.cpp', 'properties': 'properties-dialog.cpp', 'search': 'search-controller.cpp', 'actions': 'file-actions.cpp', 'operations': 'operation-manager.cpp'}
-    selected = list(suites) if options.all else ['operations' if options.operations else 'actions' if options.actions else 'tabs' if options.tabs else 'properties' if options.properties else 'search' if options.search else 'panes']
+    suites = {'panes': 'pane-actions.cpp', 'tabs': 'tab-drag-drop.cpp', 'properties': 'properties-dialog.cpp', 'search': 'search-controller.cpp', 'actions': 'file-actions.cpp', 'operations': 'operation-manager.cpp', 'local_transfer': 'local-file-copy-job.cpp', 'transfer_plan': 'local-transfer-plan.cpp', 'local_move': 'local-file-move-job.cpp', 'local_tree': 'local-transfer-job.cpp', 'tree_history': 'local-tree-history.cpp'}
+    selected = options.suites or (list(suites) if options.all else ['local_move' if options.local_move else 'transfer_plan' if options.transfer_plan else 'local_transfer' if options.local_transfer else 'operations' if options.operations else 'actions' if options.actions else 'tabs' if options.tabs else 'properties' if options.properties else 'search' if options.search else 'panes'])
     combined = prelude + source
     for suite in selected:
         disk_data = Path(disk_tmp) / suite
@@ -113,6 +125,6 @@ target_link_libraries(pane-test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Pri
                    XDG_DATA_HOME=str(disk_data / 'data'), THISPC_TEST_FILES=str(disk_data),
                    LANG='C.UTF-8', LC_ALL='C.UTF-8')
         command = [str(tmp / 'build/pane-test'), suite]
-        if suite != 'operations':
+        if suite not in {'operations', 'local_transfer', 'transfer_plan', 'local_move', 'local_tree', 'tree_history'}:
             command = ['dbus-run-session', '--config-file=' + str(bus_config), '--'] + command
         subprocess.run(command, env=env, check=True, timeout=60)

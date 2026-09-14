@@ -919,6 +919,28 @@ inline void applyDirectoryViewLayout(
 }
 
 
+inline QString directoryItemToolTip(
+    const FileInfo &file,
+    const QString &typeText,
+    const QString &sizeText,
+    const QString &modifiedText)
+{
+    QStringList lines{
+        urlForDisplay(file.url),
+        typeText
+    };
+    if (!file.isDir) {
+        lines.push_back(
+            QStringLiteral("%1: %2")
+                .arg(
+                    trLocal("Rozmiar", "Size"),
+                    sizeText));
+    }
+    lines.push_back(modifiedText);
+    return lines.join(QLatin1Char('\n'));
+}
+
+
 inline void addDirectoryFileItems(
     DirectoryListWidget *list,
     DirectoryTreeWidget *details,
@@ -949,12 +971,12 @@ inline void addDirectoryFileItems(
     listItem->setData(
         Qt::UserRole + 4,
         modifiedText);
-    listItem->setToolTip(
-        QStringLiteral("%1\n%2\n%3")
-            .arg(
-                urlForDisplay(file.url),
-                typeText,
-                modifiedText));
+    const QString toolTip = directoryItemToolTip(
+        file,
+        typeText,
+        sizeText,
+        modifiedText);
+    listItem->setToolTip(toolTip);
 
     QStringList columns{
         file.name,
@@ -977,9 +999,7 @@ inline void addDirectoryFileItems(
         0,
         Qt::UserRole + 1,
         file.isDir);
-    detailsItem->setToolTip(
-        0,
-        urlForDisplay(file.url));
+    detailsItem->setToolTip(0, toolTip);
     detailsItem->setTextAlignment(
         2,
         Qt::AlignRight | Qt::AlignVCenter);

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.23.0
+
+- dodano natywny lokalny silnik copy/move z dokładnym Pause/Resume na granicach chunków;
+- dodano bezpieczną publikację przez `.thispc-part`, cleanup po anulowaniu oraz kontrolowane błędy zapisu, disk-full i device-loss;
+- dodano natywne Overwrite/Rename/Skip dla konfliktów pojedynczych plików;
+- dodano asynchroniczne planowanie i wykonywanie katalogów, wielu źródeł oraz symlinków;
+- zachowywane są permissions, nanosekundowe timestampy katalogów/plików oraz literalne cele symlinków;
+- cross-filesystem Move publikuje dane przed usunięciem źródła i integruje się z Undo/Redo;
+- natywna historia drzew i historia KIO zachowują wspólną kolejność poleceń;
+- KIO pozostaje używane dla URL-i zdalnych i niewspieranych lokalnych przypadków;
+- poprawiono widoczność zatrzymanych operacji w szczegółowym oknie;
+- dodano pionową skalę prędkości wykresu oraz rozmiar pliku w tooltipie;
+- pełna regresja przechodzi **842/842 asercji**;
+- ręczna walidacja potwierdziła konflikty, katalogi, symlinki, metadata, wielokrotne Pause/Resume, równoległe transfery, Cancel, cross-filesystem Move, Undo/Redo, disk-full, device-loss i integralność SHA-256.
+
 ## 0.22.0
 
 - dodano normalne, nieblokujące okno szczegółów aktywnych operacji, otwierane automatycznie po rozpoczęciu zadania;

@@ -1,4 +1,16 @@
-# kio-thispc 0.22.0
+# kio-thispc 0.23.0
+
+## 0.23.0 — natywny lokalny silnik transferów
+
+- Obsługiwane lokalne kopie i przenoszenia korzystają z natywnego silnika z rzeczywistym Pause/Resume na znanym offsecie; KIO pozostaje backendem dla zdalnych i niewspieranych przypadków.
+- Bezpieczna publikacja przez pliki `.thispc-part`, cleanup po anulowaniu oraz kontrolowana obsługa błędów zapisu, braku miejsca i utraty urządzenia.
+- Natywna obsługa konfliktów pojedynczych plików: **Nadpisz / Zmień nazwę / Pomiń**.
+- Natywne wykonywanie katalogów, wielu źródeł i symlinków z sumarycznym postępem i bieżącym plikiem.
+- Zachowanie uprawnień, timestampów i literalnych celów linków symbolicznych.
+- Cross-filesystem Move, bezpieczne Undo/Redo dla plików i drzew katalogów oraz wspólna kolejność historii z operacjami KIO.
+- Okno operacji obsługuje prawdziwe Pause/Resume, pionową skalę prędkości na wykresie oraz pozostawia zatrzymane zadania widoczne.
+- Tooltip pliku pokazuje również jego rozmiar.
+- Pełny zestaw automatyczny przechodzi **842/842 asercji**, a pełna akceptacja manualna na KDE/CachyOS została zakończona pomyślnie.
 
 ## 0.22.0 — zaawansowane okno transferów
 
@@ -114,7 +126,7 @@ Funkcje z 0.15.4 — kompaktowy popup operacji, dynamiczna wysokość, anulowani
 ```bash
 cd ~/Pobrane
 rm -rf kio-thispc
-unzip kio-thispc-0.22.0.zip
+unzip kio-thispc-0.23.0.zip
 cd kio-thispc
 chmod +x install.sh
 ./install.sh

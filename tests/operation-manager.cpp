@@ -1,10 +1,12 @@
 class TestOperationJob final : public KJob
 {
 public:
-    explicit TestOperationJob(bool killable)
+    explicit TestOperationJob(bool killable, bool suspendable = false)
     {
         setAutoDelete(false);
-        setCapabilities(killable ? KJob::Killable : KJob::NoCapabilities);
+        setCapabilities(
+            (killable ? KJob::Killable : KJob::NoCapabilities)
+            | (suspendable ? KJob::Suspendable : KJob::NoCapabilities));
     }
 
     void start() override {}
@@ -36,8 +38,21 @@ protected:
         return true;
     }
 
+    bool doSuspend() override
+    {
+        paused = true;
+        return true;
+    }
+
+    bool doResume() override
+    {
+        paused = false;
+        return true;
+    }
+
 public:
     bool killed = false;
+    bool paused = false;
 };
 
 static int checks = 0;
@@ -92,6 +107,12 @@ int main(int argc, char **argv)
     verify(operations[0].contextText.contains(QStringLiteral("source.txt"))
                && operations[0].contextText.contains(QStringLiteral("target")),
            "KJob context is exposed");
+    const QUrl nativeCurrent = QUrl::fromLocalFile(QStringLiteral("/tmp/tree/nested/current.bin"));
+    first.setProperty("thispcCurrentSourceUrl", nativeCurrent);
+    first.setProperty("thispcCurrentDestinationUrl", QUrl::fromLocalFile(QStringLiteral("/tmp/output/current.bin")));
+    first.report(256, 1024, 128);
+    verify(manager.operations().first().currentSourceUrl == nativeCurrent,
+           "native tree descriptions update the current-file display");
 
     const quint64 firstId = operations[0].id;
     verify(manager.cancelOperation(firstId) && first.killed,
@@ -161,6 +182,39 @@ int main(int argc, char **argv)
                    == OperationManager::State::Cancelling,
            "detailed window cancellation uses shared manager path");
     manager.finish(&third, false, true, {});
+    manager.clearFinished();
+
+    TestOperationJob pauseable(true, true);
+    manager.track(&pauseable, QStringLiteral("Native copy"));
+    verify(manager.operations().constLast().canPause
+               && !manager.operations().constLast().paused,
+           "suspendable operation exposes pause capability");
+    auto *pauseButton = manager.m_detailedWindow->findChild<QToolButton *>(
+        QStringLiteral("detailedOperationPauseButton"));
+    verify(pauseButton && !pauseButton->isHidden() && pauseButton->isEnabled(),
+           "detailed window shows an enabled pause button");
+    pauseButton->click();
+    verify(pauseable.paused
+               && manager.operations().constLast().state
+                   == OperationManager::State::Paused,
+           "pause control suspends the job and updates shared state");
+    QCoreApplication::processEvents();
+    QTest::qWait(160);
+    verify(manager.m_detailedWindow->isVisible()
+               && manager.m_detailedWindow
+                      ->findChildren<QFrame *>(QStringLiteral("operationRow"))
+                      .size() == 1,
+           "paused operation remains visible in the detailed window");
+    pauseButton = manager.m_detailedWindow->findChild<QToolButton *>(
+        QStringLiteral("detailedOperationPauseButton"));
+    verify(pauseButton && pauseButton->isEnabled(),
+           "paused operation exposes an enabled resume button");
+    pauseButton->click();
+    verify(!pauseable.paused
+               && manager.operations().constLast().state
+                   == OperationManager::State::Running,
+           "same control resumes the paused operation");
+    manager.finish(&pauseable, true, false, {});
     manager.clearFinished();
 
     TestOperationJob timed(false);

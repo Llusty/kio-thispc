@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(kio-thispc VERSION 0.22.0 LANGUAGES CXX)
+project(kio-thispc VERSION 0.23.0 LANGUAGES CXX)
 
 set(QT_MIN_VERSION "6.5.0")
 set(KF_MIN_VERSION "6.17.0")
@@ -58,6 +58,12 @@ add_executable(thispc-view
     src/browsercommon.h
     src/directoryview.h
     src/fileactions.h
+    src/localfilecopyjob.h
+    src/localfilemovejob.h
+    src/localfileoverwrite.h
+    src/localtransferplan.h
+    src/localtransferjob.h
+    src/localtreehistory.h
     src/operationmanager.h
     src/propertiesdialog.h
     src/sidebar.h

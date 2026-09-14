@@ -15,6 +15,7 @@
 #include <KIO/CopyJob>
 
 #include <QFrame>
+#include <QFontMetrics>
 #include <QElapsedTimer>
 #include <QGuiApplication>
 #include <QHash>
@@ -335,6 +336,7 @@ class OperationManager final : public QObject
 public:
     enum class State {
         Running,
+        Paused,
         Cancelling,
         Completed,
         Cancelled,
@@ -359,6 +361,8 @@ public:
         unsigned long percent = 0;
         State state = State::Running;
         bool canCancel = false;
+        bool canPause = false;
+        bool paused = false;
     };
 
     OperationManager(
@@ -416,7 +420,11 @@ public:
             snapshot.state = item->state;
             snapshot.canCancel = item->job
                 && item->job->capabilities().testFlag(KJob::Killable)
-                && item->state == State::Running;
+                && (item->state == State::Running || item->state == State::Paused);
+            snapshot.canPause = item->job
+                && item->job->capabilities().testFlag(KJob::Suspendable)
+                && (item->state == State::Running || item->state == State::Paused);
+            snapshot.paused = item->state == State::Paused;
             result.push_back(snapshot);
         }
         return result;
@@ -461,6 +469,15 @@ public:
                 [this, item](KIO::Job *, const QUrl &source, const QUrl &destination) {
                     updateCurrentFile(item, source, destination);
                 });
+        } else {
+            item->sourceUrls = job->property("thispcSourceUrls")
+                .value<QList<QUrl>>();
+            item->destinationUrl = job->property("thispcDestinationUrl")
+                .value<QUrl>();
+            if (!item->sourceUrls.isEmpty()) {
+                item->currentSourceUrl = item->sourceUrls.first();
+                item->currentDestinationUrl = item->destinationUrl;
+            }
         }
 
         item->row = new QFrame(m_popup->m_listWidget);
@@ -555,6 +572,27 @@ public:
 
         connect(
             job,
+            &KJob::suspended,
+            this,
+            [this, item](KJob *) {
+                if (!item || item->finished()) return;
+                item->state = State::Paused;
+                item->stateLabel->setText(trLocal("Wstrzymano", "Paused"));
+                Q_EMIT operationsChanged();
+            });
+        connect(
+            job,
+            &KJob::resumed,
+            this,
+            [this, item](KJob *) {
+                if (!item || item->finished()) return;
+                item->state = State::Running;
+                item->stateLabel->setText(trLocal("W toku", "Running"));
+                Q_EMIT operationsChanged();
+            });
+
+        connect(
+            job,
             &KJob::percentChanged,
             this,
             [this, item](KJob *, unsigned long percent) {
@@ -625,12 +663,18 @@ public:
             &KJob::description,
             this,
             [this, item](
-                KJob *,
+                KJob *job,
                 const QString &,
                 const QPair<QString, QString> &field1,
                 const QPair<QString, QString> &field2) {
                 if (!item || item->finished()) {
                     return;
+                }
+
+                const QUrl currentSource = job->property("thispcCurrentSourceUrl").value<QUrl>();
+                if (currentSource.isValid()) {
+                    item->currentSourceUrl = currentSource;
+                    item->currentDestinationUrl = job->property("thispcCurrentDestinationUrl").value<QUrl>();
                 }
 
                 QString context;
@@ -723,6 +767,20 @@ public:
                 continue;
             }
             return cancelItem(item, true);
+        }
+        return false;
+    }
+
+    bool togglePause(quint64 id)
+    {
+        for (FileOperationItem *item : std::as_const(m_items)) {
+            if (!item || item->id != id || !item->job
+                || !item->job->capabilities().testFlag(KJob::Suspendable)) {
+                continue;
+            }
+            if (item->state == State::Paused) return item->job->resume();
+            if (item->state == State::Running) return item->job->suspend();
+            return false;
         }
         return false;
     }
@@ -1212,15 +1270,6 @@ protected:
         painter.setBrush(palette().color(QPalette::AlternateBase));
         painter.drawRoundedRect(graphRect, 5, 5);
 
-        painter.setPen(QPen(palette().color(QPalette::Midlight), 1));
-        for (int division = 1; division < 4; ++division) {
-            const qreal y = graphRect.top()
-                + graphRect.height() * division / 4.0;
-            painter.drawLine(
-                QPointF(graphRect.left(), y),
-                QPointF(graphRect.right(), y));
-        }
-
         if (m_samples.size() < 2) {
             painter.setPen(palette().color(QPalette::PlaceholderText));
             painter.drawText(
@@ -1232,26 +1281,75 @@ protected:
             return;
         }
 
-        qulonglong maximum = 1;
+        qulonglong sampleMaximum = 1;
         for (qulonglong sample : m_samples) {
-            maximum = qMax(maximum, sample);
+            sampleMaximum = qMax(sampleMaximum, sample);
+        }
+        const qulonglong maximum = scaleMaximum(sampleMaximum);
+
+        const QFontMetrics metrics(font());
+        QStringList scaleLabels;
+        scaleLabels.reserve(5);
+        int scaleLabelWidth = 0;
+        for (int division = 0; division <= 4; ++division) {
+            const qulonglong value = maximum * division / 4;
+            const QString label = speedScaleText(value);
+            scaleLabels.push_back(label);
+            scaleLabelWidth = qMax(
+                scaleLabelWidth,
+                metrics.horizontalAdvance(label));
+        }
+
+        const qreal scaleGap = 8.0;
+        const QRectF plotRect = graphRect.adjusted(
+            scaleLabelWidth + scaleGap + 6.0,
+            6.0,
+            -6.0,
+            -6.0);
+
+        painter.setPen(QPen(palette().color(QPalette::Midlight), 1));
+        for (int division = 0; division <= 4; ++division) {
+            const qreal y = plotRect.bottom()
+                - plotRect.height() * division / 4.0;
+            painter.drawLine(
+                QPointF(plotRect.left(), y),
+                QPointF(plotRect.right(), y));
+        }
+        painter.setPen(QPen(palette().color(QPalette::Mid), 1));
+        painter.drawLine(
+            QPointF(plotRect.left(), plotRect.top()),
+            QPointF(plotRect.left(), plotRect.bottom()));
+
+        painter.setPen(palette().color(QPalette::PlaceholderText));
+        for (int division = 0; division <= 4; ++division) {
+            const qreal y = plotRect.bottom()
+                - plotRect.height() * division / 4.0;
+            const QRectF labelRect(
+                graphRect.left() + 4.0,
+                y - metrics.height() / 2.0,
+                scaleLabelWidth,
+                metrics.height());
+            painter.drawText(
+                labelRect,
+                Qt::AlignRight | Qt::AlignVCenter,
+                scaleLabels.at(division));
         }
 
         QPolygonF line;
         line.reserve(m_samples.size());
         for (int index = 0; index < m_samples.size(); ++index) {
-            const qreal x = graphRect.left()
-                + graphRect.width() * index / (m_samples.size() - 1.0);
+            const qreal x = plotRect.left()
+                + plotRect.width() * index / (m_samples.size() - 1.0);
             const qreal ratio = static_cast<qreal>(m_samples.at(index))
                 / static_cast<qreal>(maximum);
-            const qreal y = graphRect.bottom()
-                - ratio * (graphRect.height() - 4);
+            const qreal y = plotRect.bottom()
+                - ratio * plotRect.height();
             line.push_back(QPointF(x, y));
         }
 
         QPolygonF fill = line;
-        fill.push_back(QPointF(graphRect.right(), graphRect.bottom()));
-        fill.push_back(QPointF(graphRect.left(), graphRect.bottom()));
+        fill.push_back(QPointF(plotRect.right(), plotRect.bottom()));
+        fill.push_back(QPointF(plotRect.left(), plotRect.bottom()));
         QColor fillColor = palette().color(QPalette::Highlight);
         fillColor.setAlpha(55);
         painter.setPen(Qt::NoPen);
@@ -1261,23 +1359,34 @@ protected:
         painter.setBrush(Qt::NoBrush);
         painter.setPen(QPen(palette().color(QPalette::Highlight), 2));
         painter.drawPolyline(line);
-
-        painter.setPen(palette().color(QPalette::WindowText));
-        painter.drawText(
-            graphRect.adjusted(6, 4, -6, -4),
-            Qt::AlignTop | Qt::AlignRight,
-            formatFileSize(
-                static_cast<qint64>(qMin<qulonglong>(
-                    maximum,
-                    static_cast<qulonglong>(
-                        std::numeric_limits<qint64>::max()))),
-                false) + QStringLiteral("/s"));
     }
 
 private:
+    static qulonglong scaleMaximum(qulonglong sampleMaximum)
+    {
+        qulonglong maximum = 4;
+        while (maximum < sampleMaximum
+               && maximum <= std::numeric_limits<qulonglong>::max() / 2) {
+            maximum *= 2;
+        }
+        return qMax(maximum, sampleMaximum);
+    }
+
+    static QString speedScaleText(qulonglong bytesPerSecond)
+    {
+        if (bytesPerSecond == 0) {
+            return QStringLiteral("0");
+        }
+        return formatFileSize(
+            static_cast<qint64>(qMin<qulonglong>(
+                bytesPerSecond,
+                static_cast<qulonglong>(
+                    std::numeric_limits<qint64>::max()))),
+            false) + QStringLiteral("/s");
+    }
+
     QList<qulonglong> m_samples;
 };
-
 
 class OperationWindow final : public QWidget
 {
@@ -1354,6 +1463,7 @@ public:
         QList<OperationManager::OperationSnapshot> operations;
         for (const auto &operation : allOperations) {
             if (operation.state == OperationManager::State::Running
+                || operation.state == OperationManager::State::Paused
                 || operation.state == OperationManager::State::Cancelling) {
                 operations.push_back(operation);
             }
@@ -1463,6 +1573,8 @@ private:
         switch (state) {
         case OperationManager::State::Running:
             return trLocal("W toku", "Running");
+        case OperationManager::State::Paused:
+            return trLocal("Wstrzymano", "Paused");
         case OperationManager::State::Cancelling:
             return trLocal("Anulowanie…", "Cancelling…");
         case OperationManager::State::Completed:
@@ -1598,6 +1710,28 @@ private:
         detailsToggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
         topLine->addWidget(detailsToggle);
 
+        auto *pause = new QToolButton(content);
+        pause->setObjectName(QStringLiteral("detailedOperationPauseButton"));
+        pause->setIcon(themedIcon(
+            operation.paused
+                ? QStringLiteral("media-playback-start")
+                : QStringLiteral("media-playback-pause")));
+        pause->setToolTip(
+            operation.paused
+                ? trLocal("Wznów operację", "Resume operation")
+                : trLocal("Wstrzymaj operację", "Pause operation"));
+        pause->setEnabled(operation.canPause);
+        pause->setVisible(operation.canPause);
+        protectInteraction(pause);
+        QObject::connect(
+            pause,
+            &QToolButton::clicked,
+            this,
+            [manager = m_manager, id = operation.id] {
+                if (manager) manager->togglePause(id);
+            });
+        topLine->addWidget(pause);
+
         auto *cancel = new QToolButton(content);
         cancel->setObjectName(
             QStringLiteral("detailedOperationCancelButton"));
@@ -1722,6 +1856,7 @@ private:
         }
         if (details.isEmpty()
             && (operation.state == OperationManager::State::Running
+                || operation.state == OperationManager::State::Paused
                 || operation.state == OperationManager::State::Cancelling)) {
             details = trLocal(
                 "Oczekiwanie na informacje o postępie…",

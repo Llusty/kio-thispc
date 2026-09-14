@@ -13,10 +13,10 @@ The goal is not to replace KDE with Windows UI. The goal is a familiar Explorer-
 - native file operations and properties;
 - operation progress UI;
 - Undo/Redo;
-- rich transfer UI, future native local transfer engine, previews, search, device/network integration, etc.
+- rich transfer UI, native local transfer engine, previews, search, device/network integration, etc.
 
 ## Last confirmed stable version
-**0.22.0** is the current user-confirmed release candidate on `main`.
+**0.23.0** is the current user-confirmed release candidate on `main`.
 
 User-confirmed working behavior includes:
 - navigation and address/breadcrumb controls;
@@ -33,6 +33,9 @@ User-confirmed working behavior includes:
 - multiple simultaneous operations combined in one dynamically sized window;
 - automatic detailed-window close after the last active operation;
 - dynamic operation list height with scrollbar at the cap;
+- native local file/tree copy and move with exact Pause/Resume and safe partial publication;
+- native local conflicts, directories, multiple sources and symbolic links with preserved metadata;
+- native/KIO ordered Undo/Redo, including verified cross-filesystem moves and tree history;
 - visible application version in the bottom-right status area;
 - Undo/Redo through `KIO::FileUndoManager`, including fixed rename Undo in 0.16.0.1.
 
@@ -81,11 +84,17 @@ The 0.21.0 refactor split the former monolithic `src/thispcview.cpp` into focuse
 - `splitbrowserpane.h` — secondary pane;
 - `sidebar.h` — Places/Remote/Devices, Quick Access and Recent;
 - `sessionmanager.h` — persisted tabs/history/split state;
-- `operationmanager.h` — KIO job tracking and operation popup;
+- `operationmanager.h` — KIO/native job tracking, compact history and detailed operation window;
 - `undocontroller.h` — KIO Undo/Redo integration;
 - `propertiesdialog.h` — Properties, permissions, admin/NTFS behavior;
 - `searchcontroller.h` — search lifecycle, filters and result integration;
-- `fileactions.h` — create/copy/move/rename/trash/conflict actions;
+- `fileactions.h` — create/copy/move/rename/trash/conflict actions and native/KIO routing;
+- `localfilecopyjob.h` — chunked native local single-file copy;
+- `localfilemovejob.h` — native local move and cross-filesystem move semantics;
+- `localfileoverwrite.h` — safe native overwrite publication/recovery;
+- `localtransferplan.h` — immutable asynchronous plans for files, trees and symbolic links;
+- `localtransferjob.h` — aggregate execution for directories and multiple sources;
+- `localtreehistory.h` — safe native tree Undo/Redo;
 - `thispcview.cpp` — main window orchestration and remaining UI/navigation logic.
 
 The refactor reduced `src/thispcview.cpp` from roughly 14,178 to roughly 7,250 lines and is intended to make later roadmap features safer to add.
@@ -105,7 +114,7 @@ thispc-view
 For Codex, prefer working directly in a Git checkout and running `./scripts/build.sh` after edits instead of repeatedly creating ZIPs.
 
 
-## Current state — 0.22.0
+## Current state — 0.23.0
 
 0.18.0 conflict handling is user-confirmed. 0.19.x adds persistent session restore and the stable full-name/IconMode layout. 0.20.0 adds persistent Quick Access / Favorites and Recent locations.
 
@@ -113,4 +122,10 @@ For Codex, prefer working directly in a Git checkout and running `./scripts/buil
 
 0.22.0 adds the user-confirmed advanced transfer window while retaining the compact popup as operation history. The detailed window opens automatically, shows active operations only, combines concurrent work, provides current/average speed, ETA, a bounded graph and prominent progress, and closes after the final active operation.
 
-Manual testing showed that `KIO::CopyJob::suspend()` can report a suspended state while its local worker continues copying and buffers progress. The misleading pause control was removed from 0.22.0. The next roadmap milestone is 0.23.0 — Native local transfer engine, which will implement chunked local I/O and real pause/resume while preserving KIO for remote and appropriate operations.
+Manual testing in 0.22.0 showed that `KIO::CopyJob::suspend()` cannot provide exact local-transfer pause semantics, so misleading KIO-based pause was removed.
+
+0.23.0 delivers the native local transfer engine. Supported local files, directories, multiple sources and symbolic links use asynchronous native planning/execution with exact Pause/Resume, safe partial publication, conflict handling, metadata preservation, aggregate progress and native Undo/Redo. Cross-filesystem moves are verified before source removal. KIO remains in use for remote URLs and unsupported/unresolved local cases.
+
+The complete automated suite passes **842/842 assertions**. Full KDE/CachyOS manual acceptance passed for conflicts, directory trees, symlinks, metadata, concurrent jobs, Pause/Resume, Cancel, cross-filesystem Move, file/tree Undo/Redo, disk-full, device-loss and SHA-256 integrity.
+
+The next roadmap milestone is **0.24.0 — Resizable and scrollable sidebar**.

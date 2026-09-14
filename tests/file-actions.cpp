@@ -25,8 +25,20 @@ int main(int argc, char **argv)
     undo.setActions(&undoAction, &redoAction);
     int completed = 0, lastError = 0;
     bool lastClear = false, interactive = true;
+    bool lastNativeCopy = false, lastNativeMove = false;
+    bool lastNativeTree = false, lastTreeUsedKio = false, lastSuspendable = false;
+    bool pauseNextTree = false;
+    QPointer<LocalTransferJob> observedTree;
     FileActions actions(&parent, &undo, [&](KJob *job, const QString &, bool clear, const QString &) {
         lastClear = clear;
+        lastNativeCopy = qobject_cast<LocalFileCopyJob *>(job) != nullptr;
+        lastNativeMove = qobject_cast<LocalFileMoveJob *>(job) != nullptr;
+        observedTree = qobject_cast<LocalTransferJob *>(job);
+        lastNativeTree = observedTree != nullptr;
+        if (observedTree && pauseNextTree) {
+            pauseNextTree = false;
+            verify(observedTree->suspend(), "tree job can pause before planning completes");
+        }
         if (auto *copy = qobject_cast<KIO::CopyJob *>(job)) {
             verify(interactive ? copy->uiDelegate() != nullptr : copy->uiDelegate() == nullptr,
                    "operation has the expected delegate");
@@ -34,6 +46,8 @@ int main(int argc, char **argv)
                 verify(!copy->uiDelegate()->isAutoErrorHandlingEnabled(), "no duplicate automatic error UI");
         }
         QObject::connect(job, &KJob::result, &parent, [&](KJob *done) {
+            if (auto *tree = qobject_cast<LocalTransferJob *>(done)) lastTreeUsedKio = tree->usedKio();
+            lastSuspendable = done->capabilities().testFlag(KJob::Suspendable);
             lastError = done->error();
             ++completed;
         });
@@ -78,6 +92,7 @@ int main(int argc, char **argv)
     actions.transfer({source}, rootB, Qt::CopyAction);
     waitJob(4);
     verify(QFile::exists(a + "/renamed.txt") && QFile::exists(b + "/renamed.txt"), "copy preserves source");
+    verify(lastNativeCopy, "supported single local copy uses native engine");
     verify(!lastClear, "drag copy does not clear clipboard");
 
     // Drive the actual KIO conflict dialog through its public actions.
@@ -99,7 +114,13 @@ int main(int argc, char **argv)
         conflict.start();
         const int expected = completed + 1;
         actions.transfer({source}, rootB, Qt::CopyAction);
-        waitJob(expected, !cancel);
+        if (cancel) verify(completed == expected - 1, "cancel conflict dispatches no transfer");
+        else {
+            waitJob(expected);
+            verify(lastNativeCopy, "overwrite uses the native copy engine");
+            verify(!undoAction.isEnabled() && !redoAction.isEnabled(),
+                   "irreversible overwrite blocks earlier unsafe history");
+        }
         verify(conflictSeen, "KIO conflict UI remains interactive");
         verify(QFile::exists(a + "/renamed.txt") && QFile::exists(b + "/renamed.txt"), "conflict preserves expected files");
     }
@@ -108,9 +129,10 @@ int main(int argc, char **argv)
     mime->setData("application/x-kde-cutselection", "1");
     app.clipboard()->setMimeData(mime);
     actions.pasteClipboardInto(QUrl::fromLocalFile(a + "/folder"));
-    waitJob(7);
+    waitJob(6);
     verify(lastClear, "cut requests clipboard cleanup only on success");
     verify(!QFile::exists(a + "/renamed.txt") && QFile::exists(a + "/folder/renamed.txt"), "clipboard cut moves source");
+    verify(lastNativeMove, "supported single local move uses native engine");
     undoRedo([&] { return QFile::exists(a + "/renamed.txt"); },
              [&] { return QFile::exists(a + "/folder/renamed.txt"); });
     QFile payload(a + "/folder/renamed.txt");
@@ -123,11 +145,113 @@ int main(int argc, char **argv)
         dialog->button(QMessageBox::Yes)->click();
     });
     actions.trashSelected({QUrl::fromLocalFile(trashed)});
-    waitJob(8);
+    waitJob(7);
     verify(!QFile::exists(trashed), "disposable file moved to Trash");
     undoRedo([&] { return QFile::exists(trashed); }, [&] { return !QFile::exists(trashed); });
     undo.undo();
     verify(QTest::qWaitFor([&] { return !undo.m_busy && QFile::exists(trashed); }, 10000),
            "restore disposable file from Trash before cleanup");
-    qInfo("PASS: %d FileActions assertions; real KIO create/copy/move/rename/Trash, conflicts, Undo/Redo", checks);
+
+    const QString nativeCopySource = a + "/native-copy.txt";
+    QFile nativeFixture(nativeCopySource);
+    verify(nativeFixture.open(QIODevice::WriteOnly)
+               && nativeFixture.write("native copy history") == 19,
+           "native copy Undo fixture is created");
+    nativeFixture.close();
+    actions.transfer({QUrl::fromLocalFile(nativeCopySource)}, rootB, Qt::CopyAction);
+    waitJob(8);
+    const QString nativeCopyDestination = b + "/native-copy.txt";
+    verify(lastNativeCopy && QFile::exists(nativeCopyDestination),
+           "native copy completes before history test");
+    undoRedo([&] { return !QFile::exists(nativeCopyDestination); },
+             [&] { return QFile::exists(nativeCopyDestination); });
+
+    const auto readFile = [](const QString &path) {
+        QFile file(path);
+        return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+    };
+    auto *cutMime = new QMimeData;
+    cutMime->setUrls({QUrl::fromLocalFile(nativeCopySource)});
+    cutMime->setData("application/x-kde-cutselection", "1");
+    app.clipboard()->setMimeData(cutMime);
+    QTimer::singleShot(0, &parent, [&] {
+        auto *dialog = qobject_cast<KIO::RenameDialog *>(QApplication::activeModalWidget());
+        verify(dialog != nullptr, "native skip uses the KDE conflict dialog");
+        dialog->skipPressed();
+    });
+    const int beforeSkip = completed;
+    actions.pasteClipboardInto(rootB);
+    verify(completed == beforeSkip && QFile::exists(nativeCopySource)
+               && readFile(nativeCopyDestination) == "native copy history"
+               && app.clipboard()->mimeData()->data("application/x-kde-cutselection") == "1",
+           "skip retains both files and the cut clipboard");
+
+    QUrl renamedDestination;
+    QTimer::singleShot(0, &parent, [&] {
+        auto *dialog = qobject_cast<KIO::RenameDialog *>(QApplication::activeModalWidget());
+        verify(dialog != nullptr, "native rename uses the KDE conflict dialog");
+        dialog->suggestNewNamePressed();
+        renamedDestination = dialog->newDestUrl();
+        dialog->renamePressed();
+    });
+    actions.transfer({QUrl::fromLocalFile(nativeCopySource)}, rootB, Qt::CopyAction);
+    waitJob(beforeSkip + 1);
+    verify(lastNativeCopy && renamedDestination != QUrl::fromLocalFile(nativeCopyDestination)
+               && readFile(renamedDestination.toLocalFile()) == "native copy history"
+               && readFile(nativeCopyDestination) == "native copy history",
+           "rename publishes natively at the suggested name and preserves the conflict");
+    undoRedo([&] { return !QFile::exists(renamedDestination.toLocalFile()); },
+             [&] { return QFile::exists(renamedDestination.toLocalFile()); });
+
+    verify(QDir().mkpath(a + "/batch/nested"), "batch source directory exists");
+    QFile batchFile(a + "/batch/nested/data");
+    verify(batchFile.open(QIODevice::WriteOnly) && batchFile.write("batch data") == 10,
+           "batch file is created");
+    batchFile.close();
+    verify(::symlink("nested/data", QFile::encodeName(a + "/batch/link").constData()) == 0,
+           "batch contains a relative symbolic link");
+    const QList<QUrl> batchSources{QUrl::fromLocalFile(a + "/batch"), QUrl::fromLocalFile(nativeCopySource)};
+    const QString batchDestination = files.filePath("batch-target");
+    verify(QDir().mkdir(batchDestination), "batch target directory exists");
+    int expectedBatch = completed + 1;
+    actions.transfer(batchSources, QUrl::fromLocalFile(batchDestination), Qt::CopyAction);
+    waitJob(expectedBatch);
+    verify(lastNativeTree && !lastTreeUsedKio && lastSuspendable
+               && readFile(batchDestination + "/batch/nested/data") == "batch data"
+               && readLocalLink(batchDestination + "/batch/link") == "nested/data",
+           "FileActions routes directories, multiple sources and links through native execution");
+    undoRedo([&] { return !QFileInfo::exists(batchDestination + "/batch")
+                           && !QFileInfo::exists(batchDestination + "/native-copy.txt"); },
+             [&] { return QFileInfo::exists(batchDestination + "/batch/nested/data")
+                           && QFileInfo::exists(batchDestination + "/native-copy.txt"); });
+
+    bool fallbackConflictSeen = false;
+    QTimer fallbackDialog;
+    fallbackDialog.setInterval(10);
+    QObject::connect(&fallbackDialog, &QTimer::timeout, [&] {
+        for (QWidget *widget : QApplication::topLevelWidgets()) {
+            if (auto *dialog = qobject_cast<KIO::RenameDialog *>(widget); dialog && dialog->isVisible()) {
+                fallbackConflictSeen = true;
+                dialog->overwriteAllPressed();
+            }
+        }
+    });
+    fallbackDialog.start();
+    pauseNextTree = true;
+    expectedBatch = completed + 1;
+    actions.transfer(batchSources, QUrl::fromLocalFile(batchDestination), Qt::CopyAction);
+    QTest::qWait(200);
+    verify(observedTree && observedTree->isSuspended() && !fallbackConflictSeen
+               && completed == expectedBatch - 1,
+           "paused planning does not begin the KIO fallback");
+    verify(observedTree->resume(), "paused fallback plan resumes");
+    waitJob(expectedBatch);
+    fallbackDialog.stop();
+    verify(fallbackConflictSeen && lastTreeUsedKio && !lastSuspendable
+               && readFile(batchDestination + "/batch/nested/data") == "batch data",
+           "unresolved tree conflicts keep KIO dialogs and never advertise exact pause");
+    verify(!actions.startNativeSingleFileTransfer(
+               {QUrl(QStringLiteral("sftp://example.invalid/file"))}, rootB,
+               false, false, {}, {}), "remote URLs remain on the existing KIO route");
+    qInfo("PASS: %d FileActions assertions; native local copy/move, KIO fallbacks, conflicts, Undo/Redo", checks);
 }

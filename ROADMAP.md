@@ -59,9 +59,7 @@ This ordering prioritizes core file-manager correctness, safety and maintainabil
 - compact popup remains the operation-history view;
 - misleading KIO-based pause was rejected during manual acceptance and removed.
 
-## Planned releases
-
-### 0.23.0 — Native local transfer engine
+### 0.23.0 — Native local transfer engine ✅ user-confirmed
 - chunked local copy with real pause/resume at a known byte offset;
 - cross-device move built on verified copy followed by source removal;
 - safe partial-file handling and cleanup/recovery after cancellation or failure;
@@ -70,9 +68,19 @@ This ordering prioritizes core file-manager correctness, safety and maintainabil
 - progress integration with the 0.22.0 detailed window and compact history;
 - Undo/Redo integration where the completed operation is safely reversible;
 - keep KIO for remote URLs and operations where it remains the appropriate backend;
-- integrity and interruption tests before replacing any existing local KIO path.
+- integrity and interruption tests before replacing any existing local KIO path;
+- full automated regression: **842/842 assertions**;
+- full manual KDE/CachyOS acceptance passed, including conflicts, trees, symlinks, metadata, Pause/Resume, Undo/Redo, disk-full, device-loss and SHA-256 integrity.
 
-### 0.24.0 — Archives + richer New menu
+## Planned releases
+
+### 0.24.0 — Resizable and scrollable sidebar
+- expanding Quick Access, Recent, Places, Remote or Devices does not change the application window height;
+- the sidebar gains its own vertical scrollbar whenever expanded content does not fit;
+- the divider between the sidebar and file view can be dragged to change sidebar width;
+- the chosen sidebar width persists across launches.
+
+### 0.25.0 — Archives + richer New menu
 Archives:
 - native KDE/Ark-oriented integration;
 - ZIP / 7z / tar.gz where backend support exists;
@@ -83,7 +91,7 @@ New:
 - folder, empty file, text, Markdown;
 - user templates.
 
-### 0.25.0 — Preview pane
+### 0.26.0 — Preview pane
 - images, PDF, text/Markdown, JSON/XML;
 - audio/video metadata;
 - EXIF;
@@ -91,10 +99,10 @@ New:
 - folder summary;
 - toggle shortcut such as Alt+P.
 
-### 0.26.0 — Quick Look on Space
+### 0.27.0 — Quick Look on Space
 Large temporary preview without opening the associated app.
 
-### 0.27.0 — Batch rename
+### 0.28.0 — Batch rename
 - prefix/suffix;
 - numbering;
 - replace text;
@@ -103,30 +111,30 @@ Large temporary preview without opening the associated app.
 - preview before apply;
 - Undo support.
 
-### 0.28.0 — Advanced search
+### 0.29.0 — Advanced search
 - type/name/extension/date/size filters;
 - files-only/folders-only;
 - saved searches;
 - Baloo acceleration when available, current search fallback otherwise.
 
-### 0.29.0 — Grouping and per-folder view settings
+### 0.30.0 — Grouping and per-folder view settings
 - group by type/date/size;
 - Today/Yesterday/This week/etc.;
 - remember icon/list/details mode per folder.
 
-### 0.30.0 — Split View synchronization
+### 0.31.0 — Split View synchronization
 - compare left/right;
 - same / only-left / only-right / changed;
 - preview synchronization plan;
 - copy differences left/right;
 - safe sync execution.
 
-### 0.31.0 — File/folder comparison
+### 0.32.0 — File/folder comparison
 - external Meld/KDiff3 integration first;
 - folder difference view;
 - optional hashes for stronger comparisons.
 
-### 0.32.0 — Drives and devices
+### 0.33.0 — Drives and devices
 - mount/unmount/eject;
 - removable media;
 - MTP;
@@ -134,23 +142,23 @@ Large temporary preview without opening the associated app.
 - filesystem/mount details;
 - sensible SMART integration where available.
 
-### 0.33.0 — Network
+### 0.34.0 — Network
 - SMB, SFTP, FTP, WebDAV via KIO where appropriate;
 - saved remote locations;
 - network discovery where reliable.
 
-### 0.34.0 — Disk usage analyzer
+### 0.35.0 — Disk usage analyzer
 - biggest directories/files;
 - background scan;
 - top-N views;
 - optional treemap later.
 
-### 0.35.0 — Duplicates + checksums
+### 0.36.0 — Duplicates + checksums
 - SHA-256 / SHA-1 / MD5 utilities;
 - duplicate discovery by size then hash;
 - safe review before removal/move.
 
-### 0.36.0 — Advanced Properties / ACL
+### 0.37.0 — Advanced Properties / ACL
 - POSIX ACL;
 - owner/group/inode/filesystem/mount;
 - atime/mtime/ctime;
@@ -158,21 +166,21 @@ Large temporary preview without opening the associated app.
 - EXIF/media metadata;
 - continue verified NTFS behavior rather than blanket assumptions.
 
-### 0.37.0 — Administrator fallback for failed operations
+### 0.38.0 — Administrator fallback for failed operations
 When a normal operation receives permission denied, offer a targeted `admin://` retry instead of requiring an entire window to run elevated.
 
-### 0.38.0 — Transfer queue/control
+### 0.39.0 — Transfer queue/control
 - serial vs parallel;
 - concurrency limit;
 - priorities/order;
 - queue-wide control and priorities on top of backends that genuinely support them.
 
-### 0.39.0 — Notifications + operation history
+### 0.40.0 — Notifications + operation history
 - Plasma notification for long/background completions;
 - recent operation log with source/destination/result;
 - retry where meaningful.
 
-### 0.40.0 — Plugin / Service Action architecture
+### 0.41.0 — Plugin / Service Action architecture
 Allow new context-menu actions and integrations without editing the core window source.
 
 ## Before 1.0
