@@ -692,6 +692,10 @@ QPushButton#sidebarButton[current="true"] {
     background: palette(alternate-base);
     border: 1px solid palette(highlight);
 }
+QPushButton#sidebarButton[dropActive="true"] {
+    background: palette(alternate-base);
+    border: 1px solid palette(highlight);
+}
 
 QFrame#sidebarDrive {
     border: 1px solid transparent;
@@ -703,6 +707,10 @@ QFrame#sidebarDrive:hover {
 }
 QFrame#sidebarDrive:focus,
 QFrame#sidebarDrive[current="true"] {
+    border: 1px solid palette(highlight);
+    background: palette(alternate-base);
+}
+QFrame#sidebarDrive[dropActive="true"] {
     border: 1px solid palette(highlight);
     background: palette(alternate-base);
 }
@@ -2224,6 +2232,8 @@ private:
             [this](const QString &message, int timeoutMs) {
                 statusBar()->showMessage(message, timeoutMs);
             });
+        connect(m_sidebar, &SidebarPanel::urlsDropped,
+                this, &ThisPcWindow::handleDroppedUrls);
 
         centralLayout->addWidget(m_sidebar);
 

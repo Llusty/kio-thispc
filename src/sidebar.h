@@ -10,6 +10,7 @@
 #pragma once
 
 #include "browsercommon.h"
+#include "directoryview.h"
 
 #include <KProtocolManager>
 
@@ -22,9 +23,11 @@
 #include <QDragEnterEvent>
 #include <QDragMoveEvent>
 #include <QDropEvent>
+#include <QEvent>
 #include <QFileInfo>
 #include <QFrame>
 #include <QGuiApplication>
+#include <QHash>
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLabel>
@@ -508,6 +511,15 @@ public:
         buildSections();
     }
 
+    ~SidebarPanel() override
+    {
+        for (QObject *target : m_transferDropTargets.keys()) {
+            if (target) {
+                disconnect(target, &QObject::destroyed, this, nullptr);
+            }
+        }
+    }
+
     bool canQuickAccessLocation(const QUrl &rawUrl) const
     {
         if (!rawUrl.isValid()) {
@@ -599,6 +611,77 @@ Q_SIGNALS:
     void openInSplitPaneRequested(const QUrl &url);
     void openInDolphinRequested(const QUrl &url);
     void statusMessageRequested(const QString &message, int timeoutMs);
+    void urlsDropped(const QList<QUrl> &urls,
+                     const QUrl &destination,
+                     const QPoint &globalPosition,
+                     Qt::KeyboardModifiers modifiers);
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override
+    {
+        auto it = m_transferDropTargets.constFind(watched);
+        if (it == m_transferDropTargets.cend()) {
+            return QFrame::eventFilter(watched, event);
+        }
+
+        auto *target = qobject_cast<QWidget *>(watched);
+        if (!target) {
+            return QFrame::eventFilter(watched, event);
+        }
+
+        // Quick Access reorder owns this MIME even if a platform also exposes
+        // URI data for the same drag. Never reinterpret it as a file transfer.
+        auto hasQuickAccessMime = [](const QMimeData *mime) {
+            return mime && mime->hasFormat(
+                QStringLiteral("application/x-thispc-quick-access"));
+        };
+
+        switch (event->type()) {
+        case QEvent::DragEnter: {
+            auto *drag = static_cast<QDragEnterEvent *>(event);
+            if (hasQuickAccessMime(drag->mimeData())) {
+                setDropFeedback(target, false);
+                return false;
+            }
+            return updateTransferDrag(target, it.value(), drag);
+        }
+        case QEvent::DragMove: {
+            auto *drag = static_cast<QDragMoveEvent *>(event);
+            if (hasQuickAccessMime(drag->mimeData())) {
+                setDropFeedback(target, false);
+                return false;
+            }
+            return updateTransferDrag(target, it.value(), drag);
+        }
+        case QEvent::DragLeave:
+            setDropFeedback(target, false);
+            event->accept();
+            return true;
+        case QEvent::Drop: {
+            auto *drop = static_cast<QDropEvent *>(event);
+            setDropFeedback(target, false);
+            if (hasQuickAccessMime(drop->mimeData())) {
+                return false;
+            }
+            if (!canTransferDrop(drop->mimeData(), it.value())) {
+                drop->ignore();
+                return true;
+            }
+
+            const QList<QUrl> urls = drop->mimeData()->urls();
+            const QPoint globalPosition = target->mapToGlobal(
+                drop->position().toPoint());
+            drop->setDropAction(dropActionForUrls(
+                urls, it.value(), drop->modifiers()));
+            drop->accept();
+            Q_EMIT urlsDropped(
+                urls, it.value(), globalPosition, drop->modifiers());
+            return true;
+        }
+        default:
+            return QFrame::eventFilter(watched, event);
+        }
+    }
 
 private:
     static bool isSearchLocation(const QUrl &url)
@@ -649,6 +732,85 @@ private:
         return url.path()
             .split(QLatin1Char('/'), Qt::SkipEmptyParts)
             .size();
+    }
+
+    static bool isSupportedTransferDestination(const QUrl &rawUrl)
+    {
+        const QUrl url = normalizedUrl(rawUrl);
+        const QString scheme = url.scheme().toLower();
+        if (!url.isValid() || scheme.isEmpty()
+            || scheme == QStringLiteral("thispc")
+            || scheme == QStringLiteral("trash")
+            || scheme == QStringLiteral("remote")
+            || scheme == QStringLiteral("thispcsearch")
+            || scheme == QStringLiteral("filenamesearch")) {
+            return false;
+        }
+
+        if (url.isLocalFile()) {
+            const QFileInfo info(url.toLocalFile());
+            // Do not use isWritable(): NTFS and admin fallback are resolved by
+            // the existing FileActions path after the Drop is dispatched.
+            return info.exists() && info.isDir();
+        }
+
+        return KProtocolManager::supportsListing(url)
+            && KProtocolManager::supportsWriting(url);
+    }
+
+    static bool canTransferDrop(const QMimeData *mime, const QUrl &destination)
+    {
+        if (!mime || !mime->hasUrls() || mime->urls().isEmpty()
+            || !isSupportedTransferDestination(destination)) {
+            return false;
+        }
+        for (const QUrl &url : mime->urls()) {
+            if (!url.isValid()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    template<typename DragEvent>
+    static bool updateTransferDrag(QWidget *target,
+                                   const QUrl &destination,
+                                   DragEvent *event)
+    {
+        if (!canTransferDrop(event->mimeData(), destination)) {
+            setDropFeedback(target, false);
+            event->ignore();
+            return true;
+        }
+        event->setDropAction(dropActionForUrls(
+            event->mimeData()->urls(), destination, event->modifiers()));
+        event->accept();
+        setDropFeedback(target, true);
+        return true;
+    }
+
+    static void setDropFeedback(QWidget *target, bool active)
+    {
+        if (!target || target->property("dropActive").toBool() == active) {
+            return;
+        }
+        target->setProperty("dropActive", active);
+        target->style()->unpolish(target);
+        target->style()->polish(target);
+        target->update();
+    }
+
+    void registerTransferDropTarget(QWidget *target, const QUrl &url)
+    {
+        if (!target || !url.isValid()) {
+            return;
+        }
+        target->setAcceptDrops(true);
+        target->installEventFilter(this);
+        m_transferDropTargets.insert(target, normalizedUrl(url));
+        connect(target, &QObject::destroyed, this, [this, target] {
+            m_transferDropTargets.remove(target);
+        });
     }
 
     static void clearLayout(QLayout *layout)
@@ -763,7 +925,8 @@ private:
             placesSection->contentLayout(),
             trLocal("Katalog domowy", "Home"),
             QStringLiteral("user-home"),
-            QUrl::fromLocalFile(home));
+            QUrl::fromLocalFile(home),
+            true);
         addStandardSidebarLocation(
             placesSection->contentLayout(),
             QStandardPaths::DesktopLocation,
@@ -803,7 +966,8 @@ private:
                 placesSection->contentLayout(),
                 QStringLiteral("Games"),
                 QStringLiteral("applications-games"),
-                QUrl::fromLocalFile(gamesPath));
+                QUrl::fromLocalFile(gamesPath),
+                true);
         }
 
         addSidebarLocation(
@@ -836,12 +1000,16 @@ private:
     SidebarButton *addSidebarLocation(QVBoxLayout *layout,
                                       const QString &name,
                                       const QString &iconName,
-                                      const QUrl &url)
+                                      const QUrl &url,
+                                      bool transferDropTarget = false)
     {
         auto *button = new SidebarButton(name, iconName, url, this);
         connectSidebarButton(button);
         layout->addWidget(button);
         m_staticSidebarButtons.push_back(button);
+        if (transferDropTarget) {
+            registerTransferDropTarget(button, url);
+        }
         return button;
     }
 
@@ -856,7 +1024,8 @@ private:
                 layout,
                 name,
                 iconName,
-                QUrl::fromLocalFile(path));
+                QUrl::fromLocalFile(path),
+                true);
         }
     }
 
@@ -888,6 +1057,7 @@ private:
                 url,
                 this);
             connectSidebarButton(button);
+            registerTransferDropTarget(button, url);
 
             connect(button,
                     &SidebarButton::removeFromQuickAccessRequested,
@@ -943,6 +1113,7 @@ private:
                     this, &SidebarPanel::openInSplitPaneRequested);
             connect(button, &SidebarDriveButton::openInDolphinRequested,
                     this, &SidebarPanel::openInDolphinRequested);
+            registerTransferDropTarget(button, drive.targetUrl);
 
             m_devicesLayout->addWidget(button);
             m_driveSidebarButtons.push_back(button);
@@ -1133,4 +1304,5 @@ private:
     QList<SidebarButton *> m_staticSidebarButtons;
     QList<SidebarDriveButton *> m_driveSidebarButtons;
     SidebarButton *m_thisPcButton = nullptr;
+    QHash<QObject *, QUrl> m_transferDropTargets;
 };

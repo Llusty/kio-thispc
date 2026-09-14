@@ -14,6 +14,7 @@ import tempfile
 parser = argparse.ArgumentParser(description=__doc__)
 group = parser.add_mutually_exclusive_group()
 group.add_argument('--tabs', action='store_true', help='run tab drag/drop tests instead of pane actions')
+group.add_argument('--sidebar-dnd', action='store_true', help='run sidebar drag/drop tests')
 group.add_argument('--properties', action='store_true', help='run real PropertiesDialog tests')
 group.add_argument('--search', action='store_true', help='run real KIO search and cancellation tests')
 group.add_argument('--actions', action='store_true', help='run real FileActions and Undo tests')
@@ -24,7 +25,8 @@ group.add_argument('--local-move', action='store_true', help='run safe native mo
 group.add_argument('--all', action='store_true', help='run every regression suite')
 group.add_argument('--suites', nargs='+', choices=[
     'panes', 'tabs', 'properties', 'search', 'actions', 'operations',
-    'local_transfer', 'transfer_plan', 'local_move', 'local_tree', 'tree_history'],
+    'local_transfer', 'transfer_plan', 'local_move', 'local_tree', 'tree_history',
+    'sidebar_dnd'],
     help='build once and run only the selected regression suites')
 options = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
@@ -73,8 +75,8 @@ with tempfile.TemporaryDirectory(prefix='thispc-pane-tests-') as tmp, tempfile.T
     (tmp / 'src').mkdir()
     for header in (root / 'src').glob('*.h'):
         (tmp / 'src' / header.name).write_text(expose(file_actions if header.name == 'fileactions.h' else header.read_text()))
-    suites = {'panes': 'pane-actions.cpp', 'tabs': 'tab-drag-drop.cpp', 'properties': 'properties-dialog.cpp', 'search': 'search-controller.cpp', 'actions': 'file-actions.cpp', 'operations': 'operation-manager.cpp', 'local_transfer': 'local-file-copy-job.cpp', 'transfer_plan': 'local-transfer-plan.cpp', 'local_move': 'local-file-move-job.cpp', 'local_tree': 'local-transfer-job.cpp', 'tree_history': 'local-tree-history.cpp'}
-    selected = options.suites or (list(suites) if options.all else ['local_move' if options.local_move else 'transfer_plan' if options.transfer_plan else 'local_transfer' if options.local_transfer else 'operations' if options.operations else 'actions' if options.actions else 'tabs' if options.tabs else 'properties' if options.properties else 'search' if options.search else 'panes'])
+    suites = {'panes': 'pane-actions.cpp', 'tabs': 'tab-drag-drop.cpp', 'sidebar_dnd': 'sidebar-drag-drop.cpp', 'properties': 'properties-dialog.cpp', 'search': 'search-controller.cpp', 'actions': 'file-actions.cpp', 'operations': 'operation-manager.cpp', 'local_transfer': 'local-file-copy-job.cpp', 'transfer_plan': 'local-transfer-plan.cpp', 'local_move': 'local-file-move-job.cpp', 'local_tree': 'local-transfer-job.cpp', 'tree_history': 'local-tree-history.cpp'}
+    selected = options.suites or (list(suites) if options.all else ['sidebar_dnd' if options.sidebar_dnd else 'local_move' if options.local_move else 'transfer_plan' if options.transfer_plan else 'local_transfer' if options.local_transfer else 'operations' if options.operations else 'actions' if options.actions else 'tabs' if options.tabs else 'properties' if options.properties else 'search' if options.search else 'panes'])
     combined = prelude + source
     for suite in selected:
         disk_data = Path(disk_tmp) / suite
