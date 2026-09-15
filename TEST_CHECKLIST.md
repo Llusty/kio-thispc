@@ -47,7 +47,22 @@ Only test on disposable files.
 - [ ] no blanket NTFS-disable behavior returns
 - [ ] admin fallback remains targeted
 
-## 0.17 Drag & Drop
-See `TASK_0.17_DRAG_DROP.md` for the full matrix.
-The mandatory release blocker is:
-- [ ] dragging an item from tab A, hovering tab B, then dropping on tab B's empty directory background succeeds with the intended action.
+
+## Sidebar & Split View regression
+
+- [ ] both Split View panes navigate independently
+- [ ] shared toolbar/sidebar actions target the active pane
+- [ ] F6 switches the active pane without losing pane state
+- [ ] This PC / `thispc:/` cards work in both panes
+- [ ] Search query, filters, results and Stop remain independent per pane
+- [ ] sidebar Drag & Drop works after scrolling
+- [ ] Quick Access reorder works after scrolling
+- [ ] sidebar width persists after restart
+- [ ] long sidebar labels use right-side ellipsis and show the full tooltip
+- [ ] no horizontal sidebar scrollbar appears
+
+## Automated regression
+
+- [ ] `python3 tests/run-pane-actions.py --all` exits with code 0
+- [ ] all focused suites pass
+- [ ] `git diff --check` is clean

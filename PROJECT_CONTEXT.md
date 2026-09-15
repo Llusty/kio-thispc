@@ -16,7 +16,7 @@ The goal is not to replace KDE with Windows UI. The goal is a familiar Explorer-
 - rich transfer UI, native local transfer engine, previews, search, device/network integration, etc.
 
 ## Last confirmed stable version
-**0.24.0** is the current user-confirmed release candidate on `main`. The final release commit and `v0.24.0` tag are still pending.
+**0.24.0** is the current stable user-confirmed release on `main`, committed and tagged as `v0.24.0`.
 
 User-confirmed working behavior includes:
 - navigation and address/breadcrumb controls;

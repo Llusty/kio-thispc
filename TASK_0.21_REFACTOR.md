@@ -9,7 +9,6 @@
 - All refactor changes are still uncommitted; the eight extracted headers
   were untracked. The index was empty. Do not reset these changes.
 - The only other initial changes were lost executable bits on build.sh,
-  check-version.sh and gemini-preflight.sh. Those bits have been restored.
 - thispcview.cpp initially had 8093 lines. No sources were changed before
   this starting state was confirmed.
 

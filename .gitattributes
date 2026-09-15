@@ -1,0 +1,12 @@
+# Development/agent context — useful in Git, unnecessary in release archives.
+AGENTS.md export-ignore
+PROJECT_CONTEXT.md export-ignore
+TASK_*.md export-ignore
+TEST_CHECKLIST.md export-ignore
+
+# Historical handoff/debug material.
+handoff export-ignore
+handoff/** export-ignore
+
+# Archive control file itself is not needed by end users.
+.gitattributes export-ignore
