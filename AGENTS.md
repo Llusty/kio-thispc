@@ -4,10 +4,10 @@
 Develop `thispc-view`, a lightweight native Qt/KDE file manager inspired by Windows 11 Explorer while retaining KDE/KIO integration and the `thispc:/` KIO worker backend.
 
 ## Current baseline
-- Work from the local `main` checkout. The current release candidate is **0.22.0 — Advanced transfer window**.
+- Work from the local `main` checkout. The current user-confirmed release candidate is **0.24.0 — Sidebar & Split View UX**; final release commit and tag are pending.
 - Do **not** start new implementation from the failed 0.17.0.4 code.
 - A reference branch named `reference/failed-0.17.0.4` and a patch under `handoff/` preserve the failed Drag & Drop attempt for inspection only.
-- The next planned feature is **0.23.0 — Native local transfer engine**. `TASK_0.21_REFACTOR.md` and `TASK_0.17_DRAG_DROP.md` remain historical regression references.
+- The next planned feature is **0.25.0 — Archives + richer New menu**. `TASK_0.24_SIDEBAR_SPLIT_UX.md`, `TASK_0.21_REFACTOR.md` and `TASK_0.17_DRAG_DROP.md` remain regression/historical references.
 
 ## User environment
 Target the user's actual local environment first:

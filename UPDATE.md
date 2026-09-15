@@ -1,13 +1,26 @@
-# Aktualizacja do 0.23.0
+# Aktualizacja do 0.24.0
 
 ```bash
 cd ~/Pobrane
 rm -rf kio-thispc
-unzip kio-thispc-0.23.0.zip
+unzip kio-thispc-0.24.0.zip
 cd kio-thispc
 chmod +x install.sh
 ./install.sh
 ```
+
+## 0.24.0 — Sidebar & Split View UX
+
+- równorzędne panele Split View z breadcrumbs dopasowanymi do szerokości paneli;
+- wspólny toolbar i sidebar działają na aktualnie aktywnym panelu;
+- Drag & Drop plików i folderów do obsługiwanych miejsc w sidebarze;
+- pionowo przewijalny i regulowany sidebar z trwałym zapisem preferowanej szerokości;
+- długie etykiety sidebara z prawostronnym `…` i pełną nazwą w tooltipie;
+- niezależny Search w obu panelach, w tym filtry, zakres, wyniki, postęp i Stop;
+- pełny widok `Ten komputer` dostępny również w prawym panelu;
+- pełna regresja: **1022/1022 asercje**;
+- pełna ręczna akceptacja Stage 1–4 na KDE/CachyOS;
+- brak migracji ustawień użytkownika.
 
 ## 0.23.0 — natywny lokalny silnik transferów
 

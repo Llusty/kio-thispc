@@ -16,7 +16,7 @@ The goal is not to replace KDE with Windows UI. The goal is a familiar Explorer-
 - rich transfer UI, native local transfer engine, previews, search, device/network integration, etc.
 
 ## Last confirmed stable version
-**0.23.0** is the current user-confirmed release candidate on `main`.
+**0.24.0** is the current user-confirmed release candidate on `main`. The final release commit and `v0.24.0` tag are still pending.
 
 User-confirmed working behavior includes:
 - navigation and address/breadcrumb controls;
@@ -27,7 +27,10 @@ User-confirmed working behavior includes:
 - command toolbar and New/Open With/Properties;
 - editable permissions and admin fallback via `admin://`;
 - tabs, new-window behavior and reopen closed tab;
-- Split View with independent right pane state;
+- Split View with equal left/right pane behavior, independent state and per-pane breadcrumbs;
+- active-pane routing for shared toolbar, sidebar, View, Sort, navigation and Search controls;
+- sidebar Drag & Drop, vertical scrolling, persisted resizable width and long-label ellipsis/tooltips;
+- independent Search state and full `thispc:/` card presentation in both panes;
 - operation manager popup on the right side of the application;
 - automatic detailed window for active operations with graph, speed, ETA and prominent progress;
 - multiple simultaneous operations combined in one dynamically sized window;
@@ -114,7 +117,7 @@ thispc-view
 For Codex, prefer working directly in a Git checkout and running `./scripts/build.sh` after edits instead of repeatedly creating ZIPs.
 
 
-## Current state — 0.23.0
+## Current state — 0.24.0
 
 0.18.0 conflict handling is user-confirmed. 0.19.x adds persistent session restore and the stable full-name/IconMode layout. 0.20.0 adds persistent Quick Access / Favorites and Recent locations.
 
@@ -126,6 +129,10 @@ Manual testing in 0.22.0 showed that `KIO::CopyJob::suspend()` cannot provide ex
 
 0.23.0 delivers the native local transfer engine. Supported local files, directories, multiple sources and symbolic links use asynchronous native planning/execution with exact Pause/Resume, safe partial publication, conflict handling, metadata preservation, aggregate progress and native Undo/Redo. Cross-filesystem moves are verified before source removal. KIO remains in use for remote URLs and unsupported/unresolved local cases.
 
-The complete automated suite passes **842/842 assertions**. Full KDE/CachyOS manual acceptance passed for conflicts, directory trees, symlinks, metadata, concurrent jobs, Pause/Resume, Cancel, cross-filesystem Move, file/tree Undo/Redo, disk-full, device-loss and SHA-256 integrity.
+The 0.23.0 release baseline passed **842/842 assertions** with full KDE/CachyOS manual acceptance of the native transfer engine.
 
-The next roadmap milestone is **0.24.0 — Resizable and scrollable sidebar**.
+0.24.0 completes Sidebar & Split View UX. Both panes are equal peers, shared controls route to the active pane, sidebar Drag & Drop uses the existing FileActions path, the sidebar is scrollable and resizable with persisted width, and long labels use ellipsis plus full-name tooltips. Search state, filters, results, jobs and `thispc:/` presentation are independent and complete in both panes.
+
+The complete automated suite now passes **1022/1022 assertions**. Full Stage 1–4 manual KDE/CachyOS acceptance passed.
+
+The next roadmap milestone is **0.25.0 — Archives + richer New menu**.

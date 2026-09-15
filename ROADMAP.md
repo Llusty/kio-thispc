@@ -72,14 +72,16 @@ This ordering prioritizes core file-manager correctness, safety and maintainabil
 - full automated regression: **842/842 assertions**;
 - full manual KDE/CachyOS acceptance passed, including conflicts, trees, symlinks, metadata, Pause/Resume, Undo/Redo, disk-full, device-loss and SHA-256 integrity.
 
-## Planned releases
+### 0.24.0 — Sidebar & Split View UX ✅ user-confirmed
+- equal Split View panes with aligned per-pane breadcrumbs and one shared toolbar/sidebar routed to the active pane;
+- Sidebar Drag & Drop into supported Places, devices and Quick Access destinations;
+- vertically scrollable, resizable sidebar with persisted user-selected width and long-label ellipsis/tooltips;
+- independent Search state, results, filters, progress and jobs for both panes;
+- full `thispc:/` / This PC card presentation in both panes;
+- full automated regression: **1022/1022 assertions**;
+- full Stage 1–4 manual KDE/CachyOS acceptance passed.
 
-### 0.24.0 — Sidebar & Split View UX
-- Stage 1: equal Split View panes, two aligned breadcrumbs and one shared toolbar/sidebar routed to the active pane;
-- Stage 1 preserves pane swap/close, navigation, View and Sort while removing the asymmetric secondary mini-toolbar;
-- later stage: Drag & Drop into sidebar destinations;
-- later stage: vertical sidebar scrolling, resizable width and persisted width;
-- later stage: full Search and `thispc:/` presentation parity between panes.
+## Planned releases
 
 ### 0.25.0 — Archives + richer New menu
 Archives:

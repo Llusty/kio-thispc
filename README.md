@@ -1,4 +1,15 @@
-# kio-thispc 0.23.0
+# kio-thispc 0.24.0
+
+## 0.24.0 — Sidebar & Split View UX
+
+- Split View ma dwa równorzędne panele z osobnymi breadcrumbs i wspólnym toolbar/sidebarem działającym na aktywnym panelu.
+- Sidebar obsługuje Drag & Drop do Places, urządzeń i Szybkiego dostępu bez omijania istniejącego FileActions.
+- Sidebar jest pionowo przewijalny i regulowany w zakresie 205–480 px, a ustawiona szerokość jest zapisywana między uruchomieniami.
+- Długie etykiety są elidowane po prawej stronie i pokazują pełną nazwę w tooltipie bez poziomego scrollbara.
+- Search ma niezależny stan dla obu paneli: zapytania, filtry, wyniki, postęp i URL z parametrami pozostają przypisane do właściwego panelu.
+- Oba panele pokazują pełny widok `Ten komputer`/`thispc:/`, a wspólne akcje nawigacyjne działają na aktywnym panelu.
+- Pełna regresja przechodzi **1022/1022 asercje**, a Stage 1–4 zostały ręcznie zaakceptowane na KDE/CachyOS.
+- Brak migracji ustawień użytkownika.
 
 ## 0.23.0 — natywny lokalny silnik transferów
 
@@ -126,7 +137,7 @@ Funkcje z 0.15.4 — kompaktowy popup operacji, dynamiczna wysokość, anulowani
 ```bash
 cd ~/Pobrane
 rm -rf kio-thispc
-unzip kio-thispc-0.23.0.zip
+unzip kio-thispc-0.24.0.zip
 cd kio-thispc
 chmod +x install.sh
 ./install.sh

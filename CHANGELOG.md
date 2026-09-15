@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.24.0
+
+- ujednolicono oba panele Split View: osobne breadcrumbs, równorzędna nawigacja i jeden wspólny toolbar/sidebar routowany do aktywnego panelu;
+- usunięto asymetryczny mini-toolbar prawego panelu i zachowano Swap panels oraz zamykanie Split View;
+- dodano Drag & Drop plików i folderów do obsługiwanych celów sidebara z użyciem istniejącej ścieżki `FileActions`;
+- dodano pionowe przewijanie sidebara, regulowaną szerokość 205–480 px i trwały zapis szerokości wybranej przez użytkownika;
+- długie etykiety sidebara są elidowane po prawej stronie i udostępniają pełną nazwę w tooltipie bez poziomego scrollbara;
+- Search ma niezależny stan, wyniki, filtry, postęp i zadania dla obu paneli;
+- wspólne kontrolki Search, zakres, filtry, Stop i odświeżanie działają na aktywnym panelu;
+- prawy panel obsługuje pełny widok `Ten komputer` wraz z kartami folderów i dysków;
+- nawigacja Wstecz/Dalej/W górę, `Ctrl+L` i breadcrumbs zachowują Search URL wraz z parametrami;
+- zamknięcie Split View zatrzymuje ukryte wyszukiwanie, a ponowne otwarcie zachowuje zapisany URL panelu;
+- pełna regresja przechodzi **1022/1022 asercje**, a Stage 1–4 przeszły ręczną akceptację KDE/CachyOS.
+
 ## 0.23.0
 
 - dodano natywny lokalny silnik copy/move z dokładnym Pause/Resume na granicach chunków;
