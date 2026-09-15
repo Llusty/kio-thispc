@@ -1745,6 +1745,19 @@ private:
                     QByteArray());
             });
 
+        m_newMarkdownAction = newMenu->addAction(
+            themedIcon(QStringLiteral("text-markdown"), QStringLiteral("text-x-generic")),
+            trLocal("Dokument Markdown", "Markdown document"));
+        connect(
+            m_newMarkdownAction,
+            &QAction::triggered,
+            this,
+            [this] {
+                createNewFile(
+                    trLocal("Nowy dokument.md", "New document.md"),
+                    QByteArray());
+            });
+
         m_newEmptyFileAction = newMenu->addAction(
             themedIcon(QStringLiteral("document-new")),
             trLocal("Pusty plik…", "Empty file…"));
@@ -6133,6 +6146,9 @@ private:
         if (m_newTextFileAction) {
             m_newTextFileAction->setEnabled(canCreate);
         }
+        if (m_newMarkdownAction) {
+            m_newMarkdownAction->setEnabled(canCreate);
+        }
         if (m_newEmptyFileAction) {
             m_newEmptyFileAction->setEnabled(canCreate);
         }
@@ -7125,6 +7141,7 @@ private:
     QToolButton *m_newButton = nullptr;
     QAction *m_newFolderAction = nullptr;
     QAction *m_newTextFileAction = nullptr;
+    QAction *m_newMarkdownAction = nullptr;
     QAction *m_newEmptyFileAction = nullptr;
     QAction *m_cutAction = nullptr;
     QAction *m_copyAction = nullptr;

@@ -284,6 +284,24 @@ int main(int argc, char **argv)
             dialog(true, true, other);
             window.createNewFile("new.txt", {});
             verify(dispatch.kind == "create" && dispatch.destination == childUrlWithName(directory, "renamed"), "create file captures directory");
+
+            focus(view);
+            verify(window.m_newMarkdownAction != nullptr, "Markdown New action exists");
+            QTimer::singleShot(0, &window, [&] {
+                auto *nameDialog =
+                    qobject_cast<QInputDialog *>(QApplication::activeModalWidget());
+                verify(nameDialog != nullptr, "Markdown name dialog opened");
+                verify(nameDialog->textValue().endsWith(".md"),
+                       "Markdown action suggests .md");
+                nameDialog->setTextValue("markdown.md");
+                nameDialog->accept();
+            });
+            dispatch = {};
+            window.m_newMarkdownAction->trigger();
+            verify(dispatch.kind == "create"
+                       && dispatch.destination
+                           == childUrlWithName(directory, "markdown.md"),
+                   "Markdown action creates in active pane");
         }
         selectOne(lv); selectOne(rv); focus(rv);
         QToolButton *copyButton = nullptr;
