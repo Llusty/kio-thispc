@@ -156,7 +156,7 @@ int main(int argc, char **argv)
         window.setSortAscending(false);
         verify(window.m_directoryList->count() == 3, "view and sort changes keep search results");
     }
-    window.m_searchTypeFilter = 1;
+    window.m_primarySearch.type = 1;
     window.syncCurrentSearchFilters();
     window.renderDirectoryItems();
     verify(window.m_directoryList->count() == 1 && window.m_searchVisibleCount == 1, "changing type filter reuses current results");
@@ -173,5 +173,188 @@ int main(int argc, char **argv)
     verify(!window.m_searchController->isRunning(), "navigation cancels current search");
     verify(QTest::qWaitFor([&] { return window.m_directoryList->count() == 1; }, 5000), "new directory loads after cancellation");
     verify(window.m_currentUrl == rootB && paths(window.m_pendingFiles) == QSet<QString>{b + "/needle-second.txt"}, "late search results do not replace ordinary directory");
+    // Stage 4: shared Search controls follow the active pane, including drafts,
+    // history URLs and workers that continue while the other pane has focus.
+    using Pane = ThisPcWindow::PaneId;
+    auto *split = window.m_splitPane;
+    window.activateWindow();
+    window.navigateTo(rootB, true);
+    split->setCurrentUrl(rootA);
+    verify(QTest::qWaitFor([&] { return split->listView()->count() == 4; }, 5000),
+           "right ordinary directory loads before live filtering");
+    window.setActivePane(Pane::Split);
+    QTest::keyClick(&window, Qt::Key_F, Qt::ControlModifier);
+    verify(window.m_searchEdit->hasFocus() && window.m_activePane == Pane::Split,
+           "Ctrl+F focuses shared Search while preserving right pane");
+    window.m_searchEdit->setText("needle");
+    verify(split->listView()->count() == 2 && window.m_directoryList->count() == 1,
+           "live filtering affects only the right active directory");
+    window.setActivePane(Pane::Primary);
+    verify(window.m_searchEdit->text().isEmpty()
+               && window.m_searchEdit->placeholderText().contains("B"),
+           "left pane restores its own search draft and placeholder");
+    window.m_searchEdit->setText("second");
+    window.setActivePane(Pane::Split);
+    verify(window.m_searchEdit->text() == "needle" && window.m_searchScopeAction->isEnabled(),
+           "returning right restores live query and folder scope");
+    QTest::keyClick(window.m_searchEdit, Qt::Key_Return);
+    const QUrl rightSearch = split->currentUrl();
+    verify(isSearchLocation(rightSearch) && searchBaseFromUrl(rightSearch) == rootA
+               && searchIntParameter(rightSearch, "scope", -1) == 0,
+           "Enter routes recursive Search to the right folder");
+    verify(window.m_currentUrl == rootB && window.m_primarySearch.text == "second",
+           "right Search preserves left location and draft");
+    waitForSearch(*split->searchController());
+    verify(paths(split->m_pending) == expectedA && split->listView()->count() == 3,
+           "right Search receives real recursive KIO results");
+    verify(!split->m_details->isColumnHidden(4)
+               && split->m_details->topLevelItem(0)->text(4)
+                    == parentLocationForDisplay(QUrl(split->m_details->topLevelItem(0)->data(0, Qt::UserRole).toString())),
+           "right Search details include each result's parent location");
+    verify(split->m_breadcrumbButton->text() == "Results for: needle"
+               && split->m_thisPcCrumb->isVisible()
+               && window.m_searchEdit->placeholderText() == "New search"
+               && !window.m_searchScopeAction->isEnabled(),
+           "right Search has friendly breadcrumbs and correct shared controls");
+    for (int mode : {0, 1, 2}) {
+        for (auto *action : window.m_viewButton->menu()->actions())
+            if (action->data().isValid() && action->data().toInt() == mode) action->trigger();
+        for (auto *action : window.m_sortButton->menu()->actions())
+            if (action->data().isValid() && action->data().toInt() == 2) action->trigger();
+        verify(split->viewMode() == mode && split->listView()->count() == 3,
+               "shared View and Sort preserve right Search results");
+    }
+    auto choose = [](QActionGroup *group, int value) {
+        for (auto *action : group->actions())
+            if (action->data().toInt() == value) action->trigger();
+    };
+    const int rightHistorySize = split->m_history.size();
+    choose(window.m_searchTypeGroup, 1);
+    const QUrl filteredSearch = split->currentUrl();
+    verify(split->listView()->count() == 1
+               && split->m_history.size() == rightHistorySize
+               && split->m_history.at(split->m_historyIndex) == filteredSearch
+               && searchIntParameter(filteredSearch, "type", 0) == 1,
+           "right type filter reuses results and updates existing history entry");
+    verify(window.m_tabs.at(window.m_activeTab).splitUrl == filteredSearch,
+           "right filtered Search URL is saved in tab state");
+    QTest::keyClick(&window, Qt::Key_L, Qt::ControlModifier);
+    verify(split->m_addressEdit->text() == urlForDisplay(filteredSearch),
+           "right Ctrl+L exposes current filtered Search URL");
+    QTest::keyClick(split->m_addressEdit, Qt::Key_Escape);
+    verify(split->m_locationStack->currentWidget() == split->m_breadcrumbFrame,
+           "right Escape restores Search breadcrumb");
+    window.m_upAction->trigger();
+    verify(split->currentUrl() == rootA && window.m_currentUrl == rootB
+               && split->m_details->isColumnHidden(4),
+           "right Search Up returns to base and hides result-location column");
+    window.m_backAction->trigger();
+    waitForSearch(*split->searchController());
+    verify(split->currentUrl() == filteredSearch && split->listView()->count() == 1
+               && window.m_searchTypeGroup->checkedAction()->data().toInt() == 1,
+           "Back restores right Search filters and results");
+    window.m_forwardAction->trigger();
+    verify(split->currentUrl() == rootA && window.m_searchEdit->text().isEmpty(),
+           "Forward restores right directory and clears Search draft");
+    // Current drive must use the right location, with test-only drive roots.
+    DriveInfo driveA; driveA.name = "A"; driveA.targetUrl = rootA;
+    DriveInfo driveB; driveB.name = "B"; driveB.targetUrl = rootB;
+    window.m_drives = {driveA, driveB};
+    split->setCurrentUrl(QUrl::fromLocalFile(a + "/nested"));
+    choose(window.m_searchScopeGroup, 1);
+    window.m_searchEdit->setText("needle");
+    QTest::keyClick(window.m_searchEdit, Qt::Key_Return);
+    verify(searchBaseFromUrl(split->currentUrl()) == rootA
+               && searchIntParameter(split->currentUrl(), "scope", -1) == 1,
+           "current-drive Search resolves the active right drive");
+    waitForSearch(*split->searchController());
+    verify(split->listView()->count() == 3, "right drive Search covers the whole drive fixture");
+    window.m_searchEdit->setText("deep");
+    QTest::keyClick(window.m_searchEdit, Qt::Key_Return);
+    verify(searchBaseFromUrl(split->currentUrl()) == rootA
+               && searchQueryFromUrl(split->currentUrl()) == "deep",
+           "new query within right Search retains its base and scope");
+    waitForSearch(*split->searchController());
+    verify(split->listView()->count() == 1, "replacement right query displays fresh results");
+    window.m_refreshAction->trigger();
+    verify(split->searchController()->isRunning() && window.m_currentUrl == rootB,
+           "shared Refresh restarts only the active right Search");
+    waitForSearch(*split->searchController());
+
+    // Two independent workers: late callbacks may never update the other pane.
+    window.navigateTo(location, true);
+    split->setCurrentUrl(makeSearchLocation("needle", 0, rootB, 0, 0, 0));
+    auto *primaryWorker = window.m_searchController->m_searchJobs.first().data();
+    QPointer<KIO::ListJob> rightWorker = split->searchController()->m_searchJobs.first();
+    primaryWorker->entries(primaryWorker, {entry(a + "/needle.txt")});
+    rightWorker->entries(rightWorker, {entry(b + "/needle-second.txt")});
+    window.m_stopSearchAction->trigger();
+    verify(!split->searchController()->isRunning() && window.m_searchController->isRunning()
+               && split->listView()->count() == 1,
+           "shared Stop cancels only right Search and preserves its partial results");
+    verify(!window.m_stopSearchAction->isVisible() && !split->m_searchProgressFrame->isVisible(),
+           "right cancellation hides only its progress and shared Stop");
+    rightWorker->entries(rightWorker, {entry(b + "/stale.txt")});
+    verify(split->searchController()->files().size() == 1,
+           "late canceled right worker cannot contaminate results");
+    window.setActivePane(Pane::Primary);
+    verify(window.m_stopSearchAction->isVisible(), "switching left shows its still-running Stop action");
+    window.m_stopSearchAction->trigger();
+    verify(!window.m_searchController->isRunning() && window.m_directoryList->count() == 1,
+           "shared Stop works symmetrically on left Search");
+    window.setActivePane(Pane::Split);
+    split->setCurrentUrl(rightSearch);
+    window.navigateTo(location, true);
+    window.m_cancelSearchButton->click();
+    verify(!window.m_searchController->isRunning() && split->searchController()->isRunning()
+               && window.m_stopSearchAction->isVisible(),
+           "left inline Stop keeps right worker and shared Stop intact");
+    split->m_cancelSearchButton->click();
+    verify(!split->searchController()->isRunning(), "right inline Stop cancels its own worker");
+    // Left completion while right runs must not hide the shared Stop action.
+    split->setCurrentUrl(rightSearch);
+    window.navigateTo(location, true);
+    window.m_searchController->start("needle", {}, false);
+    verify(split->searchController()->isRunning() && window.m_stopSearchAction->isVisible(),
+           "inactive left completion cannot hide active right Stop");
+    const QUrl savedRight = split->currentUrl();
+    window.setSplitViewEnabled(false);
+    verify(!split->searchController()->isRunning() && window.m_activePane == Pane::Primary,
+           "closing Split View cancels the hidden right worker");
+    window.setSplitViewEnabled(true);
+    window.setActivePane(Pane::Split);
+    verify(split->currentUrl() == savedRight && split->searchController()->isRunning(),
+           "reopening Split View restores the right Search URL instead of its base folder");
+    waitForSearch(*split->searchController());
+    verify(split->listView()->count() == 3, "restored right Search reloads results");
+    choose(window.m_searchTypeGroup, 3);
+    choose(window.m_searchDateGroup, 1);
+    choose(window.m_searchSizeGroup, 1);
+    verify(split->listView()->count() == 2
+               && searchIntParameter(split->currentUrl(), "date", 0) == 1
+               && searchIntParameter(split->currentUrl(), "size", 0) == 1,
+           "right type/date/size filters combine and persist in the address");
+    window.m_searchFilterButton->menu()->actions().last()->trigger();
+    verify(split->listView()->count() == 3 && split->searchState().type == 0
+               && split->searchState().date == 0 && split->searchState().size == 0,
+           "Clear filters resets only active right Search filters");
+    const QUrl leftBeforeCrumb = window.m_currentUrl;
+    QTest::mouseClick(split->m_thisPcCrumb, Qt::LeftButton);
+    verify(split->currentUrl() == kThisPcUrl && window.m_currentUrl == leftBeforeCrumb
+               && window.m_searchEdit->placeholderText() == "Search this computer",
+           "right Search This PC breadcrumb navigates right and updates shared Search state");
+    // Restrict whole-computer Search to disposable roots in this test.
+    if (window.m_driveJob) { window.m_driveJob->kill(); window.m_driveJob = nullptr; }
+    window.m_drives = {driveA, driveB};
+    window.m_searchEdit->setText("needle");
+    QTest::keyClick(window.m_searchEdit, Qt::Key_Return);
+    verify(searchIntParameter(split->currentUrl(), "scope", -1) == 2
+               && !searchBaseFromUrl(split->currentUrl()).isValid()
+               && split->searchController()->totalRoots() == 2,
+           "right This PC Search uses whole-computer scope and shared drive inventory");
+    waitForSearch(*split->searchController());
+    verify(split->listView()->count() == 4, "right whole-computer Search includes both fixture roots");
+    window.m_upAction->trigger();
+    verify(split->currentUrl() == kThisPcUrl, "whole-computer Search Up returns to right This PC");
     qInfo("PASS: %d search assertions; real KIO workers, filters, cancellation, stale signals, split/view integration", checks);
 }

@@ -250,34 +250,6 @@ bool dropWouldCreateCycle(
     return false;
 }
 
-QString parentLocationForDisplay(const QUrl &url)
-{
-    if (url.isLocalFile()) {
-        return QFileInfo(url.toLocalFile()).absolutePath();
-    }
-
-    QUrl parent = url;
-    QString path = parent.path();
-
-    while (path.size() > 1
-           && path.endsWith(QLatin1Char('/'))) {
-        path.chop(1);
-    }
-
-    const int slash =
-        path.lastIndexOf(QLatin1Char('/'));
-
-    if (slash <= 0) {
-        path = QStringLiteral("/");
-    } else {
-        path = path.left(slash);
-    }
-
-    parent.setPath(path);
-    parent.setQuery(QString());
-    return parent.toDisplayString(QUrl::PreferLocalFile);
-}
-
 void openInDolphin(const QUrl &url)
 {
     if (!url.isValid()) {
@@ -1048,7 +1020,7 @@ class ThisPcWindow : public QMainWindow
             && m_splitPane && m_splitPane->isVisible();
         context.id = split ? PaneId::Split : PaneId::Primary;
         context.directory = split ? m_splitPane->currentUrl() : m_currentUrl;
-        context.isDirectory = split || (m_contentStack
+        context.isDirectory = split ? !sameLocation(context.directory, kThisPcUrl) : (m_contentStack
             && m_contentStack->currentWidget() == m_directoryPage);
         const int mode = split ? m_splitPane->viewMode() : m_directoryViewMode;
         auto *list = split ? m_splitPane->listView() : m_directoryList;
@@ -1100,6 +1072,7 @@ class ThisPcWindow : public QMainWindow
             m_splitPane->setAddressActive(m_activePane == PaneId::Split);
         }
         updateSidebarCurrent();
+        updateSearchControls();
         updateFileActionStates();
     }
 
@@ -1188,8 +1161,9 @@ public:
         });
         connect(m_searchController, &SearchController::finished, this, [this] {
             m_searchProgressFrame->hide();
-            m_stopSearchAction->setVisible(false);
-            statusBar()->showMessage(trLocal("Wyszukiwanie zakończone", "Search completed"), 4000);
+            updateSearchControls();
+            if (m_activePane == PaneId::Primary)
+                statusBar()->showMessage(trLocal("Wyszukiwanie zakończone", "Search completed"), 4000);
         });
 
         buildToolbar();
@@ -1414,7 +1388,7 @@ private:
                 &QAction::triggered,
                 this,
                 [this, value = def.value] {
-                    m_searchScopeMode = value;
+                    activeSearchState().scope = value;
                     updateSearchControls();
                 });
         }
@@ -1455,7 +1429,7 @@ private:
             &QAction::triggered,
             this,
             [this] {
-                cancelActiveSearch(true);
+                cancelSearch(m_activePane, true);
             });
 
         toolbar->addWidget(m_searchEdit);
@@ -1509,12 +1483,10 @@ private:
                 &QAction::triggered,
                 this,
                 [this, value = def.value] {
-                    m_searchTypeFilter = value;
+                    activeSearchState().type = value;
                     syncCurrentSearchFilters();
                     updateSearchControls();
-                    if (isSearchLocation(m_currentUrl)) {
-                        renderDirectoryItems();
-                    }
+                    renderActiveSearchItems();
                 });
         }
 
@@ -1545,12 +1517,10 @@ private:
                 &QAction::triggered,
                 this,
                 [this, value = def.value] {
-                    m_searchDateFilter = value;
+                    activeSearchState().date = value;
                     syncCurrentSearchFilters();
                     updateSearchControls();
-                    if (isSearchLocation(m_currentUrl)) {
-                        renderDirectoryItems();
-                    }
+                    renderActiveSearchItems();
                 });
         }
 
@@ -1581,12 +1551,10 @@ private:
                 &QAction::triggered,
                 this,
                 [this, value = def.value] {
-                    m_searchSizeFilter = value;
+                    activeSearchState().size = value;
                     syncCurrentSearchFilters();
                     updateSearchControls();
-                    if (isSearchLocation(m_currentUrl)) {
-                        renderDirectoryItems();
-                    }
+                    renderActiveSearchItems();
                 });
         }
 
@@ -1602,14 +1570,12 @@ private:
             &QAction::triggered,
             this,
             [this] {
-                m_searchTypeFilter = 0;
-                m_searchDateFilter = 0;
-                m_searchSizeFilter = 0;
+                activeSearchState().type = 0;
+                activeSearchState().date = 0;
+                activeSearchState().size = 0;
                 syncCurrentSearchFilters();
                 updateSearchControls();
-                if (isSearchLocation(m_currentUrl)) {
-                    renderDirectoryItems();
-                }
+                renderActiveSearchItems();
             });
 
         m_searchFilterButton->setMenu(filterMenu);
@@ -1620,15 +1586,8 @@ private:
             &QLineEdit::textChanged,
             this,
             [this](const QString &text) {
-                if (m_contentStack
-                    && m_contentStack->currentWidget()
-                        == m_directoryPage
-                    && !isSearchLocation(m_currentUrl)) {
-                    m_searchQuery = text.trimmed();
-                    renderDirectoryItems();
-                } else {
-                    m_searchQuery.clear();
-                }
+                activeSearchState().text = text;
+                if (!isSearchLocation(activeLocation())) renderActiveSearchItems();
             });
 
         connect(
@@ -2405,6 +2364,19 @@ private:
                     m_contentSplitter->saveState());
             });
 
+        m_splitPane->setSearchRootsProvider([this] { return wholeComputerSearchRoots(); });
+        connect(m_splitPane, &SplitBrowserPane::homeRefreshRequested,
+                this, &ThisPcWindow::reloadDrives);
+        connect(m_splitPane, &SplitBrowserPane::searchUiChanged, this, [this] {
+            if (m_activePane == PaneId::Split) updateSearchControls();
+        });
+        connect(m_splitPane, &SplitBrowserPane::searchCanceled, this, [this] {
+            statusBar()->showMessage(trLocal("Wyszukiwanie anulowane", "Search canceled"), 4000);
+        });
+        connect(m_splitPane->searchController(), &SearchController::finished, this, [this] {
+            if (m_activePane == PaneId::Split)
+                statusBar()->showMessage(trLocal("Wyszukiwanie zakończone", "Search completed"), 4000);
+        });
         connect(
             m_splitPane,
             &SplitBrowserPane::closeRequested,
@@ -2455,6 +2427,7 @@ private:
                 }
                 if (m_activePane == PaneId::Split) {
                     updateSidebarCurrent();
+                    updateSearchControls();
                 }
                 updateFileActionStates();
             });
@@ -2521,7 +2494,10 @@ private:
         });
         centralLayout->addWidget(m_sidebarSplitter, 1);
 
-        buildHomePage();
+        buildHomePage(PaneId::Primary, m_contentStack, m_homePage, m_homeStatus, m_drivesGrid);
+        buildHomePage(PaneId::Split, m_splitPane->contentStack(), m_splitHomePage,
+                      m_splitHomeStatus, m_splitDrivesGrid);
+        m_splitPane->setHomePage(m_splitHomePage);
         buildDirectoryPage();
         buildTabShortcuts();
         buildSplitShortcuts();
@@ -2550,9 +2526,10 @@ private:
             new OperationManager(this, toolbar, this);
     }
 
-    void buildHomePage()
+    void buildHomePage(PaneId pane, QStackedWidget *stack, QWidget *&homePage,
+                       QLabel *&homeStatus, QGridLayout *&drivesGrid)
     {
-        auto *scroll = new QScrollArea(m_contentStack);
+        auto *scroll = new QScrollArea(stack);
         scroll->setWidgetResizable(true);
         scroll->setFrameShape(QFrame::NoFrame);
         scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -2629,8 +2606,9 @@ private:
                 card,
                 &ClickableFrame::activated,
                 this,
-                [this](const QUrl &url) {
-                    navigateTo(url, true);
+                [this, pane](const QUrl &url) {
+                    setActivePane(pane);
+                    navigatePane(pane, url);
                 });
 
             foldersGrid->addWidget(
@@ -2653,23 +2631,23 @@ private:
         drivesTitle->setFont(sectionFont);
         mainLayout->addWidget(drivesTitle);
 
-        m_homeStatus =
+        homeStatus =
             new QLabel(trLocal("Wczytywanie…", "Loading…"), page);
-        m_homeStatus->setForegroundRole(QPalette::PlaceholderText);
-        mainLayout->addWidget(m_homeStatus);
+        homeStatus->setForegroundRole(QPalette::PlaceholderText);
+        mainLayout->addWidget(homeStatus);
 
-        m_drivesGrid = new QGridLayout;
-        m_drivesGrid->setContentsMargins(0, 0, 0, 0);
-        m_drivesGrid->setHorizontalSpacing(10);
-        m_drivesGrid->setVerticalSpacing(7);
-        m_drivesGrid->setColumnStretch(0, 1);
-        m_drivesGrid->setColumnStretch(1, 1);
-        mainLayout->addLayout(m_drivesGrid);
+        drivesGrid = new QGridLayout;
+        drivesGrid->setContentsMargins(0, 0, 0, 0);
+        drivesGrid->setHorizontalSpacing(10);
+        drivesGrid->setVerticalSpacing(7);
+        drivesGrid->setColumnStretch(0, 1);
+        drivesGrid->setColumnStretch(1, 1);
+        mainLayout->addLayout(drivesGrid);
 
         mainLayout->addStretch(1);
 
-        m_homePage = scroll;
-        m_contentStack->addWidget(m_homePage);
+        homePage = scroll;
+        stack->addWidget(homePage);
     }
 
     void buildDirectoryPage()
@@ -2784,7 +2762,7 @@ private:
             &QPushButton::clicked,
             this,
             [this] {
-                cancelActiveSearch(true);
+                cancelSearch(PaneId::Primary, true);
             });
 
         searchProgressLayout->addWidget(
@@ -3025,8 +3003,43 @@ private:
         return QIcon(pixmap);
     }
 
+    QUrl activeLocation() const
+    {
+        return m_activePane == PaneId::Split && m_splitPane && m_splitPane->isVisible()
+            ? m_splitPane->currentUrl() : m_currentUrl;
+    }
+
+    PaneSearchState &activeSearchState()
+    {
+        return m_activePane == PaneId::Split && m_splitPane && m_splitPane->isVisible()
+            ? m_splitPane->searchState() : m_primarySearch;
+    }
+
+    void renderActiveSearchItems()
+    {
+        if (sameLocation(activeLocation(), kThisPcUrl)) return;
+        if (m_activePane == PaneId::Split) m_splitPane->renderSearchItems();
+        else renderDirectoryItems();
+    }
+
     void updateSearchControls()
     {
+        if (m_searchEdit) {
+            const QSignalBlocker blocker(m_searchEdit);
+            m_searchEdit->setText(activeSearchState().text);
+            const QUrl url = activeLocation();
+            m_searchEdit->setPlaceholderText(sameLocation(url, kThisPcUrl)
+                ? trLocal("Szukaj na tym komputerze", "Search this computer")
+                : isSearchLocation(url)
+                    ? trLocal("Nowe wyszukiwanie", "New search")
+                    : (isPolish() ? QStringLiteral("Szukaj w: %1") : QStringLiteral("Search in: %1"))
+                        .arg(displayNameForLocation(url)));
+        }
+        if (m_stopSearchAction && m_searchController) {
+            const auto *controller = m_activePane == PaneId::Split && m_splitPane
+                ? m_splitPane->searchController() : m_searchController;
+            m_stopSearchAction->setVisible(controller->isRunning());
+        }
         auto checkGroup =
             [](QActionGroup *group, int value) {
             if (!group) {
@@ -3041,21 +3054,21 @@ private:
 
         checkGroup(
             m_searchScopeGroup,
-            m_searchScopeMode);
+            activeSearchState().scope);
         checkGroup(
             m_searchTypeGroup,
-            m_searchTypeFilter);
+            activeSearchState().type);
         checkGroup(
             m_searchDateGroup,
-            m_searchDateFilter);
+            activeSearchState().date);
         checkGroup(
             m_searchSizeGroup,
-            m_searchSizeFilter);
+            activeSearchState().size);
 
         if (m_searchScopeAction) {
             QString scopeName;
 
-            switch (m_searchScopeMode) {
+            switch (activeSearchState().scope) {
             case 1:
                 scopeName = trLocal(
                     "Bieżący dysk",
@@ -3085,17 +3098,17 @@ private:
                         "Search scope: %1\nClick the magnifier arrow to change scope.")
                         .arg(scopeName));
             m_searchScopeAction->setEnabled(
-                !isSearchLocation(m_currentUrl));
+                !isSearchLocation(activeLocation()));
         }
 
         if (m_searchFilterButton) {
             int activeFilters = 0;
             activeFilters +=
-                m_searchTypeFilter != 0 ? 1 : 0;
+                activeSearchState().type != 0 ? 1 : 0;
             activeFilters +=
-                m_searchDateFilter != 0 ? 1 : 0;
+                activeSearchState().date != 0 ? 1 : 0;
             activeFilters +=
-                m_searchSizeFilter != 0 ? 1 : 0;
+                activeSearchState().size != 0 ? 1 : 0;
 
             m_searchFilterButton->setToolTip(
                 activeFilters == 0
@@ -3174,9 +3187,9 @@ private:
 
     QUrl searchContextUrl() const
     {
-        if (isSearchLocation(m_currentUrl)) {
+        if (isSearchLocation(activeLocation())) {
             const QUrl base =
-                searchBaseFromUrl(m_currentUrl);
+                searchBaseFromUrl(activeLocation());
 
             if (base.isValid()) {
                 return base;
@@ -3187,13 +3200,13 @@ private:
         }
 
         if (sameLocation(
-                m_currentUrl,
+                activeLocation(),
                 kThisPcUrl)) {
             return QUrl::fromLocalFile(
                 QDir::homePath());
         }
 
-        return m_currentUrl;
+        return activeLocation();
     }
 
     void startSearchFromUi()
@@ -3209,11 +3222,11 @@ private:
             return;
         }
 
-        int scope = m_searchScopeMode;
+        int scope = activeSearchState().scope;
         QUrl base;
 
         if (sameLocation(
-                m_currentUrl,
+                activeLocation(),
                 kThisPcUrl)) {
             scope = 2;
         }
@@ -3232,42 +3245,47 @@ private:
             }
         }
 
-        navigateTo(
+        navigatePane(m_activePane,
             makeSearchLocation(
                 query,
                 scope,
                 base,
-                m_searchTypeFilter,
-                m_searchDateFilter,
-                m_searchSizeFilter),
-            true);
+                activeSearchState().type,
+                activeSearchState().date,
+                activeSearchState().size));
     }
 
     void syncCurrentSearchFilters()
     {
-        if (!isSearchLocation(m_currentUrl)) {
+        if (!isSearchLocation(activeLocation())) {
             return;
         }
 
         const QUrl updated =
             makeSearchLocation(
-                searchQueryFromUrl(m_currentUrl),
+                searchQueryFromUrl(activeLocation()),
                 searchIntParameter(
-                    m_currentUrl,
+                    activeLocation(),
                     QStringLiteral("scope"),
-                    m_searchScopeMode),
-                searchBaseFromUrl(m_currentUrl),
-                m_searchTypeFilter,
-                m_searchDateFilter,
-                m_searchSizeFilter);
+                    activeSearchState().scope),
+                searchBaseFromUrl(activeLocation()),
+                activeSearchState().type,
+                activeSearchState().date,
+                activeSearchState().size);
 
+        if (m_activePane == PaneId::Split) {
+            m_splitPane->updateSearchFilters(updated);
+            return;
+        }
         m_currentUrl = updated;
+        m_primarySearch.location = updated;
 
         if (m_historyIndex >= 0
             && m_historyIndex < m_history.size()) {
             m_history[m_historyIndex] = updated;
         }
 
+        rebuildBreadcrumbs();
         syncActiveTabState();
         updateActiveTabPresentation();
     }
@@ -3286,66 +3304,20 @@ private:
             return;
         }
 
-        const QString scopeLabel =
-            m_searchScopeMode == 2
-                ? trLocal(
-                    "Ten komputer",
-                    "This PC")
-                : (m_searchScopeMode == 1
-                    ? trLocal(
-                        "Bieżący dysk",
-                        "Current drive")
-                    : trLocal(
-                        "Bieżący folder",
-                        "Current folder"));
-
-        if (m_searchController->isRunning()) {
-            m_directoryStatus->setText(
-                isPolish()
-                    ? QStringLiteral(
-                        "%1 wyników • %2/%3 lokalizacji • %4")
-                        .arg(m_searchVisibleCount)
-                        .arg(m_searchController->completedRoots())
-                        .arg(m_searchController->totalRoots())
-                        .arg(scopeLabel)
-                    : QStringLiteral(
-                        "%1 results • %2/%3 locations • %4")
-                        .arg(m_searchVisibleCount)
-                        .arg(m_searchController->completedRoots())
-                        .arg(m_searchController->totalRoots())
-                        .arg(scopeLabel));
-        } else {
-            QString message =
-                isPolish()
-                    ? QStringLiteral(
-                        "%1 wyników • zakres: %2")
-                        .arg(m_searchVisibleCount)
-                        .arg(scopeLabel)
-                    : QStringLiteral(
-                        "%1 results • scope: %2")
-                        .arg(m_searchVisibleCount)
-                        .arg(scopeLabel);
-
-            if (m_searchController->errorCount() > 0) {
-                message +=
-                    isPolish()
-                        ? QStringLiteral(
-                            " • %1 lokalizacji z błędem")
-                            .arg(m_searchController->errorCount())
-                        : QStringLiteral(
-                            " • %1 locations with errors")
-                            .arg(m_searchController->errorCount());
-            }
-
-            m_directoryStatus->setText(message);
-        }
+        m_directoryStatus->setText(m_searchController->statusText(
+            m_searchVisibleCount, m_primarySearch.scope));
     }
 
-    void cancelActiveSearch(bool userRequested)
+    void cancelSearch(PaneId pane, bool userRequested)
     {
+        if (pane == PaneId::Split) {
+            m_splitPane->cancelSearch(userRequested);
+            updateSearchControls();
+            return;
+        }
         if (!m_searchController->cancel()) return;
         if (m_searchProgressFrame) m_searchProgressFrame->hide();
-        if (m_stopSearchAction) m_stopSearchAction->setVisible(false);
+        updateSearchControls();
         if (userRequested) {
             m_pendingFiles = m_searchController->files();
             renderDirectoryItems();
@@ -3355,7 +3327,7 @@ private:
 
     void loadSearchLocation(const QUrl &url)
     {
-        cancelActiveSearch(false);
+        cancelSearch(PaneId::Primary, false);
 
         m_pendingFiles.clear();
         m_directoryList->clear();
@@ -3366,43 +3338,7 @@ private:
         const QString query =
             searchQueryFromUrl(url);
 
-        m_searchScopeMode =
-            std::clamp(
-                searchIntParameter(
-                    url,
-                    QStringLiteral("scope"),
-                    2),
-                0,
-                2);
-
-        m_searchTypeFilter =
-            std::clamp(
-                searchIntParameter(
-                    url,
-                    QStringLiteral("type"),
-                    0),
-                0,
-                6);
-
-        m_searchDateFilter =
-            std::clamp(
-                searchIntParameter(
-                    url,
-                    QStringLiteral("date"),
-                    0),
-                0,
-                4);
-
-        m_searchSizeFilter =
-            std::clamp(
-                searchIntParameter(
-                    url,
-                    QStringLiteral("size"),
-                    0),
-                0,
-                4);
-
-        updateSearchControls();
+        m_primarySearch.loadLocation(url);
 
         m_directoryDetails->setColumnHidden(
             4,
@@ -3417,7 +3353,7 @@ private:
 
         QList<QUrl> roots;
 
-        if (m_searchScopeMode == 2) {
+        if (m_primarySearch.scope == 2) {
             roots =
                 wholeComputerSearchRoots();
         } else {
@@ -3437,8 +3373,8 @@ private:
         m_searchProgressBar->setRange(0, 100);
         m_searchProgressBar->setValue(0);
         m_searchProgressFrame->show();
-        m_stopSearchAction->setVisible(true);
         m_searchController->start(query, roots, m_showHiddenFiles);
+        updateSearchControls();
     }
 
     void setSplitViewEnabled(bool enabled)
@@ -3466,10 +3402,6 @@ private:
                 target = m_tabs.at(m_activeTab).splitUrl;
             }
 
-            if (isSearchLocation(target)) {
-                const QUrl base = searchBaseFromUrl(target);
-                target = base.isValid() ? base : kThisPcUrl;
-            }
             if (!target.isValid()) {
                 target = kThisPcUrl;
             }
@@ -3510,6 +3442,7 @@ private:
                 m_contentSplitter->setSizes({total / 2, total / 2});
             }
         } else {
+            m_splitPane->cancelSearch(false);
             m_splitPane->hide();
             setActivePane(PaneId::Primary);
         }
@@ -3578,8 +3511,10 @@ private:
                 }
 
                 if (m_activePane == PaneId::Split) {
+                    setActivePane(PaneId::Primary);
                     focusPrimaryPane();
                 } else {
+                    setActivePane(PaneId::Split);
                     m_splitPane->focusView();
                 }
             });
@@ -3961,6 +3896,7 @@ private:
                     : state.currentUrl,
                 true);
         } else {
+            m_splitPane->cancelSearch(false);
             m_splitPane->hide();
             setActivePane(PaneId::Primary);
         }
@@ -4241,7 +4177,7 @@ private:
             !sameLocation(m_currentUrl, url);
 
         if (changedLocation && m_searchController->isRunning()) {
-            cancelActiveSearch(false);
+            cancelSearch(PaneId::Primary, false);
         }
 
         m_currentUrl = url;
@@ -4251,71 +4187,7 @@ private:
                 isAdminUrl(url));
         }
 
-        if (changedLocation && m_searchEdit) {
-            const QString embeddedSearch =
-                searchQueryFromUrl(url);
-
-            m_searchEdit->blockSignals(true);
-
-            if (!embeddedSearch.isEmpty()) {
-                m_searchEdit->setText(embeddedSearch);
-                m_searchQuery.clear();
-            } else {
-                m_searchEdit->clear();
-                m_searchQuery.clear();
-            }
-
-            m_searchEdit->blockSignals(false);
-        }
-
-        if (isSearchLocation(url)) {
-            m_searchScopeMode =
-                std::clamp(
-                    searchIntParameter(
-                        url,
-                        QStringLiteral("scope"),
-                        2),
-                    0,
-                    2);
-        } else if (sameLocation(
-                       url,
-                       kThisPcUrl)) {
-            m_searchScopeMode = 2;
-            m_searchTypeFilter = 0;
-            m_searchDateFilter = 0;
-            m_searchSizeFilter = 0;
-        } else {
-            m_searchScopeMode = 0;
-            m_searchTypeFilter = 0;
-            m_searchDateFilter = 0;
-            m_searchSizeFilter = 0;
-        }
-
-        updateSearchControls();
-
-        if (m_searchEdit) {
-            m_searchEdit->setVisible(true);
-            m_searchEdit->setEnabled(true);
-
-            if (sameLocation(url, kThisPcUrl)) {
-                m_searchEdit->setPlaceholderText(
-                    trLocal(
-                        "Szukaj na tym komputerze",
-                        "Search this computer"));
-            } else if (isSearchLocation(url)) {
-                m_searchEdit->setPlaceholderText(
-                    trLocal(
-                        "Nowe wyszukiwanie",
-                        "New search"));
-            } else {
-                m_searchEdit->setPlaceholderText(
-                    isPolish()
-                        ? QStringLiteral("Szukaj w: %1")
-                            .arg(displayNameForLocation(url))
-                        : QStringLiteral("Search in: %1")
-                            .arg(displayNameForLocation(url)));
-            }
-        }
+        m_primarySearch.loadLocation(url);
 
         if (m_directoryJob) {
             m_directoryJob->kill();
@@ -4344,6 +4216,7 @@ private:
             }
         }
 
+        updateSearchControls();
         rebuildBreadcrumbs();
         updateNavigationActions();
         updateSidebarCurrent();
@@ -4429,15 +4302,15 @@ private:
 
     bool fileMatchesSearch(const FileInfo &file) const
     {
-        if (m_searchQuery.isEmpty()) {
+        if (isSearchLocation(m_currentUrl) || m_primarySearch.text.trimmed().isEmpty()) {
             return true;
         }
 
         return file.name.contains(
-                m_searchQuery,
+                m_primarySearch.text.trimmed(),
                 Qt::CaseInsensitive)
             || file.mimeType.contains(
-                m_searchQuery,
+                m_primarySearch.text.trimmed(),
                 Qt::CaseInsensitive);
     }
 
@@ -4562,7 +4435,7 @@ private:
                 && !SearchController::matchesFile(
                     file,
                     mimeDb,
-                    {m_searchTypeFilter, m_searchDateFilter, m_searchSizeFilter})) {
+                    {m_primarySearch.type, m_primarySearch.date, m_primarySearch.size})) {
                 continue;
             }
 
@@ -4598,7 +4471,7 @@ private:
             m_searchVisibleCount =
                 visibleCount;
             updateSearchStatusLabel();
-        } else if (m_searchQuery.isEmpty()) {
+        } else if (m_primarySearch.text.trimmed().isEmpty()) {
             m_directoryStatus->setText(
                 isPolish()
                     ? QStringLiteral("%1 elementów").arg(count)
@@ -4614,10 +4487,12 @@ private:
                         .arg(count));
         }
 
-        statusBar()->showMessage(
-            isSearchLocation(m_currentUrl)
-                ? displayNameForLocation(m_currentUrl)
-                : urlForDisplay(m_currentUrl));
+        if (m_activePane == PaneId::Primary) {
+            statusBar()->showMessage(
+                isSearchLocation(m_currentUrl)
+                    ? displayNameForLocation(m_currentUrl)
+                    : urlForDisplay(m_currentUrl));
+        }
 
         updateFileActionStates();
     }
@@ -6462,7 +6337,8 @@ private:
         if (m_contentStack
             && m_contentStack->currentWidget()
                 == m_directoryPage) {
-            loadDirectory(m_currentUrl);
+            if (isSearchLocation(m_currentUrl)) loadSearchLocation(m_currentUrl);
+            else loadDirectory(m_currentUrl);
         }
         if (m_splitPane) m_splitPane->setDisplayOptions(m_showHiddenFiles, m_thumbnailsEnabled);
     }
@@ -7017,9 +6893,8 @@ private:
         QUrl effectiveLocation = split
             ? m_splitPane->currentUrl()
             : m_currentUrl;
-        if (!split
-            && isSearchLocation(effectiveLocation)) {
-            if (m_searchScopeMode == 2) {
+        if (isSearchLocation(effectiveLocation)) {
+            if (searchIntParameter(effectiveLocation, QStringLiteral("scope"), 2) == 2) {
                 effectiveLocation = kThisPcUrl;
             } else {
                 const QUrl base = searchBaseFromUrl(effectiveLocation);
@@ -7093,14 +6968,8 @@ private Q_SLOTS:
 
         m_pendingDrives.clear();
 
-        if (sameLocation(
-                m_currentUrl,
-                kThisPcUrl)) {
-            m_homeStatus->setText(
-                trLocal(
-                    "Odświeżanie…",
-                    "Refreshing…"));
-        }
+        m_homeStatus->setText(trLocal("Odświeżanie…", "Refreshing…"));
+        m_splitHomeStatus->setText(m_homeStatus->text());
 
         KIO::ListJob *job = KIO::listDir(
             kThisPcUrl,
@@ -7184,15 +7053,8 @@ private Q_SLOTS:
             }
 
             if (job->error()) {
-                if (sameLocation(
-                        m_currentUrl,
-                        kThisPcUrl)) {
-                    m_homeStatus->setText(
-                        trLocal(
-                            "Nie udało się odczytać thispc:/.",
-                            "Could not read thispc:/."));
-                }
-
+                m_homeStatus->setText(trLocal("Nie udało się odczytać thispc:/.", "Could not read thispc:/."));
+                m_splitHomeStatus->setText(m_homeStatus->text());
                 return;
             }
 
@@ -7209,17 +7071,24 @@ private Q_SLOTS:
 private:
     void rebuildDriveGrid()
     {
-        clearLayout(m_drivesGrid);
+        rebuildDriveGrid(PaneId::Primary, m_homePage, m_homeStatus, m_drivesGrid);
+        rebuildDriveGrid(PaneId::Split, m_splitHomePage, m_splitHomeStatus, m_splitDrivesGrid);
+        m_splitPane->setDrives(m_drives);
+    }
+
+    void rebuildDriveGrid(PaneId pane, QWidget *homePage, QLabel *homeStatus, QGridLayout *drivesGrid)
+    {
+        clearLayout(drivesGrid);
 
         if (m_drives.isEmpty()) {
-            m_homeStatus->setText(
+            homeStatus->setText(
                 trLocal(
                     "Nie znaleziono dysków.",
                     "No drives found."));
             return;
         }
 
-        m_homeStatus->clear();
+        homeStatus->clear();
 
         for (int i = 0;
              i < m_drives.size();
@@ -7227,17 +7096,18 @@ private:
             DriveFrame *card =
                 makeDriveCard(
                     m_drives.at(i),
-                    m_homePage);
+                    homePage);
 
             connect(
                 card,
                 &ClickableFrame::activated,
                 this,
-                [this](const QUrl &url) {
-                    navigateTo(url, true);
+                [this, pane](const QUrl &url) {
+                    setActivePane(pane);
+                    navigatePane(pane, url);
                 });
 
-            m_drivesGrid->addWidget(
+            drivesGrid->addWidget(
                 card,
                 i / 2,
                 i % 2);
@@ -7295,11 +7165,7 @@ private:
     QActionGroup *m_searchSizeGroup = nullptr;
     QLineEdit *m_searchEdit = nullptr;
     QAction *m_stopSearchAction = nullptr;
-    QString m_searchQuery;
-    int m_searchScopeMode = 2;
-    int m_searchTypeFilter = 0;
-    int m_searchDateFilter = 0;
-    int m_searchSizeFilter = 0;
+    PaneSearchState m_primarySearch;
 
     SidebarPanel *m_sidebar = nullptr;
     QSplitter *m_sidebarSplitter = nullptr;
@@ -7323,6 +7189,9 @@ private:
     OperationManager *m_operationManager = nullptr;
     QLabel *m_versionLabel = nullptr;
 
+    QWidget *m_splitHomePage = nullptr;
+    QLabel *m_splitHomeStatus = nullptr;
+    QGridLayout *m_splitDrivesGrid = nullptr;
     QWidget *m_homePage = nullptr;
     QLabel *m_homeStatus = nullptr;
     QGridLayout *m_drivesGrid = nullptr;

@@ -100,3 +100,32 @@ The focused sidebar/pane suites pass **283/283 assertions** (43 layout,
 45 sidebar Drag & Drop and 195 pane assertions). The complete automated suite
 passes **952/952 assertions** across 13 suites. Removing button elision in an
 isolated test copy fails the rendered-label regression as expected.
+
+## Stage 4 — Search and This PC active-pane symmetry
+
+Status: implemented and covered by focused automated regression tests; manual
+KDE visual and interaction acceptance remains.
+
+The shared Search box, scope menu, filters and Stop action now resolve through
+the active pane. Each pane retains its own Search text, scope and filters, and
+owns an independent asynchronous `SearchController`. Starting, refreshing,
+filtering or canceling Search in one pane therefore leaves the other pane's
+location, draft, results and worker unchanged. Search URLs remain in the owning
+pane's history and tab state, including their base, scope and filter parameters.
+
+The secondary pane now presents `thispc:/` with the same folder and drive card
+layout as the primary pane. Both pages are built by one shared function and use
+the same drive inventory and refresh backend. Folder and drive cards navigate
+their owning pane. Back, Forward, Up, Refresh, `Ctrl+L`, `F6`, pane swap,
+sidebar activation and the Search breadcrumb preserve active-pane routing.
+
+Search results in either pane support Icons, List and Details, including the
+result Location column, active filters, progress, partial results after Stop
+and friendly Search/This PC breadcrumb and address presentation. Closing Split
+View cancels its hidden Search worker; reopening restores the stored Search URL
+and reloads those results.
+
+Focused coverage belongs in `tests/search-controller.cpp` and
+`tests/pane-actions.cpp`, with the existing sidebar suites retained as routing
+and layout regressions. Stage 4 does not change transfer backends, filename
+layout behavior or release version metadata.

@@ -10,6 +10,7 @@
 
 #include "browsercommon.h"
 #include "directoryview.h"
+#include "searchcontroller.h"
 
 #include <KIO/ListJob>
 #include <KIO/UDSEntry>
@@ -42,6 +43,8 @@
 #include <QPixmap>
 #include <QPoint>
 #include <QPointer>
+#include <QProgressBar>
+#include <QPushButton>
 #include <QSettings>
 #include <QShortcut>
 #include <QSignalBlocker>
@@ -59,6 +62,7 @@
 #include <QWidget>
 
 #include <algorithm>
+#include <functional>
 #include <utility>
 
 class SplitBrowserPane : public QFrame
@@ -156,6 +160,18 @@ public:
         m_breadcrumbIcon->setFixedSize(18, 18);
         m_breadcrumbIcon->setAlignment(Qt::AlignCenter);
         m_breadcrumbIcon->hide();
+
+        m_thisPcCrumb = new QToolButton(m_breadcrumbFrame);
+        m_thisPcCrumb->setObjectName(QStringLiteral("crumbButton"));
+        m_thisPcCrumb->setText(trLocal("Ten komputer", "This PC"));
+        m_thisPcCrumb->setIcon(themedIcon(QStringLiteral("computer")));
+        m_thisPcCrumb->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        m_thisPcCrumb->hide();
+        breadcrumbLayout->addWidget(m_thisPcCrumb);
+        connect(m_thisPcCrumb, &QToolButton::clicked, this, [this] {
+            Q_EMIT activated();
+            navigateTo(kThisPcUrl, true);
+        });
 
         m_breadcrumbButton =
             new QToolButton(m_breadcrumbFrame);
@@ -359,6 +375,14 @@ public:
 
         outer->addWidget(header);
 
+        m_contentStack = new QStackedWidget(this);
+        outer->addWidget(m_contentStack, 1);
+        m_directoryPage = new QWidget(m_contentStack);
+        auto *directoryLayout = new QVBoxLayout(m_directoryPage);
+        directoryLayout->setContentsMargins(0, 0, 0, 0);
+        directoryLayout->setSpacing(0);
+        m_contentStack->addWidget(m_directoryPage);
+
         // --------------------------------------------------------------
         // Same heading/count layout as the primary pane
         // --------------------------------------------------------------
@@ -385,7 +409,36 @@ public:
             QPalette::PlaceholderText);
         contentHeaderLayout->addWidget(m_status);
 
-        outer->addWidget(contentHeader);
+        directoryLayout->addWidget(contentHeader);
+        m_searchProgressFrame = new QFrame(m_directoryPage);
+        m_searchProgressFrame->setObjectName(QStringLiteral("searchProgressFrame"));
+        auto *progressLayout = new QHBoxLayout(m_searchProgressFrame);
+        progressLayout->setContentsMargins(16, 0, 16, 8);
+        m_searchProgressBar = new QProgressBar(m_searchProgressFrame);
+        m_searchProgressBar->setRange(0, 100);
+        m_searchProgressBar->setTextVisible(false);
+        m_searchProgressBar->setMaximumHeight(7);
+        m_cancelSearchButton = new QPushButton(themedIcon(QStringLiteral("process-stop")),
+            trLocal("Stop", "Stop"), m_searchProgressFrame);
+        m_cancelSearchButton->setFlat(true);
+        m_cancelSearchButton->setToolTip(trLocal("Przerwij wyszukiwanie", "Stop search"));
+        progressLayout->addWidget(m_searchProgressBar, 1);
+        progressLayout->addWidget(m_cancelSearchButton);
+        directoryLayout->addWidget(m_searchProgressFrame);
+        m_searchProgressFrame->hide();
+        m_searchController = new SearchController(this);
+        connect(m_cancelSearchButton, &QPushButton::clicked, this, [this] { cancelSearch(true); });
+        connect(m_searchController, &SearchController::resultsChanged, this, [this] {
+            if (!isSearchLocation(m_currentUrl)) return;
+            m_pending = m_searchController->files();
+            renderItems();
+        });
+        connect(m_searchController, &SearchController::progressChanged, this, [this] {
+            updateSearchProgress();
+        });
+        connect(m_searchController, &SearchController::finished, this, [this] {
+            updateSearchProgress();
+        });
 
         // --------------------------------------------------------------
         // Icons/List + Details, matching the main pane
@@ -407,14 +460,15 @@ public:
             new DirectoryTreeWidget(m_viewStack);
         m_details->setObjectName(
             QStringLiteral("splitDirectoryDetails"));
-        m_details->setColumnCount(4);
+        m_details->setColumnCount(5);
         m_details->setHeaderLabels({
             trLocal("Nazwa", "Name"),
             trLocal("Typ", "Type"),
             trLocal("Rozmiar", "Size"),
             trLocal(
                 "Zmodyfikowano",
-                "Date modified")
+                "Date modified"),
+            trLocal("Lokalizacja", "Location")
         });
         m_details->setRootIsDecorated(false);
         m_details->setUniformRowHeights(true);
@@ -442,10 +496,13 @@ public:
             3,
             QHeaderView::ResizeToContents);
         m_details->setColumnWidth(1, 190);
+        detailsHeader->setSectionResizeMode(4, QHeaderView::Interactive);
+        m_details->setColumnWidth(4, 320);
+        m_details->setColumnHidden(4, true);
 
         m_viewStack->addWidget(m_list);
         m_viewStack->addWidget(m_details);
-        outer->addWidget(m_viewStack, 1);
+        directoryLayout->addWidget(m_viewStack, 1);
 
         connect(
             m_backButton,
@@ -568,6 +625,41 @@ public:
         updateNavigationButtons();
     }
 
+    QStackedWidget *contentStack() const { return m_contentStack; }
+    void setHomePage(QWidget *page) { m_homePage = page; }
+    PaneSearchState &searchState() { return m_searchState; }
+    SearchController *searchController() const { return m_searchController; }
+    void setSearchRootsProvider(std::function<QList<QUrl>()> provider)
+    {
+        m_searchRootsProvider = std::move(provider);
+    }
+    void setDrives(const QList<DriveInfo> &drives)
+    {
+        m_drives = drives;
+        updateNavigationButtons();
+    }
+    void renderSearchItems() { renderItems(); }
+    void updateSearchFilters(const QUrl &url)
+    {
+        m_currentUrl = url;
+        m_searchState.location = url;
+        if (m_historyIndex >= 0 && m_historyIndex < m_history.size())
+            m_history[m_historyIndex] = url;
+        updateLocationPresentation();
+        renderItems();
+        Q_EMIT stateChanged();
+    }
+    void cancelSearch(bool userRequested)
+    {
+        if (!m_searchController->cancel()) return;
+        if (userRequested) {
+            m_pending = m_searchController->files();
+            renderItems();
+        }
+        updateSearchProgress();
+        if (userRequested) Q_EMIT searchCanceled();
+    }
+
     DirectoryListWidget *listView() const { return m_list; }
     DirectoryTreeWidget *detailsView() const { return m_details; }
     QWidget *shortcutScope() const { return m_viewStack; }
@@ -576,8 +668,13 @@ public:
     bool canGoUp() const { return parentUrl().isValid(); }
     void setDisplayOptions(bool hidden, bool thumbnails)
     {
+        const bool hiddenChanged = hidden != m_showHiddenFiles;
         m_showHiddenFiles = hidden;
         m_thumbnailsEnabled = thumbnails;
+        if (!hiddenChanged && isSearchLocation(m_currentUrl)) {
+            renderItems();
+            return;
+        }
         refresh();
     }
 
@@ -694,6 +791,10 @@ public:
 
     void focusView()
     {
+        if (sameLocation(m_currentUrl, kThisPcUrl) && m_homePage) {
+            m_homePage->setFocus(Qt::ShortcutFocusReason);
+            return;
+        }
         if (m_viewMode == 2) {
             m_details->setFocus(
                 Qt::ShortcutFocusReason);
@@ -716,6 +817,9 @@ public:
     }
 
 Q_SIGNALS:
+    void homeRefreshRequested();
+    void searchUiChanged();
+    void searchCanceled();
     void activated();
     void selectionChanged();
     void contextMenuRequested(bool details, const QPoint &position);
@@ -743,6 +847,11 @@ private:
             return trLocal(
                 "Ten komputer",
                 "This PC");
+        }
+
+        if (isSearchLocation(url)) {
+            return (isPolish() ? QStringLiteral("Wyniki dla: %1") : QStringLiteral("Results for: %1"))
+                .arg(searchQueryFromUrl(url));
         }
 
         if (url.isLocalFile()) {
@@ -827,6 +936,11 @@ private:
                 "This PC");
         }
 
+        if (isSearchLocation(url)) {
+            return (isPolish() ? QStringLiteral("Wyniki dla: %1") : QStringLiteral("Results for: %1"))
+                .arg(searchQueryFromUrl(url));
+        }
+
         if (url.isLocalFile()) {
             const QString path =
                 QDir::cleanPath(
@@ -871,6 +985,8 @@ private:
                 QStringLiteral("computer"));
         }
 
+        if (isSearchLocation(url)) return themedIcon(QStringLiteral("system-search"));
+
         if (isAdminUrl(url)) {
             return themedIcon(
                 QStringLiteral("security-high"));
@@ -897,6 +1013,8 @@ private:
 
     void updateLocationPresentation()
     {
+        if (!m_addressEdit->hasFocus()) m_addressEdit->setText(urlForDisplay(m_currentUrl));
+        m_thisPcCrumb->setVisible(isSearchLocation(m_currentUrl));
         m_breadcrumbButton->setText(
             friendlyLocationText(
                 m_currentUrl));
@@ -919,6 +1037,14 @@ private:
                 m_currentUrl,
                 kThisPcUrl)) {
             return {};
+        }
+
+        if (isSearchLocation(m_currentUrl)) {
+            const QUrl base = searchBaseFromUrl(m_currentUrl);
+            return base.isValid() ? base : kThisPcUrl;
+        }
+        for (const DriveInfo &drive : m_drives) {
+            if (sameLocation(drive.targetUrl, m_currentUrl)) return kThisPcUrl;
         }
 
         QUrl parent = m_currentUrl;
@@ -1066,20 +1192,37 @@ private:
             m_job = nullptr;
         }
 
+        cancelSearch(false);
+        m_searchState.loadLocation(url);
         m_pending.clear();
         m_list->clear();
         m_details->clear();
-
-        m_list->setDropDirectory(url);
-        m_details->setDropDirectory(url);
-
         m_currentUrl = url;
+        const bool search = isSearchLocation(url);
+        const bool home = sameLocation(url, kThisPcUrl);
+        m_list->setDropDirectory(search || home ? QUrl() : url);
+        m_details->setDropDirectory(search || home ? QUrl() : url);
+        m_details->setColumnHidden(4, !search);
         updateLocationPresentation();
-
-        m_status->setText(
-            trLocal(
-                "Wczytywanie…",
-                "Loading…"));
+        m_contentStack->setCurrentWidget(home && m_homePage ? m_homePage : m_directoryPage);
+        if (home) {
+            Q_EMIT homeRefreshRequested();
+            Q_EMIT searchUiChanged();
+            return;
+        }
+        if (search) {
+            QList<QUrl> roots;
+            if (m_searchState.scope == 2 && m_searchRootsProvider) roots = m_searchRootsProvider();
+            else {
+                const QUrl base = searchBaseFromUrl(url);
+                roots.push_back(base.isValid() ? base : QUrl::fromLocalFile(QDir::homePath()));
+            }
+            m_searchController->start(searchQueryFromUrl(url), roots, m_showHiddenFiles);
+            updateSearchProgress();
+            return;
+        }
+        Q_EMIT searchUiChanged();
+        m_status->setText(trLocal("Wczytywanie…", "Loading…"));
 
         KIO::ListJob *job =
             KIO::listDir(
@@ -1262,8 +1405,18 @@ private:
         m_list->clear();
         m_details->clear();
 
+        int visibleCount = 0;
         for (const FileInfo &file :
              std::as_const(m_pending)) {
+            if (isSearchLocation(m_currentUrl)) {
+                if (!SearchController::matchesFile(file, database,
+                    {m_searchState.type, m_searchState.date, m_searchState.size})) continue;
+            } else {
+                const QString query = m_searchState.text.trimmed();
+                if (!query.isEmpty() && !file.name.contains(query, Qt::CaseInsensitive)
+                    && !file.mimeType.contains(query, Qt::CaseInsensitive)) continue;
+            }
+            ++visibleCount;
             const QIcon icon =
                 iconForSplitFile(
                     file,
@@ -1290,19 +1443,29 @@ private:
                 icon,
                 typeText,
                 sizeText,
-                modifiedText);
+                modifiedText,
+                {parentLocationForDisplay(file.url)});
         }
 
-        m_status->setText(
-            isPolish()
-                ? QStringLiteral(
-                    "%1 elementów")
-                    .arg(
-                        m_pending.size())
-                : QStringLiteral(
-                    "%1 items")
-                    .arg(
-                        m_pending.size()));
+        if (isSearchLocation(m_currentUrl)) {
+            m_status->setText(m_searchController->statusText(visibleCount, m_searchState.scope));
+        } else if (m_searchState.text.trimmed().isEmpty()) {
+            m_status->setText((isPolish() ? QStringLiteral("%1 elementów") : QStringLiteral("%1 items"))
+                .arg(m_pending.size()));
+        } else {
+            m_status->setText((isPolish() ? QStringLiteral("%1 z %2 elementów") : QStringLiteral("%1 of %2 items"))
+                .arg(visibleCount).arg(m_pending.size()));
+        }
+    }
+
+    void updateSearchProgress()
+    {
+        const bool running = m_searchController->isRunning();
+        m_searchProgressFrame->setVisible(running);
+        m_searchProgressBar->setValue(m_searchController->progressPercent());
+        if (isSearchLocation(m_currentUrl))
+            m_status->setText(m_searchController->statusText(m_list->count(), m_searchState.scope));
+        Q_EMIT searchUiChanged();
     }
 
     void applyViewMode()
@@ -1401,6 +1564,18 @@ private:
     {
         Q_EMIT contextMenuRequested(true, pos);
     }
+
+    QStackedWidget *m_contentStack = nullptr;
+    QWidget *m_directoryPage = nullptr;
+    QWidget *m_homePage = nullptr;
+    QToolButton *m_thisPcCrumb = nullptr;
+    PaneSearchState m_searchState;
+    SearchController *m_searchController = nullptr;
+    QFrame *m_searchProgressFrame = nullptr;
+    QProgressBar *m_searchProgressBar = nullptr;
+    QPushButton *m_cancelSearchButton = nullptr;
+    std::function<QList<QUrl>()> m_searchRootsProvider;
+    QList<DriveInfo> m_drives;
 
     QToolButton *m_backButton = nullptr;
     QToolButton *m_forwardButton = nullptr;

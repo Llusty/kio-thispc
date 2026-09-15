@@ -114,6 +114,60 @@ inline QUrl searchBaseFromUrl(const QUrl &url)
         : QUrl(base);
 }
 
+// Each pane retains its own draft and filter choices while the toolbar is shared.
+struct PaneSearchState {
+    QUrl location;
+    QString text;
+    int scope = 2;
+    int type = 0;
+    int date = 0;
+    int size = 0;
+
+    void loadLocation(const QUrl &url)
+    {
+        const bool changed = !sameLocation(location, url);
+        if (changed) text = searchQueryFromUrl(url);
+        if (isSearchLocation(url)) {
+            scope = std::clamp(searchIntParameter(url, QStringLiteral("scope"), 2), 0, 2);
+            type = std::clamp(searchIntParameter(url, QStringLiteral("type"), 0), 0, 6);
+            date = std::clamp(searchIntParameter(url, QStringLiteral("date"), 0), 0, 4);
+            size = std::clamp(searchIntParameter(url, QStringLiteral("size"), 0), 0, 4);
+        } else if (changed) {
+            scope = sameLocation(url, kThisPcUrl) ? 2 : 0;
+            type = date = size = 0;
+        }
+        location = url;
+    }
+};
+
+inline QString parentLocationForDisplay(const QUrl &url)
+{
+    if (url.isLocalFile()) {
+        return QFileInfo(url.toLocalFile()).absolutePath();
+    }
+
+    QUrl parent = url;
+    QString path = parent.path();
+
+    while (path.size() > 1
+           && path.endsWith(QLatin1Char('/'))) {
+        path.chop(1);
+    }
+
+    const int slash =
+        path.lastIndexOf(QLatin1Char('/'));
+
+    if (slash <= 0) {
+        path = QStringLiteral("/");
+    } else {
+        path = path.left(slash);
+    }
+
+    parent.setPath(path);
+    parent.setQuery(QString());
+    return parent.toDisplayString(QUrl::PreferLocalFile);
+}
+
 class SearchController final : public QObject
 {
     Q_OBJECT
@@ -148,6 +202,63 @@ public:
         for (int value : m_searchProgressValues)
             total += static_cast<unsigned long>(std::clamp(value, 0, 100));
         return std::clamp(static_cast<int>(total / static_cast<unsigned long>(m_searchTotalRoots)), 0, 100);
+    }
+
+    QString statusText(int visibleCount, int scope) const
+    {
+        const QString scopeLabel =
+            scope == 2
+                ? trLocal(
+                    "Ten komputer",
+                    "This PC")
+                : (scope == 1
+                    ? trLocal(
+                        "Bieżący dysk",
+                        "Current drive")
+                    : trLocal(
+                        "Bieżący folder",
+                        "Current folder"));
+
+        if (isRunning()) {
+            return
+                isPolish()
+                    ? QStringLiteral(
+                        "%1 wyników • %2/%3 lokalizacji • %4")
+                        .arg(visibleCount)
+                        .arg(completedRoots())
+                        .arg(totalRoots())
+                        .arg(scopeLabel)
+                    : QStringLiteral(
+                        "%1 results • %2/%3 locations • %4")
+                        .arg(visibleCount)
+                        .arg(completedRoots())
+                        .arg(totalRoots())
+                        .arg(scopeLabel);
+        } else {
+            QString message =
+                isPolish()
+                    ? QStringLiteral(
+                        "%1 wyników • zakres: %2")
+                        .arg(visibleCount)
+                        .arg(scopeLabel)
+                    : QStringLiteral(
+                        "%1 results • scope: %2")
+                        .arg(visibleCount)
+                        .arg(scopeLabel);
+
+            if (errorCount() > 0) {
+                message +=
+                    isPolish()
+                        ? QStringLiteral(
+                            " • %1 lokalizacji z błędem")
+                            .arg(errorCount())
+                        : QStringLiteral(
+                            " • %1 locations with errors")
+                            .arg(errorCount());
+            }
+
+            return message;
+        }
     }
 
     // Keep partial results available when the user stops a search. A new

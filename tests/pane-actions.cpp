@@ -350,5 +350,108 @@ int main(int argc, char **argv)
     window.setSplitViewEnabled(false);
     verify(window.m_activePane == ThisPcWindow::PaneId::Primary, "closing split resets active pane");
     verify(window.paneContext().directory == left, "closing split restores primary destination");
+    // Stage 4: This PC is the same virtual card page on either side.
+    using Pane = ThisPcWindow::PaneId;
+    window.setSplitViewEnabled(true);
+    window.m_splitPane->setCurrentUrl(right);
+    window.setActivePane(Pane::Split);
+    window.m_sidebar->activated(kThisPcUrl);
+    verify(window.m_splitPane->currentUrl() == kThisPcUrl && window.m_currentUrl == left
+               && window.m_activePane == Pane::Split,
+           "sidebar This PC targets the active right pane");
+    verify(window.m_splitPane->contentStack()->currentWidget() == window.m_splitHomePage
+               && window.m_splitHomePage->isVisible() && window.m_splitPane->m_job == nullptr,
+           "right This PC presents the card page without a directory-list job");
+    verify(!window.paneContext().isDirectory && !window.m_upAction->isEnabled()
+               && !window.m_viewButton->isEnabled() && !window.m_sortButton->isEnabled()
+               && !window.m_copyAction->isEnabled() && !window.m_newButton->isEnabled(),
+           "right This PC shared controls match left virtual-page policy");
+    verify(window.m_splitPane->m_breadcrumbButton->text() == "This PC"
+               && window.m_searchEdit->placeholderText() == "Search this computer"
+               && window.m_searchScopeGroup->checkedAction()->data().toInt() == 2,
+           "right This PC has friendly breadcrumb and whole-computer Search scope");
+    if (window.m_driveJob) { window.m_driveJob->kill(); window.m_driveJob = nullptr; }
+    DriveInfo fixtureDrive;
+    fixtureDrive.name = "Disposable drive";
+    fixtureDrive.targetUrl = right;
+    fixtureDrive.usedPercent = 37;
+    fixtureDrive.capacityText = "100 GiB";
+    fixtureDrive.freeText = "63 GiB";
+    window.m_drives = {fixtureDrive};
+    window.rebuildDriveGrid();
+    verify(window.m_drivesGrid->count() == 1 && window.m_splitDrivesGrid->count() == 1,
+           "shared drive inventory renders a card in each This PC page");
+    auto *leftDrive = qobject_cast<DriveFrame *>(window.m_drivesGrid->itemAt(0)->widget());
+    auto *rightDrive = qobject_cast<DriveFrame *>(window.m_splitDrivesGrid->itemAt(0)->widget());
+    verify(leftDrive && rightDrive && leftDrive->accessibleName() == rightDrive->accessibleName()
+               && leftDrive->toolTip() == rightDrive->toolTip(),
+           "both This PC pages use identical drive labels and capacity tooltips");
+    verify(window.m_homePage->findChildren<ClickableFrame *>().size()
+               == window.m_splitHomePage->findChildren<ClickableFrame *>().size(),
+           "both This PC pages expose the same folders and drives");
+    QTest::keyClick(&window, Qt::Key_L, Qt::ControlModifier);
+    verify(window.m_splitPane->m_addressEdit->text() == urlForDisplay(kThisPcUrl),
+           "right This PC Ctrl+L exposes the virtual address");
+    QTest::keyClick(window.m_splitPane->m_addressEdit, Qt::Key_Escape);
+    rightDrive->setFocus();
+    QTest::keyClick(rightDrive, Qt::Key_Return);
+    verify(window.m_splitPane->currentUrl() == right && window.m_currentUrl == left
+               && window.m_activePane == Pane::Split,
+           "right drive card keyboard activation opens its real target in right pane");
+    window.m_upAction->trigger();
+    verify(window.m_splitPane->currentUrl() == kThisPcUrl,
+           "right drive-root Up returns to This PC instead of the filesystem parent");
+    window.m_backAction->trigger();
+    verify(window.m_splitPane->currentUrl() == right, "right Back restores drive after This PC");
+    window.m_forwardAction->trigger();
+    verify(window.m_splitPane->currentUrl() == kThisPcUrl, "right Forward restores This PC card page");
+    if (window.m_driveJob) { window.m_driveJob->kill(); window.m_driveJob = nullptr; }
+    window.m_refreshAction->trigger();
+    verify(window.m_driveJob && !window.m_splitPane->m_job && window.m_currentUrl == left,
+           "right This PC Refresh uses the existing shared drive backend");
+    window.m_driveJob->kill(); window.m_driveJob = nullptr;
+    window.navigateTo(kThisPcUrl, true);
+    window.setActivePane(Pane::Split);
+    window.m_searchEdit->setFocus();
+    QAction *focusOtherAction = nullptr;
+    for (QAction *action : window.actions()) {
+        if (action->shortcut() == QKeySequence(Qt::Key_F6)) {
+            focusOtherAction = action;
+            break;
+        }
+    }
+    verify(focusOtherAction != nullptr, "shared F6 action exists");
+    focusOtherAction->trigger();
+    verify(window.m_activePane == Pane::Primary, "F6 focuses left This PC from shared Search");
+    focusOtherAction->trigger();
+    verify(window.m_activePane == Pane::Split, "F6 focuses right This PC symmetrically");
+    auto folderCards = window.m_splitHomePage->findChildren<ClickableFrame *>();
+    ClickableFrame *folderCard = nullptr;
+    for (auto *card : folderCards) {
+        if (!qobject_cast<DriveFrame *>(card)) { folderCard = card; break; }
+    }
+    verify(folderCard != nullptr, "right This PC includes user folder cards");
+    // Point the real card interaction at a disposable folder for this test.
+    folderCard->m_url = right;
+    QTest::mouseDClick(folderCard, Qt::LeftButton);
+    verify(window.m_splitPane->currentUrl() == right && window.m_currentUrl == kThisPcUrl,
+           "right folder card double-click affects only its owning pane");
+    window.setActivePane(Pane::Split);
+    leftDrive->setFocus();
+    QTest::keyClick(leftDrive, Qt::Key_Return);
+    verify(window.m_currentUrl == right && window.m_splitPane->currentUrl() == right
+               && window.m_activePane == Pane::Primary,
+           "left drive card retains its accepted pane-local routing");
+    window.setActivePane(Pane::Split);
+    window.beginAddressEdit(Pane::Split);
+    window.m_splitPane->m_addressEdit->setText("thispc:/");
+    QTest::keyClick(window.m_splitPane->m_addressEdit, Qt::Key_Return);
+    verify(window.m_splitPane->currentUrl() == kThisPcUrl && window.m_currentUrl == right
+               && window.m_splitPane->m_locationStack->currentWidget() == window.m_splitPane->m_breadcrumbFrame,
+           "right address submission opens This PC and restores its breadcrumb");
+    window.swapSplitPanes();
+    verify(window.m_currentUrl == kThisPcUrl && window.m_splitPane->currentUrl() == right
+               && window.m_contentStack->currentWidget() == window.m_homePage,
+           "pane swap preserves This PC virtual-page semantics");
     qInfo("PASS: %d assertions, Icons/List/Details, both panes; KIO dispatch intercepted", checks);
 }

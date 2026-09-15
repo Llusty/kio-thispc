@@ -28,7 +28,11 @@ through the active `PaneContext`. The sidebar follows the same active-pane
 routing. Each `QSplitter` child owns its address section directly above its
 browser content, so both addresses remain visible and track the exact width of
 their respective panes. The secondary pane keeps its independent URL/history,
-view and sort state without presenting a second navigation toolbar.
+view, sort and Search state without presenting a second navigation toolbar.
+Each pane owns an asynchronous `SearchController`; the shared Search controls
+bind to the active pane and Search URLs remain in that pane's history/session
+state. Both panes use the same builder and drive inventory for the `thispc:/`
+folder-and-drive card presentation.
 
 The sidebar and the complete file-view area are children of an outer splitter.
 The sidebar content lives in its own vertical scroll area, while the inner
