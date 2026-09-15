@@ -17,6 +17,19 @@ int main(int argc, char **argv)
     const QUrl right = QUrl::fromLocalFile(files.path() + "/right");
     QDir().mkpath(left.toLocalFile());
     QDir().mkpath(right.toLocalFile());
+    const QString templates = files.filePath("templates");
+    verify(QDir().mkpath(templates), "temporary templates directory");
+    QFile templateFile(templates + "/A&B #ż.md");
+    verify(templateFile.open(QIODevice::WriteOnly) && templateFile.write("template") == 8,
+           "pane template fixture");
+    templateFile.close();
+    const QUrl templateSource = QUrl::fromLocalFile(templateFile.fileName());
+    const QString configPath = QString::fromLocal8Bit(qgetenv("XDG_CONFIG_HOME"));
+    verify(!configPath.isEmpty() && QDir().mkpath(configPath), "isolated pane template config");
+    QFile userDirs(configPath + "/user-dirs.dirs");
+    verify(userDirs.open(QIODevice::WriteOnly), "open pane template config");
+    userDirs.write("XDG_TEMPLATES_DIR=\"" + templates.toUtf8() + "\"\n");
+    userDirs.close();
 
     DirectoryListWidget tooltipList;
     DirectoryTreeWidget tooltipDetails;
@@ -56,6 +69,21 @@ int main(int argc, char **argv)
     window.activateWindow();
     window.setSplitViewEnabled(true);
     window.m_splitPane->setCurrentUrl(right);
+    const auto newActions = window.m_newButton->menu()->actions();
+    verify(newActions.size() == 6
+               && newActions.at(0) == window.m_newFolderAction
+               && newActions.at(1) == window.m_newTextFileAction
+               && newActions.at(2) == window.m_newMarkdownAction
+               && newActions.at(3) == window.m_newEmptyFileAction
+               && newActions.at(4)->isSeparator()
+               && newActions.at(5)->menu() == window.m_templateMenu,
+           "New retains all four built-ins in order and appends Templates after a separator");
+    window.m_templateMenu->aboutToShow();
+    verify(QTest::qWaitFor([&] { return !window.m_templateMenu->m_job; }, 5000),
+           "window discovers XDG templates");
+    verify(window.m_templateMenu->actions().size() == 1
+               && window.m_templateMenu->actions().first()->data().toUrl() == templateSource,
+           "window populates the template action from native XDG");
     QTest::qWait(200);
     window.m_refreshTimer.stop();
     if (window.m_directoryJob) {
@@ -302,6 +330,22 @@ int main(int argc, char **argv)
                        && dispatch.destination
                            == childUrlWithName(directory, "markdown.md"),
                    "Markdown action creates in active pane");
+
+            focus(view);
+            verify(window.m_templateMenu->menuAction()->isEnabled(), "Templates enabled in active directory");
+            QTimer::singleShot(0, &window, [&] {
+                auto *nameDialog = qobject_cast<QInputDialog *>(QApplication::activeModalWidget());
+                verify(nameDialog && nameDialog->textValue() == templateSource.fileName(),
+                       "template dialog suggests the exact source name and extension");
+                window.setActivePane(split ? ThisPcWindow::PaneId::Primary : ThisPcWindow::PaneId::Split);
+                nameDialog->setTextValue("  from template.md  ");
+                nameDialog->accept();
+            });
+            dispatch = {};
+            window.m_templateMenu->actions().first()->trigger();
+            verify(dispatch.kind == "template" && dispatch.sources == QList<QUrl>{templateSource}
+                       && dispatch.destination == childUrlWithName(directory, "from template.md"),
+                   "template action keeps initiating pane through modal focus change and trims target name");
         }
         selectOne(lv); selectOne(rv); focus(rv);
         QToolButton *copyButton = nullptr;
@@ -384,6 +428,10 @@ int main(int argc, char **argv)
                && !window.m_viewButton->isEnabled() && !window.m_sortButton->isEnabled()
                && !window.m_copyAction->isEnabled() && !window.m_newButton->isEnabled(),
            "right This PC shared controls match left virtual-page policy");
+    dispatch = {};
+    verify(!window.m_templateMenu->menuAction()->isEnabled(), "Templates disabled on right This PC");
+    window.createFromTemplate(templateSource);
+    verify(dispatch.kind.isEmpty(), "right This PC cannot dispatch template creation");
     verify(window.m_splitPane->m_breadcrumbButton->text() == "This PC"
                && window.m_searchEdit->placeholderText() == "Search this computer"
                && window.m_searchScopeGroup->checkedAction()->data().toInt() == 2,
@@ -429,6 +477,11 @@ int main(int argc, char **argv)
            "right This PC Refresh uses the existing shared drive backend");
     window.m_driveJob->kill(); window.m_driveJob = nullptr;
     window.navigateTo(kThisPcUrl, true);
+    window.setActivePane(Pane::Primary);
+    dispatch = {};
+    verify(!window.m_templateMenu->menuAction()->isEnabled(), "Templates disabled on left This PC");
+    window.createFromTemplate(templateSource);
+    verify(dispatch.kind.isEmpty(), "left This PC cannot dispatch template creation");
     window.setActivePane(Pane::Split);
     window.m_searchEdit->setFocus();
     QAction *focusOtherAction = nullptr;

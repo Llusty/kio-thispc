@@ -28,8 +28,11 @@ int main(int argc, char **argv)
     bool lastNativeCopy = false, lastNativeMove = false;
     bool lastNativeTree = false, lastTreeUsedKio = false, lastSuspendable = false;
     bool pauseNextTree = false;
+    QString lastMessage, lastTitle;
     QPointer<LocalTransferJob> observedTree;
-    FileActions actions(&parent, &undo, [&](KJob *job, const QString &, bool clear, const QString &) {
+    FileActions actions(&parent, &undo, [&](KJob *job, const QString &message, bool clear, const QString &title) {
+        lastMessage = message;
+        lastTitle = title;
         lastClear = clear;
         lastNativeCopy = qobject_cast<LocalFileCopyJob *>(job) != nullptr;
         lastNativeMove = qobject_cast<LocalFileMoveJob *>(job) != nullptr;
@@ -253,5 +256,93 @@ int main(int argc, char **argv)
     verify(!actions.startNativeSingleFileTransfer(
                {QUrl(QStringLiteral("sftp://example.invalid/file"))}, rootB,
                false, false, {}, {}), "remote URLs remain on the existing KIO route");
+
+    // Template operations use the real KIO copy/Undo path with a confirmed
+    // destination name, never the clipboard or in-memory text conversion.
+    interactive = true;
+    const QString templatePath = files.filePath("source #ż.odt");
+    const QByteArray templateData = QByteArray::fromHex("504b030400ff00c5bcc3b30a");
+    QFile templateFile(templatePath);
+    verify(templateFile.open(QIODevice::WriteOnly)
+               && templateFile.write(templateData) == templateData.size(), "binary template fixture");
+    templateFile.close();
+    const QUrl templateSource = QUrl::fromLocalFile(templatePath);
+    for (const auto &directory : {rootA, rootB}) {
+        const int next = completed + 1;
+        answerName("  result #ż.odt  ");
+        actions.createFromTemplate(directory, templateSource);
+        waitJob(next);
+        const QString destination = directory.toLocalFile() + "/result #ż.odt";
+        verify(readFile(destination) == templateData && readFile(templatePath) == templateData,
+               "template copy preserves binary contents and source at a confirmed name");
+        verify(!lastClear && lastMessage == "File created" && lastTitle == "Creating file"
+                   && !lastNativeCopy && !lastNativeTree,
+               "template operation uses the shared watcher, creation status and KIO copy history");
+        verify(app.clipboard()->mimeData()->data("application/x-kde-cutselection") == "1",
+               "template creation leaves cut clipboard untouched");
+        undoRedo([&] { return !QFile::exists(destination) && readFile(templatePath) == templateData; },
+                 [&] { return readFile(destination) == templateData && readFile(templatePath) == templateData; });
+    }
+    const int beforeRejected = completed;
+    QTimer::singleShot(0, &parent, [] {
+        auto *dialog = qobject_cast<QInputDialog *>(QApplication::activeModalWidget());
+        verify(dialog != nullptr, "template name dialog can be cancelled");
+        dialog->reject();
+    });
+    actions.createFromTemplate(rootA, templateSource);
+    verify(completed == beforeRejected, "cancelled template name starts no operation");
+    for (const QString &invalid : {QString("   "), QString("."), QString(".."), QString("../escape")}) {
+        answerName(invalid);
+        QTimer warning;
+        warning.setInterval(10);
+        bool warned = false;
+        QObject::connect(&warning, &QTimer::timeout, [&] {
+            if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+                warned = true;
+                box->accept();
+                warning.stop();
+            }
+        });
+        warning.start();
+        actions.createFromTemplate(rootA, templateSource);
+        verify(warned && completed == beforeRejected, "invalid template name warns without a file operation");
+    }
+    verify(!QFile::exists(files.filePath("escape")), "name validation prevents escape from the target directory");
+
+    // A collision must retain the normal interactive KIO rename flow.
+    QTimer templateConflict;
+    templateConflict.setInterval(10);
+    bool templateConflictSeen = false;
+    QUrl conflictDestination;
+    QObject::connect(&templateConflict, &QTimer::timeout, [&] {
+        for (QWidget *widget : QApplication::topLevelWidgets()) {
+            if (auto *dialog = qobject_cast<KIO::RenameDialog *>(widget); dialog && dialog->isVisible()) {
+                templateConflictSeen = true;
+                templateConflict.stop();
+                dialog->suggestNewNamePressed();
+                conflictDestination = dialog->newDestUrl();
+                dialog->renamePressed();
+                break;
+            }
+        }
+    });
+    templateConflict.start();
+    answerName("result #ż.odt");
+    actions.createFromTemplate(rootA, templateSource);
+    waitJob(beforeRejected + 1);
+    verify(templateConflictSeen && readFile(conflictDestination.toLocalFile()) == templateData
+               && readFile(a + "/result #ż.odt") == templateData,
+           "template collision offers rename and preserves the existing file");
+    undoRedo([&] { return !QFile::exists(conflictDestination.toLocalFile())
+                           && readFile(a + "/result #ż.odt") == templateData; },
+             [&] { return readFile(conflictDestination.toLocalFile()) == templateData; });
+
+    answerName("missing-template-result.odt");
+    const int next = completed + 1;
+    actions.createFromTemplate(rootA, QUrl::fromLocalFile(files.filePath("missing-template.odt")));
+    waitJob(next, false);
+    verify(lastMessage == "File created" && lastTitle == "Creating file"
+               && !QFile::exists(a + "/missing-template-result.odt"),
+           "stale missing template reports its error through the shared operation watcher");
     qInfo("PASS: %d FileActions assertions; native local copy/move, KIO fallbacks, conflicts, Undo/Redo", checks);
 }

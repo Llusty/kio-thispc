@@ -19,6 +19,7 @@ group.add_argument('--sidebar-layout', action='store_true', help='run sidebar sc
 group.add_argument('--properties', action='store_true', help='run real PropertiesDialog tests')
 group.add_argument('--search', action='store_true', help='run real KIO search and cancellation tests')
 group.add_argument('--actions', action='store_true', help='run real FileActions and Undo tests')
+group.add_argument('--templates', action='store_true', help='run native XDG template menu tests')
 group.add_argument('--operations', action='store_true', help='run OperationManager state tests')
 group.add_argument('--local-transfer', action='store_true', help='run native local copy pause/resume tests')
 group.add_argument('--transfer-plan', action='store_true', help='run native directory transfer planning tests')
@@ -27,7 +28,7 @@ group.add_argument('--all', action='store_true', help='run every regression suit
 group.add_argument('--suites', nargs='+', choices=[
     'panes', 'tabs', 'properties', 'search', 'actions', 'operations',
     'local_transfer', 'transfer_plan', 'local_move', 'local_tree', 'tree_history',
-    'sidebar_dnd', 'sidebar_layout'],
+    'sidebar_dnd', 'sidebar_layout', 'templates'],
     help='build once and run only the selected regression suites')
 options = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
@@ -47,6 +48,7 @@ for signature, marker, statement in [
     ('    void pasteClipboardInto(', '        if (startNativeSingleFileTransfer(', 'dispatch = {cut ? "move" : "copy", urls, destination};'),
     ('    void createNewFolder(', '        KIO::MkdirJob *job =', 'dispatch = {"mkdir", {}, destination};'),
     ('    void createNewFile(', '        KIO::StoredTransferJob *job =', 'dispatch = {"create", {}, destination};'),
+    ('    void createFromTemplate(', '        KIO::CopyJob *job =', 'dispatch = {"template", {source}, destination};'),
     ('    void transfer(', '        if (startNativeSingleFileTransfer(', 'dispatch = {action == Qt::MoveAction ? "move" : "copy", urls, destination};'),
 ]:
     file_actions = intercept(file_actions, signature, marker, statement)
@@ -76,8 +78,8 @@ with tempfile.TemporaryDirectory(prefix='thispc-pane-tests-') as tmp, tempfile.T
     (tmp / 'src').mkdir()
     for header in (root / 'src').glob('*.h'):
         (tmp / 'src' / header.name).write_text(expose(file_actions if header.name == 'fileactions.h' else header.read_text()))
-    suites = {'panes': 'pane-actions.cpp', 'tabs': 'tab-drag-drop.cpp', 'sidebar_dnd': 'sidebar-drag-drop.cpp', 'sidebar_layout': 'sidebar-layout.cpp', 'properties': 'properties-dialog.cpp', 'search': 'search-controller.cpp', 'actions': 'file-actions.cpp', 'operations': 'operation-manager.cpp', 'local_transfer': 'local-file-copy-job.cpp', 'transfer_plan': 'local-transfer-plan.cpp', 'local_move': 'local-file-move-job.cpp', 'local_tree': 'local-transfer-job.cpp', 'tree_history': 'local-tree-history.cpp'}
-    selected = options.suites or (list(suites) if options.all else ['sidebar_layout' if options.sidebar_layout else 'sidebar_dnd' if options.sidebar_dnd else 'local_move' if options.local_move else 'transfer_plan' if options.transfer_plan else 'local_transfer' if options.local_transfer else 'operations' if options.operations else 'actions' if options.actions else 'tabs' if options.tabs else 'properties' if options.properties else 'search' if options.search else 'panes'])
+    suites = {'panes': 'pane-actions.cpp', 'templates': 'template-menu.cpp', 'tabs': 'tab-drag-drop.cpp', 'sidebar_dnd': 'sidebar-drag-drop.cpp', 'sidebar_layout': 'sidebar-layout.cpp', 'properties': 'properties-dialog.cpp', 'search': 'search-controller.cpp', 'actions': 'file-actions.cpp', 'operations': 'operation-manager.cpp', 'local_transfer': 'local-file-copy-job.cpp', 'transfer_plan': 'local-transfer-plan.cpp', 'local_move': 'local-file-move-job.cpp', 'local_tree': 'local-transfer-job.cpp', 'tree_history': 'local-tree-history.cpp'}
+    selected = options.suites or (list(suites) if options.all else ['templates' if options.templates else 'sidebar_layout' if options.sidebar_layout else 'sidebar_dnd' if options.sidebar_dnd else 'local_move' if options.local_move else 'transfer_plan' if options.transfer_plan else 'local_transfer' if options.local_transfer else 'operations' if options.operations else 'actions' if options.actions else 'tabs' if options.tabs else 'properties' if options.properties else 'search' if options.search else 'panes'])
     combined = prelude + source
     for suite in selected:
         disk_data = Path(disk_tmp) / suite

@@ -58,6 +58,7 @@ add_executable(thispc-view
     src/browsercommon.h
     src/directoryview.h
     src/fileactions.h
+    src/templatemenu.h
     src/localfilecopyjob.h
     src/localfilemovejob.h
     src/localfileoverwrite.h

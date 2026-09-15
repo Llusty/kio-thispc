@@ -154,35 +154,8 @@ public:
             return;
         }
 
-        bool ok = false;
-        const QString initial =
-            suggestedName.isEmpty()
-                ? trLocal("Nowy plik", "New file")
-                : suggestedName;
-
-        const QString name =
-            QInputDialog::getText(
-                m_parentWidget,
-                trLocal("Nowy plik", "New file"),
-                trLocal("Nazwa pliku:", "File name:"),
-                QLineEdit::Normal,
-                initial,
-                &ok)
-                .trimmed();
-
-        if (!ok) {
-            return;
-        }
-
-        if (!validNewName(name)) {
-            QMessageBox::warning(
-                m_parentWidget,
-                trLocal("Nieprawidłowa nazwa", "Invalid name"),
-                trLocal(
-                    "Nazwa pliku jest pusta albo zawiera niedozwolony znak „/”.",
-                    "The file name is empty or contains the invalid “/” character."));
-            return;
-        }
+        const QString name = requestNewFileName(suggestedName);
+        if (name.isEmpty()) return;
 
         const QUrl destination =
             childUrlWithName(directory, name);
@@ -204,6 +177,32 @@ public:
             job,
             trLocal("Utworzono plik", "File created"),
             false,
+            trLocal("Tworzenie pliku", "Creating file"));
+    }
+
+    void createFromTemplate(QUrl directory, QUrl source)
+    {
+        if (!directory.isValid() || !source.isLocalFile()) return;
+
+        const QString name = requestNewFileName(source.fileName());
+        if (name.isEmpty()) return;
+
+        // Recheck after the modal dialog: a stale entry must not turn into
+        // a recursive folder copy or create a symbolic link as a document.
+        const QFileInfo info(source.toLocalFile());
+        if (info.isSymLink() || (info.exists() && !info.isFile())) {
+            QMessageBox::warning(m_parentWidget,
+                trLocal("Szablony", "Templates"),
+                trLocal("Szablon nie jest zwykłym plikiem.", "The template is not a regular file."));
+            return;
+        }
+
+        const QUrl destination = childUrlWithName(directory, name);
+        KIO::CopyJob *job = KIO::copyAs(source, destination, KIO::HideProgressInfo);
+        configureInteractiveCopyJob(job);
+        if (m_undoController) m_undoController->recordCopyJob(job);
+        watchFileOperation(job,
+            trLocal("Utworzono plik", "File created"), false,
             trLocal("Tworzenie pliku", "Creating file"));
     }
 
@@ -422,6 +421,29 @@ public:
     }
 
 private:
+    QString requestNewFileName(const QString &suggestedName)
+    {
+        bool ok = false;
+        const QString initial = suggestedName.isEmpty()
+            ? trLocal("Nowy plik", "New file") : suggestedName;
+        const QString name = QInputDialog::getText(
+            m_parentWidget,
+            trLocal("Nowy plik", "New file"),
+            trLocal("Nazwa pliku:", "File name:"),
+            QLineEdit::Normal, initial, &ok).trimmed();
+        if (!ok) return {};
+        if (!validNewName(name)) {
+            QMessageBox::warning(
+                m_parentWidget,
+                trLocal("Nieprawidłowa nazwa", "Invalid name"),
+                trLocal(
+                    "Nazwa pliku jest pusta albo zawiera niedozwolony znak „/”.",
+                    "The file name is empty or contains the invalid “/” character."));
+            return {};
+        }
+        return name;
+    }
+
     bool startNativeSingleFileTransfer(
         const QList<QUrl> &sources,
         const QUrl &destinationDirectory,

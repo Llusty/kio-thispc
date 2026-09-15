@@ -117,6 +117,7 @@
 #include "browsercommon.h"
 #include "directoryview.h"
 #include "fileactions.h"
+#include "templatemenu.h"
 #include "operationmanager.h"
 #include "propertiesdialog.h"
 #include "undocontroller.h"
@@ -1768,6 +1769,12 @@ private:
             [this] {
                 createNewFile(QString(), QByteArray());
             });
+
+        newMenu->addSeparator();
+        m_templateMenu = new TemplateMenu(newMenu);
+        newMenu->addMenu(m_templateMenu);
+        connect(m_templateMenu, &TemplateMenu::templateSelected,
+                this, &ThisPcWindow::createFromTemplate);
 
         m_newButton->setMenu(newMenu);
         toolbar->addWidget(m_newButton);
@@ -6152,6 +6159,9 @@ private:
         if (m_newEmptyFileAction) {
             m_newEmptyFileAction->setEnabled(canCreate);
         }
+        if (m_templateMenu) {
+            m_templateMenu->menuAction()->setEnabled(canCreate);
+        }
         if (m_newButton) {
             m_newButton->setEnabled(canCreate);
         }
@@ -6220,6 +6230,12 @@ private:
     {
         if (canModifyCurrentDirectory())
             m_fileActions->createNewFile(paneContext().directory, suggestedName, contents);
+    }
+
+    void createFromTemplate(const QUrl &source)
+    {
+        if (canModifyCurrentDirectory())
+            m_fileActions->createFromTemplate(paneContext().directory, source);
     }
 
     void createNewFolder()
@@ -7143,6 +7159,7 @@ private:
     QAction *m_newTextFileAction = nullptr;
     QAction *m_newMarkdownAction = nullptr;
     QAction *m_newEmptyFileAction = nullptr;
+    TemplateMenu *m_templateMenu = nullptr;
     QAction *m_cutAction = nullptr;
     QAction *m_copyAction = nullptr;
     QAction *m_pasteAction = nullptr;
