@@ -30,6 +30,11 @@ browser content, so both addresses remain visible and track the exact width of
 their respective panes. The secondary pane keeps its independent URL/history,
 view and sort state without presenting a second navigation toolbar.
 
+The sidebar and the complete file-view area are children of an outer splitter.
+The sidebar content lives in its own vertical scroll area, while the inner
+splitter remains solely responsible for the two browser panes. Sidebar width
+is persisted independently from the per-pane split state.
+
 ### `src/thispc.json`
 KIO worker plugin metadata.
 

@@ -66,3 +66,37 @@ Automated coverage belongs in `tests/sidebar-drag-drop.cpp`, including target
 policy, feedback geometry, MIME priority, exactly-once dispatch, device and
 Quick Access targets, and active-pane preservation. The complete automated
 suite passes **905/905 assertions** after Stage 2.
+
+## Stage 3 — resizable and scrollable sidebar
+
+Status: implemented and verified by the full automated regression suite;
+manual KDE visual/interaction acceptance remains.
+
+The sidebar owns a vertical scroll area, so expanding sections or rebuilding
+dynamic entries does not increase the main-window height. Horizontal scrolling
+is disabled and long labels remain constrained to the selected sidebar width.
+Quick Access, Recent and Places buttons elide overflowing text with an ellipsis
+and expose the complete label in a tooltip. Device names also elide while
+retaining their existing detailed tooltip. Elision affects painting only, so
+the full label and destination remain available after resizing or rebuilding.
+The sidebar/file-view boundary is a draggable splitter with a 205 px minimum,
+235 px default and 480 px maximum.
+
+The user's divider choice is stored as `sidebar/width`. Automatic compression
+caused by narrowing the window does not replace that preference. Sidebar entry
+rebuilds preserve the vertical scroll position when it remains valid, and
+scrolling during a drag clears hover feedback from the previous Drop target.
+
+The inner Split View splitter, pane routing and sidebar Drag & Drop remain
+independent. Search and `thispc:/` presentation are outside this stage.
+
+Automated coverage belongs in `tests/sidebar-layout.cpp`, with additional
+regressions in `tests/sidebar-drag-drop.cpp` and `tests/pane-actions.cpp`.
+Layout coverage uses the application stylesheet and compares rendered labels
+with native Qt widgets containing the expected visible text. It also checks
+tooltips, rebuilds, width persistence, compression and elision after resizing.
+
+The focused sidebar/pane suites pass **283/283 assertions** (43 layout,
+45 sidebar Drag & Drop and 195 pane assertions). The complete automated suite
+passes **952/952 assertions** across 13 suites. Removing button elision in an
+isolated test copy fails the rendered-label regression as expected.

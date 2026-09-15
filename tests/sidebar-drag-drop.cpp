@@ -221,6 +221,15 @@ static void testWindowRoutingPreservesActivePane()
     verify(dispatch.kind == "move", "Shift uses existing Move routing");
     verify(window.m_activePane == ThisPcWindow::PaneId::Primary,
            "drag and Drop preserve left active pane");
+
+    enter(&target, urls);
+    verify(target.property("dropActive").toBool(),
+           "Drop target is active before sidebar scrolling");
+    QScrollBar *bar = window.m_sidebarScrollArea->verticalScrollBar();
+    bar->setRange(0, 100);
+    bar->setValue(1);
+    verify(!target.property("dropActive").toBool(),
+           "sidebar scrolling clears the previous Drop target");
 }
 
 int main(int argc, char **argv)

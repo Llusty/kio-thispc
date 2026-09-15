@@ -661,8 +661,18 @@ QProgressBar#sidebarProgress::chunk {
 }
 
 QFrame#sidebar {
-    border-right: 1px solid palette(mid);
+    border: none;
     background: palette(base);
+}
+
+QScrollArea#sidebarScrollArea {
+    border: none;
+    background: palette(base);
+}
+
+QSplitter#sidebarSplitter::handle {
+    background: palette(mid);
+    width: 1px;
 }
 
 QToolButton#sidebarSectionButton {
@@ -2191,7 +2201,28 @@ private:
         centralLayout->setSpacing(0);
         setCentralWidget(central);
 
-        m_sidebar = new SidebarPanel(central);
+        m_sidebarSplitter = new QSplitter(Qt::Horizontal, central);
+        m_sidebarSplitter->setObjectName(QStringLiteral("sidebarSplitter"));
+        m_sidebarSplitter->setChildrenCollapsible(false);
+        m_sidebarSplitter->setHandleWidth(5);
+
+        m_sidebarScrollArea = new QScrollArea(m_sidebarSplitter);
+        m_sidebarScrollArea->setObjectName(QStringLiteral("sidebarScrollArea"));
+        m_sidebarScrollArea->setWidgetResizable(true);
+        m_sidebarScrollArea->setFrameShape(QFrame::NoFrame);
+        m_sidebarScrollArea->setSizeAdjustPolicy(
+            QAbstractScrollArea::AdjustIgnored);
+        m_sidebarScrollArea->setHorizontalScrollBarPolicy(
+            Qt::ScrollBarAlwaysOff);
+        m_sidebarScrollArea->setVerticalScrollBarPolicy(
+            Qt::ScrollBarAsNeeded);
+        m_sidebarScrollArea->setMinimumWidth(205);
+        m_sidebarScrollArea->setMaximumWidth(480);
+        m_sidebarScrollArea->setSizePolicy(
+            QSizePolicy::Preferred, QSizePolicy::Expanding);
+
+        m_sidebar = new SidebarPanel(m_sidebarScrollArea);
+        m_sidebarScrollArea->setWidget(m_sidebar);
         connect(
             m_sidebar,
             &SidebarPanel::activated,
@@ -2234,8 +2265,11 @@ private:
             });
         connect(m_sidebar, &SidebarPanel::urlsDropped,
                 this, &ThisPcWindow::handleDroppedUrls);
+        connect(m_sidebarScrollArea->verticalScrollBar(),
+                &QScrollBar::valueChanged,
+                m_sidebar, &SidebarPanel::clearDropFeedback);
 
-        centralLayout->addWidget(m_sidebar);
+        m_sidebarSplitter->addWidget(m_sidebarScrollArea);
 
         auto *rightPane = new QWidget(central);
         auto *rightLayout = new QVBoxLayout(rightPane);
@@ -2463,7 +2497,29 @@ private:
 
         rightLayout->addWidget(m_tabStrip);
         rightLayout->addWidget(m_contentSplitter, 1);
-        centralLayout->addWidget(rightPane, 1);
+        m_sidebarSplitter->addWidget(rightPane);
+        m_sidebarSplitter->setStretchFactor(0, 0);
+        m_sidebarSplitter->setStretchFactor(1, 1);
+
+        QSettings sidebarSettings;
+        m_preferredSidebarWidth = std::clamp(
+            sidebarSettings.value(QStringLiteral("sidebar/width"), 235).toInt(),
+            205,
+            480);
+        m_sidebarSplitter->setSizes({m_preferredSidebarWidth, 945});
+        connect(m_sidebarSplitter, &QSplitter::splitterMoved,
+                this, [this](int, int) {
+            if (!m_sidebarScrollArea) {
+                return;
+            }
+            m_preferredSidebarWidth = std::clamp(
+                m_sidebarScrollArea->width(), 205, 480);
+            QSettings settings;
+            settings.setValue(
+                QStringLiteral("sidebar/width"),
+                m_preferredSidebarWidth);
+        });
+        centralLayout->addWidget(m_sidebarSplitter, 1);
 
         buildHomePage();
         buildDirectoryPage();
@@ -7246,6 +7302,9 @@ private:
     int m_searchSizeFilter = 0;
 
     SidebarPanel *m_sidebar = nullptr;
+    QSplitter *m_sidebarSplitter = nullptr;
+    QScrollArea *m_sidebarScrollArea = nullptr;
+    int m_preferredSidebarWidth = 235;
 
     QFrame *m_tabStrip = nullptr;
     ExplorerTabBar *m_tabBar = nullptr;

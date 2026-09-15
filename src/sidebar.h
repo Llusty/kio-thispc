@@ -35,13 +35,19 @@
 #include <QMenu>
 #include <QMimeData>
 #include <QMouseEvent>
+#include <QPainter>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QSettings>
 #include <QSizePolicy>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QStandardPaths>
 #include <QStyle>
+#include <QStyleOptionButton>
+#include <QStylePainter>
 #include <QToolButton>
+#include <QTimer>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -64,7 +70,8 @@ public:
         setCursor(Qt::PointingHandCursor);
         setIconSize(QSize(18, 18));
         setMinimumHeight(31);
-        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        setToolTip(text);
 
         connect(this, &QPushButton::clicked, this, [this] {
             Q_EMIT activated(m_url);
@@ -97,6 +104,25 @@ Q_SIGNALS:
     void removeFromQuickAccessRequested(const QUrl &url);
 
 protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QStyleOptionButton option;
+        initStyleOption(&option);
+        int textWidth = style()->subElementRect(
+            QStyle::SE_PushButtonContents, &option, this).width();
+        if (!option.icon.isNull()) {
+            // Match the icon/text spacing used by Qt's push-button styles.
+            textWidth -= option.icon.actualSize(option.iconSize).width() + 4;
+        }
+        // Elide only the painted copy; keep the complete label for tooltip,
+        // accessibility and subsequent repaints at a different sidebar width.
+        option.text = option.fontMetrics.elidedText(
+            option.text, Qt::ElideRight, std::max(0, textWidth),
+            Qt::TextShowMnemonic);
+        QStylePainter painter(this);
+        painter.drawControl(QStyle::CE_PushButton, option);
+    }
+
     void mousePressEvent(QMouseEvent *event) override
     {
         if (event->button() == Qt::MiddleButton) {
@@ -248,6 +274,31 @@ private:
 };
 
 
+class SidebarDriveLabel : public QLabel
+{
+public:
+    SidebarDriveLabel(const QString &text, QWidget *parent)
+        : QLabel(text, parent)
+    {
+        setObjectName(QStringLiteral("sidebarDriveName"));
+        setTextFormat(Qt::PlainText);
+        setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        style()->drawItemText(
+            &painter, contentsRect(),
+            QStyle::visualAlignment(layoutDirection(), alignment()),
+            palette(), isEnabled(),
+            fontMetrics().elidedText(text(), Qt::ElideRight, contentsRect().width()),
+            foregroundRole());
+    }
+};
+
+
 class SidebarDriveButton : public QFrame
 {
     Q_OBJECT
@@ -282,7 +333,7 @@ public:
         body->setSpacing(2);
         body->setContentsMargins(0, 0, 0, 0);
 
-        auto *name = new QLabel(drive.name, this);
+        auto *name = new SidebarDriveLabel(drive.name, this);
         makePassive(name);
 
         auto *bar = new QProgressBar(this);
@@ -499,9 +550,12 @@ public:
         : QFrame(parent)
     {
         setObjectName(QStringLiteral("sidebar"));
-        setMinimumWidth(205);
-        setMaximumWidth(235);
-        setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
+        // The enclosing scroll area owns the visible width. Ignore the
+        // contents' horizontal size hint so labels follow the selected width;
+        // retain the vertical hint for scrolling.
+        setMinimumWidth(0);
+        setMaximumWidth(QWIDGETSIZE_MAX);
+        setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
 
         m_layout = new QVBoxLayout(this);
         m_layout->setContentsMargins(6, 5, 6, 8);
@@ -566,6 +620,7 @@ public:
             return;
         }
 
+        const int scrollPosition = verticalScrollPosition();
         const QUrl url = normalizedUrl(rawUrl);
         if (!url.isValid()
             || sameLocation(url, kThisPcUrl)
@@ -587,15 +642,18 @@ public:
 
         saveRecentLocations();
         rebuildRecentLocations();
+        restoreVerticalScrollPosition(scrollPosition);
     }
 
     void setDrives(const QList<DriveInfo> &drives)
     {
+        const int scrollPosition = verticalScrollPosition();
         m_drives = drives;
         rebuildDevices();
         rebuildQuickAccess();
         rebuildRecentLocations();
         updateCurrent();
+        restoreVerticalScrollPosition(scrollPosition);
     }
 
     void setCurrentLocation(const QUrl &url)
@@ -615,6 +673,14 @@ Q_SIGNALS:
                      const QUrl &destination,
                      const QPoint &globalPosition,
                      Qt::KeyboardModifiers modifiers);
+
+public Q_SLOTS:
+    void clearDropFeedback()
+    {
+        for (QObject *object : m_transferDropTargets.keys()) {
+            setDropFeedback(qobject_cast<QWidget *>(object), false);
+        }
+    }
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override
@@ -684,6 +750,36 @@ protected:
     }
 
 private:
+    int verticalScrollPosition() const
+    {
+        const QScrollArea *scrollArea = enclosingScrollArea();
+        return scrollArea ? scrollArea->verticalScrollBar()->value() : 0;
+    }
+
+    QScrollArea *enclosingScrollArea() const
+    {
+        QWidget *ancestor = parentWidget();
+        while (ancestor) {
+            if (auto *scrollArea = qobject_cast<QScrollArea *>(ancestor)) {
+                return scrollArea;
+            }
+            ancestor = ancestor->parentWidget();
+        }
+        return nullptr;
+    }
+
+    void restoreVerticalScrollPosition(int position)
+    {
+        QTimer::singleShot(0, this, [this, position] {
+            QScrollArea *scrollArea = enclosingScrollArea();
+            if (!scrollArea) {
+                return;
+            }
+            QScrollBar *bar = scrollArea->verticalScrollBar();
+            bar->setValue(std::clamp(position, bar->minimum(), bar->maximum()));
+        });
+    }
+
     static bool isSearchLocation(const QUrl &url)
     {
         return url.scheme() == QStringLiteral("thispcsearch");
@@ -1127,10 +1223,12 @@ private:
             return;
         }
 
+        const int scrollPosition = verticalScrollPosition();
         m_quickAccessUrls.push_back(normalizedUrl(rawUrl));
         saveQuickAccessUrls();
         rebuildQuickAccess();
         updateCurrent();
+        restoreVerticalScrollPosition(scrollPosition);
         Q_EMIT statusMessageRequested(
             trLocal("Przypięto folder do Szybkiego dostępu.",
                     "Folder pinned to Quick access."),
@@ -1145,10 +1243,12 @@ private:
                 continue;
             }
 
+            const int scrollPosition = verticalScrollPosition();
             m_quickAccessUrls.removeAt(i);
             saveQuickAccessUrls();
             rebuildQuickAccess();
             updateCurrent();
+            restoreVerticalScrollPosition(scrollPosition);
             Q_EMIT statusMessageRequested(
                 trLocal("Odpięto folder od Szybkiego dostępu.",
                         "Folder unpinned from Quick access."),
@@ -1161,6 +1261,7 @@ private:
                                  const QUrl &rawTarget,
                                  bool insertAfter)
     {
+        const int scrollPosition = verticalScrollPosition();
         const QUrl source = normalizedUrl(rawSource);
         const QUrl target = normalizedUrl(rawTarget);
 
@@ -1198,6 +1299,7 @@ private:
         saveQuickAccessUrls();
         rebuildQuickAccess();
         updateCurrent();
+        restoreVerticalScrollPosition(scrollPosition);
     }
 
     QString displayNameForLocation(const QUrl &url) const

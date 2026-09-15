@@ -99,6 +99,14 @@ int main(int argc, char **argv)
     verify(primaryHeader->width() == window.m_primaryPane->width()
                && splitHeader->width() == window.m_splitPane->width(),
            "address sections continue matching panes after divider resize");
+    window.setActivePane(ThisPcWindow::PaneId::Split);
+    window.m_sidebarSplitter->setSizes({360, 820});
+    app.processEvents();
+    verify(primaryHeader->width() == window.m_primaryPane->width()
+               && splitHeader->width() == window.m_splitPane->width(),
+           "pane addresses remain aligned after sidebar divider resize");
+    verify(window.m_activePane == ThisPcWindow::PaneId::Split,
+           "sidebar divider resize preserves the active pane");
     verify(!window.m_splitPane->m_backButton->isVisible()
                && !window.m_splitPane->m_forwardButton->isVisible()
                && !window.m_splitPane->m_upButton->isVisible()
