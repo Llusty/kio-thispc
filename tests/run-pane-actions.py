@@ -20,6 +20,7 @@ group.add_argument('--properties', action='store_true', help='run real Propertie
 group.add_argument('--search', action='store_true', help='run real KIO search and cancellation tests')
 group.add_argument('--actions', action='store_true', help='run real FileActions and Undo tests')
 group.add_argument('--templates', action='store_true', help='run native XDG template menu tests')
+group.add_argument('--trash', action='store_true', help='run Empty Trash menu and simulated operation tests')
 group.add_argument('--operations', action='store_true', help='run OperationManager state tests')
 group.add_argument('--local-transfer', action='store_true', help='run native local copy pause/resume tests')
 group.add_argument('--transfer-plan', action='store_true', help='run native directory transfer planning tests')
@@ -28,7 +29,7 @@ group.add_argument('--all', action='store_true', help='run every regression suit
 group.add_argument('--suites', nargs='+', choices=[
     'panes', 'tabs', 'properties', 'search', 'actions', 'operations',
     'local_transfer', 'transfer_plan', 'local_move', 'local_tree', 'tree_history',
-    'sidebar_dnd', 'sidebar_layout', 'templates'],
+    'sidebar_dnd', 'sidebar_layout', 'templates', 'trash'],
     help='build once and run only the selected regression suites')
 options = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
@@ -36,11 +37,16 @@ source = (root / 'src/thispcview.cpp').read_text()
 
 file_actions = (root / 'src/fileactions.h').read_text()
 
-def intercept(text, signature, marker, statement):
+def intercept(text, signature, marker, statement, flag='interceptFileJobs'):
     start = text.index(signature)
     end = text.index('\n    }', start)
     point = text.index(marker, start, end)
-    return text[:point] + '        if (interceptFileJobs) { ' + statement + ' return; }\n' + text[point:]
+    return text[:point] + '        if (' + flag + ') { ' + statement + ' return; }\n' + text[point:]
+
+# Never execute the real global EmptyTrash job in this runner: an isolated
+# XDG_DATA_HOME alone does not isolate trash directories on other mounts.
+assert file_actions.count('KIO::emptyTrash()') == 1
+file_actions = file_actions.replace('KIO::emptyTrash()', 'makeTestEmptyTrashJob()')
 
 for signature, marker, statement in [
     ('    void trashSelected(', '        KIO::CopyJob *job =', 'dispatch = {"trash", urls, {}};'),
@@ -54,6 +60,9 @@ for signature, marker, statement in [
     file_actions = intercept(file_actions, signature, marker, statement)
 source = intercept(source, '    void showPropertiesDialog(', '        PropertiesDialog::show(',
                    'dispatch = {"properties", {url}, {}};')
+source = intercept(source, '    void refreshPane(', '        if (pane ==',
+                   'refreshedPanes.push_back(pane == PaneId::Split ? 1 : 0);',
+                   'interceptPaneRefreshes')
 
 def expose(text):
     return text.replace('private:', 'public:').replace('protected:', 'public:').replace('    Q_OBJECT', '    Q_OBJECT\npublic:')
@@ -70,6 +79,28 @@ prelude = '''#include <QtTest>
 struct Dispatch { QString kind; QList<QUrl> sources; QUrl destination; };
 static Dispatch dispatch;
 static bool interceptFileJobs = true;
+static bool interceptPaneRefreshes = false;
+static QList<int> refreshedPanes;
+class TestEmptyTrashJob final : public KJob
+{
+public:
+    TestEmptyTrashJob() { setCapabilities(KJob::Killable); }
+    void start() override {}
+    void complete(int error = 0) {
+        setError(error);
+        if (error) setErrorText(QStringLiteral("Simulated Trash error"));
+        emitResult();
+    }
+protected:
+    bool doKill() override { return true; }
+};
+static QPointer<TestEmptyTrashJob> testEmptyTrashJob;
+static int emptyTrashDispatches = 0;
+static TestEmptyTrashJob *makeTestEmptyTrashJob() {
+    ++emptyTrashDispatches;
+    testEmptyTrashJob = new TestEmptyTrashJob;
+    return testEmptyTrashJob;
+}
 '''
 (root / 'build').mkdir(exist_ok=True)
 with tempfile.TemporaryDirectory(prefix='thispc-pane-tests-') as tmp, tempfile.TemporaryDirectory(
@@ -78,8 +109,8 @@ with tempfile.TemporaryDirectory(prefix='thispc-pane-tests-') as tmp, tempfile.T
     (tmp / 'src').mkdir()
     for header in (root / 'src').glob('*.h'):
         (tmp / 'src' / header.name).write_text(expose(file_actions if header.name == 'fileactions.h' else header.read_text()))
-    suites = {'panes': 'pane-actions.cpp', 'templates': 'template-menu.cpp', 'tabs': 'tab-drag-drop.cpp', 'sidebar_dnd': 'sidebar-drag-drop.cpp', 'sidebar_layout': 'sidebar-layout.cpp', 'properties': 'properties-dialog.cpp', 'search': 'search-controller.cpp', 'actions': 'file-actions.cpp', 'operations': 'operation-manager.cpp', 'local_transfer': 'local-file-copy-job.cpp', 'transfer_plan': 'local-transfer-plan.cpp', 'local_move': 'local-file-move-job.cpp', 'local_tree': 'local-transfer-job.cpp', 'tree_history': 'local-tree-history.cpp'}
-    selected = options.suites or (list(suites) if options.all else ['templates' if options.templates else 'sidebar_layout' if options.sidebar_layout else 'sidebar_dnd' if options.sidebar_dnd else 'local_move' if options.local_move else 'transfer_plan' if options.transfer_plan else 'local_transfer' if options.local_transfer else 'operations' if options.operations else 'actions' if options.actions else 'tabs' if options.tabs else 'properties' if options.properties else 'search' if options.search else 'panes'])
+    suites = {'trash': 'empty-trash.cpp', 'panes': 'pane-actions.cpp', 'templates': 'template-menu.cpp', 'tabs': 'tab-drag-drop.cpp', 'sidebar_dnd': 'sidebar-drag-drop.cpp', 'sidebar_layout': 'sidebar-layout.cpp', 'properties': 'properties-dialog.cpp', 'search': 'search-controller.cpp', 'actions': 'file-actions.cpp', 'operations': 'operation-manager.cpp', 'local_transfer': 'local-file-copy-job.cpp', 'transfer_plan': 'local-transfer-plan.cpp', 'local_move': 'local-file-move-job.cpp', 'local_tree': 'local-transfer-job.cpp', 'tree_history': 'local-tree-history.cpp'}
+    selected = options.suites or (list(suites) if options.all else ['trash' if options.trash else 'templates' if options.templates else 'sidebar_layout' if options.sidebar_layout else 'sidebar_dnd' if options.sidebar_dnd else 'local_move' if options.local_move else 'transfer_plan' if options.transfer_plan else 'local_transfer' if options.local_transfer else 'operations' if options.operations else 'actions' if options.actions else 'tabs' if options.tabs else 'properties' if options.properties else 'search' if options.search else 'panes'])
     combined = prelude + source
     for suite in selected:
         disk_data = Path(disk_tmp) / suite

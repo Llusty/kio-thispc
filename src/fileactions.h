@@ -8,6 +8,7 @@
 #include "localfilecopyjob.h"
 #include "localfilemovejob.h"
 #include "undocontroller.h"
+#include <KIO/EmptyTrashJob>
 #include <KIO/JobUiDelegateFactory>
 #include <KIO/MkdirJob>
 #include <KIO/RenameDialog>
@@ -19,13 +20,16 @@
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QMimeData>
+#include <QPointer>
+#include <QScopedValueRollback>
 #include <functional>
 #include <utility>
 
 class FileActions final : public QObject
 {
 public:
-    using WatchOperation = std::function<void(KJob *, const QString &, bool, const QString &)>;
+    using RefreshViews = std::function<void()>;
+    using WatchOperation = std::function<void(KJob *, const QString &, bool, const QString &, const RefreshViews &)>;
 
     FileActions(QWidget *parentWidget, UndoController *undoController, WatchOperation watchOperation)
         : QObject(parentWidget)
@@ -379,6 +383,45 @@ public:
             trLocal("Przenoszenie do Kosza", "Moving to Trash"));
     }
 
+    static bool isTrashRoot(const QUrl &directory)
+    {
+        return directory.isValid() && directory.scheme() == QStringLiteral("trash")
+            && directory.authority().isEmpty()
+            && (directory.path().isEmpty() || directory.path() == QStringLiteral("/"))
+            && !directory.hasQuery() && !directory.hasFragment();
+    }
+
+    bool canEmptyTrash(const QUrl &directory) const
+    {
+        return isTrashRoot(directory) && !m_confirmingEmptyTrash && !m_emptyTrashJob;
+    }
+
+    void emptyTrash(QUrl directory, const RefreshViews &refreshViews)
+    {
+        if (!canEmptyTrash(directory)) return;
+
+        QScopedValueRollback<bool> confirming(m_confirmingEmptyTrash, true);
+        if (QMessageBox::warning(
+                m_parentWidget,
+                trLocal("Opróżnij kosz", "Empty Trash"),
+                trLocal(
+                    "Trwale usunąć wszystkie elementy z Kosza?\n\nTej operacji nie można cofnąć.",
+                    "Permanently delete all items from Trash?\n\nThis operation cannot be undone."),
+                QMessageBox::Yes | QMessageBox::No,
+                QMessageBox::No) != QMessageBox::Yes) {
+            return;
+        }
+
+        auto *job = KIO::emptyTrash();
+        job->setUiDelegate(nullptr);
+        m_emptyTrashJob = job;
+        connect(job, &KJob::result, this, [this] { m_emptyTrashJob = nullptr; });
+        // Emptying Trash is irreversible; do not record it as an undoable job.
+        watchFileOperation(job,
+            trLocal("Kosz został opróżniony", "Trash emptied"), false,
+            trLocal("Opróżnianie kosza", "Emptying Trash"), refreshViews);
+    }
+
     void transfer(const QList<QUrl> &urls, const QUrl &destination, Qt::DropAction action)
     {
         if (urls.isEmpty() || !destination.isValid()) return;
@@ -559,12 +602,15 @@ private:
         }
     }
 
-    void watchFileOperation(KJob *job, const QString &message, bool clearClipboard, const QString &title)
+    void watchFileOperation(KJob *job, const QString &message, bool clearClipboard, const QString &title,
+                            const RefreshViews &refreshViews = {})
     {
-        m_watchOperation(job, message, clearClipboard, title);
+        m_watchOperation(job, message, clearClipboard, title, refreshViews);
     }
 
     QWidget *m_parentWidget = nullptr;
     UndoController *m_undoController = nullptr;
     WatchOperation m_watchOperation;
+    bool m_confirmingEmptyTrash = false;
+    QPointer<KJob> m_emptyTrashJob;
 };

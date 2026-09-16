@@ -30,7 +30,9 @@ int main(int argc, char **argv)
     bool pauseNextTree = false;
     QString lastMessage, lastTitle;
     QPointer<LocalTransferJob> observedTree;
-    FileActions actions(&parent, &undo, [&](KJob *job, const QString &message, bool clear, const QString &title) {
+    FileActions actions(&parent, &undo, [&](KJob *job, const QString &message, bool clear, const QString &title,
+                                          const FileActions::RefreshViews &refreshViews) {
+        verify(!refreshViews, "ordinary file operations keep the default view refresh");
         lastMessage = message;
         lastTitle = title;
         lastClear = clear;

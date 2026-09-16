@@ -1145,8 +1145,9 @@ public:
             m_redoAction);
 
         m_fileActions = new FileActions(this, m_undoController,
-            [this](KJob *job, const QString &message, bool clearClipboard, const QString &title) {
-                watchFileOperation(job, message, clearClipboard, title);
+            [this](KJob *job, const QString &message, bool clearClipboard, const QString &title,
+                   const FileActions::RefreshViews &refreshViews) {
+                watchFileOperation(job, message, clearClipboard, title, refreshViews);
             });
 
         m_searchController = new SearchController(this);
@@ -1834,6 +1835,22 @@ private:
                     toolbar->widgetForAction(m_trashAction))) {
             button->setToolButtonStyle(Qt::ToolButtonIconOnly);
             button->setToolTip(m_trashAction->text());
+        }
+
+        m_emptyTrashAction = toolbar->addAction(
+            themedIcon(QStringLiteral("trash-empty"), QStringLiteral("user-trash")),
+            trLocal("Opróżnij kosz", "Empty Trash"));
+        connect(
+            m_emptyTrashAction,
+            &QAction::triggered,
+            this,
+            [this] { emptyTrashAt(paneContext().directory); });
+
+        if (auto *button =
+                qobject_cast<QToolButton *>(
+                    toolbar->widgetForAction(m_emptyTrashAction))) {
+            button->setToolButtonStyle(Qt::ToolButtonIconOnly);
+            button->setToolTip(m_emptyTrashAction->text());
         }
 
         toolbar->addSeparator();
@@ -4316,7 +4333,7 @@ private:
                 return;
             }
 
-            renderDirectoryItems();
+            renderDirectoryItems(job->property("thispcPreserveStatusMessage").toBool());
         });
     }
 
@@ -4430,7 +4447,7 @@ private:
         return icon;
     }
 
-    void renderDirectoryItems()
+    void renderDirectoryItems(bool preserveStatusMessage = false)
     {
         sortDirectoryFiles(
             m_pendingFiles,
@@ -4507,7 +4524,7 @@ private:
                         .arg(count));
         }
 
-        if (m_activePane == PaneId::Primary) {
+        if (m_activePane == PaneId::Primary && !preserveStatusMessage) {
             statusBar()->showMessage(
                 isSearchLocation(m_currentUrl)
                     ? displayNameForLocation(m_currentUrl)
@@ -5697,6 +5714,15 @@ private:
                     trLocal("Wklej", "Paste"));
             paste->setEnabled(canPasteHere());
 
+            QAction *emptyTrash = nullptr;
+            if (context.isDirectory && FileActions::isTrashRoot(context.directory)) {
+                backgroundMenu.addSeparator();
+                emptyTrash = backgroundMenu.addAction(
+                    themedIcon(QStringLiteral("user-trash")),
+                    trLocal("Opróżnij kosz", "Empty Trash"));
+                emptyTrash->setEnabled(m_fileActions->canEmptyTrash(context.directory));
+            }
+
             backgroundMenu.addSeparator();
 
             QAction *openDolphin =
@@ -5785,6 +5811,8 @@ private:
                 createNewFolder();
             } else if (chosen == paste) {
                 pasteClipboard();
+            } else if (emptyTrash && chosen == emptyTrash) {
+                emptyTrashAt(context.directory);
             } else if (chosen == openDolphin) {
                 openInDolphin(context.directory);
             } else if (chosen == duplicateTabAction) {
@@ -6147,6 +6175,15 @@ private:
         if (m_propertiesAction) m_propertiesAction->setEnabled(singleSelection);
         m_trashAction->setEnabled(allLocal);
 
+        if (m_emptyTrashAction) {
+            const QUrl directory = paneContext().directory;
+            const bool atTrashRoot = FileActions::isTrashRoot(directory);
+            m_emptyTrashAction->setVisible(atTrashRoot);
+            m_emptyTrashAction->setEnabled(
+                atTrashRoot && m_fileActions
+                && m_fileActions->canEmptyTrash(directory));
+        }
+
         const bool canCreate =
             canModifyCurrentDirectory();
         m_newFolderAction->setEnabled(canCreate);
@@ -6255,14 +6292,47 @@ private:
         m_fileActions->trashSelected(selectedUrls());
     }
 
+    void emptyTrashAt(const QUrl &directory)
+    {
+        if (m_emptyTrashAction) m_emptyTrashAction->setEnabled(false);
+        m_fileActions->emptyTrash(directory, [this] { refreshTrashViews(); });
+        updateFileActionStates();
+    }
+
+    void refreshTrashViews()
+    {
+        // The modal dialog and the asynchronous job can both outlive a pane
+        // switch or navigation. Refresh only views still displaying Trash.
+        if (m_currentUrl.scheme() == QStringLiteral("trash")) {
+            refreshPane(PaneId::Primary);
+            if (m_directoryJob) {
+                // The listing completes later; keep the operation result
+                // visible instead of immediately replacing it with trash:/.
+                m_directoryJob->setProperty("thispcPreserveStatusMessage", true);
+            }
+        }
+        if (m_splitPane && m_splitPane->isVisible()
+            && m_splitPane->currentUrl().scheme() == QStringLiteral("trash")) {
+            refreshPane(PaneId::Split);
+        }
+    }
+
     void watchFileOperation(
         KJob *job,
         const QString &successMessage,
         bool clearClipboardOnSuccess = false,
-        const QString &operationTitle = QString())
+        const QString &operationTitle = QString(),
+        FileActions::RefreshViews refreshViews = {})
     {
         if (!job) {
             return;
+        }
+
+        if (!refreshViews) {
+            refreshViews = [this] {
+                refreshCurrent();
+                if (m_splitPane && m_splitPane->isVisible()) m_splitPane->refresh();
+            };
         }
 
         if (m_operationManager) {
@@ -6280,7 +6350,7 @@ private:
             job,
             &KJob::result,
             this,
-            [this, job, successMessage, clearClipboardOnSuccess](KJob *) {
+            [this, job, successMessage, clearClipboardOnSuccess, refreshViews](KJob *) {
             const bool cancelled =
                 (m_operationManager
                     && m_operationManager->cancelRequested(job))
@@ -6303,10 +6373,7 @@ private:
                     trLocal("Operacja anulowana", "Operation cancelled"),
                     4000);
 
-                refreshCurrent();
-                if (m_splitPane && m_splitPane->isVisible()) {
-                    m_splitPane->refresh();
-                }
+                refreshViews();
                 updateFileActionStates();
                 return;
             }
@@ -6321,10 +6388,7 @@ private:
                     trLocal("Operacja nie powiodła się", "Operation failed"),
                     job->errorString());
 
-                refreshCurrent();
-                if (m_splitPane && m_splitPane->isVisible()) {
-                    m_splitPane->refresh();
-                }
+                refreshViews();
                 updateFileActionStates();
                 return;
             }
@@ -6337,10 +6401,7 @@ private:
                 successMessage,
                 4000);
 
-            refreshCurrent();
-            if (m_splitPane && m_splitPane->isVisible()) {
-                m_splitPane->refresh();
-            }
+            refreshViews();
             updateFileActionStates();
         });
     }
@@ -7166,6 +7227,7 @@ private:
     QAction *m_renameAction = nullptr;
     QAction *m_propertiesAction = nullptr;
     QAction *m_trashAction = nullptr;
+    QAction *m_emptyTrashAction = nullptr;
     QAction *m_undoAction = nullptr;
     QAction *m_redoAction = nullptr;
     UndoController *m_undoController = nullptr;
