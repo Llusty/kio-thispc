@@ -29,7 +29,7 @@ group.add_argument('--all', action='store_true', help='run every regression suit
 group.add_argument('--suites', nargs='+', choices=[
     'panes', 'tabs', 'properties', 'search', 'actions', 'operations',
     'local_transfer', 'transfer_plan', 'local_move', 'local_tree', 'tree_history',
-    'sidebar_dnd', 'sidebar_layout', 'templates', 'trash'],
+    'sidebar_dnd', 'sidebar_layout', 'templates', 'trash', 'archive', 'archive_jobs', 'archive_menu'],
     help='build once and run only the selected regression suites')
 options = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
@@ -60,6 +60,9 @@ for signature, marker, statement in [
     file_actions = intercept(file_actions, signature, marker, statement)
 source = intercept(source, '    void showPropertiesDialog(', '        PropertiesDialog::show(',
                    'dispatch = {"properties", {url}, {}};')
+source = intercept(source, '    void extractArchiveWithArk(', '        auto *job = new ArchiveExtractionJob',
+                   'dispatch = {showDialog ? "extract-to" : "extract-here", {archiveUrl}, destinationUrl}; m_runningArchivePaths.remove(identity);',
+                   'interceptArchiveJobs')
 source = intercept(source, '    void refreshPane(', '        if (pane ==',
                    'refreshedPanes.push_back(pane == PaneId::Split ? 1 : 0);',
                    'interceptPaneRefreshes')
@@ -79,6 +82,7 @@ prelude = '''#include <QtTest>
 struct Dispatch { QString kind; QList<QUrl> sources; QUrl destination; };
 static Dispatch dispatch;
 static bool interceptFileJobs = true;
+static bool interceptArchiveJobs = false;
 static bool interceptPaneRefreshes = false;
 static QList<int> refreshedPanes;
 class TestEmptyTrashJob final : public KJob
@@ -109,7 +113,7 @@ with tempfile.TemporaryDirectory(prefix='thispc-pane-tests-') as tmp, tempfile.T
     (tmp / 'src').mkdir()
     for header in (root / 'src').glob('*.h'):
         (tmp / 'src' / header.name).write_text(expose(file_actions if header.name == 'fileactions.h' else header.read_text()))
-    suites = {'trash': 'empty-trash.cpp', 'panes': 'pane-actions.cpp', 'templates': 'template-menu.cpp', 'tabs': 'tab-drag-drop.cpp', 'sidebar_dnd': 'sidebar-drag-drop.cpp', 'sidebar_layout': 'sidebar-layout.cpp', 'properties': 'properties-dialog.cpp', 'search': 'search-controller.cpp', 'actions': 'file-actions.cpp', 'operations': 'operation-manager.cpp', 'local_transfer': 'local-file-copy-job.cpp', 'transfer_plan': 'local-transfer-plan.cpp', 'local_move': 'local-file-move-job.cpp', 'local_tree': 'local-transfer-job.cpp', 'tree_history': 'local-tree-history.cpp'}
+    suites = {'trash': 'empty-trash.cpp', 'panes': 'pane-actions.cpp', 'templates': 'template-menu.cpp', 'tabs': 'tab-drag-drop.cpp', 'sidebar_dnd': 'sidebar-drag-drop.cpp', 'sidebar_layout': 'sidebar-layout.cpp', 'properties': 'properties-dialog.cpp', 'search': 'search-controller.cpp', 'actions': 'file-actions.cpp', 'operations': 'operation-manager.cpp', 'local_transfer': 'local-file-copy-job.cpp', 'transfer_plan': 'local-transfer-plan.cpp', 'local_move': 'local-file-move-job.cpp', 'local_tree': 'local-transfer-job.cpp', 'tree_history': 'local-tree-history.cpp', 'archive': 'archive-detection.cpp', 'archive_jobs': 'archive-extraction.cpp', 'archive_menu': 'archive-menu.cpp'}
     selected = options.suites or (list(suites) if options.all else ['trash' if options.trash else 'templates' if options.templates else 'sidebar_layout' if options.sidebar_layout else 'sidebar_dnd' if options.sidebar_dnd else 'local_move' if options.local_move else 'transfer_plan' if options.transfer_plan else 'local_transfer' if options.local_transfer else 'operations' if options.operations else 'actions' if options.actions else 'tabs' if options.tabs else 'properties' if options.properties else 'search' if options.search else 'panes'])
     combined = prelude + source
     for suite in selected:
@@ -119,10 +123,10 @@ with tempfile.TemporaryDirectory(prefix='thispc-pane-tests-') as tmp, tempfile.T
         # Unlike main(), an ordinary int function must return explicitly.
         end = test.rfind('}')
         test = test[:end] + '    return 0;\n' + test[end:]
-        combined += '\nnamespace ' + suite + ' {\n' + test + '\n}\n'
+        combined += '\nnamespace regression_' + suite + ' {\n' + test + '\n}\n'
     combined += '\nint main(int argc, char **argv) {\n'
     for suite in selected:
-        combined += f'    if (argc > 1 && QByteArray(argv[1]) == "{suite}") return {suite}::run(argc, argv);\n'
+        combined += f'    if (argc > 1 && QByteArray(argv[1]) == "{suite}") return regression_{suite}::run(argc, argv);\n'
     combined += '    return 2;\n}\n'
     (tmp / 'src/thispcview.cpp').write_text(combined)
     cmake = '''cmake_minimum_required(VERSION 3.16)
@@ -131,10 +135,13 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_AUTOMOC ON)
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets PrintSupport Test)
 find_package(KF6KIO REQUIRED)
+find_package(LibArchive REQUIRED)
+find_package(ZLIB REQUIRED)
 file(GLOB TEST_HEADERS CONFIGURE_DEPENDS src/*.h)
 add_executable(pane-test src/thispcview.cpp ${TEST_HEADERS})
 target_compile_options(pane-test PRIVATE -g0 -O0 -Wno-unused-function -Wno-unused-variable)
-target_link_libraries(pane-test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::PrintSupport Qt6::Test KF6::KIOCore KF6::KIOWidgets)
+target_include_directories(pane-test PRIVATE ${LibArchive_INCLUDE_DIRS})
+target_link_libraries(pane-test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::PrintSupport Qt6::Test KF6::KIOCore KF6::KIOWidgets ${LibArchive_LIBRARIES} ZLIB::ZLIB)
 '''
     (tmp / 'CMakeLists.txt').write_text(cmake)
     subprocess.run(['cmake', '-S', str(tmp), '-B', str(tmp / 'build')], check=True)
@@ -152,6 +159,7 @@ target_link_libraries(pane-test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Pri
 </busconfig>
 ''')
     for suite in selected:
+        disk_data = Path(disk_tmp) / suite
         runtime = tmp / suite / 'runtime'
         runtime.mkdir(parents=True, mode=0o700)
         env = dict(os.environ, QT_QPA_PLATFORM='offscreen', QT_FORCE_STDERR_LOGGING='1',
@@ -162,6 +170,6 @@ target_link_libraries(pane-test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Pri
                    LANG='C.UTF-8', LC_ALL='C.UTF-8')
         command = [str(tmp / 'build/pane-test'), suite]
         if suite not in {'operations', 'local_transfer', 'transfer_plan', 'local_move', 'local_tree', 'tree_history',
-                         'sidebar_layout'}:
+                         'sidebar_layout', 'archive'}:
             command = ['dbus-run-session', '--config-file=' + str(bus_config), '--'] + command
         subprocess.run(command, env=env, check=True, timeout=60)

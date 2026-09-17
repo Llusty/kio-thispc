@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "archive-detection.h"
+#include "archive-extraction.h"
 #include <KIO/CopyJob>
 #include <KIO/Global>
 #include <KIO/JobUiDelegateFactory>
@@ -5173,6 +5175,59 @@ private:
             5000);
     }
 
+    void refreshArchiveViews(const QUrl &destination)
+    {
+        // Compare the locations visible NOW, not the pane focused at dispatch.
+        const QString target = QFileInfo(destination.toLocalFile()).canonicalFilePath();
+        if (target.isEmpty()) return;
+        const auto affected = [&](const QUrl &url) {
+            if (!url.isLocalFile()) return false;
+            const QString path = QFileInfo(url.toLocalFile()).canonicalFilePath();
+            const QString prefix = target.endsWith(QLatin1Char('/')) ? target : target + QLatin1Char('/');
+            return path == target || (!path.isEmpty() && path.startsWith(prefix));
+        };
+        if (affected(m_currentUrl)) refreshPane(PaneId::Primary);
+        if (m_splitPane && m_splitPane->isVisible() && affected(m_splitPane->currentUrl()))
+            refreshPane(PaneId::Split);
+    }
+
+    void extractArchiveWithArk(const QUrl &archiveUrl, bool showDialog)
+    {
+        const QString executable = QStandardPaths::findExecutable(QStringLiteral("ark"));
+        if (executable.isEmpty() || !thispcIsArchiveCandidate(archiveUrl, false)) {
+            QMessageBox::warning(this, trLocal("Wypakowywanie", "Extraction"),
+                executable.isEmpty()
+                    ? trLocal("Program Ark nie jest zainstalowany lub jest niedostępny.", "Ark is not installed or is unavailable.")
+                    : trLocal("Ten plik nie jest obsługiwanym archiwum.", "This file is not a supported archive."));
+            return;
+        }
+        const QString identity = thispcArchiveIdentity(archiveUrl);
+        if (identity.isEmpty()) return;
+        if (m_runningArchivePaths.contains(identity)) {
+            statusBar()->showMessage(trLocal("To archiwum jest już przetwarzane.",
+                                            "This archive is already being processed."), 4000);
+            return;
+        }
+        m_runningArchivePaths.insert(identity); // Includes the destination dialog and hardlink aliases.
+        QString destination = QFileInfo(archiveUrl.toLocalFile()).absolutePath();
+        if (showDialog) {
+            destination = QFileDialog::getExistingDirectory(this,
+                trLocal("Wypakuj do — istniejące pliki nie będą nadpisywane",
+                        "Extract To — existing files will not be overwritten"), destination);
+            if (destination.isEmpty()) { m_runningArchivePaths.remove(identity); return; }
+        }
+        const QUrl destinationUrl = QUrl::fromLocalFile(destination);
+        auto *job = new ArchiveExtractionJob(archiveUrl, destinationUrl, executable, this);
+        // Keep the busy identity until destruction has joined the worker and reaped Ark.
+        connect(job, &QObject::destroyed, this, [this, identity, destinationUrl] {
+            m_runningArchivePaths.remove(identity);
+            refreshArchiveViews(destinationUrl);
+        });
+        watchFileOperation(job, trLocal("Wypakowywanie zakończone i sprawdzone.", "Extraction completed and verified."),
+            false, trLocal("Wypakowywanie", "Extraction"), [] {});
+        job->start();
+    }
+
     void addSendToSubmenu(
         QMenu &menu,
         const QList<QUrl> &urls)
@@ -5916,6 +5971,20 @@ private:
         }
 
         addOpenWithSubmenu(menu, selected);
+        QAction *extractHereAction = nullptr;
+        QAction *extractToAction = nullptr;
+
+        if (single && thispcCanExtractArchive(url, isDir)) {
+            QMenu *extractMenu = menu.addMenu(
+                themedIcon(QStringLiteral("archive-extract")),
+                trLocal("Wypakuj", "Extract"));
+
+            extractHereAction = extractMenu->addAction(
+                trLocal("Wypakuj tutaj", "Extract Here"));
+
+            extractToAction = extractMenu->addAction(
+                trLocal("Wypakuj do…", "Extract To…"));
+        }
 
         QAction *printAction = menu.addAction(
             themedIcon(QStringLiteral("document-print")),
@@ -6045,6 +6114,10 @@ private:
             openLocationAction
             && chosen == openLocationAction) {
             openResultLocation(url);
+        } else if (extractHereAction && chosen == extractHereAction) {
+            extractArchiveWithArk(url, false);
+        } else if (extractToAction && chosen == extractToAction) {
+            extractArchiveWithArk(url, true);
         } else if (chosen == printAction) {
             printUrl(url);
         } else if (
@@ -7303,6 +7376,7 @@ private:
     DirectoryListWidget *m_directoryList = nullptr;
     DirectoryTreeWidget *m_directoryDetails = nullptr;
 
+    QSet<QString> m_runningArchivePaths;
     QUrl m_currentUrl = kThisPcUrl;
     QList<QUrl> m_history;
     int m_historyIndex = -1;

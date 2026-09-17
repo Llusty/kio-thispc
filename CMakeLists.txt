@@ -16,6 +16,9 @@ include(KDEInstallDirs)
 include(KDECMakeSettings)
 include(KDECompilerSettings NO_POLICY_SCOPE)
 
+find_package(LibArchive REQUIRED)
+find_package(ZLIB REQUIRED)
+
 find_package(Qt6 ${QT_MIN_VERSION} CONFIG REQUIRED COMPONENTS Core Gui Widgets PrintSupport)
 find_package(KF6 ${KF_MIN_VERSION} REQUIRED COMPONENTS KIO Solid)
 
@@ -55,6 +58,8 @@ install(
 # ---------------------------------------------------------------------------
 add_executable(thispc-view
     src/thispcview.cpp
+    src/archive-detection.h
+    src/archive-extraction.h
     src/browsercommon.h
     src/directoryview.h
     src/fileactions.h
@@ -74,7 +79,11 @@ add_executable(thispc-view
     src/splitbrowserpane.h
 )
 
+target_include_directories(thispc-view PRIVATE ${LibArchive_INCLUDE_DIRS})
+
 target_link_libraries(thispc-view PRIVATE
+    ${LibArchive_LIBRARIES}
+    ZLIB::ZLIB
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets

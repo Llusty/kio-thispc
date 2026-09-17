@@ -66,3 +66,10 @@ Only test on disposable files.
 - [ ] `python3 tests/run-pane-actions.py --all` exits with code 0
 - [ ] all focused suites pass
 - [ ] `git diff --check` is clean
+
+## 0.25.0 Stage 2 — archiwa
+
+- [ ] Wykonać listę manual KDE z docs/ARCHIVE_STAGE2.md, wyłącznie na danych jednorazowych.
+- [ ] Focused: TMPDIR=/tmp python3 tests/run-pane-actions.py --suites archive archive_jobs archive_menu.
+- [ ] Pełna regresja: TMPDIR=/tmp python3 tests/run-pane-actions.py --all.
+- [ ] git diff --check; bez commita/taga przed manualną akceptacją.
