@@ -26,7 +26,7 @@ CMake musi znaleźć:
 - KDE Frameworks **6.17+**: KIO Core + KIO Widgets;
 - KF6 Solid;
 - ECM;
-- libarchive i zlib (walidacja archiwów przed uruchomieniem Ark).
+- libarchive i zlib (walidacja i tworzenie archiwów oraz obsługa ekstrakcji).
 
 ### Dlaczego KF6 6.17+?
 
@@ -49,14 +49,13 @@ okular                        drukowanie PDF
 plasma-apply-wallpaperimage   ustawianie tapety Plasma
 bluedevil-sendfile            Bluetooth
 xdg-email                     domyślny klient e-mail
-zip                           tworzenie archiwów ZIP
 ark                           wypakowywanie ZIP / 7z / tar / tar.gz
 ```
 
 Na Arch/CachyOS/EndeavourOS:
 
 ```bash
-sudo pacman -S --needed bluedevil xdg-utils zip okular
+sudo pacman -S --needed bluedevil xdg-utils okular
 ```
 
 Brak któregoś programu nie blokuje uruchomienia aplikacji — odpowiadająca mu funkcja jest po prostu niedostępna.
@@ -72,3 +71,9 @@ Na zweryfikowanym środowisku: Ark 26.08.1, libarchive 3.8.9, zlib 1.3.1, Landlo
 
 Obsługa archiwów szyfrowanych, dowiązań wewnątrz archiwum, scalania i nadpisywania
 nie jest częścią Stage 2. Pełne zasady i testy: docs/ARCHIVE_STAGE2.md.
+
+## Tworzenie archiwów — 0.25.0 Stage 3
+
+ZIP, 7z i tar.gz są tworzone przez libarchive, bez wymagania programu `zip` ani CLI Ark.
+Wymagane Linux, /proc, lokalizacja `C.UTF-8` oraz system plików z `renameat2(RENAME_NOREPLACE)`.
+Dalsze ograniczenia i testy: `docs/ARCHIVE_STAGE3.md`.

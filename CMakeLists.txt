@@ -58,6 +58,7 @@ install(
 # ---------------------------------------------------------------------------
 add_executable(thispc-view
     src/thispcview.cpp
+    src/archive-creation.h
     src/archive-detection.h
     src/archive-extraction.h
     src/browsercommon.h

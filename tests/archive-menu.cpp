@@ -81,7 +81,17 @@ int main(int argc, char **argv)
             bool sendTo = false;
             for (auto *action : rootMenu->actions()) {
                 if (action->text() == "Extract") extract = action->menu();
-                if (action->text() == "Send to") sendTo = true;
+                if (action->text() == "Send to") {
+                    sendTo = true;
+                    QMenu *sendMenu = action->menu();
+                    verify(sendMenu != nullptr, "Send to submenu exists");
+                    QStringList formats;
+                    for (const QAction *entry : sendMenu->actions())
+                        formats.append(entry->text());
+                    verify(formats.contains("Compressed ZIP file…"), "existing ZIP menu action retained");
+                    verify(formats.contains("Compressed 7z file…"), "7z creation menu action present");
+                    verify(formats.contains("Compressed tar.gz file…"), "tar.gz creation menu action present");
+                }
             }
             verify(bool(extract) == expected, "archive menu visibility");
             verify(sendTo, "existing Send to menu retained");

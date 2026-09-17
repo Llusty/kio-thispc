@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.25.0 Stage 3 (w przygotowaniu, bez wydania)
+
+- dodano tworzenie ZIP, 7z i tar.gz przez asynchroniczny libarchive job;
+- zachowano „Wyślij do → ZIP”, dodano formaty 7z/tar.gz;
+- publikacja bez nadpisywania, obsługa postępu/anulowania/błędów oraz testy;
+- szczegóły i ograniczenia: `docs/ARCHIVE_STAGE3.md`.
+
 ## 0.24.0
 
 - ujednolicono oba panele Split View: osobne breadcrumbs, równorzędna nawigacja i jeden wspólny toolbar/sidebar routowany do aktywnego panelu;

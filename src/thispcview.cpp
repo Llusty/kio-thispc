@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include "archive-creation.h"
 #include "archive-detection.h"
 #include "archive-extraction.h"
 #include <KIO/CopyJob>
@@ -5117,104 +5118,53 @@ private:
         return !common.isEmpty();
     }
 
-    void createZipFromSelection(
-        const QList<QUrl> &urls)
+    void createArchiveFromSelection(const QList<QUrl> &urls, ThisPcArchiveFormat format)
     {
         QString parent;
-
-        if (!selectionHasCommonParent(
-                urls,
-                &parent)) {
-            QMessageBox::information(
-                this,
-                trLocal(
-                    "Skompresowany ZIP",
-                    "Compressed ZIP"),
-                trLocal(
-                    "Tworzenie ZIP jest obecnie dostępne tylko dla elementów znajdujących się w tym samym katalogu.",
-                    "ZIP creation is currently available only for items in the same directory."));
+        if (!selectionHasCommonParent(urls, &parent)) {
+            QMessageBox::information(this, trLocal("Tworzenie archiwum", "Create archive"),
+                trLocal("Wybierz pliki i katalogi z jednego katalogu lokalnego.",
+                        "Select files and folders from the same local directory."));
             return;
         }
-
-        const QString zipExecutable =
-            QStandardPaths::findExecutable(
-                QStringLiteral("zip"));
-
-        if (zipExecutable.isEmpty()) {
-            QMessageBox::information(
-                this,
-                trLocal(
-                    "Skompresowany ZIP",
-                    "Compressed ZIP"),
-                trLocal(
-                    "Nie znaleziono programu „zip”.",
-                    "The “zip” program was not found."));
+        const QString suffix = thispcArchiveSuffix(format);
+        const QString proposed = QDir(parent).filePath(trLocal("Archiwum", "Archive") + suffix);
+        const QString label = format == ThisPcArchiveFormat::Zip
+            ? trLocal("Archiwa ZIP (*.zip)", "ZIP archives (*.zip)")
+            : format == ThisPcArchiveFormat::SevenZip
+                ? trLocal("Archiwa 7z (*.7z)", "7z archives (*.7z)")
+                : trLocal("Archiwa tar.gz (*.tar.gz)", "tar.gz archives (*.tar.gz)");
+        QFileDialog dialog(this, trLocal("Utwórz archiwum — bez nadpisywania", "Create archive — no overwrite"),
+                           proposed, label);
+        dialog.setAcceptMode(QFileDialog::AcceptSave);
+        dialog.setOption(QFileDialog::DontConfirmOverwrite, true);
+        dialog.setDefaultSuffix(suffix.mid(1));
+        if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty()) return;
+        QString archivePath = dialog.selectedFiles().first();
+        if (!archivePath.endsWith(suffix, Qt::CaseInsensitive)) archivePath += suffix;
+        // QFileDialog's overwrite prompt is intentionally disabled; job publication
+        // uses RENAME_NOREPLACE as the final protection against races and symlinks.
+        if (QFileInfo::exists(archivePath)) {
+            QMessageBox::warning(this, trLocal("Tworzenie archiwum", "Create archive"),
+                trLocal("Archiwum już istnieje. Wybierz inną nazwę — niczego nie nadpisano.",
+                        "The archive exists. Choose a different name — nothing was overwritten."));
             return;
         }
+        const QUrl destination = QUrl::fromLocalFile(archivePath);
+        auto *job = new ArchiveCreationJob(urls, destination, format, this);
+        connect(job, &QObject::destroyed, this, [this, destination] {
+            refreshArchiveViews(QUrl::fromLocalFile(QFileInfo(destination.toLocalFile()).absolutePath()));
+        });
+        watchFileOperation(job,
+            trLocal("Archiwum zostało utworzone.", "Archive created."), false,
+            trLocal("Tworzenie archiwum", "Archive creation"), [] {});
+        job->start();
+    }
 
-        const QString suggested =
-            QDir(parent).filePath(
-                trLocal(
-                    "Archiwum.zip",
-                    "Archive.zip"));
-
-        QString archivePath =
-            QFileDialog::getSaveFileName(
-                this,
-                trLocal(
-                    "Utwórz archiwum ZIP",
-                    "Create ZIP archive"),
-                suggested,
-                trLocal(
-                    "Archiwa ZIP (*.zip)",
-                    "ZIP archives (*.zip)"));
-
-        if (archivePath.isEmpty()) {
-            return;
-        }
-
-        if (!archivePath.endsWith(
-                QStringLiteral(".zip"),
-                Qt::CaseInsensitive)) {
-            archivePath +=
-                QStringLiteral(".zip");
-        }
-
-        QStringList arguments;
-        arguments << QStringLiteral("-r")
-                  << archivePath;
-
-        for (const QUrl &url : urls) {
-            arguments
-                << QFileInfo(
-                    url.toLocalFile())
-                    .fileName();
-        }
-
-        if (!QProcess::startDetached(
-                zipExecutable,
-                arguments,
-                parent)) {
-            QMessageBox::warning(
-                this,
-                trLocal(
-                    "Skompresowany ZIP",
-                    "Compressed ZIP"),
-                trLocal(
-                    "Nie udało się uruchomić tworzenia archiwum ZIP.",
-                    "Could not start ZIP archive creation."));
-            return;
-        }
-
-        statusBar()->showMessage(
-            isPolish()
-                ? QStringLiteral(
-                    "Tworzenie archiwum: %1")
-                    .arg(archivePath)
-                : QStringLiteral(
-                    "Creating archive: %1")
-                    .arg(archivePath),
-            5000);
+    // Keep the historic Send to -> ZIP action and its selection semantics.
+    void createZipFromSelection(const QList<QUrl> &urls)
+    {
+        createArchiveFromSelection(urls, ThisPcArchiveFormat::Zip);
     }
 
     void refreshArchiveViews(const QUrl &destination)
@@ -5393,28 +5343,31 @@ private:
         sendMenu->addSeparator();
 
         QString commonParent;
-        QAction *zipAction =
-            sendMenu->addAction(
-                themedIcon(
-                    QStringLiteral("package-x-generic")),
-                trLocal(
-                    "Skompresowany plik ZIP…",
-                    "Compressed ZIP file…"));
-        zipAction->setEnabled(
-            selectionHasCommonParent(
-                urls,
-                &commonParent)
-            && !QStandardPaths::findExecutable(
-                    QStringLiteral("zip"))
-                    .isEmpty());
+        const bool canCreateArchive = selectionHasCommonParent(urls, &commonParent);
 
-        connect(
-            zipAction,
-            &QAction::triggered,
-            this,
-            [this, urls] {
-                createZipFromSelection(urls);
-            });
+        QAction *zipAction = sendMenu->addAction(
+            themedIcon(QStringLiteral("package-x-generic")),
+            trLocal("Skompresowany plik ZIP…", "Compressed ZIP file…"));
+        zipAction->setEnabled(canCreateArchive);
+        connect(zipAction, &QAction::triggered, this, [this, urls] {
+            createZipFromSelection(urls);
+        });
+
+        QAction *sevenZipAction = sendMenu->addAction(
+            themedIcon(QStringLiteral("package-x-generic")),
+            trLocal("Skompresowany plik 7z…", "Compressed 7z file…"));
+        sevenZipAction->setEnabled(canCreateArchive);
+        connect(sevenZipAction, &QAction::triggered, this, [this, urls] {
+            createArchiveFromSelection(urls, ThisPcArchiveFormat::SevenZip);
+        });
+
+        QAction *tarGzipAction = sendMenu->addAction(
+            themedIcon(QStringLiteral("package-x-generic")),
+            trLocal("Skompresowany plik tar.gz…", "Compressed tar.gz file…"));
+        tarGzipAction->setEnabled(canCreateArchive);
+        connect(tarGzipAction, &QAction::triggered, this, [this, urls] {
+            createArchiveFromSelection(urls, ThisPcArchiveFormat::TarGzip);
+        });
     }
 
 
