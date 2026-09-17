@@ -61,6 +61,7 @@ add_executable(thispc-view
     src/archive-detection.h
     src/archive-extraction.h
     src/browsercommon.h
+    src/pathwidgets.h
     src/directoryview.h
     src/fileactions.h
     src/templatemenu.h

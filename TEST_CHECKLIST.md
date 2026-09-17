@@ -60,11 +60,16 @@ Only test on disposable files.
 - [ ] sidebar width persists after restart
 - [ ] long sidebar labels use right-side ellipsis and show the full tooltip
 - [ ] no horizontal sidebar scrollbar appears
+- [ ] Ustawić nierówny podział paneli; krótkie/głębokie ścieżki i bardzo długa nazwa katalogu po obu stronach nie przesuwają separatora.
+- [ ] Przy długich ścieżkach przeciągnąć separator, zmienić rozmiar okna, przełączyć aktywny panel i Ten komputer; wybrany podział pozostaje zachowany.
+- [ ] Przewijanie segmentów po lewej, wielokropek po prawej, podpowiedzi i Ctrl+L zapewniają dostęp do pełnego adresu.
+- [ ] Wyłączyć/włączyć Split View i ponownie uruchomić aplikację; poprzedni podział wraca również po zamknięciu z ukrytym prawym panelem.
 
 ## Automated regression
 
 - [ ] `python3 tests/run-pane-actions.py --all` exits with code 0
 - [ ] all focused suites pass
+- [ ] `TMPDIR=/tmp python3 tests/run-pane-actions.py --suites split_layout panes search` przechodzi regresję szerokości paneli.
 - [ ] `git diff --check` is clean
 
 ## 0.25.0 Stage 2 — archiwa

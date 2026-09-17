@@ -368,7 +368,43 @@ public:
         : QFrame(parent)
     {
         setCursor(Qt::IBeamCursor);
+        auto *row = new QHBoxLayout(this);
+        row->setContentsMargins(4, 2, 4, 2);
+        row->setSpacing(1);
+        auto *previous = new QToolButton(this);
+        previous->setArrowType(Qt::LeftArrow);
+        previous->setAutoRaise(true);
+        previous->setToolTip(trLocal("Przewiń ścieżkę w lewo", "Scroll path left"));
+        row->addWidget(previous);
+        m_scroll = new PathScrollArea(this);
+        m_scroll->setWidget(new QWidget);
+        row->addWidget(m_scroll, 1);
+        auto *next = new QToolButton(this);
+        next->setArrowType(Qt::RightArrow);
+        next->setAutoRaise(true);
+        next->setToolTip(trLocal("Przewiń ścieżkę w prawo", "Scroll path right"));
+        row->addWidget(next);
+        auto *bar = m_scroll->horizontalScrollBar();
+        connect(previous, &QToolButton::clicked, this, [this, bar] {
+            bar->setValue(bar->value() - qMax(1, m_scroll->viewport()->width() / 2));
+        });
+        connect(next, &QToolButton::clicked, this, [this, bar] {
+            bar->setValue(bar->value() + qMax(1, m_scroll->viewport()->width() / 2));
+        });
+        connect(bar, &QScrollBar::rangeChanged, this, [previous, next, bar](int, int maximum) {
+            previous->setVisible(maximum > 0);
+            next->setVisible(maximum > 0);
+            bar->setValue(maximum); // Keep the current folder visible after navigation/resize.
+        });
+        connect(bar, &QScrollBar::valueChanged, this, [previous, next, bar](int value) {
+            previous->setEnabled(value > 0);
+            next->setEnabled(value < bar->maximum());
+        });
+        previous->hide();
+        next->hide();
     }
+
+    QWidget *contentsWidget() const { return m_scroll->widget(); }
 
 Q_SIGNALS:
     void clicked();
@@ -382,6 +418,9 @@ protected:
 
         QFrame::mousePressEvent(event);
     }
+
+private:
+    PathScrollArea *m_scroll = nullptr;
 };
 
 class ClickableFrame : public QFrame
@@ -1240,7 +1279,7 @@ protected:
         if (m_contentSplitter) {
             settings.setValue(
                 QStringLiteral("split/state"),
-                m_contentSplitter->saveState());
+                m_splitPane->isHidden() ? m_splitterState : m_contentSplitter->saveState());
         }
 
         QMainWindow::closeEvent(event);
@@ -1305,7 +1344,7 @@ private:
 
         m_addressStack = new QStackedWidget(toolbar);
         m_addressStack->setSizePolicy(
-            QSizePolicy::Expanding,
+            QSizePolicy::Ignored,
             QSizePolicy::Preferred);
 
         m_breadcrumbFrame = new BreadcrumbFrame(m_addressStack);
@@ -1324,9 +1363,10 @@ private:
                 setActivePane(PaneId::Primary);
                 beginAddressEdit(PaneId::Primary);
             });
-        m_breadcrumbLayout = new QHBoxLayout(m_breadcrumbFrame);
-        m_breadcrumbLayout->setContentsMargins(4, 2, 4, 2);
+        m_breadcrumbLayout = new QHBoxLayout(m_breadcrumbFrame->contentsWidget());
+        m_breadcrumbLayout->setContentsMargins(0, 0, 0, 0);
         m_breadcrumbLayout->setSpacing(1);
+        m_breadcrumbLayout->setSizeConstraint(QLayout::SetMinAndMaxSize);
 
         m_addressEdit = new AddressLineEdit(m_addressStack);
         m_addressEdit->setClearButtonEnabled(true);
@@ -2391,16 +2431,18 @@ private:
             || !m_contentSplitter->restoreState(storedSplitState)) {
             m_contentSplitter->setSizes({650, 450});
         }
+        m_splitterState = m_contentSplitter->saveState();
 
         connect(
             m_contentSplitter,
             &QSplitter::splitterMoved,
             this,
             [this] {
+                m_splitterState = m_contentSplitter->saveState();
                 QSettings settings;
                 settings.setValue(
                     QStringLiteral("split/state"),
-                    m_contentSplitter->saveState());
+                    m_splitterState);
             });
 
         m_splitPane->setSearchRootsProvider([this] { return wholeComputerSearchRoots(); });
@@ -2755,7 +2797,7 @@ private:
         m_adminBanner->hide();
         layout->addWidget(m_adminBanner);
 
-        m_directoryTitle = new QLabel(page);
+        m_directoryTitle = new ElidedPathLabel(page);
 
         QFont titleFont = m_directoryTitle->font();
         titleFont.setPointSize(titleFont.pointSize() + 3);
@@ -2764,7 +2806,7 @@ private:
 
         layout->addWidget(m_directoryTitle);
 
-        m_directoryStatus = new QLabel(page);
+        m_directoryStatus = new ElidedPathLabel(page);
         m_directoryStatus->setForegroundRole(
             QPalette::PlaceholderText);
         layout->addWidget(m_directoryStatus);
@@ -3445,6 +3487,7 @@ private:
                 target = kThisPcUrl;
             }
 
+            const bool wasHidden = m_splitPane->isHidden();
             m_splitPane->show();
 
             int splitViewMode =
@@ -3475,12 +3518,11 @@ private:
                 splitSortAscending);
             m_splitPane->setCurrentUrl(target, true);
 
-            QList<int> sizes = m_contentSplitter->sizes();
-            if (sizes.size() == 2 && sizes.at(1) < 80) {
-                const int total = qMax(700, sizes.at(0) + sizes.at(1));
-                m_contentSplitter->setSizes({total / 2, total / 2});
-            }
+            if (wasHidden) m_contentSplitter->restoreState(m_splitterState);
         } else {
+            // Hiding a splitter child gives it zero visible width. Preserve
+            // the user's two-pane allocation before that layout takes place.
+            if (!m_splitPane->isHidden()) m_splitterState = m_contentSplitter->saveState();
             m_splitPane->cancelSearch(false);
             m_splitPane->hide();
             setActivePane(PaneId::Primary);
@@ -6766,17 +6808,19 @@ private:
     void rebuildBreadcrumbs()
     {
         clearLayout(m_breadcrumbLayout);
+        m_breadcrumbFrame->setToolTip(urlForDisplay(m_currentUrl));
 
         auto addCrumb =
             [this](const QString &text,
                    const QIcon &icon,
                    const QUrl &url) {
             auto *button =
-                new QToolButton(m_breadcrumbFrame);
+                new QToolButton(m_breadcrumbFrame->contentsWidget());
 
             button->setObjectName(
                 QStringLiteral("crumbButton"));
             button->setText(text);
+            button->setToolTip(urlForDisplay(url));
             button->setIcon(icon);
             button->setToolButtonStyle(
                 icon.isNull()
@@ -6802,7 +6846,7 @@ private:
         auto addSeparator =
             [this] {
             auto *sep =
-                new QLabel(QStringLiteral("›"), m_breadcrumbFrame);
+                new QLabel(QStringLiteral("›"), m_breadcrumbFrame->contentsWidget());
             sep->setForegroundRole(
                 QPalette::PlaceholderText);
             m_breadcrumbLayout->addWidget(sep);
@@ -7351,6 +7395,7 @@ private:
     bool m_tabRestoreInProgress = false;
 
     QSplitter *m_contentSplitter = nullptr;
+    QByteArray m_splitterState;
     QWidget *m_primaryPane = nullptr;
     SplitBrowserPane *m_splitPane = nullptr;
     QStackedWidget *m_contentStack = nullptr;

@@ -10,6 +10,7 @@
 
 #include "browsercommon.h"
 #include "directoryview.h"
+#include "pathwidgets.h"
 #include "searchcontroller.h"
 
 #include <KIO/ListJob>
@@ -145,6 +146,7 @@ public:
 
         // Pretty breadcrumb by default; click to edit the real address.
         m_locationStack = new QStackedWidget(header);
+        m_locationStack->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
 
         m_breadcrumbFrame = new QFrame(m_locationStack);
         m_breadcrumbFrame->setObjectName(
@@ -174,15 +176,12 @@ public:
         });
 
         m_breadcrumbButton =
-            new QToolButton(m_breadcrumbFrame);
+            new ElidedPathButton(m_breadcrumbFrame);
         m_breadcrumbButton->setObjectName(
             QStringLiteral("splitBreadcrumbButton"));
         m_breadcrumbButton->setAutoRaise(true);
         m_breadcrumbButton->setToolButtonStyle(
             Qt::ToolButtonTextBesideIcon);
-        m_breadcrumbButton->setSizePolicy(
-            QSizePolicy::Expanding,
-            QSizePolicy::Preferred);
         breadcrumbLayout->addWidget(
             m_breadcrumbButton,
             1);
@@ -394,7 +393,7 @@ public:
             16, 12, 16, 7);
         contentHeaderLayout->setSpacing(3);
 
-        m_title = new QLabel(contentHeader);
+        m_title = new ElidedPathLabel(contentHeader);
         QFont titleFont = m_title->font();
         titleFont.setPointSize(
             titleFont.pointSize() + 2);
@@ -402,7 +401,7 @@ public:
         m_title->setFont(titleFont);
         contentHeaderLayout->addWidget(m_title);
 
-        m_status = new QLabel(contentHeader);
+        m_status = new ElidedPathLabel(contentHeader);
         m_status->setObjectName(
             QStringLiteral("splitPaneStatus"));
         m_status->setForegroundRole(
