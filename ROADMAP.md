@@ -81,9 +81,9 @@ This ordering prioritizes core file-manager correctness, safety and maintainabil
 - full automated regression: **1022/1022 assertions**;
 - full Stage 1–4 manual KDE/CachyOS acceptance passed.
 
-## Planned releases
+## 0.25.0 — Archives + richer New menu ✅ user-confirmed
 
-### 0.25.0 — Archives + richer New menu
+### Zakres wykonany
 Archives:
 - native KDE/Ark-oriented integration;
 - ZIP / 7z / tar.gz where backend support exists;
@@ -92,7 +92,12 @@ Archives:
 
 New:
 - folder, empty file, text, Markdown;
-- user templates.
+- user templates;
+- Empty Trash with confirmation;
+- Split View width fix for long paths;
+- Stage 3 automated regression: 20 suites / 3470 assertions PASS; manual acceptance.
+
+## Planned releases
 
 ### 0.26.0 — Preview pane
 - images, PDF, text/Markdown, JSON/XML;

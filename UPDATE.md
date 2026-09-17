@@ -1,3 +1,26 @@
+# Aktualizacja do 0.25.0
+
+Poniższe polecenia instalują z nowego katalogu, bez usuwania istniejącego repozytorium:
+
+```bash
+cd ~/Pobrane
+mkdir -p kio-thispc-0.25.0
+unzip kio-thispc-0.25.0.zip -d kio-thispc-0.25.0
+cd kio-thispc-0.25.0
+chmod +x install.sh
+./install.sh
+```
+
+## 0.25.0 — archiwa i menu Nowy
+
+- Markdown i szablony użytkownika w menu Nowy oraz opróżnianie Kosza z potwierdzeniem.
+- Bezpieczne rozpakowywanie ZIP, 7z, tar i tar.gz; tworzenie ZIP, 7z i tar.gz.
+- Stabilne proporcje Split View przy długich ścieżkach.
+- Automatyczna regresja: 20 zestawów, 3470 asercji PASS; Stage 3 zaakceptowany ręcznie.
+- Wypakowywanie wymaga Ark, Linux Landlock ABI 3+ i wsparcia publikacji bez nadpisywania. Patrz `docs/ARCHIVE_STAGE2.md` i `docs/ARCHIVE_STAGE3.md`.
+
+---
+
 # Aktualizacja do 0.24.0
 
 ```bash

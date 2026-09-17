@@ -1,4 +1,14 @@
-# kio-thispc 0.24.0
+# kio-thispc 0.25.0
+
+## 0.25.0 — Archiwa i rozbudowane menu Nowy
+
+- Menu Nowy: Markdown i szablony użytkownika; opróżnianie Kosza z potwierdzeniem.
+- Rozpakowywanie ZIP, 7z, tar i tar.gz: Wypakuj tutaj / Wypakuj do; walidacja zawartości, izolacja procesu i publikacja bez nadpisywania.
+- Tworzenie ZIP, 7z i tar.gz: obsługa wielu zaznaczonych elementów, postępu, błędów i anulowania.
+- Długie ścieżki w Split View nie zmieniają ręcznie ustawionych proporcji paneli.
+- Testy automatyczne Stage 3: 20 zestawów, 3470 asercji PASS; ręczna akceptacja zgłoszona przez użytkownika.
+- Wypakowywanie wymaga Ark, Landlock ABI 3+, /proc i systemu plików obsługującego atomową publikację bez nadpisywania; szczegóły w `docs/ARCHIVE_STAGE2.md`.
+- Szczegóły tworzenia archiwów: `docs/ARCHIVE_STAGE3.md`.
 
 ## 0.24.0 — Sidebar & Split View UX
 
@@ -136,9 +146,9 @@ Funkcje z 0.15.4 — kompaktowy popup operacji, dynamiczna wysokość, anulowani
 
 ```bash
 cd ~/Pobrane
-rm -rf kio-thispc
-unzip kio-thispc-0.24.0.zip
-cd kio-thispc
+mkdir -p kio-thispc-0.25.0
+unzip kio-thispc-0.25.0.zip -d kio-thispc-0.25.0
+cd kio-thispc-0.25.0
 chmod +x install.sh
 ./install.sh
 ```
