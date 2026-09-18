@@ -10,6 +10,20 @@
 #include <QUrl>
 #include <zlib.h>
 
+inline QString thispcSafeArchiveEntryName(QString name, bool directory)
+{
+    if (name.startsWith(QLatin1Char('/')) || name.contains(QLatin1Char('\\'))
+        || name.contains(QLatin1Char(':'))) return {};
+    for (const QChar c : name) if (c.category() == QChar::Other_Control) return {};
+    while (name.startsWith(QStringLiteral("./"))) name.remove(0, 2);
+    if (directory && name.endsWith(QLatin1Char('/'))) name.chop(1);
+    const auto parts = name.split(QLatin1Char('/'));
+    if (name.size() > 4096 || parts.size() > 128) return {};
+    for (const auto &part : parts)
+        if (part.isEmpty() || part == QLatin1String("..") || part == QLatin1String(".")) return {};
+    return name;
+}
+
 // Read at most 64 KiB of compressed input and 512 bytes of output. In particular,
 // a gzip stream is not evidence of a tar archive, irrespective of its extension.
 inline bool thispcGzipHasTarHeader(const QString &path)

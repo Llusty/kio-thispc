@@ -158,21 +158,6 @@ private:
                        "The archive is damaged, encrypted or contains unsupported entries.");
     }
 
-    static QString safeEntryName(const QString &raw, bool directory)
-    {
-        QString name = raw;
-        if (name.startsWith(QLatin1Char('/')) || name.contains(QLatin1Char('\\'))
-            || name.contains(QLatin1Char(':'))) return {};
-        for (const QChar c : name) if (c.category() == QChar::Other_Control) return {};
-        while (name.startsWith(QStringLiteral("./"))) name.remove(0, 2);
-        if (directory && name.endsWith(QLatin1Char('/'))) name.chop(1);
-        const auto parts = name.split(QLatin1Char('/'));
-        if (name.size() > 4096 || parts.size() > 128) return {};
-        for (const auto &part : parts)
-            if (part.isEmpty() || part == QLatin1String("..") || part == QLatin1String(".")) return {};
-        return name;
-    }
-
     QString inspect(const QString &snapshot, QString &suffix, QMap<QString, ThisPcArchiveEntry> &entries)
     {
         auto *reader = archive_read_new();
@@ -209,7 +194,7 @@ private:
             if (raw.toUtf8() != encoded) return invalidArchive();
             // Tar made with "tar ... ." has a harmless root directory record.
             if (directory && (raw == QLatin1String(".") || raw == QLatin1String("./"))) continue;
-            const QString name = safeEntryName(raw, directory);
+            const QString name = thispcSafeArchiveEntryName(raw, directory);
             if (name.isEmpty() || explicitEntries.contains(name)) return invalidArchive();
             explicitEntries.insert(name);
             if (entries.contains(name) && (!directory || !entries[name].directory)) return invalidArchive();
@@ -401,7 +386,8 @@ private:
         if (name.endsWith(QStringLiteral(".tar.gz"), Qt::CaseInsensitive)) name.chop(7);
         else if (name.endsWith(QStringLiteral(".tgz"), Qt::CaseInsensitive)) name.chop(4);
         else name = QFileInfo(name).completeBaseName();
-        if (safeEntryName(name, false).isEmpty() || name.startsWith(QLatin1Char('.'))) name = QStringLiteral("archive");
+        if (thispcSafeArchiveEntryName(name, false).isEmpty() || name.startsWith(QLatin1Char('.')))
+            name = QStringLiteral("archive");
         const bool singleRoot = roots.size() == 1;
         if (singleRoot) name = *roots.cbegin();
         const QString published = QDir(destination).filePath(name);

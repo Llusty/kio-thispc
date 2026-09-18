@@ -15,8 +15,8 @@ The goal is not to replace KDE with Windows UI. The goal is a familiar Explorer-
 - Undo/Redo;
 - rich transfer UI, native local transfer engine, previews, search, device/network integration, etc.
 
-## Last confirmed stable version
-**0.24.0** is the current stable user-confirmed release on `main`, committed and tagged as `v0.24.0`.
+## Current release candidate — 0.26.0
+**0.26.0 — Preview Pane** has passed automated regression and manual KDE/CachyOS acceptance. The working tree is being prepared for release; commit and tag are still pending.
 
 User-confirmed working behavior includes:
 - navigation and address/breadcrumb controls;
@@ -117,7 +117,7 @@ thispc-view
 For Codex, prefer working directly in a Git checkout and running `./scripts/build.sh` after edits instead of repeatedly creating ZIPs.
 
 
-## Current state — 0.24.0
+## Current state — 0.26.0
 
 0.18.0 conflict handling is user-confirmed. 0.19.x adds persistent session restore and the stable full-name/IconMode layout. 0.20.0 adds persistent Quick Access / Favorites and Recent locations.
 
@@ -133,6 +133,8 @@ The 0.23.0 release baseline passed **842/842 assertions** with full KDE/CachyOS 
 
 0.24.0 completes Sidebar & Split View UX. Both panes are equal peers, shared controls route to the active pane, sidebar Drag & Drop uses the existing FileActions path, the sidebar is scrollable and resizable with persisted width, and long labels use ellipsis plus full-name tooltips. Search state, filters, results, jobs and `thispc:/` presentation are independent and complete in both panes.
 
-The complete automated suite now passes **1022/1022 assertions**. Full Stage 1–4 manual KDE/CachyOS acceptance passed.
+The 0.24.0 automated regression passed **1022/1022 assertions**. Full Stage 1–4 manual KDE/CachyOS acceptance passed.
 
-The next roadmap milestone is **0.25.0 — Archives + richer New menu**.
+The 0.26.0 full automated regression passes all **20 suites**, including **106 Preview Pane assertions** and **99 Split Layout assertions**. Full manual KDE/CachyOS acceptance has been confirmed by the user.
+
+The next roadmap milestone is **0.27.0 — Quick Look on Space**.

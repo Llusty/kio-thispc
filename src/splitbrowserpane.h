@@ -47,6 +47,7 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QSettings>
+#include <QScrollBar>
 #include <QShortcut>
 #include <QSignalBlocker>
 #include <QSize>
@@ -56,6 +57,7 @@
 #include <QString>
 #include <QStringList>
 #include <QToolButton>
+#include <QTimer>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 #include <QUrl>
@@ -175,16 +177,51 @@ public:
             navigateTo(kThisPcUrl, true);
         });
 
-        m_breadcrumbButton =
-            new ElidedPathButton(m_breadcrumbFrame);
-        m_breadcrumbButton->setObjectName(
-            QStringLiteral("splitBreadcrumbButton"));
+        // Match the primary pane: full-width folder labels in a clipped,
+        // horizontally scrollable row. Scroll arrows appear only on overflow.
+        m_breadcrumbPrevious = new QToolButton(m_breadcrumbFrame);
+        m_breadcrumbPrevious->setArrowType(Qt::LeftArrow);
+        m_breadcrumbPrevious->setAutoRaise(true);
+        m_breadcrumbPrevious->setToolTip(trLocal("Przewiń ścieżkę w lewo", "Scroll path left"));
+        breadcrumbLayout->addWidget(m_breadcrumbPrevious);
+
+        m_breadcrumbScroll = new PathScrollArea(m_breadcrumbFrame);
+        m_breadcrumbScroll->setWidgetResizable(false);
+        m_breadcrumbButton = new SegmentedPathButton(m_breadcrumbScroll);
+        m_breadcrumbButton->setObjectName(QStringLiteral("splitBreadcrumbButton"));
         m_breadcrumbButton->setAutoRaise(true);
-        m_breadcrumbButton->setToolButtonStyle(
-            Qt::ToolButtonTextBesideIcon);
-        breadcrumbLayout->addWidget(
-            m_breadcrumbButton,
-            1);
+        m_breadcrumbButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        m_breadcrumbScroll->setWidget(m_breadcrumbButton);
+        breadcrumbLayout->addWidget(m_breadcrumbScroll, 1);
+
+        m_breadcrumbNext = new QToolButton(m_breadcrumbFrame);
+        m_breadcrumbNext->setArrowType(Qt::RightArrow);
+        m_breadcrumbNext->setAutoRaise(true);
+        m_breadcrumbNext->setToolTip(trLocal("Przewiń ścieżkę w prawo", "Scroll path right"));
+        breadcrumbLayout->addWidget(m_breadcrumbNext);
+
+        auto *pathBar = m_breadcrumbScroll->horizontalScrollBar();
+        connect(m_breadcrumbPrevious, &QToolButton::clicked, this, [this, pathBar] {
+            pathBar->setValue(pathBar->value()
+                              - qMax(1, m_breadcrumbScroll->viewport()->width() / 2));
+        });
+        connect(m_breadcrumbNext, &QToolButton::clicked, this, [this, pathBar] {
+            pathBar->setValue(pathBar->value()
+                              + qMax(1, m_breadcrumbScroll->viewport()->width() / 2));
+        });
+        connect(pathBar, &QScrollBar::rangeChanged, this,
+                [this, pathBar](int, int maximum) {
+            m_breadcrumbPrevious->setVisible(maximum > 0);
+            m_breadcrumbNext->setVisible(maximum > 0);
+            pathBar->setValue(maximum);
+        });
+        connect(pathBar, &QScrollBar::valueChanged, this,
+                [this, pathBar](int value) {
+            m_breadcrumbPrevious->setEnabled(value > 0);
+            m_breadcrumbNext->setEnabled(value < pathBar->maximum());
+        });
+        m_breadcrumbPrevious->hide();
+        m_breadcrumbNext->hide();
 
         m_addressEdit =
             new QLineEdit(m_locationStack);
@@ -544,6 +581,18 @@ public:
                     Qt::ShortcutFocusReason);
                 m_addressEdit->selectAll();
             });
+
+        m_breadcrumbButton->setNavigateCallback([this](const QUrl &url) {
+            Q_EMIT activated();
+            if (sameLocation(url, m_currentUrl)) {
+                m_addressEdit->setText(urlForDisplay(m_currentUrl));
+                m_locationStack->setCurrentWidget(m_addressEdit);
+                m_addressEdit->setFocus(Qt::ShortcutFocusReason);
+                m_addressEdit->selectAll();
+            } else {
+                navigateTo(url, true);
+            }
+        });
 
         connect(
             m_addressEdit,
@@ -1010,6 +1059,56 @@ private:
             QStringLiteral("folder"));
     }
 
+    // Use the same root selection as the primary breadcrumb: a matching drive,
+    // otherwise the home directory, otherwise the filesystem root.
+    QVector<SegmentedPathButton::Segment> localPathSegments(const QUrl &url) const
+    {
+        QVector<SegmentedPathButton::Segment> segments;
+        if (!url.isLocalFile()) return segments;
+
+        const QString path = QDir::cleanPath(url.toLocalFile());
+        QString baseName;
+        QUrl baseUrl;
+        for (const DriveInfo &drive : m_drives) {
+            if (!drive.targetUrl.isLocalFile()) continue;
+            const QString drivePath = QDir::cleanPath(drive.targetUrl.toLocalFile());
+            if (path == drivePath || path.startsWith(drivePath + QDir::separator())) {
+                baseName = drive.name;
+                baseUrl = drive.targetUrl;
+                break;
+            }
+        }
+
+        const QString homePath = QDir::cleanPath(QDir::homePath());
+        if (baseUrl.isEmpty()
+            && (path == homePath || path.startsWith(homePath + QDir::separator()))) {
+            baseName = trLocal("Katalog domowy", "Home");
+            baseUrl = QUrl::fromLocalFile(homePath);
+        }
+        if (baseUrl.isEmpty()) {
+            baseName = QStringLiteral("/");
+            baseUrl = QUrl::fromLocalFile(QStringLiteral("/"));
+        }
+
+        for (const DriveInfo &drive : m_drives) {
+            if (sameLocation(drive.targetUrl, baseUrl)) {
+                segments.append({trLocal("Ten komputer", "This PC"), kThisPcUrl});
+                break;
+            }
+        }
+        segments.append({baseName, baseUrl});
+
+        const QString relative = QDir(baseUrl.toLocalFile()).relativeFilePath(path);
+        if (!relative.isEmpty() && relative != QStringLiteral(".")) {
+            QString cumulative = baseUrl.toLocalFile();
+            for (const QString &part : relative.split(QLatin1Char('/'), Qt::SkipEmptyParts)) {
+                cumulative = QDir(cumulative).filePath(part);
+                segments.append({part, QUrl::fromLocalFile(cumulative)});
+            }
+        }
+        return segments;
+    }
+
     void updateLocationPresentation()
     {
         if (!m_addressEdit->hasFocus()) m_addressEdit->setText(urlForDisplay(m_currentUrl));
@@ -1023,6 +1122,34 @@ private:
 
         m_breadcrumbButton->setIcon(
             locationIcon(m_currentUrl));
+
+        QVector<SegmentedPathButton::Segment> segments;
+        if (m_currentUrl.isLocalFile()) {
+            segments = localPathSegments(m_currentUrl);
+        } else if (isAdminUrl(m_currentUrl)) {
+            QUrl cumulative = m_currentUrl;
+            cumulative.setPath(QStringLiteral("/"));
+            segments.append({trLocal("Administrator", "Administrator"), cumulative});
+            QString path;
+            for (const QString &part : m_currentUrl.path().split(QLatin1Char('/'),
+                                                                 Qt::SkipEmptyParts)) {
+                path += QLatin1Char('/') + part;
+                cumulative.setPath(path);
+                segments.append({part, cumulative});
+            }
+        }
+        if (m_currentUrl.isLocalFile()) {
+            QStringList labels;
+            for (const auto &segment : segments) labels.append(segment.text);
+            m_breadcrumbButton->setText(labels.join(QStringLiteral("  ›  ")));
+        }
+        m_breadcrumbButton->setSegments(std::move(segments));
+        // A new path can have exactly the previous width: rangeChanged would
+        // not fire in that case, so explicitly reveal the current folder.
+        QTimer::singleShot(0, m_breadcrumbScroll, [this] {
+            auto *bar = m_breadcrumbScroll->horizontalScrollBar();
+            bar->setValue(bar->maximum());
+        });
 
         m_title->setText(
             friendlyTitle(
@@ -1588,7 +1715,10 @@ private:
     QStackedWidget *m_locationStack = nullptr;
     QFrame *m_breadcrumbFrame = nullptr;
     QLabel *m_breadcrumbIcon = nullptr;
-    QToolButton *m_breadcrumbButton = nullptr;
+    QToolButton *m_breadcrumbPrevious = nullptr;
+    PathScrollArea *m_breadcrumbScroll = nullptr;
+    QToolButton *m_breadcrumbNext = nullptr;
+    SegmentedPathButton *m_breadcrumbButton = nullptr;
     QLineEdit *m_addressEdit = nullptr;
 
     QLabel *m_title = nullptr;

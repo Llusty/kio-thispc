@@ -73,6 +73,7 @@ def expose(text):
 source = expose(source)
 source = source.replace('int main(int argc, char **argv)', 'int applicationMain(int argc, char **argv)')
 prelude = '''#include <QtTest>
+#include <QPdfWriter>
 #include <KIO/RenameDialog>
 #include "localfilecopyjob.h"
 #include "localfilemovejob.h"
@@ -135,15 +136,17 @@ with tempfile.TemporaryDirectory(prefix='thispc-pane-tests-') as tmp, tempfile.T
 project(thispc-regressions LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_AUTOMOC ON)
-find_package(Qt6 REQUIRED COMPONENTS Core Concurrent Gui Widgets PrintSupport Test)
+find_package(Qt6 REQUIRED COMPONENTS Core Concurrent Gui Widgets PrintSupport Pdf Test)
 find_package(KF6KIO REQUIRED)
 find_package(LibArchive REQUIRED)
 find_package(ZLIB REQUIRED)
+find_package(TagLib REQUIRED)
+find_package(exiv2 REQUIRED CONFIG)
 file(GLOB TEST_HEADERS CONFIGURE_DEPENDS src/*.h)
 add_executable(pane-test src/thispcview.cpp ${TEST_HEADERS})
 target_compile_options(pane-test PRIVATE -g0 -O0 -Wno-unused-function -Wno-unused-variable)
 target_include_directories(pane-test PRIVATE ${LibArchive_INCLUDE_DIRS})
-target_link_libraries(pane-test PRIVATE Qt6::Core Qt6::Concurrent Qt6::Gui Qt6::Widgets Qt6::PrintSupport Qt6::Test KF6::KIOCore KF6::KIOWidgets ${LibArchive_LIBRARIES} ZLIB::ZLIB)
+target_link_libraries(pane-test PRIVATE Qt6::Core Qt6::Concurrent Qt6::Gui Qt6::Widgets Qt6::PrintSupport Qt6::Pdf Qt6::Test KF6::KIOCore KF6::KIOWidgets ${LibArchive_LIBRARIES} ZLIB::ZLIB TagLib::TagLib Exiv2::exiv2lib)
 '''
     (tmp / 'CMakeLists.txt').write_text(cmake)
     subprocess.run(['cmake', '-S', str(tmp), '-B', str(tmp / 'build')], check=True)

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(kio-thispc VERSION 0.25.0 LANGUAGES CXX)
+project(kio-thispc VERSION 0.26.0 LANGUAGES CXX)
 
 set(QT_MIN_VERSION "6.5.0")
 set(KF_MIN_VERSION "6.17.0")
@@ -18,8 +18,10 @@ include(KDECompilerSettings NO_POLICY_SCOPE)
 
 find_package(LibArchive REQUIRED)
 find_package(ZLIB REQUIRED)
+find_package(TagLib REQUIRED)
+find_package(exiv2 REQUIRED CONFIG)
 
-find_package(Qt6 ${QT_MIN_VERSION} CONFIG REQUIRED COMPONENTS Core Concurrent Gui Widgets PrintSupport)
+find_package(Qt6 ${QT_MIN_VERSION} CONFIG REQUIRED COMPONENTS Core Concurrent Gui Widgets PrintSupport Pdf)
 find_package(KF6 ${KF_MIN_VERSION} REQUIRED COMPONENTS KIO Solid)
 
 # ---------------------------------------------------------------------------
@@ -82,16 +84,23 @@ add_executable(thispc-view
     src/splitbrowserpane.h
 )
 
+# Exiv2 reports malformed metadata through C++ exceptions. Keep exception
+# support scoped to the GUI target that reads EXIF in the worker task.
+kde_target_enable_exceptions(thispc-view PRIVATE)
+
 target_include_directories(thispc-view PRIVATE ${LibArchive_INCLUDE_DIRS})
 
 target_link_libraries(thispc-view PRIVATE
     ${LibArchive_LIBRARIES}
     ZLIB::ZLIB
+    TagLib::TagLib
+    Exiv2::exiv2lib
     Qt6::Core
     Qt6::Concurrent
     Qt6::Gui
     Qt6::Widgets
     Qt6::PrintSupport
+    Qt6::Pdf
     KF6::KIOCore
     KF6::KIOWidgets
 )

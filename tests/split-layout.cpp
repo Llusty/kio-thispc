@@ -61,30 +61,30 @@ static void verifyOverflow(ThisPcWindow &window, const QUrl &left, const QUrl &r
 
     auto *button = window.m_splitPane->m_breadcrumbButton;
     verify(button->toolTip() == urlForDisplay(right), "right tooltip retains the complete address");
-    QStyleOptionToolButton option;
-    option.initFrom(button);
-    option.icon = button->icon();
-    option.iconSize = button->iconSize();
-    option.toolButtonStyle = button->toolButtonStyle();
-    const int available = button->style()->subControlRect(
-        QStyle::CC_ToolButton, &option, QStyle::SC_ToolButton, button).width()
-        - 2 * button->style()->pixelMetric(QStyle::PM_ButtonMargin, &option, button)
-        - (option.icon.isNull() ? 0 : option.iconSize.width() + 4);
-    const QString visible = button->fontMetrics().elidedText(
-        button->text(), Qt::ElideMiddle, qMax(0, available), Qt::TextShowMnemonic);
-    verify(visible.contains(QChar(0x2026)) && visible != button->text(), "long right path has a middle ellipsis");
-    QToolButton reference(button->parentWidget());
-    reference.setObjectName(button->objectName());
-    reference.setText(visible);
-    reference.setIcon(button->icon());
-    reference.setIconSize(button->iconSize());
-    reference.setToolButtonStyle(button->toolButtonStyle());
-    reference.setAutoRaise(button->autoRaise());
-    reference.setFont(button->font());
-    reference.setPalette(button->palette());
-    reference.resize(button->size());
-    reference.ensurePolished();
-    verify(rendered(button) == rendered(&reference), "right path paints ellipsis with native button styling");
+    verify(button->segmentCount() >= 3,
+           "long right path exposes individual folder segments");
+
+    const QRect first = button->segmentRect(0);
+    const QRect last = button->segmentRect(button->segmentCount() - 1);
+
+    auto *pathScroll = window.m_splitPane->m_breadcrumbScroll;
+
+    verify(pathScroll && pathScroll->horizontalScrollBar()->maximum() > 0,
+           "long right path scrolls without shortening folder names");
+
+    verify(!first.isEmpty(),
+           "long right path retains complete ancestor segments");
+
+    auto *rightBar = pathScroll->horizontalScrollBar();
+    verify(QTest::qWaitFor([rightBar] {
+        return rightBar->value() == rightBar->maximum();
+    }), "right path scroll settles at the destination");
+
+    const QRect visibleLast(button->mapTo(pathScroll->viewport(), last.topLeft()),
+                            button->mapTo(pathScroll->viewport(), last.bottomRight()));
+    verify(visibleLast.intersects(pathScroll->viewport()->rect())
+           && visibleLast.right() <= pathScroll->viewport()->rect().right(),
+           "right path reveals the destination end inside its scroll viewport");
 }
 
 int main(int argc, char **argv)

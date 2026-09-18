@@ -1,6 +1,28 @@
 # Changelog
+## 0.26.0 — Preview Pane
 
-## 0.25.0 Stage 3 (w przygotowaniu, bez wydania)
+- Dodano panel podglądu z przełącznikiem Alt+P.
+- Podgląd obrazów ze skalowaniem do dostępnego obszaru.
+- Podgląd tekstu, Markdown, JSON i XML.
+- Podgląd pierwszej strony PDF przez QtPdf.
+- Asynchroniczne renderowanie PDF bez blokowania GUI.
+- Naprawiono przezroczyste tło PDF: wynik renderowania jest
+  kompozytowany na nieprzezroczystym białym tle.
+- Dodano metadane audio/wideo przez TagLib.
+- Dodano metadane EXIF przez Exiv2, bez zastępowania obrazu.
+- Dodano bezpieczny podgląd zawartości archiwów ZIP, 7z,
+  tar i tar.gz przez libarchive, bez rozpakowywania.
+- Dodano podsumowania folderów.
+- Poprawiono breadcrumbs prawego panelu Split View.
+- Zachowano ochronę przed nieaktualnymi wynikami zadań
+  asynchronicznych oraz limity przetwarzania.
+- Rozszerzono testy Preview Pane i Split View.
+- Pełna regresja: 20 zestawów PASS.
+- Preview Pane: 106 asercji PASS.
+- Split Layout: 99 asercji PASS.
+- Ręczna akceptacja KDE/CachyOS potwierdzona przez użytkownika.
+
+## 0.25.0 — Archives + richer New menu
 
 - dodano tworzenie ZIP, 7z i tar.gz przez asynchroniczny libarchive job;
 - zachowano „Wyślij do → ZIP”, dodano formaty 7z/tar.gz;

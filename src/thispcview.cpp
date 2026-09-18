@@ -2,7 +2,7 @@
  * thispc-view - a lightweight KDE/Qt file browser with a Windows-like
  * "This PC" home page, backed by KIO.
  *
- * Version 0.25.0
+ * Version 0.26.0
  * SPDX-License-Identifier: MIT
  */
 
@@ -774,14 +774,18 @@ QLabel#adminBannerText {
     font-weight: 600;
 }
 QToolButton#crumbButton {
-    border: none;
+    border: 1px solid transparent;
     border-radius: 4px;
-    padding: 3px 6px;
-    min-height: 22px;
+    /* Reserve room for the entire hover outline inside the breadcrumb row. */
+    padding: 1px 6px;
+    min-height: 18px;
+    margin: 2px 0;
     background: transparent;
 }
-QToolButton#crumbButton:hover {
-    background: palette(alternate-base);
+QToolButton#crumbButton:hover,
+QToolButton#crumbButton:focus {
+    border-color: palette(highlight);
+    background: rgba(93, 126, 155, 115);
 }
 
 QToolBar#fileCommandToolbar {
@@ -848,9 +852,9 @@ QToolButton#splitBreadcrumbButton {
     text-align: left;
     padding: 3px 2px;
 }
+/* Hover highlighting is painted per segment by SegmentedPathButton. */
 QToolButton#splitBreadcrumbButton:hover {
-    background: palette(alternate-base);
-    border-radius: 4px;
+    background: transparent;
 }
 QLineEdit#splitAddressEdit {
     min-height: 25px;
@@ -2612,14 +2616,14 @@ private:
         statusBar()->setSizeGripEnabled(true);
 
         m_versionLabel = new QLabel(
-            QStringLiteral("v0.25.0"),
+            QStringLiteral("v0.26.0"),
             this);
         m_versionLabel->setObjectName(
             QStringLiteral("versionLabel"));
         m_versionLabel->setToolTip(
             trLocal(
-                "Wersja thispc-view 0.25.0",
-                "thispc-view version 0.25.0"));
+                "Wersja thispc-view 0.26.0",
+                "thispc-view version 0.26.0"));
         statusBar()->addPermanentWidget(m_versionLabel);
     }
 
@@ -6809,6 +6813,7 @@ private:
 
             button->setObjectName(
                 QStringLiteral("crumbButton"));
+            button->setCursor(Qt::PointingHandCursor);
             button->setText(text);
             button->setToolTip(urlForDisplay(url));
             button->setIcon(icon);
@@ -7444,7 +7449,7 @@ int main(int argc, char **argv)
     QCoreApplication::setApplicationName(
         QStringLiteral("thispc-view"));
     QCoreApplication::setApplicationVersion(
-        QStringLiteral("0.25.0"));
+        QStringLiteral("0.26.0"));
 
     app.setApplicationDisplayName(
         isPolish()

@@ -67,10 +67,74 @@ Only test on disposable files.
 
 ## Automated regression
 
-- [ ] `python3 tests/run-pane-actions.py --all` exits with code 0
+- [x] `TMPDIR=/tmp python3 tests/run-pane-actions.py --all` exits with code 0
 - [ ] all focused suites pass
 - [ ] `TMPDIR=/tmp python3 tests/run-pane-actions.py --suites split_layout panes search` przechodzi regresję szerokości paneli.
-- [ ] `git diff --check` is clean
+- [x] `git diff --check` is clean
+
+## Last verified automated baseline — 2026-09-18
+
+- [x] `git diff --check` — PASS.
+- [x] `cmake --build build -j2` — PASS.
+- [x] `split_layout` — 3 consecutive runs, 99 assertions each.
+- [x] `TMPDIR=/tmp python3 tests/run-pane-actions.py --all` — PASS, all suites.
+
+The split_layout test verifies that the destination path
+scrolls to its maximum position and exposes the right edge
+of the final path segment.
+
+A segment longer than the viewport is not required to fit
+entirely inside the viewport.
+
+0.26.0 manual KDE/CachyOS acceptance confirmed by the user on 2026-09-18.
+
+## 0.26.0 Stage 4 — metadane audio/wideo i EXIF
+
+- [ ] Audio: wybrać lokalny MP3/FLAC/WAV; panel pokazuje dostępne tagi, czas, bitrate,
+  częstotliwość próbkowania i kanały, ale niczego nie odtwarza.
+- [ ] Wideo: wybrać lokalny MP4/M4V obsługiwany przez TagLib; panel pokazuje bezpiecznie dostępne metadane,
+  a uszkodzony plik daje komunikat błędu bez zawieszenia interfejsu.
+- [ ] EXIF: wybrać lokalny JPEG ze zdjęcia; obraz nadal jest widoczny, a pod nim pojawiają
+  się tylko dostępne pola aparatu, daty, ekspozycji, ISO i ogniskowej.
+- [ ] Szybko zmieniać wybór między dużym plikiem multimedialnym, zdjęciem i tekstem;
+  spóźniony wynik nie zastępuje bieżącego podglądu.
+- [ ] Ukryć panel Alt+P podczas analizy i ponownie go pokazać; brak starego wyniku i awarii.
+- [ ] Sprawdzić plik większy niż 4 GiB (może być rzadki test ręczny); pojawia się limit,
+  bez próby pełnej analizy.
+- [x] Focused: `TMPDIR=/tmp python3 tests/run-pane-actions.py --suites preview`.
+- [x] Pełna regresja: `TMPDIR=/tmp python3 tests/run-pane-actions.py --all`.
+- [x] `git diff --check` — PASS; numer wersji 0.26.0 zaktualizowany, commit/tag/instalacja nadal oczekują.
+
+## 0.26.0 Stage 5 — zawartość archiwów
+
+Diagnostyka Stage 5: **PASS, 101 asercji**. Następnie użytkownik uruchomił
+focused preview oraz pełną regresję w zwykłej sesji KDE (oba exit code 0).
+Po poprawce renderowania PDF: **20 zestawów PASS**, w tym **106 asercji Preview Pane**
+i **99 asercji Split Layout**. Użytkownik potwierdził końcową ręczną akceptację
+0.26.0; szczegółowych przypadków niezweryfikowanych osobno nie odhaczamy.
+
+- [ ] ZIP: lista pokazuje katalogi i pliki w kolejności archiwum, nazwy UTF-8 i rozmiary.
+- [ ] 7z, tar i tar.gz: lista działa dla formatów obsługiwanych przez istniejący backend.
+- [ ] Puste, uszkodzone, zaszyfrowane i niewspierane archiwum: jasny komunikat bez dialogu Ark.
+- [ ] Archiwum z niebezpieczną ścieżką, linkiem lub nadmierną liczbą wpisów jest odrzucane.
+- [ ] Podgląd nie rozpakowuje, nie uruchamia i nie zapisuje żadnej zawartości archiwum.
+- [ ] Szybko zmieniać wybór archiwum/tekst/obraz; spóźniony manifest nie zastępuje wyboru.
+- [ ] Alt+P podczas analizy, ponowne pokazanie i resize: brak starego wyniku i awarii.
+- [ ] Potwierdzić brak regresji PDF, obraz/EXIF, tekst, multimedia, folder summary i Split View.
+- [x] Focused: `TMPDIR=/tmp python3 tests/run-pane-actions.py --suites preview`.
+- [x] Pełna regresja: `TMPDIR=/tmp python3 tests/run-pane-actions.py --all`.
+- [x] `git diff --check` — PASS; numer wersji 0.26.0 zaktualizowany, commit/tag/instalacja nadal oczekują.
+
+## 0.26.0 — ponowna akceptacja PDF i EXIF
+
+- [ ] Otworzyć lokalne PDF-y, które wcześniej miały szare lub częściowo szare strony;
+  puste obszary pierwszej strony są białe, a treść pozostaje kompletna.
+- [ ] Sprawdzić PDF tekstowy, skan oraz dokument z nietypowym rozmiarem/kadrem strony;
+  zgłosić osobno ewentualne braki treści (ograniczenie QtPdf), nie tylko kolor tła.
+- [ ] EXIF: użyć zdjęcia bezpośrednio z aparatu lub telefonu. EXIF to metadane zdjęcia,
+  np. producent/model aparatu, data wykonania, ekspozycja, ISO i ogniskowa. Brak sekcji
+  EXIF przy zwykłym JPEG-u bez takich danych nie jest błędem.
+- [x] Użytkownik potwierdził końcową ręczną akceptację podglądu PDF i EXIF (2026-09-18).
 
 ## 0.25.0 Stage 2 — archiwa
 

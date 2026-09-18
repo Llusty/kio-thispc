@@ -1,4 +1,18 @@
-# kio-thispc 0.25.0
+# kio-thispc 0.26.0
+
+## 0.26.0 — Preview Pane
+
+- Panel podglądu włączany skrótem Alt+P.
+- Obrazy, tekst, Markdown, JSON i XML.
+- Asynchroniczny podgląd pierwszej strony PDF przez QtPdf.
+- Metadane audio/wideo przez TagLib.
+- Metadane zdjęć EXIF przez Exiv2.
+- Bezpieczny podgląd zawartości ZIP, 7z, tar i tar.gz bez rozpakowywania.
+- Podsumowania folderów.
+- Poprawione breadcrumbs w Split View.
+- Zabezpieczenie przed spóźnionymi wynikami podglądu.
+- Pełna regresja: 20 zestawów PASS, Preview Pane 106 asercji PASS.
+- Ręczna akceptacja KDE/CachyOS zakończona pomyślnie.
 
 ## 0.25.0 — Archiwa i rozbudowane menu Nowy
 

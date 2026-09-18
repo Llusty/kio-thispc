@@ -3,7 +3,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-echo "==> kio-thispc 0.25.0"
+echo "==> kio-thispc 0.26.0"
 echo "==> Czysty build"
 rm -rf build
 

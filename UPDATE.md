@@ -1,3 +1,31 @@
+# Aktualizacja do 0.26.0
+
+Wydanie wprowadza Preview Pane z przełącznikiem Alt+P.
+
+## Nowości
+
+- Podgląd obrazów, tekstu, Markdown, JSON i XML.
+- Asynchroniczny podgląd pierwszej strony PDF.
+- Metadane audio/wideo oraz EXIF.
+- Podgląd zawartości ZIP, 7z, tar i tar.gz.
+- Podsumowania folderów.
+- Poprawione breadcrumbs w Split View.
+- Naprawione białe tło renderowanych PDF.
+
+## Weryfikacja
+
+- Kompilacja: PASS.
+- Pełna regresja: 20 zestawów PASS.
+- Preview Pane: 106 asercji PASS.
+- Split Layout: 99 asercji PASS.
+- Ręczna akceptacja KDE/CachyOS: potwierdzona.
+
+Instrukcja instalacji zostanie wykorzystana po przygotowaniu
+i zweryfikowaniu paczki wydania.
+
+---
+
+
 # Aktualizacja do 0.25.0
 
 Poniższe polecenia instalują z nowego katalogu, bez usuwania istniejącego repozytorium:

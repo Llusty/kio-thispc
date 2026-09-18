@@ -97,15 +97,25 @@ New:
 - Split View width fix for long paths;
 - Stage 3 automated regression: 20 suites / 3470 assertions PASS; manual acceptance.
 
-## Planned releases
+### 0.26.0 — Preview Pane ✅ user-confirmed
 
-### 0.26.0 — Preview pane
-- images, PDF, text/Markdown, JSON/XML;
-- audio/video metadata;
-- EXIF;
-- archive contents;
-- folder summary;
-- toggle shortcut such as Alt+P.
+- image preview and proportional scaling;
+- text, Markdown, JSON and XML;
+- asynchronous first-page PDF preview using QtPdf;
+- opaque white PDF background fix;
+- audio/video metadata using TagLib;
+- image EXIF metadata using Exiv2;
+- safe archive manifest preview using libarchive;
+- folder summaries;
+- Alt+P preview toggle;
+- Split View breadcrumb improvements;
+- protection against stale asynchronous results;
+- full automated regression: 20 suites PASS;
+- Preview Pane: 106 assertions PASS;
+- Split Layout: 99 assertions PASS;
+- manual KDE/CachyOS acceptance confirmed.
+
+## Planned releases
 
 ### 0.27.0 — Quick Look on Space
 Large temporary preview without opening the associated app.
