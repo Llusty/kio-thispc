@@ -29,7 +29,7 @@ group.add_argument('--all', action='store_true', help='run every regression suit
 group.add_argument('--suites', nargs='+', choices=[
     'panes', 'tabs', 'properties', 'search', 'actions', 'operations',
     'local_transfer', 'transfer_plan', 'local_move', 'local_tree', 'tree_history',
-    'sidebar_dnd', 'sidebar_layout', 'split_layout', 'templates', 'trash', 'archive', 'archive_jobs', 'archive_menu', 'archive_creation'],
+    'sidebar_dnd', 'sidebar_layout', 'split_layout', 'templates', 'trash', 'archive', 'archive_jobs', 'archive_menu', 'archive_creation', 'preview'],
     help='build once and run only the selected regression suites')
 options = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
@@ -115,6 +115,7 @@ with tempfile.TemporaryDirectory(prefix='thispc-pane-tests-') as tmp, tempfile.T
         (tmp / 'src' / header.name).write_text(expose(file_actions if header.name == 'fileactions.h' else header.read_text()))
     suites = {'trash': 'empty-trash.cpp', 'panes': 'pane-actions.cpp', 'templates': 'template-menu.cpp', 'tabs': 'tab-drag-drop.cpp', 'sidebar_dnd': 'sidebar-drag-drop.cpp', 'sidebar_layout': 'sidebar-layout.cpp', 'properties': 'properties-dialog.cpp', 'search': 'search-controller.cpp', 'actions': 'file-actions.cpp', 'operations': 'operation-manager.cpp', 'local_transfer': 'local-file-copy-job.cpp', 'transfer_plan': 'local-transfer-plan.cpp', 'local_move': 'local-file-move-job.cpp', 'local_tree': 'local-transfer-job.cpp', 'tree_history': 'local-tree-history.cpp', 'archive': 'archive-detection.cpp', 'archive_jobs': 'archive-extraction.cpp', 'archive_menu': 'archive-menu.cpp', 'archive_creation': 'archive-creation.cpp'}
     suites['split_layout'] = 'split-layout.cpp'
+    suites['preview'] = 'preview-pane.cpp'
     selected = options.suites or (list(suites) if options.all else ['trash' if options.trash else 'templates' if options.templates else 'sidebar_layout' if options.sidebar_layout else 'sidebar_dnd' if options.sidebar_dnd else 'local_move' if options.local_move else 'transfer_plan' if options.transfer_plan else 'local_transfer' if options.local_transfer else 'operations' if options.operations else 'actions' if options.actions else 'tabs' if options.tabs else 'properties' if options.properties else 'search' if options.search else 'panes'])
     combined = prelude + source
     for suite in selected:
@@ -134,7 +135,7 @@ with tempfile.TemporaryDirectory(prefix='thispc-pane-tests-') as tmp, tempfile.T
 project(thispc-regressions LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_AUTOMOC ON)
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets PrintSupport Test)
+find_package(Qt6 REQUIRED COMPONENTS Core Concurrent Gui Widgets PrintSupport Test)
 find_package(KF6KIO REQUIRED)
 find_package(LibArchive REQUIRED)
 find_package(ZLIB REQUIRED)
@@ -142,7 +143,7 @@ file(GLOB TEST_HEADERS CONFIGURE_DEPENDS src/*.h)
 add_executable(pane-test src/thispcview.cpp ${TEST_HEADERS})
 target_compile_options(pane-test PRIVATE -g0 -O0 -Wno-unused-function -Wno-unused-variable)
 target_include_directories(pane-test PRIVATE ${LibArchive_INCLUDE_DIRS})
-target_link_libraries(pane-test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::PrintSupport Qt6::Test KF6::KIOCore KF6::KIOWidgets ${LibArchive_LIBRARIES} ZLIB::ZLIB)
+target_link_libraries(pane-test PRIVATE Qt6::Core Qt6::Concurrent Qt6::Gui Qt6::Widgets Qt6::PrintSupport Qt6::Test KF6::KIOCore KF6::KIOWidgets ${LibArchive_LIBRARIES} ZLIB::ZLIB)
 '''
     (tmp / 'CMakeLists.txt').write_text(cmake)
     subprocess.run(['cmake', '-S', str(tmp), '-B', str(tmp / 'build')], check=True)

@@ -123,6 +123,7 @@
 #include "templatemenu.h"
 #include "operationmanager.h"
 #include "propertiesdialog.h"
+#include "previewpane.h"
 #include "undocontroller.h"
 #include "sidebar.h"
 #include "sessionmanager.h"
@@ -1117,6 +1118,7 @@ class ThisPcWindow : public QMainWindow
         updateSidebarCurrent();
         updateSearchControls();
         updateFileActionStates();
+        updatePreview();
     }
 
     void navigatePane(PaneId pane, const QUrl &url)
@@ -2068,6 +2070,17 @@ private:
             this,
             &ThisPcWindow::setThumbnailsEnabled);
 
+        m_previewAction = viewMenu->addAction(
+            themedIcon(QStringLiteral("document-preview"), QStringLiteral("view-preview")),
+            trLocal("Panel podglądu", "Preview pane"));
+        m_previewAction->setCheckable(true);
+        m_previewAction->setShortcut(QKeySequence(Qt::ALT | Qt::Key_P));
+        addAction(m_previewAction);
+        connect(m_previewAction, &QAction::toggled, this, [this](bool enabled) {
+            if (m_previewPane) m_previewPane->setVisible(enabled);
+            if (enabled) updatePreview();
+        });
+
         viewMenu->addSeparator();
 
         m_restoreSessionAction = viewMenu->addAction(
@@ -2515,7 +2528,7 @@ private:
             });
 
         connect(m_splitPane, &SplitBrowserPane::selectionChanged,
-                this, &ThisPcWindow::updateFileActionStates);
+                this, [this] { updateFileActionStates(); updatePreview(); });
         connect(m_splitPane, &SplitBrowserPane::activated,
                 this, [this] { setActivePane(PaneId::Split); });
         connect(m_splitPane, &SplitBrowserPane::contextMenuRequested,
@@ -2551,7 +2564,19 @@ private:
             });
 
         rightLayout->addWidget(m_tabStrip);
-        rightLayout->addWidget(m_contentSplitter, 1);
+        m_previewSplitter = new QSplitter(Qt::Horizontal, rightPane);
+        m_previewSplitter->setObjectName(QStringLiteral("previewSplitter"));
+        m_previewSplitter->setChildrenCollapsible(false);
+        m_previewSplitter->setHandleWidth(1);
+        m_contentSplitter->setParent(m_previewSplitter);
+        m_previewSplitter->addWidget(m_contentSplitter);
+        m_previewPane = new PreviewPane(m_previewSplitter);
+        m_previewSplitter->addWidget(m_previewPane);
+        m_previewPane->hide();
+        m_previewSplitter->setStretchFactor(0, 1);
+        m_previewSplitter->setStretchFactor(1, 0);
+        m_previewSplitter->setSizes({850, 320});
+        rightLayout->addWidget(m_previewSplitter, 1);
         m_sidebarSplitter->addWidget(rightPane);
         m_sidebarSplitter->setStretchFactor(0, 0);
         m_sidebarSplitter->setStretchFactor(1, 1);
@@ -2940,7 +2965,7 @@ private:
             m_directoryList,
             &QListWidget::itemSelectionChanged,
             this,
-            &ThisPcWindow::updateFileActionStates);
+            [this] { updateFileActionStates(); updatePreview(); });
 
         connect(
             m_directoryList,
@@ -2968,7 +2993,7 @@ private:
             m_directoryDetails,
             &QTreeWidget::itemSelectionChanged,
             this,
-            &ThisPcWindow::updateFileActionStates);
+            [this] { updateFileActionStates(); updatePreview(); });
 
         connect(
             m_directoryDetails,
@@ -6163,6 +6188,18 @@ private:
         return urls;
     }
 
+    void updatePreview()
+    {
+        if (!m_previewPane || !m_previewPane->isVisible()) return;
+        const PaneContext context = paneContext();
+        if (context.items.size() != 1) {
+            m_previewPane->preview(QUrl(), false);
+            return;
+        }
+        const PaneItem &item = context.items.first();
+        m_previewPane->preview(item.url, item.isDir);
+    }
+
     bool canModifyCurrentDirectory() const
     {
         const auto context = paneContext();
@@ -7308,6 +7345,7 @@ private:
     QAction *m_swapPanesAction = nullptr;
     QAction *m_showHiddenAction = nullptr;
     QAction *m_thumbnailsAction = nullptr;
+    QAction *m_previewAction = nullptr;
     QAction *m_fullNamesAction = nullptr;
     QAction *m_restoreSessionAction = nullptr;
     int m_directoryViewMode = 0;
@@ -7348,6 +7386,8 @@ private:
     bool m_tabRestoreInProgress = false;
 
     QSplitter *m_contentSplitter = nullptr;
+    QSplitter *m_previewSplitter = nullptr;
+    PreviewPane *m_previewPane = nullptr;
     QByteArray m_splitterState;
     QWidget *m_primaryPane = nullptr;
     SplitBrowserPane *m_splitPane = nullptr;

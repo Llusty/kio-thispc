@@ -19,7 +19,7 @@ include(KDECompilerSettings NO_POLICY_SCOPE)
 find_package(LibArchive REQUIRED)
 find_package(ZLIB REQUIRED)
 
-find_package(Qt6 ${QT_MIN_VERSION} CONFIG REQUIRED COMPONENTS Core Gui Widgets PrintSupport)
+find_package(Qt6 ${QT_MIN_VERSION} CONFIG REQUIRED COMPONENTS Core Concurrent Gui Widgets PrintSupport)
 find_package(KF6 ${KF_MIN_VERSION} REQUIRED COMPONENTS KIO Solid)
 
 # ---------------------------------------------------------------------------
@@ -74,6 +74,7 @@ add_executable(thispc-view
     src/localtreehistory.h
     src/operationmanager.h
     src/propertiesdialog.h
+    src/previewpane.h
     src/sidebar.h
     src/searchcontroller.h
     src/sessionmanager.h
@@ -87,6 +88,7 @@ target_link_libraries(thispc-view PRIVATE
     ${LibArchive_LIBRARIES}
     ZLIB::ZLIB
     Qt6::Core
+    Qt6::Concurrent
     Qt6::Gui
     Qt6::Widgets
     Qt6::PrintSupport
