@@ -160,9 +160,8 @@ Funkcje z 0.15.4 — kompaktowy popup operacji, dynamiczna wysokość, anulowani
 
 ```bash
 cd ~/Pobrane
-mkdir -p kio-thispc-0.25.0
-unzip kio-thispc-0.25.0.zip -d kio-thispc-0.25.0
-cd kio-thispc-0.25.0
+unzip kio-thispc-0.26.0.zip
+cd kio-thispc-0.26.0
 chmod +x install.sh
 ./install.sh
 ```

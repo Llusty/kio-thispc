@@ -2,6 +2,16 @@
 
 Wydanie wprowadza Preview Pane z przełącznikiem Alt+P.
 
+Poniższe polecenia instalują wydanie z nowego katalogu, bez usuwania istniejącego repozytorium:
+
+```bash
+cd ~/Pobrane
+unzip kio-thispc-0.26.0.zip
+cd kio-thispc-0.26.0
+chmod +x install.sh
+./install.sh
+```
+
 ## Nowości
 
 - Podgląd obrazów, tekstu, Markdown, JSON i XML.
@@ -19,9 +29,6 @@ Wydanie wprowadza Preview Pane z przełącznikiem Alt+P.
 - Preview Pane: 106 asercji PASS.
 - Split Layout: 99 asercji PASS.
 - Ręczna akceptacja KDE/CachyOS: potwierdzona.
-
-Instrukcja instalacji zostanie wykorzystana po przygotowaniu
-i zweryfikowaniu paczki wydania.
 
 ---
 

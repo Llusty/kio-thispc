@@ -16,7 +16,7 @@ The goal is not to replace KDE with Windows UI. The goal is a familiar Explorer-
 - rich transfer UI, native local transfer engine, previews, search, device/network integration, etc.
 
 ## Current release candidate — 0.26.0
-**0.26.0 — Preview Pane** has passed automated regression and manual KDE/CachyOS acceptance. The working tree is being prepared for release; commit and tag are still pending.
+**0.26.0 — Preview Pane** has passed automated regression and manual KDE/CachyOS acceptance. The release implementation is committed; the release tag is still pending.
 
 User-confirmed working behavior includes:
 - navigation and address/breadcrumb controls;
