@@ -2,7 +2,7 @@
  * thispc-view - a lightweight KDE/Qt file browser with a Windows-like
  * "This PC" home page, backed by KIO.
  *
- * Version 0.26.0
+ * Version 0.27.0
  * SPDX-License-Identifier: MIT
  */
 
@@ -106,6 +106,7 @@
 #include <QTabBar>
 #include <QTabWidget>
 #include <QTextDocument>
+#include <QTextEdit>
 #include <QTextLayout>
 #include <QTimer>
 #include <QToolBar>
@@ -124,6 +125,7 @@
 #include "operationmanager.h"
 #include "propertiesdialog.h"
 #include "previewpane.h"
+#include "quicklook.h"
 #include "undocontroller.h"
 #include "sidebar.h"
 #include "sessionmanager.h"
@@ -1123,7 +1125,84 @@ class ThisPcWindow : public QMainWindow
         updateSearchControls();
         updateFileActionStates();
         updatePreview();
+        updateQuickLook();
     }
+
+    bool quickLookFocusIsEligible() const
+    {
+        if (QApplication::activeModalWidget() || QApplication::activePopupWidget()) return false;
+        QWidget *focus = QApplication::focusWidget();
+        const PaneContext context = paneContext();
+        return focus && context.view
+            && (focus == context.view || context.view->isAncestorOf(focus))
+            && !qobject_cast<QLineEdit *>(focus)
+            && !qobject_cast<QPlainTextEdit *>(focus)
+            && !qobject_cast<QTextEdit *>(focus);
+    }
+
+    void setQuickLookVisible(bool visible)
+    {
+        if (!m_quickLook) return;
+        if (!visible) {
+            m_quickLook->hide();
+            return;
+        }
+        const PaneContext context = paneContext();
+        if (context.items.size() != 1) return;
+        positionQuickLook();
+        m_quickLook->show();
+        m_quickLook->raise();
+        updateQuickLook();
+    }
+
+    void updateQuickLook()
+    {
+        if (!m_quickLook || !m_quickLook->isVisible()) return;
+        const PaneContext context = paneContext();
+        if (context.items.size() != 1) {
+            m_quickLook->previewPane()->preview(QUrl(), false);
+            return;
+        }
+        const PaneItem &item = context.items.first();
+        m_quickLook->previewPane()->preview(item.url, item.isDir);
+    }
+
+    void positionQuickLook()
+    {
+        if (!m_quickLook || !centralWidget()) return;
+        const QRect area = centralWidget()->rect().adjusted(36, 36, -36, -36);
+        const int width = qMin(1100, qMax(420, area.width() * 4 / 5));
+        const int height = qMin(760, qMax(300, area.height() * 4 / 5));
+        m_quickLook->setGeometry(area.center().x() - width / 2,
+                                 area.center().y() - height / 2, width, height);
+    }
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override
+    {
+        if (event->type() == QEvent::KeyPress && isActiveWindow()) {
+            auto *key = static_cast<QKeyEvent *>(event);
+            if (m_quickLook && m_quickLook->isVisible()
+                && key->key() == Qt::Key_Escape && key->modifiers() == Qt::NoModifier) {
+                setQuickLookVisible(false);
+                return true;
+            }
+            if (key->key() == Qt::Key_Space && key->modifiers() == Qt::NoModifier
+                && !key->isAutoRepeat() && quickLookFocusIsEligible()) {
+                setQuickLookVisible(!m_quickLook->isVisible());
+                return true;
+            }
+        }
+        return QMainWindow::eventFilter(watched, event);
+    }
+
+    void resizeEvent(QResizeEvent *event) override
+    {
+        QMainWindow::resizeEvent(event);
+        positionQuickLook();
+    }
+
+private:
 
     void navigatePane(PaneId pane, const QUrl &url)
     {
@@ -2257,6 +2336,11 @@ private:
         centralLayout->setSpacing(0);
         setCentralWidget(central);
 
+        m_quickLook = new QuickLookOverlay(central);
+        connect(m_quickLook->closeButton(), &QToolButton::clicked,
+                this, [this] { setQuickLookVisible(false); });
+        qApp->installEventFilter(this);
+
         m_sidebarSplitter = new QSplitter(Qt::Horizontal, central);
         m_sidebarSplitter->setObjectName(QStringLiteral("sidebarSplitter"));
         m_sidebarSplitter->setChildrenCollapsible(false);
@@ -2532,7 +2616,7 @@ private:
             });
 
         connect(m_splitPane, &SplitBrowserPane::selectionChanged,
-                this, [this] { updateFileActionStates(); updatePreview(); });
+                this, [this] { updateFileActionStates(); updatePreview(); updateQuickLook(); });
         connect(m_splitPane, &SplitBrowserPane::activated,
                 this, [this] { setActivePane(PaneId::Split); });
         connect(m_splitPane, &SplitBrowserPane::contextMenuRequested,
@@ -2616,14 +2700,14 @@ private:
         statusBar()->setSizeGripEnabled(true);
 
         m_versionLabel = new QLabel(
-            QStringLiteral("v0.26.0"),
+            QStringLiteral("v0.27.0"),
             this);
         m_versionLabel->setObjectName(
             QStringLiteral("versionLabel"));
         m_versionLabel->setToolTip(
             trLocal(
-                "Wersja thispc-view 0.26.0",
-                "thispc-view version 0.26.0"));
+                "Wersja thispc-view 0.27.0",
+                "thispc-view version 0.27.0"));
         statusBar()->addPermanentWidget(m_versionLabel);
     }
 
@@ -2969,7 +3053,7 @@ private:
             m_directoryList,
             &QListWidget::itemSelectionChanged,
             this,
-            [this] { updateFileActionStates(); updatePreview(); });
+            [this] { updateFileActionStates(); updatePreview(); updateQuickLook(); });
 
         connect(
             m_directoryList,
@@ -2997,7 +3081,7 @@ private:
             m_directoryDetails,
             &QTreeWidget::itemSelectionChanged,
             this,
-            [this] { updateFileActionStates(); updatePreview(); });
+            [this] { updateFileActionStates(); updatePreview(); updateQuickLook(); });
 
         connect(
             m_directoryDetails,
@@ -7393,6 +7477,7 @@ private:
     QSplitter *m_contentSplitter = nullptr;
     QSplitter *m_previewSplitter = nullptr;
     PreviewPane *m_previewPane = nullptr;
+    QuickLookOverlay *m_quickLook = nullptr;
     QByteArray m_splitterState;
     QWidget *m_primaryPane = nullptr;
     SplitBrowserPane *m_splitPane = nullptr;
@@ -7449,7 +7534,7 @@ int main(int argc, char **argv)
     QCoreApplication::setApplicationName(
         QStringLiteral("thispc-view"));
     QCoreApplication::setApplicationVersion(
-        QStringLiteral("0.26.0"));
+        QStringLiteral("0.27.0"));
 
     app.setApplicationDisplayName(
         isPolish()

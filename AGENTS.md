@@ -9,11 +9,11 @@ Develop `thispc-view`, a lightweight native Qt/KDE file manager inspired by Wind
 - `TASK_0.24_SIDEBAR_SPLIT_UX.md`, `TASK_0.21_REFACTOR.md` and `TASK_0.17_DRAG_DROP.md` remain regression/historical references.
 
 - Work from the local `main` checkout.
-- The 0.26.0 Preview Pane implementation has passed automated regression and manual KDE/CachyOS acceptance.
-- Version 0.26.0 is committed and being prepared for release; do not claim it is tagged until the release tag is created.
-- The previously documented tagged baseline is v0.24.0.
+- The 0.27.0 Quick Look implementation has passed automated regression and all 9 manual KDE/CachyOS acceptance cases.
+- Version 0.27.0 is being prepared for release; do not claim it is committed or tagged until those steps are explicitly performed.
+- The tagged baseline is v0.26.0 at commit `5d62cf8027abf694148dd7531f14f31820fdb46a`.
 - Do not start new implementation from the failed 0.17.0.4 code.
-- The next planned milestone is 0.27.0 — Quick Look on Space.
+- The next planned milestone after this release is 0.28.0 — Batch rename.
 
 ## User environment
 Target the user's actual local environment first:

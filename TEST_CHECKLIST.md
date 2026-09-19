@@ -142,3 +142,14 @@ i **99 asercji Split Layout**. Użytkownik potwierdził końcową ręczną akcep
 - [ ] Focused: TMPDIR=/tmp python3 tests/run-pane-actions.py --suites archive archive_jobs archive_menu.
 - [ ] Pełna regresja: TMPDIR=/tmp python3 tests/run-pane-actions.py --all.
 - [ ] git diff --check; bez commita/taga przed manualną akceptacją.
+
+## 0.27.0 — Quick Look on Space
+
+- [x] Wszystkie 9 przypadków z `docs/QUICK_LOOK_STAGE1.md` potwierdzone ręcznie przez użytkownika na KDE/CachyOS (2026-09-19).
+- [x] Space otwiera/zamyka duży podgląd pojedynczego zaznaczenia w lewym i prawym panelu; Esc zamyka.
+- [x] Strzałki zmieniają zaznaczenie pod otwartym Quick Look, a fokus pozostaje w aktywnym widoku plików.
+- [x] Space wpisuje znak w Search, Ctrl+L, zmianie nazwy i dialogach zamiast otwierać Quick Look.
+- [x] Szybka zmiana zaznaczenia, zmiana aktywnego panelu i zamknięcie podczas ładowania nie pokazują starego wyniku.
+- [x] Alt+P Preview Pane działa niezależnie przed, podczas i po Quick Look.
+- [x] Focused: `TMPDIR=/tmp python3 tests/run-pane-actions.py --suites quick_look preview panes split_layout`.
+- [x] Full: `TMPDIR=/tmp python3 tests/run-pane-actions.py --all` — 22 suites / 3598 assertions PASS.

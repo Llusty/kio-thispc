@@ -1,0 +1,107 @@
+// Appended to a temporary, instrumented copy by run-pane-actions.py.
+static int checks = 0;
+static void verify(bool value, const char *description)
+{
+    if (!value) qFatal("FAIL: %s", description);
+    ++checks;
+}
+
+static void addFixtureItem(QListWidget *list, const QUrl &url, const QString &name)
+{
+    auto *item = new QListWidgetItem(name, list);
+    item->setData(Qt::UserRole, url.toString());
+    item->setData(Qt::UserRole + 1, false);
+}
+
+int main(int argc, char **argv)
+{
+    QApplication app(argc, argv);
+    QCoreApplication::setOrganizationName(QStringLiteral("thispc-quick-look-test"));
+    QCoreApplication::setApplicationName(QStringLiteral("quick-look-test"));
+    QTemporaryDir files;
+    verify(files.isValid(), "temporary Quick Look directory");
+    const QString leftPath = files.filePath(QStringLiteral("left"));
+    const QString rightPath = files.filePath(QStringLiteral("right"));
+    verify(QDir().mkpath(leftPath) && QDir().mkpath(rightPath), "pane fixture folders");
+    auto write = [](const QString &path, const QByteArray &contents) {
+        QFile file(path);
+        return file.open(QIODevice::WriteOnly) && file.write(contents) == contents.size();
+    };
+    verify(write(leftPath + QStringLiteral("/left.txt"), "left preview"), "left fixture");
+    verify(write(leftPath + QStringLiteral("/new.txt"), "new preview"), "replacement fixture");
+    verify(write(rightPath + QStringLiteral("/right.txt"), "right preview"), "right fixture");
+
+    ThisPcWindow window(QUrl::fromLocalFile(leftPath));
+    window.resize(1000, 700);
+    window.show();
+    window.activateWindow();
+    QTest::qWait(150);
+    window.m_refreshTimer.stop();
+    if (window.m_directoryJob) { window.m_directoryJob->kill(); window.m_directoryJob = nullptr; }
+
+    window.m_directoryList->clear();
+    addFixtureItem(window.m_directoryList, QUrl::fromLocalFile(leftPath + "/left.txt"), "left.txt");
+    addFixtureItem(window.m_directoryList, QUrl::fromLocalFile(leftPath + "/new.txt"), "new.txt");
+    window.m_directoryList->setCurrentRow(0);
+    window.m_directoryList->setFocus();
+    app.processEvents();
+    QTest::keyClick(window.m_directoryList, Qt::Key_Space);
+    app.processEvents();
+    verify(window.m_quickLook->isVisible(), "Space opens Quick Look from the primary pane");
+    verify(window.m_quickLook->width() > 520, "Quick Look is larger than Preview Pane");
+    verify(window.m_directoryList->hasFocus(), "opening preserves directory focus");
+    verify(QTest::qWaitFor([&] {
+        return window.m_quickLook->previewPane()->m_text->toPlainText() == QStringLiteral("left preview");
+    }, 5000), "primary selection is previewed asynchronously");
+
+    QTest::keyClick(window.m_directoryList, Qt::Key_Right);
+    verify(window.m_directoryList->currentRow() == 1, "arrow navigation remains active behind Quick Look");
+    verify(QTest::qWaitFor([&] {
+        return window.m_quickLook->previewPane()->m_text->toPlainText() == QStringLiteral("new preview");
+    }, 5000), "arrow navigation refreshes an open Quick Look");
+
+    window.setSplitViewEnabled(true);
+    window.m_splitPane->setCurrentUrl(QUrl::fromLocalFile(rightPath), false);
+    QTest::qWait(100);
+    if (window.m_splitPane->m_job) { window.m_splitPane->m_job->kill(); window.m_splitPane->m_job = nullptr; }
+    window.m_splitPane->listView()->clear();
+    addFixtureItem(window.m_splitPane->listView(),
+                   QUrl::fromLocalFile(rightPath + "/right.txt"), "right.txt");
+    window.m_splitPane->listView()->setCurrentRow(0);
+    window.setActivePane(ThisPcWindow::PaneId::Split);
+    window.m_splitPane->listView()->setFocus();
+    app.processEvents();
+    verify(QTest::qWaitFor([&] {
+        return window.m_quickLook->previewPane()->m_text->toPlainText() == QStringLiteral("right preview");
+    }, 5000), "active split pane reroutes an open Quick Look");
+
+    QTest::keyClick(window.m_splitPane->listView(), Qt::Key_Escape);
+    verify(!window.m_quickLook->isVisible(), "Esc closes Quick Look");
+    verify(window.m_splitPane->listView()->hasFocus(), "closing preserves split-pane focus");
+
+    window.m_searchEdit->setFocus();
+    QTest::keyClick(window.m_searchEdit, Qt::Key_Space);
+    verify(!window.m_quickLook->isVisible() && window.m_searchEdit->text() == QStringLiteral(" "),
+           "Space remains text input in Search");
+    window.m_splitPane->m_addressEdit->setFocus();
+    window.m_splitPane->m_addressEdit->clear();
+    QTest::keyClick(window.m_splitPane->m_addressEdit, Qt::Key_Space);
+    verify(!window.m_quickLook->isVisible()
+               && window.m_splitPane->m_addressEdit->text() == QStringLiteral(" "),
+           "Space remains text input in address editing");
+
+    window.m_previewAction->setChecked(true);
+    window.m_splitPane->listView()->setCurrentRow(0);
+    window.setActivePane(ThisPcWindow::PaneId::Split);
+    window.m_splitPane->listView()->setFocus();
+    app.processEvents();
+    window.setQuickLookVisible(true);
+    verify(window.m_quickLook->isVisible() && !window.m_previewPane->isHidden(),
+           "Quick Look coexists with Alt+P Preview Pane");
+    window.m_previewAction->setChecked(false);
+    verify(window.m_quickLook->isVisible(), "Alt+P does not close Quick Look");
+    QTest::keyClick(window.m_splitPane->listView(), Qt::Key_Space);
+    verify(!window.m_quickLook->isVisible(), "Space toggles Quick Look closed");
+
+    qInfo("PASS: %d Quick Look assertions", checks);
+}

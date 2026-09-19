@@ -1,4 +1,17 @@
 # Changelog
+
+## 0.27.0 — Quick Look on Space
+
+- Dodano duży, tymczasowy Quick Look otwierany spacją bez uruchamiania skojarzonej aplikacji.
+- Ponowne naciśnięcie Space lub Esc zamyka podgląd.
+- Quick Look działa wyłącznie z aktywnego widoku plików, nie przechwytuje fokusu i podąża za zaznaczeniem oraz aktywnym panelem Split View.
+- Search, Ctrl+L, zmiana nazwy, popupy i dialogi zachowują normalną obsługę spacji.
+- Współdzielony backend Preview Pane zapewnia te same formaty, limity, komunikaty i ochronę przed spóźnionymi wynikami bez duplikowania parserów.
+- Alt+P Preview Pane pozostaje niezależny od Quick Look.
+- Pełna regresja: 22 zestawy / 3598 asercji PASS.
+- Focused: Quick Look 19, Preview Pane 106, pane routing 269 i Split Layout 99 asercji PASS.
+- Wszystkie 9 ręcznych przypadków KDE/CachyOS potwierdzone przez użytkownika.
+
 ## 0.26.0 — Preview Pane
 
 - Dodano panel podglądu z przełącznikiem Alt+P.

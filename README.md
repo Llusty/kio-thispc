@@ -1,4 +1,13 @@
-# kio-thispc 0.26.0
+# kio-thispc 0.27.0
+
+## 0.27.0 — Quick Look on Space
+
+- Duży, tymczasowy podgląd otwierany spacją w aktywnym widoku plików.
+- Space lub Esc zamyka Quick Look; fokus pozostaje w widoku, więc strzałki nadal zmieniają zaznaczenie.
+- Podgląd podąża za aktywnym panelem Split View i aktualnym pojedynczym zaznaczeniem.
+- Search, Ctrl+L, zmiana nazwy, popupy i dialogi zachowują normalne działanie spacji.
+- Quick Look współdzieli formaty, limity i asynchroniczną ochronę Preview Pane; Alt+P nadal działa niezależnie.
+- Pełna regresja: 22 zestawy / 3598 asercji PASS; wszystkie 9 przypadków ręcznych KDE/CachyOS potwierdzone.
 
 ## 0.26.0 — Preview Pane
 
@@ -160,8 +169,8 @@ Funkcje z 0.15.4 — kompaktowy popup operacji, dynamiczna wysokość, anulowani
 
 ```bash
 cd ~/Pobrane
-unzip kio-thispc-0.26.0.zip
-cd kio-thispc-0.26.0
+unzip kio-thispc-0.27.0.zip
+cd kio-thispc-0.27.0
 chmod +x install.sh
 ./install.sh
 ```

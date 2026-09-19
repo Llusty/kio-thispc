@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(kio-thispc VERSION 0.26.0 LANGUAGES CXX)
+project(kio-thispc VERSION 0.27.0 LANGUAGES CXX)
 
 set(QT_MIN_VERSION "6.5.0")
 set(KF_MIN_VERSION "6.17.0")
@@ -77,6 +77,7 @@ add_executable(thispc-view
     src/operationmanager.h
     src/propertiesdialog.h
     src/previewpane.h
+    src/quicklook.h
     src/sidebar.h
     src/searchcontroller.h
     src/sessionmanager.h

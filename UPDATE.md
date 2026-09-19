@@ -1,3 +1,39 @@
+# Aktualizacja do 0.27.0
+
+Wydanie dodaje duży Quick Look otwierany spacją w aktywnym widoku plików.
+
+Poniższe polecenia instalują wydanie z nowego katalogu, bez usuwania istniejącego repozytorium:
+
+```bash
+cd ~/Pobrane
+unzip kio-thispc-0.27.0.zip
+cd kio-thispc-0.27.0
+chmod +x install.sh
+./install.sh
+```
+
+## Nowości
+
+- Space otwiera i zamyka Quick Look; Esc również zamyka podgląd.
+- Fokus pozostaje w aktywnym widoku plików, więc strzałki na bieżąco zmieniają podglądane zaznaczenie.
+- Obsługa aktywnego panelu Split View.
+- Normalne działanie spacji w Search, Ctrl+L, zmianie nazwy, popupach i dialogach.
+- Wspólny backend Preview Pane z tymi samymi formatami, limitami i ochroną przed spóźnionymi wynikami.
+- Niezależne działanie istniejącego Alt+P Preview Pane.
+
+## Weryfikacja
+
+- Kompilacja: PASS.
+- Pełna regresja: 22 zestawy / 3598 asercji PASS.
+- Quick Look: 19 asercji PASS.
+- Preview Pane: 106 asercji PASS.
+- Pane routing: 269 asercji PASS.
+- Split Layout: 99 asercji PASS.
+- Wszystkie 9 ręcznych przypadków KDE/CachyOS: potwierdzone przez użytkownika.
+
+---
+
+
 # Aktualizacja do 0.26.0
 
 Wydanie wprowadza Preview Pane z przełącznikiem Alt+P.

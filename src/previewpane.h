@@ -179,6 +179,13 @@ public:
         showMessage(trLocal("Brak wybranego pliku", "No file selected"));
     }
 
+    void setQuickLookLayout(bool enabled)
+    {
+        setMinimumWidth(enabled ? 0 : 260);
+        setMaximumWidth(enabled ? QWIDGETSIZE_MAX : 520);
+        m_metadata->setMaximumHeight(enabled ? 220 : 150);
+    }
+
     void preview(const QUrl &url, bool isDirectory)
     {
         const quint64 request = ++m_request;

@@ -115,10 +115,19 @@ New:
 - Split Layout: 99 assertions PASS;
 - manual KDE/CachyOS acceptance confirmed.
 
-## Planned releases
+### 0.27.0 — Quick Look on Space ✅ user-confirmed
 
-### 0.27.0 — Quick Look on Space
-Large temporary preview without opening the associated app.
+- large temporary preview without opening the associated app;
+- Space opens/closes Quick Look only from the active file view; Esc closes it;
+- selection and active Split View pane changes update the preview while file-view focus stays intact;
+- Search, address editing, inline rename, popups and dialogs retain normal Space behavior;
+- shared Preview Pane backend, supported formats, limits and stale-result protection;
+- Alt+P Preview Pane remains independent;
+- full automated regression: **22 suites / 3598 assertions PASS**;
+- focused assertions: Quick Look 19, Preview Pane 106, pane routing 269 and Split Layout 99;
+- all 9 manual KDE/CachyOS acceptance cases confirmed by the user.
+
+## Planned releases
 
 ### 0.28.0 — Batch rename
 - prefix/suffix;
