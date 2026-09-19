@@ -10,7 +10,7 @@ Develop `thispc-view`, a lightweight native Qt/KDE file manager inspired by Wind
 
 - Work from the local `main` checkout.
 - The 0.27.0 Quick Look implementation has passed automated regression and all 9 manual KDE/CachyOS acceptance cases.
-- Version 0.27.0 is being prepared for release; do not claim it is committed or tagged until those steps are explicitly performed.
+- Version 0.27.0 was committed as a690014; tag and distribution archive are pending.
 - The tagged baseline is v0.26.0 at commit `5d62cf8027abf694148dd7531f14f31820fdb46a`.
 - Do not start new implementation from the failed 0.17.0.4 code.
 - The next planned milestone after this release is 0.28.0 — Batch rename.

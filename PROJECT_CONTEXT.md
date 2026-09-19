@@ -16,7 +16,7 @@ The goal is not to replace KDE with Windows UI. The goal is a familiar Explorer-
 - rich transfer UI, native local transfer engine, previews, search, device/network integration, etc.
 
 ## Current release candidate — 0.27.0
-**0.27.0 — Quick Look on Space** has passed automated regression and all 9 manual KDE/CachyOS acceptance cases. Release documentation and version strings are being prepared; no 0.27.0 commit or tag exists yet.
+**0.27.0 — Quick Look on Space** has passed automated regression and all 9 manual KDE/CachyOS acceptance cases. Release commit a690014 is present; tag and distribution archive are pending.
 
 User-confirmed working behavior includes:
 - navigation and address/breadcrumb controls;
