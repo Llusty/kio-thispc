@@ -54,9 +54,9 @@ for signature, marker, statement in [
     ('    void trashSelected(', '        KIO::CopyJob *job =', 'dispatch = {"trash", urls, {}};'),
     ('    void renameSelected(', '        KIO::CopyJob *job =', 'dispatch = {"rename", {source}, destination};'),
     ('    void pasteClipboardInto(', '        if (startNativeSingleFileTransfer(', 'dispatch = {cut ? "move" : "copy", urls, destination};'),
-    ('    void createNewFolder(', '        KIO::MkdirJob *job =', 'dispatch = {"mkdir", {}, destination};'),
-    ('    void createNewFile(', '        KIO::StoredTransferJob *job =', 'dispatch = {"create", {}, destination};'),
-    ('    void createFromTemplate(', '        KIO::CopyJob *job =', 'dispatch = {"template", {source}, destination};'),
+    ('    void createNewFolderWithName(', '        KIO::MkdirJob *job =', 'dispatch = {"mkdir", {}, destination};'),
+    ('    void createNewFileWithName(', '        KIO::StoredTransferJob *job =', 'dispatch = {"create", {}, destination};'),
+    ('    void createFromTemplateWithName(', '        KIO::CopyJob *job =', 'dispatch = {"template", {source}, destination};'),
     ('    void transfer(', '        if (startNativeSingleFileTransfer(', 'dispatch = {action == Qt::MoveAction ? "move" : "copy", urls, destination};'),
 ]:
     file_actions = intercept(file_actions, signature, marker, statement)

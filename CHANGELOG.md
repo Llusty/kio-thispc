@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.29.0 — Inteligentne nazwy nowych elementów
+
+- Pliki, foldery i elementy z szablonów proponują pierwszą wolną nazwę przed
+  otwarciem edytowalnego dialogu; numeracja uzupełnia luki i zachowuje pełne
+  rozszerzenia, nazwy ukryte oraz Unicode.
+- Drugi preflight po dialogu blokuje wykrytą kolizję. Końcowe operacje nie
+  używają `Overwrite` ani `Resume` i zachowują dotychczasową rejestrację Undo/Redo.
+- Zdalne KIO używa dwóch asynchronicznych listingów, zachowuje cel z panelu,
+  który rozpoczął akcję, i odrzuca błędy listowania w trybie fail-closed.
+- Zdalny preflight nie rezerwuje atomowo nazwy. Ostateczna ochrona zależy od
+  kontraktu no-overwrite workera/protokołu; nie deklarujemy obsługi wszystkich
+  protokołów, odporności na awarię połączenia ani wyeliminowania TOCTOU.
+- Podstawowy odbiór ręczny Stage 1 i Stage 2 został potwierdzony; szczegółowy
+  zakres i ograniczenia opisuje `RELEASE_NOTES_0.29.0.md`.
+
 ## 0.28.0 — Batch Rename
 
 - Dodano zbiorczą zmianę nazw z podglądem: prefix/suffix, numerowanie, replace,

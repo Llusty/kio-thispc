@@ -324,7 +324,21 @@ int main(int argc, char **argv)
             QTest::keyClick(view, Qt::Key_N, Qt::ControlModifier | Qt::ShiftModifier);
             verify(dispatch.kind == "mkdir" && dispatch.destination == childUrlWithName(directory, "renamed"), "create folder captures directory");
             focus(view);
-            dialog(true, true, other);
+            QFile occupied(directory.toLocalFile() + "/new.txt");
+            if (!occupied.exists()) {
+                verify(occupied.open(QIODevice::WriteOnly | QIODevice::NewOnly),
+                       "occupied default fixture is created per pane");
+                occupied.close();
+            }
+            QTimer::singleShot(0, &window, [&, other] {
+                auto *box = qobject_cast<QInputDialog *>(QApplication::activeModalWidget());
+                verify(box && box->textValue() == "new (1).txt",
+                       "active pane collision is suggested before input");
+                window.setActivePane(other == window.m_directoryList || other == window.m_directoryDetails
+                    ? ThisPcWindow::PaneId::Primary : ThisPcWindow::PaneId::Split);
+                box->setTextValue("renamed");
+                box->accept();
+            });
             window.createNewFile("new.txt", {});
             verify(dispatch.kind == "create" && dispatch.destination == childUrlWithName(directory, "renamed"), "create file captures directory");
 

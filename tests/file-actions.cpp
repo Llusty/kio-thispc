@@ -19,6 +19,31 @@ int main(int argc, char **argv)
     const QString a = files.filePath("A"), b = files.filePath("B");
     verify(QDir().mkpath(a) && QDir().mkpath(b), "disposable operation roots");
     const QUrl rootA = QUrl::fromLocalFile(a), rootB = QUrl::fromLocalFile(b);
+    auto createFixture = [&](const QString &path, const QByteArray &data = {}) {
+        QFile file(path);
+        verify(file.open(QIODevice::WriteOnly | QIODevice::NewOnly)
+                   && file.write(data) == data.size(), "collision fixture created");
+    };
+    auto fixtureData = [](const QString &path) {
+        QFile file(path);
+        return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+    };
+    createFixture(a + "/report.tar.gz");
+    createFixture(a + "/report (1).tar.gz");
+    createFixture(a + "/report (3).tar.gz");
+    createFixture(a + "/.gitignore");
+    const QString reportSuggestion =
+        FileActions::suggestedAvailableName(rootA, "report.tar.gz", false);
+    verify(reportSuggestion == "report (2).tar.gz",
+           "first numbering gap preserves a multi-part extension");
+    verify(FileActions::suggestedAvailableName(rootA, ".gitignore", false)
+               == ".gitignore (1)", "hidden name is not treated as an extension");
+    verify(FileActions::suggestedAvailableName(rootB, QString::fromUtf8("żółw.txt"), false)
+               == QString::fromUtf8("żółw.txt"), "free Unicode name remains unchanged");
+    verify(QDir().mkdir(a + "/Nowy folder") && QDir().mkdir(a + "/Nowy folder (1)"),
+           "folder collision fixtures created");
+    verify(FileActions::suggestedAvailableName(rootA, "Nowy folder", true)
+               == "Nowy folder (2)", "folder numbering finds the first free name");
     QWidget parent;
     QAction undoAction(&parent), redoAction(&parent);
     UndoController undo(&parent, [](bool) {}, [] {}, [](const QString &, int) {});
@@ -45,9 +70,11 @@ int main(int argc, char **argv)
             verify(observedTree->suspend(), "tree job can pause before planning completes");
         }
         if (auto *copy = qobject_cast<KIO::CopyJob *>(job)) {
-            verify(interactive ? copy->uiDelegate() != nullptr : copy->uiDelegate() == nullptr,
+            const bool safeCreation = title == "Creating file";
+            verify(safeCreation ? copy->uiDelegate() == nullptr
+                                : interactive ? copy->uiDelegate() != nullptr : copy->uiDelegate() == nullptr,
                    "operation has the expected delegate");
-            if (interactive)
+            if (interactive && !safeCreation)
                 verify(!copy->uiDelegate()->isAutoErrorHandlingEnabled(), "no duplicate automatic error UI");
         }
         QObject::connect(job, &KJob::result, &parent, [&](KJob *done) {
@@ -77,6 +104,23 @@ int main(int argc, char **argv)
         undo.redo();
         verify(QTest::qWaitFor([&] { return !undo.m_busy && redone(); }, 10000), "real KIO Redo completes");
     };
+    createFixture(a + "/default.txt", "existing");
+    QTimer::singleShot(0, &parent, [&] {
+        auto *dialog = qobject_cast<QInputDialog *>(QApplication::activeModalWidget());
+        verify(dialog && dialog->textValue() == "default (1).txt",
+               "occupied default is suggested before the dialog is accepted");
+        createFixture(a + "/default (1).txt", "race winner");
+        dialog->accept();
+        QTimer::singleShot(0, &parent, [] {
+            auto *warning = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+            verify(warning != nullptr, "race collision is reported without dispatch");
+            warning->accept();
+        });
+    });
+    actions.createNewFile(rootA, "default.txt", QByteArray("must not overwrite"));
+    verify(completed == 0 && fixtureData(a + "/default.txt") == "existing"
+               && fixtureData(a + "/default (1).txt") == "race winner",
+           "pre-dispatch race preserves both existing files and starts no job");
     answerName("created.txt");
     actions.createNewFile(rootA, "default.txt", QByteArray("original payload"));
     waitJob(1);
@@ -311,33 +355,23 @@ int main(int argc, char **argv)
     }
     verify(!QFile::exists(files.filePath("escape")), "name validation prevents escape from the target directory");
 
-    // A collision must retain the normal interactive KIO rename flow.
-    QTimer templateConflict;
-    templateConflict.setInterval(10);
+    // A manually entered occupied template name is refused before dispatch.
     bool templateConflictSeen = false;
-    QUrl conflictDestination;
-    QObject::connect(&templateConflict, &QTimer::timeout, [&] {
-        for (QWidget *widget : QApplication::topLevelWidgets()) {
-            if (auto *dialog = qobject_cast<KIO::RenameDialog *>(widget); dialog && dialog->isVisible()) {
-                templateConflictSeen = true;
-                templateConflict.stop();
-                dialog->suggestNewNamePressed();
-                conflictDestination = dialog->newDestUrl();
-                dialog->renamePressed();
-                break;
-            }
+    answerName("result #ż.odt");
+    QTimer templateWarning;
+    templateWarning.setInterval(10);
+    QObject::connect(&templateWarning, &QTimer::timeout, [&] {
+        if (auto *warning = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+            templateConflictSeen = true;
+            templateWarning.stop();
+            warning->accept();
         }
     });
-    templateConflict.start();
-    answerName("result #ż.odt");
+    templateWarning.start();
     actions.createFromTemplate(rootA, templateSource);
-    waitJob(beforeRejected + 1);
-    verify(templateConflictSeen && readFile(conflictDestination.toLocalFile()) == templateData
+    verify(templateConflictSeen && completed == beforeRejected
                && readFile(a + "/result #ż.odt") == templateData,
-           "template collision offers rename and preserves the existing file");
-    undoRedo([&] { return !QFile::exists(conflictDestination.toLocalFile())
-                           && readFile(a + "/result #ż.odt") == templateData; },
-             [&] { return readFile(conflictDestination.toLocalFile()) == templateData; });
+           "template collision starts no job and preserves the existing file");
 
     answerName("missing-template-result.odt");
     const int next = completed + 1;
@@ -346,5 +380,124 @@ int main(int argc, char **argv)
     verify(lastMessage == "File created" && lastTitle == "Creating file"
                && !QFile::exists(a + "/missing-template-result.odt"),
            "stale missing template reports its error through the shared operation watcher");
+
+    // Remote Stage 2 uses an injected, fully isolated directory backend. No
+    // network worker or user location is touched by these async checks.
+    interceptFileJobs = true;
+    QList<FileActions::DirectorySnapshotCallback> remoteSnapshots;
+    const auto startMockSnapshot =
+        [&](const QUrl &, QObject *, FileActions::DirectorySnapshotCallback callback) -> KJob * {
+            remoteSnapshots.append(std::move(callback));
+            return nullptr;
+        };
+    FileActions remoteActions(
+        &parent, &undo,
+        [&](KJob *, const QString &, bool, const QString &,
+            const FileActions::RefreshViews &) {
+            verify(false, "mock remote tests intercept every final dispatch");
+        }, {}, startMockSnapshot);
+    const QUrl remoteDirectory(QStringLiteral("mock://host/share"));
+
+    dispatch = {};
+    remoteActions.createNewFile(
+        remoteDirectory, QString::fromUtf8("żółw.tar.gz"), QByteArrayLiteral("remote"));
+    verify(remoteSnapshots.size() == 1 && !QApplication::activeModalWidget(),
+           "remote suggestion starts asynchronously before opening a dialog");
+    QTimer::singleShot(0, &parent, [] {
+        auto *dialog = qobject_cast<QInputDialog *>(QApplication::activeModalWidget());
+        verify(dialog && dialog->textValue() == QString::fromUtf8("żółw (2).tar.gz"),
+               "remote Unicode suggestion preserves the complete suffix and first gap");
+        dialog->accept();
+    });
+    remoteSnapshots.takeFirst()({0, {}, {
+        QString::fromUtf8("żółw.tar.gz"), QString::fromUtf8("żółw (1).tar.gz")}});
+    verify(remoteSnapshots.size() == 1 && dispatch.kind.isEmpty(),
+           "accepting a remote name starts a second snapshot before dispatch");
+    QTimer::singleShot(0, &parent, [] {
+        auto *warning = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+        verify(warning != nullptr, "remote post-dialog collision is reported");
+        warning->accept();
+    });
+    remoteSnapshots.takeFirst()({0, {}, {QString::fromUtf8("żółw (2).tar.gz")}});
+    verify(dispatch.kind.isEmpty(),
+           "remote race collision fails closed without dispatching a create job");
+
+    remoteActions.createNewFolder(remoteDirectory);
+    QTimer::singleShot(0, &parent, [] {
+        auto *dialog = qobject_cast<QInputDialog *>(QApplication::activeModalWidget());
+        verify(dialog && dialog->textValue() == "New folder (2)",
+               "remote folder suggestion finds the first numbering gap");
+        dialog->setTextValue(QString::fromUtf8("ręczny folder"));
+        dialog->accept();
+    });
+    remoteSnapshots.takeFirst()({0, {}, {"New folder", "New folder (1)"}});
+    verify(remoteSnapshots.size() == 1, "remote folder is rechecked after manual editing");
+    remoteSnapshots.takeFirst()({0, {}, {}});
+    verify(dispatch.kind == "mkdir"
+               && dispatch.destination == childUrlWithName(
+                   remoteDirectory, QString::fromUtf8("ręczny folder")),
+           "free manually edited remote folder name is dispatched at the captured URL");
+
+    dispatch = {};
+    remoteActions.createFromTemplate(remoteDirectory, templateSource);
+    QTimer::singleShot(0, &parent, [] {
+        auto *dialog = qobject_cast<QInputDialog *>(QApplication::activeModalWidget());
+        verify(dialog && dialog->textValue() == QString::fromUtf8("source #ż.odt"),
+               "remote template keeps its Unicode source name");
+        dialog->accept();
+    });
+    remoteSnapshots.takeFirst()({0, {}, {}});
+    remoteSnapshots.takeFirst()({0, {}, {}});
+    verify(dispatch.kind == "template" && dispatch.sources == QList<QUrl>{templateSource}
+               && dispatch.destination == childUrlWithName(
+                   remoteDirectory, QString::fromUtf8("source #ż.odt")),
+           "remote template uses the no-overwrite copyAs dispatch path");
+
+    dispatch = {};
+    remoteActions.createNewFile(remoteDirectory, "blocked.txt", {});
+    QTimer::singleShot(0, &parent, [] {
+        auto *warning = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+        verify(warning && warning->text().contains("No item was created"),
+               "remote listing failure has explicit fail-closed UI");
+        warning->accept();
+    });
+    remoteSnapshots.takeFirst()({KIO::ERR_CANNOT_OPEN_FOR_READING, "mock listing failure", {}});
+    verify(dispatch.kind.isEmpty() && remoteSnapshots.isEmpty(),
+           "remote listing error is never interpreted as an available name");
+
+    remoteActions.createNewFile(remoteDirectory, "stale-a.txt", {});
+    const auto staleSnapshot = remoteSnapshots.takeFirst();
+    remoteActions.createNewFile(remoteDirectory, "current-b.txt", {});
+    staleSnapshot({0, {}, {}});
+    verify(remoteSnapshots.size() == 1 && !QApplication::activeModalWidget(),
+           "superseded remote callback cannot open a stale dialog");
+    QTimer::singleShot(0, &parent, [] {
+        auto *dialog = qobject_cast<QInputDialog *>(QApplication::activeModalWidget());
+        verify(dialog && dialog->textValue() == "current-b.txt",
+               "latest remote request owns the dialog");
+        dialog->reject();
+    });
+    remoteSnapshots.takeFirst()({0, {}, {}});
+    verify(remoteSnapshots.isEmpty() && dispatch.kind.isEmpty(),
+           "cancelling the current remote dialog starts no final check or job");
+
+    QList<FileActions::DirectorySnapshotCallback> closingSnapshots;
+    QWidget *closingParent = new QWidget;
+    auto *closingActions = new FileActions(
+        closingParent, nullptr,
+        [](KJob *, const QString &, bool, const QString &,
+           const FileActions::RefreshViews &) {}, {},
+        [&](const QUrl &, QObject *, FileActions::DirectorySnapshotCallback callback) -> KJob * {
+            closingSnapshots.append(std::move(callback));
+            return nullptr;
+        });
+    closingActions->createNewFile(remoteDirectory, "closed.txt", {});
+    verify(closingSnapshots.size() == 1, "closing-window remote callback is pending");
+    delete closingParent;
+    closingSnapshots.takeFirst()({0, {}, {}});
+    verify(!QApplication::activeModalWidget(),
+           "callback after window destruction is ignored safely");
+    interceptFileJobs = false;
+
     qInfo("PASS: %d FileActions assertions; native local copy/move, KIO fallbacks, conflicts, Undo/Redo", checks);
 }

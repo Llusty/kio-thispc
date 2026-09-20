@@ -14,6 +14,7 @@
 #include "undocontroller.h"
 #include <KIO/EmptyTrashJob>
 #include <KIO/JobUiDelegateFactory>
+#include <KIO/ListJob>
 #include <KIO/MkdirJob>
 #include <KIO/RenameDialog>
 #include <KIO/StoredTransferJob>
@@ -31,8 +32,10 @@
 #include <QProgressDialog>
 #include <QSharedPointer>
 #include <QScopedValueRollback>
+#include <QSet>
 #include <QTimer>
 #include <functional>
+#include <limits>
 #include <utility>
 
 class FileActions final : public QObject
@@ -40,19 +43,30 @@ class FileActions final : public QObject
 public:
     using RefreshViews = std::function<void()>;
     using WatchOperation = std::function<void(KJob *, const QString &, bool, const QString &, const RefreshViews &)>;
+    struct DirectorySnapshot {
+        int error = 0;
+        QString errorText;
+        QSet<QString> names;
+    };
+    using DirectorySnapshotCallback = std::function<void(DirectorySnapshot)>;
+    using StartDirectorySnapshot =
+        std::function<KJob *(const QUrl &, QObject *, DirectorySnapshotCallback)>;
 
     FileActions(QWidget *parentWidget, UndoController *undoController, WatchOperation watchOperation,
-                std::function<void(const QString &)> showRecoveryFence = {})
+                std::function<void(const QString &)> showRecoveryFence = {},
+                StartDirectorySnapshot startDirectorySnapshot = {})
         : QObject(parentWidget)
         , m_parentWidget(parentWidget)
         , m_undoController(undoController)
         , m_watchOperation(std::move(watchOperation))
         , m_showRecoveryFence(std::move(showRecoveryFence))
+        , m_startDirectorySnapshot(std::move(startDirectorySnapshot))
     {
     }
 
     ~FileActions() override
     {
+        cancelPendingNewItem();
         if (m_swapWorkerRunning) m_swapFuture.waitForFinished();
         // A batch fence survives between worker invocations. Destruction in
         // that interval cannot silently release it as a verified completion.
@@ -188,32 +202,20 @@ public:
             return;
         }
 
-        const QString name = requestNewFileName(suggestedName);
-        if (name.isEmpty()) return;
-
-        if (!mutationAllowed()) return;
-
-        const QUrl destination =
-            childUrlWithName(directory, name);
-
-        KIO::StoredTransferJob *job =
-            KIO::storedPut(
-                contents,
-                destination,
-                -1,
-                KIO::HideProgressInfo);
-        job->setUiDelegate(nullptr);
-        if (m_undoController) {
-            m_undoController->recordPutJob(
-                destination,
-                job);
+        if (!directory.isLocalFile()) {
+            requestRemoteNewItemName(
+                directory, suggestedName, false,
+                [this, directory, contents](const QString &name) {
+                    createNewFileWithName(directory, name, contents);
+                });
+            return;
         }
+        cancelPendingNewItem();
 
-        watchFileOperation(
-            job,
-            trLocal("Utworzono plik", "File created"),
-            false,
-            trLocal("Tworzenie pliku", "Creating file"));
+        const QString name = requestNewFileName(
+            suggestedAvailableName(directory, suggestedName, false));
+        if (name.isEmpty()) return;
+        createNewFileWithName(directory, name, contents);
     }
 
     void createFromTemplate(QUrl directory, QUrl source)
@@ -221,29 +223,20 @@ public:
         if (!mutationAllowed()) return;
         if (!directory.isValid() || !source.isLocalFile()) return;
 
-        const QString name = requestNewFileName(source.fileName());
-        if (name.isEmpty()) return;
-
-        if (!mutationAllowed()) return;
-
-        // Recheck after the modal dialog: a stale entry must not turn into
-        // a recursive folder copy or create a symbolic link as a document.
-        const QFileInfo info(source.toLocalFile());
-        if (info.isSymLink() || (info.exists() && !info.isFile())) {
-            QMessageBox::warning(m_parentWidget,
-                trLocal("Szablony", "Templates"),
-                trLocal("Szablon nie jest zwykłym plikiem.", "The template is not a regular file."));
+        if (!directory.isLocalFile()) {
+            requestRemoteNewItemName(
+                directory, source.fileName(), false,
+                [this, directory, source](const QString &name) {
+                    createFromTemplateWithName(directory, source, name);
+                });
             return;
         }
+        cancelPendingNewItem();
 
-        const QUrl destination = childUrlWithName(directory, name);
-        if (!mutationAllowed()) return;
-        KIO::CopyJob *job = KIO::copyAs(source, destination, KIO::HideProgressInfo);
-        configureInteractiveCopyJob(job);
-        if (m_undoController) m_undoController->recordCopyJob(job);
-        watchFileOperation(job,
-            trLocal("Utworzono plik", "File created"), false,
-            trLocal("Tworzenie pliku", "Creating file"));
+        const QString name = requestNewFileName(
+            suggestedAvailableName(directory, source.fileName(), false));
+        if (name.isEmpty()) return;
+        createFromTemplateWithName(directory, source, name);
     }
 
     void createNewFolder(const QUrl &directory)
@@ -253,6 +246,16 @@ public:
             return;
         }
 
+        if (!directory.isLocalFile()) {
+            requestRemoteNewItemName(
+                directory, trLocal("Nowy folder", "New folder"), true,
+                [this, directory](const QString &name) {
+                    createNewFolderWithName(directory, name);
+                });
+            return;
+        }
+        cancelPendingNewItem();
+
         bool ok = false;
 
         const QString name =
@@ -261,7 +264,8 @@ public:
                 trLocal("Nowy folder", "New folder"),
                 trLocal("Nazwa folderu:", "Folder name:"),
                 QLineEdit::Normal,
-                trLocal("Nowy folder", "New folder"),
+                suggestedAvailableName(
+                    directory, trLocal("Nowy folder", "New folder"), true),
                 &ok)
                 .trimmed();
 
@@ -279,26 +283,7 @@ public:
             return;
         }
 
-        const QUrl destination =
-            childUrlWithName(directory, name);
-
-        if (!mutationAllowed()) return;
-
-        KIO::MkdirJob *job =
-            KIO::mkdir(destination);
-
-        job->setUiDelegate(nullptr);
-        if (m_undoController) {
-            m_undoController->recordMkdirJob(
-                destination,
-                job);
-        }
-
-        watchFileOperation(
-            job,
-            trLocal("Utworzono folder", "Folder created"),
-            false,
-            trLocal("Tworzenie folderu", "Creating folder"));
+        createNewFolderWithName(directory, name);
     }
 
     void renameSelected(const QList<QUrl> &urls, QString oldName)
@@ -1101,6 +1086,261 @@ public:
     }
 
 private:
+    void cancelPendingNewItem()
+    {
+        ++m_newItemRequestSerial;
+        if (!m_newItemListJob) return;
+        disconnect(m_newItemListJob, nullptr, this, nullptr);
+        m_newItemListJob->kill(KJob::Quietly);
+        m_newItemListJob = nullptr;
+    }
+
+    KJob *startDirectorySnapshot(
+        const QUrl &directory, const DirectorySnapshotCallback &callback)
+    {
+        if (m_startDirectorySnapshot) {
+            return m_startDirectorySnapshot(directory, this, callback);
+        }
+
+        auto names = QSharedPointer<QSet<QString>>::create();
+        KIO::ListJob *job = KIO::listDir(directory, KIO::HideProgressInfo);
+        job->setUiDelegate(nullptr);
+        connect(job, &KIO::ListJob::entries, this,
+                [names](KIO::Job *, const KIO::UDSEntryList &entries) {
+            for (const KIO::UDSEntry &entry : entries) {
+                const QString name = entry.stringValue(KIO::UDSEntry::UDS_NAME);
+                if (!name.isEmpty()) names->insert(name);
+            }
+        });
+        connect(job, &KJob::result, this,
+                [names, callback](KJob *finished) {
+            callback({finished->error(), finished->errorString(), *names});
+        });
+        return job;
+    }
+
+    static QString suggestedAvailableName(
+        const QSet<QString> &names, const QString &requestedName, bool directoryEntry)
+    {
+        const QString initial = requestedName.isEmpty()
+            ? trLocal("Nowy plik", "New file") : requestedName;
+        if (!names.contains(initial)) return initial;
+        for (int number = 1; number < std::numeric_limits<int>::max(); ++number) {
+            const QString candidate = numberedName(initial, number, directoryEntry);
+            if (!names.contains(candidate)) return candidate;
+        }
+        return initial;
+    }
+
+    void showRemoteListingError(const DirectorySnapshot &snapshot)
+    {
+        QString detail = snapshot.errorText.trimmed();
+        if (!detail.isEmpty()) detail.prepend(QStringLiteral("\n\n"));
+        QMessageBox::warning(
+            m_parentWidget,
+            trLocal("Nie można sprawdzić nazwy", "Could not check the name"),
+            trLocal(
+                "Nie udało się bezpiecznie odczytać zdalnego katalogu. Nie utworzono żadnego elementu.",
+                "The remote directory could not be read safely. No item was created.")
+                + detail);
+    }
+
+    void requestRemoteNewItemName(
+        const QUrl &directory, const QString &requestedName, bool directoryEntry,
+        std::function<void(const QString &)> create)
+    {
+        cancelPendingNewItem();
+        const quint64 serial = m_newItemRequestSerial;
+        const QPointer<FileActions> guard(this);
+        m_newItemListJob = startDirectorySnapshot(
+            directory,
+            [guard, serial, directory, requestedName, directoryEntry,
+             create = std::move(create)](DirectorySnapshot snapshot) mutable {
+                FileActions *self = guard.data();
+                if (!self || serial != self->m_newItemRequestSerial) return;
+                self->m_newItemListJob = nullptr;
+                if (snapshot.error) {
+                    self->showRemoteListingError(snapshot);
+                    return;
+                }
+
+                const QString suggestion = suggestedAvailableName(
+                    snapshot.names, requestedName, directoryEntry);
+                bool ok = false;
+                const QString name = QInputDialog::getText(
+                    self->m_parentWidget,
+                    directoryEntry
+                        ? trLocal("Nowy folder", "New folder")
+                        : trLocal("Nowy plik", "New file"),
+                    directoryEntry
+                        ? trLocal("Nazwa folderu:", "Folder name:")
+                        : trLocal("Nazwa pliku:", "File name:"),
+                    QLineEdit::Normal, suggestion, &ok).trimmed();
+                if (!ok) return;
+                if (!validNewName(name)) {
+                    QMessageBox::warning(
+                        self->m_parentWidget,
+                        trLocal("Nieprawidłowa nazwa", "Invalid name"),
+                        directoryEntry
+                            ? trLocal(
+                                "Nazwa folderu jest pusta albo zawiera niedozwolony znak „/”.",
+                                "The folder name is empty or contains the invalid “/” character.")
+                            : trLocal(
+                                "Nazwa pliku jest pusta albo zawiera niedozwolony znak „/”.",
+                                "The file name is empty or contains the invalid “/” character."));
+                    return;
+                }
+                self->verifyRemoteNameBeforeCreate(
+                    directory, name, directoryEntry, serial, std::move(create));
+            });
+    }
+
+    void verifyRemoteNameBeforeCreate(
+        const QUrl &directory, const QString &name, bool directoryEntry,
+        quint64 serial, std::function<void(const QString &)> create)
+    {
+        const QPointer<FileActions> guard(this);
+        m_newItemListJob = startDirectorySnapshot(
+            directory,
+            [guard, serial, name, directoryEntry,
+             create = std::move(create)](DirectorySnapshot snapshot) mutable {
+                FileActions *self = guard.data();
+                if (!self || serial != self->m_newItemRequestSerial) return;
+                self->m_newItemListJob = nullptr;
+                if (snapshot.error) {
+                    self->showRemoteListingError(snapshot);
+                    return;
+                }
+                if (snapshot.names.contains(name)) {
+                    const QString next = suggestedAvailableName(
+                        snapshot.names, name, directoryEntry);
+                    QMessageBox::warning(
+                        self->m_parentWidget,
+                        trLocal("Nazwa jest już zajęta", "Name already exists"),
+                        trLocal(
+                            "Ta nazwa została zajęta przed utworzeniem elementu. Niczego nie nadpisano. Spróbuj ponownie; następna wolna propozycja to: %1",
+                            "That name was taken before the item could be created. Nothing was overwritten. Try again; the next available suggestion is: %1")
+                            .arg(next));
+                    return;
+                }
+                if (!self->mutationAllowed()) return;
+                create(name);
+            });
+    }
+
+    void createNewFileWithName(
+        const QUrl &directory, const QString &name, const QByteArray &contents)
+    {
+        if (!mutationAllowed()) return;
+        const QUrl destination = childUrlWithName(directory, name);
+        if (directory.isLocalFile()
+            && !ensureNewDestinationAvailable(destination, false)) return;
+
+        // KIO::DefaultFlags deliberately excludes Overwrite and Resume. A
+        // protocol that honors KIO's contract must fail a post-check race.
+        KIO::StoredTransferJob *job = KIO::storedPut(
+            contents, destination, -1, KIO::HideProgressInfo);
+        job->setUiDelegate(nullptr);
+        if (m_undoController) m_undoController->recordPutJob(destination, job);
+        watchFileOperation(job,
+            trLocal("Utworzono plik", "File created"), false,
+            trLocal("Tworzenie pliku", "Creating file"));
+    }
+
+    void createFromTemplateWithName(
+        const QUrl &directory, const QUrl &source, const QString &name)
+    {
+        if (!mutationAllowed()) return;
+        // Recheck after the modal dialog: a stale entry must not turn into
+        // a recursive folder copy or create a symbolic link as a document.
+        const QFileInfo info(source.toLocalFile());
+        if (info.isSymLink() || (info.exists() && !info.isFile())) {
+            QMessageBox::warning(m_parentWidget,
+                trLocal("Szablony", "Templates"),
+                trLocal("Szablon nie jest zwykłym plikiem.", "The template is not a regular file."));
+            return;
+        }
+
+        const QUrl destination = childUrlWithName(directory, name);
+        if (directory.isLocalFile()
+            && !ensureNewDestinationAvailable(destination, false)) return;
+        if (!mutationAllowed()) return;
+        KIO::CopyJob *job = KIO::copyAs(source, destination, KIO::HideProgressInfo);
+        job->setUiDelegate(nullptr);
+        if (m_undoController) m_undoController->recordCopyJob(job);
+        watchFileOperation(job,
+            trLocal("Utworzono plik", "File created"), false,
+            trLocal("Tworzenie pliku", "Creating file"));
+    }
+
+    void createNewFolderWithName(const QUrl &directory, const QString &name)
+    {
+        if (!mutationAllowed()) return;
+        const QUrl destination = childUrlWithName(directory, name);
+        if (directory.isLocalFile()
+            && !ensureNewDestinationAvailable(destination, true)) return;
+
+        KIO::MkdirJob *job = KIO::mkdir(destination);
+        job->setUiDelegate(nullptr);
+        if (m_undoController) m_undoController->recordMkdirJob(destination, job);
+        watchFileOperation(job,
+            trLocal("Utworzono folder", "Folder created"), false,
+            trLocal("Tworzenie folderu", "Creating folder"));
+    }
+
+    static bool localEntryExists(const QUrl &url)
+    {
+        if (!url.isLocalFile()) return false;
+        const QFileInfo info(url.toLocalFile());
+        return info.exists() || info.isSymLink();
+    }
+
+    static QString numberedName(const QString &name, int number, bool directory)
+    {
+        if (directory) return QStringLiteral("%1 (%2)").arg(name).arg(number);
+
+        // A leading dot alone does not introduce an extension.  Preserve a
+        // complete multi-part suffix such as .tar.gz.
+        const int dot = name.indexOf(u'.', name.startsWith(u'.') ? 1 : 0);
+        if (dot < 0) return QStringLiteral("%1 (%2)").arg(name).arg(number);
+        const QString base = name.left(dot);
+        const QString suffix = name.mid(dot + 1);
+        return QStringLiteral("%1 (%2).%3")
+            .arg(base).arg(number).arg(suffix);
+    }
+
+    static QString suggestedAvailableName(
+        const QUrl &directory, const QString &requestedName, bool directoryEntry)
+    {
+        const QString initial = requestedName.isEmpty()
+            ? trLocal("Nowy plik", "New file") : requestedName;
+        if (!directory.isLocalFile()
+            || !localEntryExists(childUrlWithName(directory, initial))) {
+            return initial;
+        }
+        for (int number = 1; number < std::numeric_limits<int>::max(); ++number) {
+            const QString candidate = numberedName(initial, number, directoryEntry);
+            if (!localEntryExists(childUrlWithName(directory, candidate))) return candidate;
+        }
+        return initial;
+    }
+
+    bool ensureNewDestinationAvailable(const QUrl &destination, bool directoryEntry)
+    {
+        if (!localEntryExists(destination)) return true;
+        const QString next = suggestedAvailableName(
+            destination.adjusted(QUrl::RemoveFilename),
+            destination.fileName(), directoryEntry);
+        QMessageBox::warning(
+            m_parentWidget,
+            trLocal("Nazwa jest już zajęta", "Name already exists"),
+            trLocal(
+                "Ta nazwa została zajęta przed utworzeniem elementu. Niczego nie nadpisano. Spróbuj ponownie; następna wolna propozycja to: %1",
+                "That name was taken before the item could be created. Nothing was overwritten. Try again; the next available suggestion is: %1")
+                .arg(next));
+        return false;
+    }
+
     bool mutationAllowed()
     {
         auto &gate = BatchRenameRecoveryGate::instance();
@@ -1264,6 +1504,9 @@ private:
     UndoController *m_undoController = nullptr;
     WatchOperation m_watchOperation;
     std::function<void(const QString &)> m_showRecoveryFence;
+    StartDirectorySnapshot m_startDirectorySnapshot;
+    QPointer<KJob> m_newItemListJob;
+    quint64 m_newItemRequestSerial = 0;
     bool m_confirmingEmptyTrash = false;
     QPointer<KJob> m_emptyTrashJob;
     QFuture<BatchRenameSwapWorkerResult> m_swapFuture;

@@ -1,35 +1,36 @@
-# Aktualizacja do 0.28.0
+# Aktualizacja do 0.29.0
 
-Wydanie dodaje duży Quick Look otwierany spacją w aktywnym widoku plików.
+Wydanie dodaje inteligentne, bezpieczne propozycje nazw przy tworzeniu plików,
+folderów i elementów z szablonów.
 
 Poniższe polecenia instalują wydanie z nowego katalogu, bez usuwania istniejącego repozytorium:
 
 ```bash
 cd ~/Pobrane
-unzip kio-thispc-0.28.0.zip
-cd kio-thispc-0.28.0
+unzip kio-thispc-0.29.0.zip
+cd kio-thispc-0.29.0
 chmod +x install.sh
 ./install.sh
 ```
 
 ## Nowości
 
-- Space otwiera i zamyka Quick Look; Esc również zamyka podgląd.
-- Fokus pozostaje w aktywnym widoku plików, więc strzałki na bieżąco zmieniają podglądane zaznaczenie.
-- Obsługa aktywnego panelu Split View.
-- Normalne działanie spacji w Search, Ctrl+L, zmianie nazwy, popupach i dialogach.
-- Wspólny backend Preview Pane z tymi samymi formatami, limitami i ochroną przed spóźnionymi wynikami.
-- Niezależne działanie istniejącego Alt+P Preview Pane.
+- Pierwsza wolna nazwa jest proponowana przed otwarciem dialogu.
+- Luki numeracji, pełne rozszerzenia, nazwy ukryte i Unicode są zachowane.
+- Ręczna edycja i routing aktywnego panelu Split View pozostają aktywne.
+- Nazwa jest sprawdzana ponownie po dialogu, bez żądania nadpisania.
+- Zdalne KIO działa asynchronicznie i fail-closed. Nie zapewnia atomowej
+  rezerwacji; wymaga wiarygodnego listowania i no-overwrite od workera/protokołu.
 
 ## Weryfikacja
 
 - Kompilacja: PASS.
-- Pełna regresja: 22 zestawy / 3598 asercji PASS.
-- Quick Look: 19 asercji PASS.
-- Preview Pane: 106 asercji PASS.
-- Pane routing: 269 asercji PASS.
-- Split Layout: 99 asercji PASS.
-- Wszystkie 9 ręcznych przypadków KDE/CachyOS: potwierdzone przez użytkownika.
+- FileActions: 176 asercji PASS.
+- Routing paneli: 289 asercji PASS.
+- Pełna regresja: 23 zestawy / 5430 asercji PASS.
+- Batch Rename: 1790 asercji PASS.
+- Podstawowy ręczny Stage 1 i Stage 2: potwierdzony przez użytkownika.
+- Nie testowano wszystkich protokołów zdalnych ani awarii połączenia.
 
 ---
 

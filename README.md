@@ -1,4 +1,20 @@
-# kio-thispc 0.28.0
+# kio-thispc 0.29.0
+
+## 0.29.0 — Inteligentne nazwy nowych elementów
+
+- Nowy plik, folder i element z szablonu otrzymuje przed otwarciem edytowalnego
+  dialogu pierwszą wolną nazwę, z uzupełnianiem luk numeracji.
+- Numer jest wstawiany przed pełnym rozszerzeniem; zachowane są nazwy ukryte,
+  wiele kropek, Unicode, ręczna edycja i właściwy panel Split View.
+- Po zatwierdzeniu nazwa jest sprawdzana ponownie. Operacje tworzenia nie żądają
+  `Overwrite` ani `Resume`, a obsługiwane operacje zachowują Undo/Redo.
+- Dla zdalnego KIO oba listingi są asynchroniczne i fail-closed. Nie jest to
+  atomowa rezerwacja: ostateczna ochrona zależy od no-overwrite gwarantowanego
+  przez konkretny worker i protokół. Listing niewiarygodny lub nieobsługiwany,
+  błędy uwierzytelnienia i niejednoznaczne błędy nie są traktowane jako wolna
+  nazwa. Szczegóły: `RELEASE_NOTES_0.29.0.md`.
+- Podstawowy ręczny odbiór Stage 1 i jednorazowej lokalizacji zdalnej Stage 2
+  został potwierdzony. Nie testowano wszystkich protokołów ani awarii połączenia.
 
 ## 0.28.0 — Batch Rename
 
@@ -184,8 +200,8 @@ Funkcje z 0.15.4 — kompaktowy popup operacji, dynamiczna wysokość, anulowani
 
 ```bash
 cd ~/Pobrane
-unzip kio-thispc-0.28.0.zip
-cd kio-thispc-0.28.0
+unzip kio-thispc-0.29.0.zip
+cd kio-thispc-0.29.0
 chmod +x install.sh
 ./install.sh
 ```

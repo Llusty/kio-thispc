@@ -355,3 +355,22 @@ i **99 asercji Split Layout**. Użytkownik potwierdził końcową ręczną akcep
 - [x] Archiwum źródłowe i suma SHA-256 przygotowane bez `.git`, buildów,
       cache ani danych użytkownika; nie instalowano, nie commitowano, nie
       tagowano i nie publikowano.
+
+## 0.29.0 — release candidate inteligentnych nazw
+
+- [x] Stage 1 lokalny: podstawowy odbiór ręczny potwierdzony przez użytkownika.
+- [x] Stage 2 zdalnego KIO: podstawowy przepływ na jednorazowej lokalizacji
+      potwierdzony przez użytkownika. Nie oznacza to testu awarii połączenia,
+      wszystkich protokołów, całej rozszerzonej checklisty ani atomowej
+      rezerwacji nazwy.
+- [x] Granica bezpieczeństwa: dwa asynchroniczne listingi są fail-closed, a
+      końcowe operacje nie używają `Overwrite`/`Resume`; ostateczna ochrona
+      zależy od kontraktu no-overwrite konkretnego workera i protokołu.
+- [x] Świeży build RC po bumpie wersji: PASS (2026-09-20).
+- [x] Świeży focused: FileActions 176, routing paneli 289 i Batch Rename 1790
+      asercji PASS.
+- [x] Świeża pełna regresja: 23 zestawy / 5430 asercji PASS.
+- [x] `git diff --check`, spójność wersji oraz czyste archiwum źródłowe + SHA256:
+      `kio-thispc-0.29.0.tar.gz` i `kio-thispc-0.29.0.tar.gz.sha256`, bez `.git`,
+      buildów, `__pycache__` i runtime’owych dzienników recovery.
+- [ ] Finalny commit, tag `v0.29.0` i instalacja wyłącznie po osobnej zgodzie.
