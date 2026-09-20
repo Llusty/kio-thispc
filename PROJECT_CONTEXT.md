@@ -15,8 +15,11 @@ The goal is not to replace KDE with Windows UI. The goal is a familiar Explorer-
 - Undo/Redo;
 - rich transfer UI, native local transfer engine, previews, search, device/network integration, etc.
 
-## Current release candidate — 0.27.0
-**0.27.0 — Quick Look on Space** has passed automated regression and all 9 manual KDE/CachyOS acceptance cases. Release commit a690014 is present; tag and distribution archive are pending.
+## Current release candidate — 0.28.0
+**0.28.0 — Batch Rename** is being finalized as a deliberately limited release.
+Production v2 auto-recovery covers qualifying local linear Execute/Undo/Redo
+only. Swap/cycle recovery, KIO-equivalent guarantees and power-loss durability
+remain future work; see `RELEASE_NOTES_0.28.0.md`.
 
 User-confirmed working behavior includes:
 - navigation and address/breadcrumb controls;
@@ -117,7 +120,7 @@ thispc-view
 For Codex, prefer working directly in a Git checkout and running `./scripts/build.sh` after edits instead of repeatedly creating ZIPs.
 
 
-## Current state — 0.27.0
+## Current state — 0.28.0
 
 0.18.0 conflict handling is user-confirmed. 0.19.x adds persistent session restore and the stable full-name/IconMode layout. 0.20.0 adds persistent Quick Access / Favorites and Recent locations.
 
@@ -139,4 +142,4 @@ The 0.26.0 full automated regression passes all **20 suites**, including **106 P
 
 0.27.0 adds a large, focus-safe Quick Look overlay toggled with Space in the active file view. It reuses the Preview Pane backend, follows selection and active-pane changes, closes with Esc or Space, protects text entry and dialogs, and preserves stale-result cancellation. The automated baseline is **22 suites / 3598 assertions**, including Quick Look 19, Preview Pane 106, pane routing 269 and Split Layout 99 assertions. The user confirmed all 9 manual KDE/CachyOS acceptance cases.
 
-The next roadmap milestone is **0.28.0 — Batch rename**.
+The next roadmap work is the post-0.28 recovery backlog followed by **0.29.0 — Advanced search**.

@@ -129,14 +129,44 @@ New:
 
 ## Planned releases
 
-### 0.28.0 — Batch rename
-- prefix/suffix;
-- numbering;
-- replace text;
-- extension/case changes;
-- regex;
-- preview before apply;
-- Undo support.
+## 0.28.0 — Batch rename (zakres zamknięty)
+- Stage 1: prefix/suffix, numbering, bezpieczny preview i Undo per element — 8/8 testów ręcznych potwierdzone;
+- Stage 2: replace text, extension/case changes, regex i diagnostyka preview; ręczne punkty 1–8 i 10 PASS, w tym no-op, kolizje/race, oba panele Split View i regresje. Historyczny test anulowania większej partii KIO w trakcie nie został wykonany i nie opisuje już zwykłych kwalifikujących się partii lokalnych;
+- zachowana ochrona przed nadpisaniem, ponowny preflight i aktywny panel Split View;
+- Stage 3A: acykliczne łańcuchy, snapshot `lstat` i preflight; build i 529 asercji focused PASS, ręczny test łańcucha i zawartości PASS; pełnej regresji po Stage 3A jeszcze nie potwierdzono;
+- Stage 3B.1: Linux `renameat2(RENAME_EXCHANGE)` dla dwóch nazw bez Undo; build/focused/full regression PASS, pojedynczy ręczny test zawartości `ab ↔ ba` PASS (reszta checklisty nadal otwarta);
+- Stage 3B.2: patch do weryfikacji — cykle 3+ jako N−1 osobnych atomowych wymian, kontrola inode i odwracanie wykonanych etapów po zwykłym błędzie/anulowaniu; **nie jest to atomowość całej partii ani trwałe recovery**;
+- Stage 3B.2: pełna regresja i ręczny cykl 3 plików z zachowaniem danych potwierdzone przez użytkownika; pozostała checklista otwarta.
+- Stage 3C.1: diagnostyczny dziennik cykli 3+; po naprawie sprawdzenia pending journal pełna regresja `FULL_REGRESSION_EXIT=0`, Batch Rename 163 PASS; ręczny cykl trzech plików zachował treść i nie pozostawił `cycle-*.json`. Automatyczne recovery nadal nie istnieje.
+- Stage 3C.2A (patch do lokalnej weryfikacji): pojedyncze Undo/Redo dla jednej dwuelementowej wymiany; **nie** obejmuje mieszanych partii, wielu swapów ani cykli 3+. Szczegóły: `docs/BATCH_RENAME_STAGE3.md`.
+- Stage 3C.2A: build / 175 asercji Batch Rename / pełna regresja PASS; użytkownik potwierdził jedno Ctrl+Z i Ctrl+Y na zamianie dwóch plików.
+- Stage 3C.2B.1 (nowy patch do testów): jedno journalowane Undo/Redo dla dokładnie jednego izolowanego cyklu 3+; nieatomowe N−1 wymian. Łańcuchy i partie mieszane nadal bez wspólnego Undo.
+- Stage 3C.2B.1: build, pełna regresja i ręczny cykl trzech plików z pojedynczym Ctrl+Z / Ctrl+Y oraz kontrolą zawartości: PASS według użytkownika.
+- Stage 3C.2B.2A: wspólne, dziennikowane Undo/Redo dla czystych lokalnych łańcuchów, również kilku niezależnych łańcuchów w jednym planie; ręczny test dwóch łańcuchów, wspólnego Undo/Redo, race oraz wykonania z aktywnego lewego panelu Split View PASS. Replay jest nieatomowy, bez Cancel w trakcie i wymaga ręcznej kontroli journalu po awarii.
+- Ręcznie PASS także: swap i cykl 3 z Undo/Redo, odmowa Redo po podmianie inode z trwałym komunikatem ok. 12 s oraz cancel przed startem. Stan audytowany 2026-09-19; ostatnia zapisana pełna regresja, wykonana **przed tymi nowymi testami ręcznymi**, to 23 zestawy / 3865 asercji PASS; nie jest to świeższy rerun.
+- Przed wydaniem pozostają wyłącznie jawne pozycje z bieżącego audytu w `TEST_CHECKLIST.md`; automatyczne crash recovery, atomowość wieloetapowej partii i zdalne URL-e nie są obietnicą 0.28.0.
+- Różnice wizualne trybów widoku między lewym i prawym panelem Split View: osobne przyszłe zadanie, poza zakresem 0.28.0, o ile nie ujawnią błędu funkcjonalnego.
+
+Zakres wydania kończy się na produkcyjnym auto-recovery v2 dla kwalifikujących
+się lokalnych operacji linear Execute/Undo/Redo. Ograniczenia są częścią
+kontraktu wydania, nie ukrytymi kryteriami blokującymi; pełna lista znajduje się
+w `RELEASE_NOTES_0.28.0.md`.
+
+### Po 0.28.0 — recovery i domknięcie Batch Rename (wersja do ustalenia)
+
+- 4A.3: połączyć zweryfikowany izolowany silnik swap v2 z prawdziwymi
+  produkcyjnymi kontrolerami Execute/Undo/Redo, workerami, statusami i gate;
+- 4B: osobno aktywować generator i startupową allowlistę swapu dopiero po
+  black-box Execute/Undo/Redo, drugim restarcie, dwóch instancjach i audycie GUI;
+- zaprojektować osobny bezpieczny protokół recovery dla cykli 3+; nie traktować
+  istniejącego nieatomowego N−1 replay jako pełnej atomowości;
+- określić i przetestować gwarancje KIO fallback oraz zdalnych URL-i, w tym
+  kontrolowane anulowanie w trakcie na jednorazowych danych;
+- power-loss badać wyłącznie w disposable VM/FS-image, nigdy na danych
+  użytkownika; SIGKILL pozostaje testem awarii procesu;
+- kontynuować ochronę przed procesami niekooperującymi i TOCTOU, bez obiecywania
+  gwarancji niemożliwych dla bezwarunkowego `RENAME_EXCHANGE`;
+- ręcznie sprawdzić różnice wizualne trybów lewego/prawego panelu Split View.
 
 ### 0.29.0 — Advanced search
 - type/name/extension/date/size filters;

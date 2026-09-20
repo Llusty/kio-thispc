@@ -1,4 +1,4 @@
-# Aktualizacja do 0.27.0
+# Aktualizacja do 0.28.0
 
 Wydanie dodaje duży Quick Look otwierany spacją w aktywnym widoku plików.
 
@@ -6,8 +6,8 @@ Poniższe polecenia instalują wydanie z nowego katalogu, bez usuwania istnieją
 
 ```bash
 cd ~/Pobrane
-unzip kio-thispc-0.27.0.zip
-cd kio-thispc-0.27.0
+unzip kio-thispc-0.28.0.zip
+cd kio-thispc-0.28.0
 chmod +x install.sh
 ./install.sh
 ```

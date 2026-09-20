@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.28.0 — Batch Rename
+
+- Dodano zbiorczą zmianę nazw z podglądem: prefix/suffix, numerowanie, replace,
+  case/extension i regex.
+- Dodano ponowny preflight, ochronę przed kolizjami i podmianą inode oraz
+  obsługę aktywnego panelu Split View.
+- Kwalifikujące się lokalne partie liniowe mają jedno sesyjne Undo/Redo i
+  produkcyjny journal v2; po awarii procesu startup dokańcza zapisany kierunek
+  Execute, Undo albo Redo.
+- Swapy i cykle zachowują payloady i oferują sesyjne Undo/Redo, lecz ich
+  generator v2 oraz automatyczne recovery pozostają wyłączone.
+- KIO fallback nie otrzymuje gwarancji local-linear. Wydanie nie deklaruje
+  odporności na zanik zasilania ani eliminacji ingerencji zewnętrznych procesów
+  i TOCTOU. Szczegóły: `RELEASE_NOTES_0.28.0.md`.
+
 ## 0.27.0 — Quick Look on Space
 
 - Dodano duży, tymczasowy Quick Look otwierany spacją bez uruchamiania skojarzonej aplikacji.

@@ -9,6 +9,8 @@
 
 #pragma once
 
+#include "batchrenamerecovery.h"
+
 #include "browsercommon.h"
 
 #include <KIO/ChmodJob>
@@ -705,6 +707,13 @@ public:
                     && recursivePermissions->isChecked();
 
                 KJob *chmodJob = nullptr;
+                auto &recoveryGate = BatchRenameRecoveryGate::instance();
+                recoveryGate.refresh();
+                if (recoveryGate.mutationsBlocked()) {
+                    QMessageBox::warning(&dialog, trLocal("Właściwości", "Properties"),
+                                         recoveryGate.message());
+                    return false;
+                }
 
                 if (recursive) {
                     KFileItem rootItem;
@@ -903,6 +912,14 @@ public:
                     siblingUrlWithName(
                         workingUrl,
                         requestedName);
+
+                auto &recoveryGate = BatchRenameRecoveryGate::instance();
+                recoveryGate.refresh();
+                if (recoveryGate.mutationsBlocked()) {
+                    QMessageBox::warning(&dialog, trLocal("Właściwości", "Properties"),
+                                         recoveryGate.message());
+                    return false;
+                }
 
                 KIO::CopyJob *renameJob =
                     KIO::moveAs(

@@ -21,7 +21,7 @@ int main(int argc, char **argv)
     const QUrl rootA = QUrl::fromLocalFile(a), rootB = QUrl::fromLocalFile(b);
     QWidget parent;
     QAction undoAction(&parent), redoAction(&parent);
-    UndoController undo(&parent, [] {}, [] {}, [](const QString &, int) {});
+    UndoController undo(&parent, [](bool) {}, [] {}, [](const QString &, int) {});
     undo.setActions(&undoAction, &redoAction);
     int completed = 0, lastError = 0;
     bool lastClear = false, interactive = true;

@@ -304,6 +304,21 @@ int main(int argc, char **argv)
             QTest::keyClick(view, Qt::Key_A, Qt::ControlModifier);
             verify(window.selectedUrls().size() == 2, "Ctrl+A active pane");
             verify(other->selectionModel()->selectedRows().size() == 1, "Ctrl+A leaves other selection alone");
+            verify(window.m_batchRenameAction->isEnabled(),
+                   "Batch Rename is enabled for multiple selection in the active pane");
+            QTimer::singleShot(0, &window, [&, split, directory] {
+                auto *batch = dynamic_cast<BatchRenameDialog *>(QApplication::activeModalWidget());
+                verify(batch != nullptr, "Batch Rename dialog opened");
+                window.setActivePane(split ? ThisPcWindow::PaneId::Primary
+                                           : ThisPcWindow::PaneId::Split);
+                verify(batch->m_urls.size() == 2
+                           && QFileInfo(batch->m_urls.first().toLocalFile()).absolutePath()
+                               == directory.toLocalFile(),
+                       "Batch Rename retains the initiating pane snapshot after focus changes");
+                batch->reject();
+            });
+            window.batchRenameSelected();
+            focus(view);
             selectOne(view);
             dialog(true, true, other);
             QTest::keyClick(view, Qt::Key_N, Qt::ControlModifier | Qt::ShiftModifier);

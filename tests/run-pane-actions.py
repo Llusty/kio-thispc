@@ -12,6 +12,8 @@ import subprocess
 import tempfile
 
 parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--keep-build', action='store_true',
+                    help='preserve the generated pane-test tree for post-mortem debugging')
 group = parser.add_mutually_exclusive_group()
 group.add_argument('--tabs', action='store_true', help='run tab drag/drop tests instead of pane actions')
 group.add_argument('--sidebar-dnd', action='store_true', help='run sidebar drag/drop tests')
@@ -29,7 +31,7 @@ group.add_argument('--all', action='store_true', help='run every regression suit
 group.add_argument('--suites', nargs='+', choices=[
     'panes', 'tabs', 'properties', 'search', 'actions', 'operations',
     'local_transfer', 'transfer_plan', 'local_move', 'local_tree', 'tree_history',
-    'sidebar_dnd', 'sidebar_layout', 'split_layout', 'templates', 'trash', 'archive', 'archive_jobs', 'archive_menu', 'archive_creation', 'preview', 'quick_look'],
+    'sidebar_dnd', 'sidebar_layout', 'split_layout', 'templates', 'trash', 'archive', 'archive_jobs', 'archive_menu', 'archive_creation', 'preview', 'quick_look', 'batch_rename'],
     help='build once and run only the selected regression suites')
 options = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
@@ -108,9 +110,11 @@ static TestEmptyTrashJob *makeTestEmptyTrashJob() {
 }
 '''
 (root / 'build').mkdir(exist_ok=True)
-with tempfile.TemporaryDirectory(prefix='thispc-pane-tests-') as tmp, tempfile.TemporaryDirectory(
-        prefix='test-data-', dir=root / 'build') as disk_tmp:
+with tempfile.TemporaryDirectory(prefix='thispc-pane-tests-', delete=not options.keep_build) as tmp, tempfile.TemporaryDirectory(
+        prefix='test-data-', dir=root / 'build', delete=not options.keep_build) as disk_tmp:
     tmp = Path(tmp)
+    if options.keep_build:
+        print(f'Persistent pane-test build: {tmp}', flush=True)
     (tmp / 'src').mkdir()
     for header in (root / 'src').glob('*.h'):
         (tmp / 'src' / header.name).write_text(expose(file_actions if header.name == 'fileactions.h' else header.read_text()))
@@ -118,7 +122,13 @@ with tempfile.TemporaryDirectory(prefix='thispc-pane-tests-') as tmp, tempfile.T
     suites['split_layout'] = 'split-layout.cpp'
     suites['preview'] = 'preview-pane.cpp'
     suites['quick_look'] = 'quick-look.cpp'
+    suites['batch_rename'] = 'batch-rename.cpp'
     selected = options.suites or (list(suites) if options.all else ['trash' if options.trash else 'templates' if options.templates else 'sidebar_layout' if options.sidebar_layout else 'sidebar_dnd' if options.sidebar_dnd else 'local_move' if options.local_move else 'transfer_plan' if options.transfer_plan else 'local_transfer' if options.local_transfer else 'operations' if options.operations else 'actions' if options.actions else 'tabs' if options.tabs else 'properties' if options.properties else 'search' if options.search else 'panes'])
+    if 'batch_rename' in selected:
+        subprocess.run(['cmake', '-S', str(root), '-B', str(root / 'build'),
+                        '-DCMAKE_BUILD_TYPE=Debug'], check=True)
+        subprocess.run(['cmake', '--build', str(root / 'build'), '--target',
+                        'thispc-view', 'thispc-view-stage3c1-test', '-j2'], check=True)
     combined = prelude + source
     for suite in selected:
         disk_data = Path(disk_tmp) / suite
@@ -129,6 +139,7 @@ with tempfile.TemporaryDirectory(prefix='thispc-pane-tests-') as tmp, tempfile.T
         test = test[:end] + '    return 0;\n' + test[end:]
         combined += '\nnamespace regression_' + suite + ' {\n' + test + '\n}\n'
     combined += '\nint main(int argc, char **argv) {\n'
+    combined += '    if (qgetenv("THISPC_RECOVERY_STARTUP_SYNC") == "1") { auto &gate = BatchRenameRecoveryGate::instance(); if (gate.beginStartupScan()) gate.completeStartupScan(); }\n'
     for suite in selected:
         combined += f'    if (argc > 1 && QByteArray(argv[1]) == "{suite}") return regression_{suite}::run(argc, argv);\n'
     combined += '    return 2;\n}\n'
@@ -145,9 +156,10 @@ find_package(TagLib REQUIRED)
 find_package(exiv2 REQUIRED CONFIG)
 file(GLOB TEST_HEADERS CONFIGURE_DEPENDS src/*.h)
 add_executable(pane-test src/thispcview.cpp ${TEST_HEADERS})
-target_compile_options(pane-test PRIVATE -g0 -O0 -Wno-unused-function -Wno-unused-variable)
+target_compile_options(pane-test PRIVATE -g3 -O0 -fno-omit-frame-pointer -Wno-unused-function -Wno-unused-variable)
 target_include_directories(pane-test PRIVATE ${LibArchive_INCLUDE_DIRS})
 target_link_libraries(pane-test PRIVATE Qt6::Core Qt6::Concurrent Qt6::Gui Qt6::Widgets Qt6::PrintSupport Qt6::Pdf Qt6::Test KF6::KIOCore KF6::KIOWidgets ${LibArchive_LIBRARIES} ZLIB::ZLIB TagLib::TagLib Exiv2::exiv2lib)
+target_compile_definitions(pane-test PRIVATE THISPC_BATCH_RENAME_TEST_HOOKS=1)
 '''
     (tmp / 'CMakeLists.txt').write_text(cmake)
     subprocess.run(['cmake', '-S', str(tmp), '-B', str(tmp / 'build')], check=True)
@@ -174,6 +186,11 @@ target_link_libraries(pane-test PRIVATE Qt6::Core Qt6::Concurrent Qt6::Gui Qt6::
                    XDG_CONFIG_HOME=str(tmp / suite / 'config'), XDG_CACHE_HOME=str(tmp / suite / 'cache'),
                    XDG_DATA_HOME=str(disk_data / 'data'), THISPC_TEST_FILES=str(disk_data),
                    LANG='C.UTF-8', LC_ALL='C.UTF-8')
+        if suite == 'batch_rename':
+            env['THISPC_BLACKBOX_VIEW'] = str(root / 'build/bin/thispc-view-stage3c1-test')
+            env['THISPC_PRODUCTION_VIEW'] = str(root / 'build/bin/thispc-view')
+        if suite != 'batch_rename':
+            env['THISPC_RECOVERY_STARTUP_SYNC'] = '1'
         command = [str(tmp / 'build/pane-test'), suite]
         if suite not in {'operations', 'local_transfer', 'transfer_plan', 'local_move', 'local_tree', 'tree_history',
                          'sidebar_layout', 'archive', 'archive_creation'}:

@@ -2,7 +2,7 @@
  * thispc-view - a lightweight KDE/Qt file browser with a Windows-like
  * "This PC" home page, backed by KIO.
  *
- * Version 0.27.0
+ * Version 0.28.0
  * SPDX-License-Identifier: MIT
  */
 
@@ -54,6 +54,7 @@
 #include <QFontMetrics>
 #include <QFormLayout>
 #include <QFrame>
+#include <QFutureWatcher>
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QGuiApplication>
@@ -108,6 +109,7 @@
 #include <QTextDocument>
 #include <QTextEdit>
 #include <QTextLayout>
+#include <QtConcurrent>
 #include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
@@ -1224,6 +1226,7 @@ private:
 
     void showSelectedProperties()
     {
+        if (!mutationAllowedByRecoveryGate()) return;
         const auto context = paneContext();
         if (context.items.size() != 1) return;
         const auto item = context.items.first();
@@ -1256,8 +1259,8 @@ public:
 
         m_undoController = new UndoController(
             this,
-            [this] {
-                refreshCurrent();
+            [this](bool preserveStatusMessage) {
+                refreshCurrent(preserveStatusMessage);
                 if (m_splitPane && m_splitPane->isVisible()) {
                     m_splitPane->refresh();
                 }
@@ -1275,7 +1278,44 @@ public:
             [this](KJob *job, const QString &message, bool clearClipboard, const QString &title,
                    const FileActions::RefreshViews &refreshViews) {
                 watchFileOperation(job, message, clearClipboard, title, refreshViews);
+            }, [this](const QString &message) { statusBar()->showMessage(message, 0); });
+
+        auto &recoveryGate = BatchRenameRecoveryGate::instance();
+        const bool startsRecoveryScan = recoveryGate.beginStartupScan();
+        m_recoveryStatusLabel = new QLabel(statusBar());
+        m_recoveryStatusLabel->setObjectName(QStringLiteral("recoveryFenceStatus"));
+        m_recoveryStatusLabel->setText(recoveryGate.message());
+        m_recoveryStatusLabel->setToolTip(recoveryGate.message());
+        m_recoveryStatusLabel->setVisible(true);
+        statusBar()->addPermanentWidget(m_recoveryStatusLabel, 1);
+        statusBar()->showMessage(recoveryGate.message(), 0);
+        recordRecoveryTestPresentation();
+        if (startsRecoveryScan) {
+#ifdef THISPC_BATCH_RENAME_TEST_HOOKS
+            if (qgetenv("THISPC_RECOVERY_STARTUP_SYNC") == QByteArrayLiteral("1")) {
+                recoveryGate.completeStartupScan();
+                updateRecoveryFencePresentation();
+            } else {
+#endif
+            m_recoveryStartupWatcher = new QFutureWatcher<void>(this);
+            connect(m_recoveryStartupWatcher, &QFutureWatcher<void>::finished, this, [this] {
+                updateRecoveryFencePresentation();
+                updateFileActionStates();
             });
+            m_recoveryStartupWatcher->setFuture(QtConcurrent::run([&recoveryGate] {
+                recoveryGate.completeStartupScan();
+            }));
+#ifdef THISPC_BATCH_RENAME_TEST_HOOKS
+            }
+#endif
+        }
+        QTimer *recoveryFenceTimer = new QTimer(this);
+        recoveryFenceTimer->setInterval(1000);
+        connect(recoveryFenceTimer, &QTimer::timeout, this, [this] {
+            updateRecoveryFencePresentation();
+            updateFileActionStates();
+        });
+        recoveryFenceTimer->start();
 
         m_searchController = new SearchController(this);
         connect(m_searchController, &SearchController::resultsChanged, this, [this] {
@@ -1328,6 +1368,13 @@ public:
 protected:
     void closeEvent(QCloseEvent *event) override
     {
+        if (BatchRenameRecoveryGate::instance().unjournaledSwapRunning()) {
+            statusBar()->showMessage(trLocal(
+                "Trwa zamiana nazw bez produkcyjnego dziennika recovery. Poczekaj na jej zakończenie przed zamknięciem okna.",
+                "A name exchange without production crash recovery is in progress. Wait for completion before closing."), 0);
+            event->ignore();
+            return;
+        }
         const int activeOperations =
             m_operationManager ? m_operationManager->activeCount() : 0;
         if (activeOperations > 0) {
@@ -1991,6 +2038,12 @@ private:
             &QAction::triggered,
             this,
             &ThisPcWindow::renameSelected);
+
+        m_batchRenameAction = toolbar->addAction(
+            themedIcon(QStringLiteral("edit-rename")),
+            trLocal("Zmień nazwy zbiorczo…", "Batch Rename…"));
+        connect(m_batchRenameAction, &QAction::triggered,
+                this, &ThisPcWindow::batchRenameSelected);
 
         toolbar->addSeparator();
 
@@ -2700,14 +2753,14 @@ private:
         statusBar()->setSizeGripEnabled(true);
 
         m_versionLabel = new QLabel(
-            QStringLiteral("v0.27.0"),
+            QStringLiteral("v0.28.0"),
             this);
         m_versionLabel->setObjectName(
             QStringLiteral("versionLabel"));
         m_versionLabel->setToolTip(
             trLocal(
-                "Wersja thispc-view 0.27.0",
-                "thispc-view version 0.27.0"));
+                "Wersja thispc-view 0.28.0",
+                "thispc-view version 0.28.0"));
         statusBar()->addPermanentWidget(m_versionLabel);
     }
 
@@ -4420,7 +4473,7 @@ private:
         updateActiveTabPresentation();
     }
 
-    void loadDirectory(const QUrl &url)
+    void loadDirectory(const QUrl &url, bool preserveStatusMessage = false)
     {
         m_pendingFiles.clear();
         m_directoryList->clear();
@@ -4436,6 +4489,7 @@ private:
             url,
             KIO::HideProgressInfo);
         job->setUiDelegate(nullptr);
+        job->setProperty("thispcPreserveStatusMessage", preserveStatusMessage);
         m_directoryJob = job;
 
         connect(
@@ -5233,6 +5287,7 @@ private:
 
     void createArchiveFromSelection(const QList<QUrl> &urls, ThisPcArchiveFormat format)
     {
+        if (!mutationAllowedByRecoveryGate()) return;
         QString parent;
         if (!selectionHasCommonParent(urls, &parent)) {
             QMessageBox::information(this, trLocal("Tworzenie archiwum", "Create archive"),
@@ -5263,6 +5318,7 @@ private:
                         "The archive exists. Choose a different name — nothing was overwritten."));
             return;
         }
+        if (!mutationAllowedByRecoveryGate()) return;
         const QUrl destination = QUrl::fromLocalFile(archivePath);
         auto *job = new ArchiveCreationJob(urls, destination, format, this);
         connect(job, &QObject::destroyed, this, [this, destination] {
@@ -5298,6 +5354,7 @@ private:
 
     void extractArchiveWithArk(const QUrl &archiveUrl, bool showDialog)
     {
+        if (!mutationAllowedByRecoveryGate()) return;
         const QString executable = QStandardPaths::findExecutable(QStringLiteral("ark"));
         if (executable.isEmpty() || !thispcIsArchiveCandidate(archiveUrl, false)) {
             QMessageBox::warning(this, trLocal("Wypakowywanie", "Extraction"),
@@ -5320,6 +5377,10 @@ private:
                 trLocal("Wypakuj do — istniejące pliki nie będą nadpisywane",
                         "Extract To — existing files will not be overwritten"), destination);
             if (destination.isEmpty()) { m_runningArchivePaths.remove(identity); return; }
+        }
+        if (!mutationAllowedByRecoveryGate()) {
+            m_runningArchivePaths.remove(identity);
+            return;
         }
         const QUrl destinationUrl = QUrl::fromLocalFile(destination);
         auto *job = new ArchiveExtractionJob(archiveUrl, destinationUrl, executable, this);
@@ -6156,6 +6217,11 @@ private:
             trLocal("Zmień nazwę", "Rename"));
         renameAction->setEnabled(single);
 
+        QAction *batchRenameAction = menu.addAction(
+            themedIcon(QStringLiteral("edit-rename")),
+            trLocal("Zmień nazwy zbiorczo…", "Batch Rename…"));
+        batchRenameAction->setEnabled(selected.size() >= 2);
+
         QAction *trashAction = menu.addAction(
             themedIcon(QStringLiteral("user-trash")),
             trLocal("Do Kosza", "Trash"));
@@ -6246,6 +6312,8 @@ private:
             putSelectionOnClipboard(false);
         } else if (chosen == renameAction) {
             renameSelected();
+        } else if (chosen == batchRenameAction) {
+            batchRenameSelected();
         } else if (chosen == trashAction) {
             trashSelected();
         } else if (chosen == pasteIntoAction) {
@@ -6354,6 +6422,10 @@ private:
         }
 
         const QList<QUrl> selection = selectedUrls();
+        auto &recoveryGate = BatchRenameRecoveryGate::instance();
+        recoveryGate.refresh();
+        const bool recoverySafe = !recoveryGate.mutationsBlocked();
+        updateRecoveryFencePresentation();
         const bool hasSelection = !selection.isEmpty();
         const bool singleSelection = selection.size() == 1;
 
@@ -6364,21 +6436,21 @@ private:
 
         m_copyAction->setEnabled(hasSelection);
         m_cutAction->setEnabled(hasSelection);
-        m_renameAction->setEnabled(singleSelection);
-        if (m_propertiesAction) m_propertiesAction->setEnabled(singleSelection);
-        m_trashAction->setEnabled(allLocal);
+        m_renameAction->setEnabled(recoverySafe && singleSelection);
+        m_batchRenameAction->setEnabled(recoverySafe && selection.size() >= 2 && paneContext().isDirectory);
+        if (m_propertiesAction) m_propertiesAction->setEnabled(recoverySafe && singleSelection);
+        m_trashAction->setEnabled(recoverySafe && allLocal);
 
         if (m_emptyTrashAction) {
             const QUrl directory = paneContext().directory;
             const bool atTrashRoot = FileActions::isTrashRoot(directory);
             m_emptyTrashAction->setVisible(atTrashRoot);
             m_emptyTrashAction->setEnabled(
-                atTrashRoot && m_fileActions
+                recoverySafe && atTrashRoot && m_fileActions
                 && m_fileActions->canEmptyTrash(directory));
         }
 
-        const bool canCreate =
-            canModifyCurrentDirectory();
+        const bool canCreate = recoverySafe && canModifyCurrentDirectory();
         m_newFolderAction->setEnabled(canCreate);
         if (m_newTextFileAction) {
             m_newTextFileAction->setEnabled(canCreate);
@@ -6396,7 +6468,7 @@ private:
             m_newButton->setEnabled(canCreate);
         }
         m_pasteAction->setEnabled(
-            canPasteHere());
+            recoverySafe && canPasteHere());
 
         const bool inDirectory = paneContext().isDirectory;
 
@@ -6478,6 +6550,14 @@ private:
     {
         const auto context = paneContext();
         m_fileActions->renameSelected(selectedUrls(), context.items.isEmpty() ? QString() : context.items.first().name);
+    }
+
+    void batchRenameSelected()
+    {
+        const PaneContext context = paneContext();
+        QList<QUrl> urls;
+        for (const PaneItem &item : context.items) urls.push_back(item.url);
+        if (m_fileActions) m_fileActions->batchRenameSelected(urls);
     }
 
     void trashSelected()
@@ -7232,7 +7312,7 @@ private Q_SLOTS:
         }
     }
 
-    void refreshCurrent()
+    void refreshCurrent(bool preserveStatusMessage = false)
     {
         reloadDrives();
 
@@ -7245,7 +7325,7 @@ private Q_SLOTS:
         if (isSearchLocation(m_currentUrl)) {
             loadSearchLocation(m_currentUrl);
         } else {
-            loadDirectory(m_currentUrl);
+            loadDirectory(m_currentUrl, preserveStatusMessage);
         }
     }
 
@@ -7358,6 +7438,51 @@ private Q_SLOTS:
     }
 
 private:
+    void recordRecoveryTestPresentation()
+    {
+#ifdef THISPC_BATCH_RENAME_TEST_HOOKS
+        const QString path = QString::fromLocal8Bit(qgetenv("THISPC_RECOVERY_UI_TRACE"));
+        if (path.isEmpty() || !m_recoveryStatusLabel) return;
+        const QByteArray line = m_recoveryStatusLabel->text().toUtf8() + '\n';
+        QFile trace(path);
+        if (trace.open(QIODevice::WriteOnly | QIODevice::Append)) trace.write(line);
+#endif
+    }
+
+    void updateRecoveryFencePresentation()
+    {
+        auto &gate = BatchRenameRecoveryGate::instance();
+        gate.refresh();
+        if (!m_recoveryStatusLabel) return;
+        m_recoveryStatusLabel->setText(gate.message());
+        m_recoveryStatusLabel->setToolTip(gate.message());
+        m_recoveryStatusLabel->setVisible(true);
+        recordRecoveryTestPresentation();
+        if (gate.mutationsBlocked()) {
+            statusBar()->showMessage(gate.message(), 0);
+        } else if (statusBar()->currentMessage().contains(
+                       QStringLiteral("Checking crash recovery"), Qt::CaseInsensitive)) {
+            statusBar()->clearMessage();
+        }
+    }
+
+    bool mutationAllowedByRecoveryGate()
+    {
+        auto &gate = BatchRenameRecoveryGate::instance();
+        gate.refresh();
+        if (!gate.mutationsBlocked()) {
+            updateRecoveryFencePresentation();
+            return true;
+        }
+        if (m_recoveryStatusLabel) {
+            m_recoveryStatusLabel->setText(gate.message());
+            m_recoveryStatusLabel->setToolTip(gate.message());
+            m_recoveryStatusLabel->show();
+        }
+        statusBar()->showMessage(gate.message(), 0);
+        return false;
+    }
+
     void rebuildDriveGrid()
     {
         rebuildDriveGrid(PaneId::Primary, m_homePage, m_homeStatus, m_drivesGrid);
@@ -7421,6 +7546,7 @@ private:
     QAction *m_copyAction = nullptr;
     QAction *m_pasteAction = nullptr;
     QAction *m_renameAction = nullptr;
+    QAction *m_batchRenameAction = nullptr;
     QAction *m_propertiesAction = nullptr;
     QAction *m_trashAction = nullptr;
     QAction *m_emptyTrashAction = nullptr;
@@ -7485,6 +7611,8 @@ private:
 
     OperationManager *m_operationManager = nullptr;
     QLabel *m_versionLabel = nullptr;
+    QLabel *m_recoveryStatusLabel = nullptr;
+    QFutureWatcher<void> *m_recoveryStartupWatcher = nullptr;
 
     QWidget *m_splitHomePage = nullptr;
     QLabel *m_splitHomeStatus = nullptr;
@@ -7534,7 +7662,7 @@ int main(int argc, char **argv)
     QCoreApplication::setApplicationName(
         QStringLiteral("thispc-view"));
     QCoreApplication::setApplicationVersion(
-        QStringLiteral("0.27.0"));
+        QStringLiteral("0.28.0"));
 
     app.setApplicationDisplayName(
         isPolish()
@@ -7575,6 +7703,34 @@ int main(int argc, char **argv)
         initialUrl,
         !hasExplicitInitialUrl);
     window.show();
+
+#ifdef THISPC_BATCH_RENAME_TEST_HOOKS
+    QTimer recoveryTestHeartbeat;
+    const QString heartbeatPath = QString::fromLocal8Bit(
+        qgetenv("THISPC_RECOVERY_UI_HEARTBEAT"));
+    if (!heartbeatPath.isEmpty()) {
+        recoveryTestHeartbeat.setInterval(25);
+        QObject::connect(&recoveryTestHeartbeat, &QTimer::timeout, [&heartbeatPath] {
+            QFile heartbeat(heartbeatPath);
+            if (heartbeat.open(QIODevice::WriteOnly | QIODevice::Append)) heartbeat.write("tick\n");
+        });
+        recoveryTestHeartbeat.start();
+    }
+    QTimer recoveryTestExit;
+    bool recoveryTestExitScheduled = false;
+    if (qgetenv("THISPC_RECOVERY_TEST_EXIT") == QByteArrayLiteral("1")) {
+        recoveryTestExit.setInterval(25);
+        QObject::connect(&recoveryTestExit, &QTimer::timeout,
+                         [&app, &recoveryTestExitScheduled] {
+            if (!recoveryTestExitScheduled
+                && !BatchRenameRecoveryGate::instance().startupScanPending()) {
+                recoveryTestExitScheduled = true;
+                QTimer::singleShot(100, &app, &QCoreApplication::quit);
+            }
+        });
+        recoveryTestExit.start();
+    }
+#endif
 
     return app.exec();
 }

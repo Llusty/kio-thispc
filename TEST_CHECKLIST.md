@@ -153,3 +153,205 @@ i **99 asercji Split Layout**. Użytkownik potwierdził końcową ręczną akcep
 - [x] Alt+P Preview Pane działa niezależnie przed, podczas i po Quick Look.
 - [x] Focused: `TMPDIR=/tmp python3 tests/run-pane-actions.py --suites quick_look preview panes split_layout`.
 - [x] Full: `TMPDIR=/tmp python3 tests/run-pane-actions.py --all` — 22 suites / 3598 assertions PASS.
+
+## 0.28.0 — Batch Rename
+
+> Sekcje etapowe poniżej są historycznym zapisem kolejnych wycinków. Bieżące
+> rozstrzygnięcie wydania znajduje się w sekcji „Audyt końcowy 0.28.0”.
+
+- [x] Stage 1: 8/8 testów ręcznych potwierdzone przez użytkownika.
+- [x] Focused Stage 2: `batch_rename panes actions` — 50 + 287 + 157 asercji PASS.
+- [ ] Wykonać ręczną checklistę Stage 2 z `docs/BATCH_RENAME_STAGE2.md` na jednorazowych danych.
+- [x] Full: `TMPDIR=/tmp python3 tests/run-pane-actions.py --all` — 23 zestawy / 3666 asercji PASS.
+- [x] `git diff --check` i build; bez zmiany wersji, commita, taga, ZIP, instalacji ani publikacji.
+
+## 0.28.0 — Batch Rename Stage 3A
+
+- [x] Patch Stage 3A zastosowany; build PASS.
+- [x] Focused `batch_rename panes actions`: 85 + 287 + 157 = 529 PASS.
+- [x] Ręczny test łańcucha `1 → 41 → 441` i zachowania obu zawartości PASS.
+- [ ] Pełna regresja po Stage 3A.
+- [ ] Pozostała ręczna checklista Stage 3A i pełna Stage 2 (tylko błędny regex ręcznie potwierdzony).
+
+## Stage 3B.1 — atomowy swap dwóch nazw, patch do weryfikacji
+
+- [ ] Zastosować Stage 3B.1 patch na bazie Stage 3A i `git diff --check`.
+- [ ] `./scripts/build.sh` i focused `batch_rename panes actions`.
+- [ ] Pełna regresja `tests/run-pane-actions.py --all`.
+- [ ] Ręczne testy w `docs/BATCH_RENAME_STAGE3.md`: pliki, katalogi, symlinki,
+      odrzucenie ostrzeżenia, race po preview, Split View i brak Ctrl+Z dla swapu.
+- [ ] Cykle 3+, trwałe recovery i wspólne Undo/Redo — **niewdrożone**;
+      nie wydawać 0.28.0.
+
+
+## 0.28.0 — Stage 3B.2: cykle 3+ (testy automatyczne PASS, ręczny cykl 3 PASS)
+
+- [x] Zastosować przyrostowy patch Stage 3B.2 na repo z Stage 3B.1; nie
+      nadpisywać lokalnych zmian użytkownika.
+- [x] `./scripts/build.sh` — konfiguracja i kompilacja Qt6/KF6.
+- [x] Focused: `env TMPDIR=/tmp python3 tests/run-pane-actions.py --suites batch_rename panes actions`.
+- [x] Pełna regresja: `env TMPDIR=/tmp python3 tests/run-pane-actions.py --all`.
+- [x] `git diff --check`.
+- [ ] Pełna ręczna checklista `docs/BATCH_RENAME_STAGE3.md` na kopiach w KDE;
+      test cyklu 3 plików z zawartością potwierdzono, pozostałych nie.
+- [ ] Pełna ręczna akceptacja Stage 2 (dotąd potwierdzono tylko wybrane przypadki).
+- [ ] Trwały journal/recovery i wspólne Undo/Redo nadal niewdrożone;
+      nie uznawać 0.28.0 za gotowe do wydania.
+
+## 0.28.0 — Stage 3C.1: journal diagnostyczny (patch do weryfikacji)
+
+- [ ] Kompilacja, focused `batch_rename panes actions`, pełna regresja, `git diff --check`.
+- [ ] Testy dziennika: sygnatura source/inode/device, checkpoint i cleanup, przerwany
+      obiekt pozostawia plik, nierozwiązany manifest blokuje kolejną próbę.
+- [ ] KDE: cykl 3 plików na kopiach, poprawna zawartość i brak journalu po sukcesie.
+- [ ] Nie deklarować automatycznego recovery ani zbiorczego Undo/Redo: nadal brak.
+
+
+## 0.28.0 Stage 3C.2A — isolated atomic pair Undo/Redo (basic KDE acceptance PASS)
+
+- [x] Two disposable sibling files `uv` / `vu`: complete one exchange; Ctrl+Z
+      restores both payloads in one step and Ctrl+Y exchanges them again.
+- [x] After Undo, replace one disposable inode; Redo refuses with zero changes
+      (manual KDE confirmation: original inode retained as `.original-1-backup`).
+- [ ] 3+ cycle retains crash-inspection journal and no Undo; ordinary acyclic
+      batch retains per-file KIO Undo (do not claim whole-batch Undo).
+- [ ] Split View, Quick Look, normal file actions and full regression PASS.
+
+
+## 0.28.0 Stage 3C.2B.1 — pojedynczy cykl 3+ (oczekuje na akceptację)
+
+- [ ] Build, focused `batch_rename panes actions`, full `--all` i `git diff --check`.
+- [ ] Testy: pełny snapshot inode+metadata, journal przy Undo/Redo, zawartość
+      trzech plików po Undo i Redo, blokada przy istniejącym dzienniku.
+- [ ] KDE: jedno Ctrl+Z i jedno Ctrl+Y dla samodzielnego cyklu trzech plików;
+      sprawdzenie treści oraz braku pozostawionego `cycle-*.json`.
+- [ ] KDE: po Undo podmień jeden testowy inode, sprawdź odmowę Redo bez zmian.
+- [ ] Upewnij się, że łańcuchy i mieszane partie NIE reklamują wspólnego Undo.
+- [ ] Nadal brak automatycznego recovery i atomowości całego cyklu; nie wydawać 0.28.0.
+
+
+## Stage 3C.2B.2A — czyste lokalne łańcuchy (patch do weryfikacji)
+
+- [ ] `./scripts/build.sh` — PASS wymagany na KDE/CachyOS.
+- [ ] Focused `batch_rename panes actions`, full `--all`, `git diff --check`.
+- [ ] Testy automatyczne: dwie niezależne grupy w jednym Undo/Redo, preflight
+      całej mapy, fault injection po pierwszym kroku i poprawny rollback,
+      blokada nieznanego inode oraz outsiders w pustym źródle.
+- [ ] KDE: `1,41,2,42`, prefiks `4`; jedno Ctrl+Z i Ctrl+Y dla czterech plików.
+- [ ] Odrzucenie dialogu nie zmienia plików; błąd/anulowanie zwykłego KIO
+      nie tworzy historii grupowej i zachowuje wpisy ukończonych operacji.
+- [ ] Samodzielny swap, cykl 3+, obie strony Split View, Quick Look: bez regresji.
+- [ ] NIE deklarować wspólnego Undo/Redo dla partii łączących różne typy,
+      automatycznego crash recovery ani atomowości wieloetapowej partii.
+
+## 0.28.0 — odmowa Redo po zmianie inode: trwały komunikat UI
+
+- [x] Kontroler: Undo → podmiana inode → Redo odmawia bez zmian, zachowuje
+      aktywne Redo i po bezpiecznym przywróceniu oczekiwanego inode pozwala ponowić.
+- [x] Integracja: `renderDirectoryItems` i asynchroniczny refresh z właściwością
+      joba nie nadpisują komunikatu odmowy; zwykły refresh nie zmienia zachowania.
+- [x] Build i focused `batch_rename search actions`: 246 + 122 + 157 = 525 PASS.
+- [x] Full `--all`: 23 zestawy / 3865 asercji PASS.
+
+## Audyt końcowy 0.28.0 — stan po ręcznych testach Stage 2/3
+
+- [x] Stage 2 punkty 1–8 i 10 z `docs/BATCH_RENAME_STAGE2.md`: PASS. Obejmuje
+      kolizje i race, mieszany no-op (1 zmiana + 3 pominięcia) z Undo/Redo,
+      preview w obu panelach Split View i trzech trybach oraz regresje Rename,
+      Trash, Quick Look i Preview Pane.
+- [ ] Stage 2 punkt 9: anulowanie **w trakcie** większej niekwalifikującej się
+      partii KIO z osobnymi wpisami Undo — nie wykonano. Nie oznaczać PASS.
+      Zwykłe kwalifikujące się lokalne partie mają celowo brak Cancel w trakcie,
+      journalowany nieatomowy replay i jedno wspólne Undo po pełnym sukcesie.
+- [x] Anulowanie przed startem (odrzucenie ostrzeżenia): PASS, zero zmian.
+- [x] Stage 3: swap oraz cykl 3 — wykonanie, jedno Undo i jedno Redo PASS.
+- [x] Stage 3: dwa niezależne łańcuchy — wspólne Undo/Redo PASS.
+- [x] Stage 3: odmowa Redo po podmianie inode bez zmian; komunikat pozostał
+      widoczny około 12 s.
+- [x] Stage 3: świeża dwuelementowa partia journalowana — wykonanie, jedno Undo
+      i jedno Redo zachowały nazwy i zawartości; po każdym kroku brak
+      `linear-*.json`. UI reagowało podczas krótkiej operacji; to ograniczona
+      obserwacja, nie dowód responsywności dla wszystkich czasów wykonania.
+- [x] Stage 3: odmowa całej operacji przed pierwszą zmianą po utworzeniu obcego
+      `a.txt` (inode 13093128) — PASS. Jedno Ctrl+Z pokazało komunikat o zmianie
+      plików/inode; `a.txt` zachował obcą zawartość i inode, `b.txt` nie powstał,
+      `TEST_a.txt` (`PIERWSZY`, inode 13092581) i `TEST_b.txt` (`DRUGI`, inode
+      13092582) pozostały bez zmian; brak `linear-*.json`.
+- [x] Stage 3: aktywny lewy panel Split View — wykonanie i Undo/Redo PASS.
+- [x] Stage 3: dwa ręczne przypadki race oraz cancel przed startem PASS.
+- [x] Bieżąca baza (2026-09-19): `./scripts/build.sh` PASS; focused
+      `batch_rename panes actions` — 268 + 287 + 157 = 712 asercji PASS;
+      pełna regresja `--all` — 23 zestawy / 3887 asercji PASS;
+      `git diff --check` PASS.
+- [x] Polityka local-linear rozstrzygnięta w 3C.2: produkcyjne v2 recovery
+      dokańcza zapisany kierunek; pozostałe klasy nadal blokują/manual-only.
+- [ ] Jeżeli 0.28.0 ma oficjalnie obejmować niekwalifikujące się/zdalne plany
+      KIO, wykonać kontrolowany test ich cancel w trakcie na jednorazowych
+      danych. Dla lokalnego zakresu wydania test jest opcjonalny i nie należy
+      próbować wymuszać go na szybkiej partii produkcyjnych plików.
+- [ ] Różnice wizualne trybów widoku lewego/prawego panelu Split View zapisać
+      jako osobne przyszłe zadanie; nie rozszerzają zakresu 0.28.0 bez wykazanej
+      regresji funkcjonalnej.
+
+## Crash recovery Stage 3C.1 — izolowane UI/black-box
+
+- [x] Kierunkowe, trwałe statusy checking/recovering/success/conflict dla Undo/Redo.
+- [x] Prawdziwy testowy build aplikacji: startup recovery obu kierunków i drugi
+      restart; dokładne nazwy, treści oraz dev+ino.
+- [x] Konflikt: brak zmian, obcy inode i treść zachowane, journal zachowany,
+      mutacje nadal zablokowane.
+- [x] Spowolniony worker nie blokuje głównego event loop; czysty startup PASS.
+- [x] Produkcyjny `thispc-view` nie wykonuje automatycznie v2 Undo/Redo.
+- [x] Focused Batch Rename: 1032/1032 PASS; pełne `--all`: PASS;
+      produkcyjny build, testowy build i `git diff --check`: PASS.
+- [x] 3C.2: kwalifikujące się local-linear Undo/Redo używa produkcyjnego v2;
+      startup dokańcza dokładnie jeden poprawny v2 forward/undo/redo (polityka B).
+- [x] Procesowa macierz 12 punktów SIGKILL × Undo/Redo przechodzi przez
+      `UndoController::undo()`/`redo()` w prywatnym XDG; drugi restart idempotentny.
+- [x] V1/corrupt/unknown/multiple/temp/live-lock pozostają fail-closed/manual-only;
+      konflikt zachowuje journal i obcy inode, a mutacje pozostają zablokowane.
+- [x] 3C.2/Etap 3 PASS w zakresie local-linear: build PASS; focused
+      `batch_rename panes actions` 1476 PASS; pełne `--all` 23 zestawy / 4651
+      asercji PASS; `git diff --check` PASS.
+- [ ] Brak gwarancji power-loss bez disposable VM/FS-image; swapy/cykle/KIO
+      fallback i Etap 4 poza zakresem. Wersja 0.27.0, release nadal wstrzymany.
+
+## 0.28.0 — Etap 4A: crash recovery izolowanego swapu
+
+- [x] Audyt istniejącego Execute/Undo/Redo, v2 i kolejności blokad; zamrożony
+      osobny manifest `kind=swap` oraz deterministyczne mapy before/after.
+- [x] 4A.1B: izolowany testowy parser/silnik v2 swapu — procesowe
+      Execute/Undo/Redo, drugi SIGKILL podczas recovery, kolejne restarty,
+      concurrency/lock lifecycle, fsync journal/data/cleanup, ENOSYS/
+      EOPNOTSUPP, konflikty, podmiana katalogu, TOCTOU oraz ścisły validator
+      plans/states/digest PASS. Nie oznacza aktywacji produkcyjnej.
+- [ ] Worker dla swap Execute oraz Undo/Redo; kierunkowe trwałe statusy i gate.
+- [ ] Black-box Execute/Undo/Redo, drugi restart, dwie instancje i GUI responsive.
+- [ ] Produkcyjna allowlista startup recovery dla `kind=swap`.
+- [ ] **4A NIEZALICZONY**; swapy nadal nie są automatycznie odzyskiwane.
+- [x] Bieżąca weryfikacja części 4A.1: build PASS; focused `batch_rename panes
+      actions` 1272 + 287 + 157 = 1716 asercji PASS; pełne `--all` 23 zestawy /
+      4891 asercji PASS; `git diff --check` PASS; wersja nadal 0.27.0.
+- [x] Weryfikacja 4A.1B (2026-09-20): `./scripts/build.sh` PASS; focused
+      `batch_rename panes actions` 1757 + 287 + 157 = 2201 asercji PASS; pełne
+      `--all` 23 zestawy / 5376 asercji PASS; `git diff --check` PASS; wersja
+      nadal 0.27.0, bez instalacji/commita/taga/ZIP/wydania.
+
+## 0.28.0 — końcowy kandydat wariantu A
+
+- [x] Zakres zamknięty: produkcyjne auto-recovery v2 wyłącznie dla
+      kwalifikujących się lokalnych linear Execute/Undo/Redo.
+- [x] Swap v2 generator/dispatch/allowlista, recovery cykli, równoważne
+      gwarancje KIO i power-loss przeniesione do roadmapy po 0.28.0.
+- [x] Ograniczenia procesów niekooperujących i TOCTOU opisane jawnie w
+      `RELEASE_NOTES_0.28.0.md`.
+- [x] Świeży build po zmianie wersji i dokumentów: PASS (2026-09-20).
+- [x] Świeży focused: Batch Rename 1790 + panes 287 + actions 157 = 2234 PASS.
+- [x] Świeża pełna regresja: 23 zestawy / 5409 asercji PASS.
+- [x] `git diff --check` po zmianach: PASS.
+- [ ] Końcowy ręczny odbiór GUI na izolowanych kopiach i osobnym
+      `XDG_DATA_HOME`. Jeśli nie wykonano interakcji człowieka z GUI, pozostawić
+      jako **UNVERIFIED**, nawet gdy automatyczne black-box testy przechodzą.
+- [x] Archiwum źródłowe i suma SHA-256 przygotowane bez `.git`, buildów,
+      cache ani danych użytkownika; nie instalowano, nie commitowano, nie
+      tagowano i nie publikowano.

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(kio-thispc VERSION 0.27.0 LANGUAGES CXX)
+project(kio-thispc VERSION 0.28.0 LANGUAGES CXX)
 
 set(QT_MIN_VERSION "6.5.0")
 set(KF_MIN_VERSION "6.17.0")
@@ -64,6 +64,8 @@ add_executable(thispc-view
     src/archive-detection.h
     src/archive-extraction.h
     src/browsercommon.h
+    src/batchrename.h
+    src/batchrenamejournal.h
     src/pathwidgets.h
     src/directoryview.h
     src/fileactions.h
@@ -85,6 +87,38 @@ add_executable(thispc-view
     src/splitbrowserpane.h
 )
 
+# Black-box startup/recovery integration binary. It is built from the exact
+# application sources but is neither installed nor enabled in production.
+add_executable(thispc-view-stage3c1-test EXCLUDE_FROM_ALL
+    src/thispcview.cpp
+    src/archive-creation.h
+    src/archive-detection.h
+    src/archive-extraction.h
+    src/browsercommon.h
+    src/batchrename.h
+    src/batchrenamejournal.h
+    src/pathwidgets.h
+    src/directoryview.h
+    src/fileactions.h
+    src/templatemenu.h
+    src/localfilecopyjob.h
+    src/localfilemovejob.h
+    src/localfileoverwrite.h
+    src/localtransferplan.h
+    src/localtransferjob.h
+    src/localtreehistory.h
+    src/operationmanager.h
+    src/propertiesdialog.h
+    src/previewpane.h
+    src/quicklook.h
+    src/sidebar.h
+    src/searchcontroller.h
+    src/sessionmanager.h
+    src/undocontroller.h
+    src/splitbrowserpane.h
+)
+target_compile_definitions(thispc-view-stage3c1-test PRIVATE THISPC_BATCH_RENAME_TEST_HOOKS=1)
+
 # Exiv2 reports malformed metadata through C++ exceptions. Keep exception
 # support scoped to the GUI target that reads EXIF in the worker task.
 kde_target_enable_exceptions(thispc-view PRIVATE)
@@ -105,6 +139,13 @@ target_link_libraries(thispc-view PRIVATE
     KF6::KIOCore
     KF6::KIOWidgets
 )
+
+kde_target_enable_exceptions(thispc-view-stage3c1-test PRIVATE)
+target_include_directories(thispc-view-stage3c1-test PRIVATE ${LibArchive_INCLUDE_DIRS})
+target_link_libraries(thispc-view-stage3c1-test PRIVATE
+    ${LibArchive_LIBRARIES} ZLIB::ZLIB TagLib::TagLib Exiv2::exiv2lib
+    Qt6::Core Qt6::Concurrent Qt6::Gui Qt6::Widgets Qt6::PrintSupport Qt6::Pdf
+    KF6::KIOCore KF6::KIOWidgets)
 
 install(TARGETS thispc-view DESTINATION ${KDE_INSTALL_BINDIR})
 

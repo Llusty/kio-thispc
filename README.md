@@ -1,4 +1,19 @@
-# kio-thispc 0.27.0
+# kio-thispc 0.28.0
+
+## 0.28.0 — Batch Rename
+
+- Podgląd przed wykonaniem: prefix/suffix, numerowanie, zamiana tekstu, zmiana
+  wielkości liter i rozszerzeń oraz wyrażenia regularne.
+- Bezpieczny preflight kolizji i zmiany inode, obsługa aktywnego panelu Split
+  View oraz wspólne Undo/Redo dla kwalifikujących się lokalnych partii.
+- Produkcyjne auto-recovery v2 obejmuje wyłącznie kwalifikujące się lokalne,
+  liniowe Execute/Undo/Redo i po restarcie dokańcza zapisany kierunek.
+- Swapy i cykle mają działające wykonanie oraz sesyjne Undo/Redo, ale ich
+  generator v2 i automatyczne recovery po awarii pozostają wyłączone.
+- KIO fallback (w tym zdalne URL-e) nie ma gwarancji local-linear. Brak
+  gwarancji odporności na zanik zasilania; SIGKILL testuje tylko awarię procesu.
+- Procesy zewnętrzne, które nie respektują blokady, oraz nieredukowalne okna
+  TOCTOU pozostają możliwe. Pełny kontrakt i wyniki: `RELEASE_NOTES_0.28.0.md`.
 
 ## 0.27.0 — Quick Look on Space
 
@@ -169,8 +184,8 @@ Funkcje z 0.15.4 — kompaktowy popup operacji, dynamiczna wysokość, anulowani
 
 ```bash
 cd ~/Pobrane
-unzip kio-thispc-0.27.0.zip
-cd kio-thispc-0.27.0
+unzip kio-thispc-0.28.0.zip
+cd kio-thispc-0.28.0
 chmod +x install.sh
 ./install.sh
 ```
