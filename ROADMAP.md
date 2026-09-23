@@ -140,16 +140,18 @@ New:
 
 ## Planned releases
 
-### 0.29.0 — Inteligentne tworzenie plików i folderów (release candidate)
+### 0.29.0 — Inteligentne tworzenie plików i folderów ✅ wydane i zainstalowane
 
 **Cel:** przy tworzeniu nowego elementu wykrywać zajętą nazwę przed otwarciem okna i od razu wstawiać pierwszą wolną propozycję do pola nazwy.
 
-**Stan RC:** Stage 1 lokalny i Stage 2 zdalnego KIO są zaimplementowane, a ich
+**Stan wydania:** Stage 1 lokalny i Stage 2 zdalnego KIO są zaimplementowane, a ich
 podstawowy ręczny przepływ został potwierdzony przez użytkownika. Stage 2 używa
 dwóch asynchronicznych listingów i końcowych operacji bez `Overwrite` ani
 `Resume`. Nie oznacza to testu awarii połączenia, wszystkich protokołów ani
 atomowej rezerwacji; granice opisuje `docs/NEW_ITEM_NAMING_STAGE2.md`. Wersja
-0.29.0 jest przygotowana do weryfikacji RC, bez commita, taga i instalacji.
+0.29.0 została wydana jako commit `e56acee`, oznaczona tagiem `v0.29.0`,
+zainstalowana i ręcznie potwierdzona przez użytkownika. Pełna regresja wydania:
+23 zestawy / 5430 asercji PASS.
 
 - Dla zajętej nazwy proponować `Nowy dokument (1).txt`, następnie `(2)`, `(3)` itd.; bez kolizji pozostawiać nazwę domyślną.
 - Numer umieszczać przed rozszerzeniem; poprawnie traktować nazwy katalogów, szablony, pliki z wieloma kropkami oraz pliki ukryte (np. `.gitignore`).
@@ -160,10 +162,93 @@ atomowej rezerwacji; granice opisuje `docs/NEW_ITEM_NAMING_STAGE2.md`. Wersja
 - Testy: brak konfliktu, luki w numeracji, zajęte kolejne numery, rozszerzenia i Unicode, foldery, szablony, dowiązania symboliczne, ręczna edycja, jednoczesne utworzenie nazwy przez inny proces, oba panele i brak utraty istniejących danych.
 - Kryterium odbioru: użytkownik widzi wolną nazwę od razu, może ją zmienić, a żaden test kolizji nie nadpisuje istniejącego elementu.
 
-### 0.30.0 — Grouping and per-folder view settings
-- group by type/date/size;
-- Today/Yesterday/This week/etc.;
-- remember icon/list/details mode per folder.
+### 0.30.0 — Grouping and per-folder view settings — zakres zakończony, RC
+
+**Stage 1 — per-folder view mode: zaimplementowany i ręcznie zaakceptowany**
+- zapamiętywanie Icons/List/Details według znormalizowanego URL katalogu;
+- wspólna preferencja dla panelu głównego, Split View, kart i restore session;
+- lokalne i zdalne URL-e KIO, bez skanowania zawartości i bez zależności od metadanych;
+- bezpieczny fallback do dotychczasowego ustawienia globalnego;
+- focused regression po Stage 1b: 15 asercji ustawień + 300 asercji paneli/menu PASS;
+- szczegóły i granice: `docs/GROUPING_VIEW_SETTINGS_STAGE1.md`.
+
+**Stage 1b — porządkowanie menu Widok: zaimplementowany i ręcznie zaakceptowany**
+- Icons/List/Details pozostają jedną grupą radio i są routowane do aktywnego panelu;
+- podmenu Pokaż zawiera wyłącznie działające opcje: ukryte elementy, miniatury,
+  panel podglądu i pełne nazwy, z zachowaniem stanów oraz skrótów Ctrl+H/Alt+P;
+- ten sam układ obowiązuje w menu kontekstowym Widok; Sort, Search, KIO, karty,
+  Split View, sesja i zapamiętywanie per folder nie zmieniają kontraktu.
+- build PASS; pełna regresja: 24 zestawy / 5456 asercji PASS.
+
+**Stage 1c — rozmiary ikon: zaimplementowany i ręcznie zaakceptowany**
+- cztery rzeczywiste poziomy: Bardzo duże 96 px, Duże 64 px, Średnie 48 px i Małe 32 px;
+- Duże zachowuje dotychczasową geometrię i jest bezpiecznym fallbackiem;
+- rozmiar jest zapamiętywany według znormalizowanego URL folderu i współdzielony
+  przez panel główny, Split View, karty oraz restore session;
+- menu główne i kontekstowe routują zmianę do aktywnego panelu, a radio state
+  podąża za panelem; Lista/Szczegóły zachowują dotychczasowe rozmiary;
+- każda wielkość ikon ma stałą siatkę; callout zaznaczonej pełnej nazwy nie zmienia
+  geometrii elementów ani położenia sąsiadów.
+- build PASS; focused regression: 23 ustawień + 305 paneli/menu PASS;
+  pełna regresja: 24 zestawy / 5469 asercji PASS.
+
+**Stage 1d — widok kompaktowy: zaimplementowany i ręcznie zaakceptowany**
+- czwarty tryb per-folder, dostępny w panelu głównym i Split View;
+- gęste, jednowierszowe elementy z ikoną 20 px, w kolumnach wypełnianych od góry;
+- stabilna szerokość komórki i elidowanie nazw zapewniają przewidywalny koszt układu;
+- natywna nawigacja wizualna Qt, zaznaczanie, aktywacja, menu kontekstowe i DnD
+  korzystają z tych samych ścieżek co Lista; callout pełnej nazwy pozostaje Icons-only.
+
+**Suwak rozmiaru ikon — przyszłe oddzielne zadanie po 0.30, niezrealizowane**
+- około 8–10 stopni, wyłącznie dla trybu Icons;
+- ustawienie per-folder i dla aktywnego panelu, opcjonalnie Ctrl+wheel;
+- suwak nie przełącza do List, Details ani Compact.
+
+**Dalsze funkcje Widok — osobny backlog, nie Stage 2 grupowania**
+- Tiles/Content wymagają nowych layoutów i testów wszystkich backendów;
+- details pane jest odrębny od istniejącego Preview Pane;
+- checkboxy wyboru i przełącznik rozszerzeń wymagają nowych zachowań modelu/nazw;
+- panel nawigacji istnieje, ale nie ma jeszcze kompletnego przełącznika widoczności
+  z trwałym stanem i bezpiecznym układem Split View.
+
+**Nawigacja klawiaturą — przyszłe zadanie, niezrealizowane**
+- strzałki działają obecnie w zwykłych folderach, ale nie w widoku `thispc:/`;
+- Enter ma otwierać folder lub uruchamiać plik, Backspace przechodzić do katalogu
+  nadrzędnego, Alt+Left/Alt+Right obsługiwać historię, a Alt+Up katalog nadrzędny;
+- skróty mają działać w aktywnym panelu Split View, na kartach oraz w trybach
+  Icons/List/Details/Compact, z poprawnym odtwarzaniem fokusu po nawigacji;
+- pola Search i adresu, inline rename oraz dialogi muszą zachować własną obsługę
+  klawiatury; implementacja nie może globalnie przechwytywać ich zdarzeń;
+- testy mają objąć oba panele, przełączanie kart i trybów, historię, granice historii,
+  fokus oraz lokalne i KIO URL-e. Ten wpis nie oznacza implementacji funkcji.
+
+**Stage 2 — grouping: zaimplementowany i ręcznie zaakceptowany**
+- Group by Type używa rzeczywistych kategorii modelu KDE w Icons/List/Compact
+  oraz nieselektowalnych wierszy sekcji w Details; nagłówki nie mają URL-a ani
+  roli pliku i nie trafiają do akcji, schowka, DnD, Preview, Quick Look ani menu elementu;
+- `Brak/Typ/Data/Rozmiar` jest zapamiętywane per znormalizowany URL i działa dla
+  panelu głównego, Split View, kart, Search/source URLs, KIO i restore session;
+- bieżące sortowanie jest wykonywane przed stabilnym podziałem na grupy, więc
+  kolejność wewnątrz każdej sekcji pozostaje zgodna z kluczem i kierunkiem sortowania;
+- Group by Date używa czasu modyfikacji z metadanych KIO i rozłącznych grup
+  lokalnego kalendarza: Future, Today, Yesterday, This week, Last week,
+  wcześniejsze zakresy oraz Unknown date; tydzień zaczyna się w poniedziałek;
+- osobny timer każdego panelu przelicza kategorie daty po następnej lokalnej
+  północy, także przez dni DST 23/25 h, bez synchronicznego skanowania;
+- Group by Size używa `UDS_SIZE` już dostarczonego przez KIO. Granice są binarne,
+  rozłączne i udokumentowane; foldery oraz nieznane rozmiary mają osobne grupy;
+- grouping nie wykonuje rekurencyjnego skanowania, synchronicznego `stat` ani
+  dodatkowych zdalnych żądań KIO;
+- ręczny odbiór Type, Date i Size potwierdził Icons/List/Details/Compact,
+  Split View, Search, PPM nagłówków, sortowanie, trwałość per-folder i selekcję;
+- poprawiono obrys zaznaczenia i zalegający hover w widoku pogrupowanym. Logi
+  diagnostyczne potwierdziły pojedynczą selekcję modelu; wizualny „duch” był
+  stale `State_MouseOver` i został usunięty przez wyliczanie hover z pozycji kursora;
+- weryfikacje po wycinkach: Type 24/6197 PASS, Date 24/6213 PASS; Size build,
+  test granic/ustawień 190 asercji i pełna regresja 24 zestawów PASS;
+- finalny RC po bumpie wersji: build PASS, focused 778 asercji PASS, pełne
+  `--all` 24 zestawy / 6278 asercji PASS, `git diff --check` i audit wersji PASS.
+  Pozostaje czyste archiwum + SHA-256 oraz osobna zgoda na commit/tag/install.
 
 ### 0.31.0 — Split View synchronization
 - compare left/right;

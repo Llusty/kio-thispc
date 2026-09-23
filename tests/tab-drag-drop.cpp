@@ -186,7 +186,7 @@ static void testWindow(bool split)
     QTest::qWait(200);
     auto *bar = window.m_tabBar;
     QMimeData mime; mime.setUrls({source});
-    for (int mode : {0, 1, 2}) {
+    for (int mode : {0, 1, 2, 3}) {
         window.setDirectoryViewMode(mode);
         const QPoint target = bar->tabRect(1).center();
         verify(enter(bar, target, mime), "A to B dragEnter");

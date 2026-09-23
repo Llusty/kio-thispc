@@ -47,7 +47,7 @@ int main(int argc, char **argv)
         QStringLiteral("File"),
         formatFileSize(tooltipFile.size, false),
         QStringLiteral("Today"));
-    verify(tooltipList.item(0)->toolTip().contains(formatFileSize(tooltipFile.size, false))
+    verify(tooltipList.item(0).data(Qt::ToolTipRole).toString().contains(formatFileSize(tooltipFile.size, false))
                && tooltipDetails.topLevelItem(0)->toolTip(0).contains(formatFileSize(tooltipFile.size, false)),
            "file tooltips include the formatted file size in list and details views");
 
@@ -94,16 +94,138 @@ int main(int argc, char **argv)
         window.m_splitPane->m_job->kill();
         window.m_splitPane->m_job = nullptr;
     }
+
+    // 0.30 Stage 1: the mode belongs to the normalized location rather than
+    // to a pane. Exercise both panes, navigation, and the shared persistence.
+    window.setDirectoryViewMode(1);
+    window.navigateTo(right, false);
+    if (window.m_directoryJob) {
+        window.m_directoryJob->kill();
+        window.m_directoryJob = nullptr;
+    }
+    window.setDirectoryViewMode(2);
+    window.navigateTo(left, false);
+    if (window.m_directoryJob) {
+        window.m_directoryJob->kill();
+        window.m_directoryJob = nullptr;
+    }
+    verify(window.m_directoryViewMode == 1,
+           "primary navigation restores the folder view mode");
+    window.m_splitPane->setCurrentUrl(right, false);
+    if (window.m_splitPane->m_job) {
+        window.m_splitPane->m_job->kill();
+        window.m_splitPane->m_job = nullptr;
+    }
+    verify(window.m_splitPane->viewMode() == 2,
+           "split pane restores the same persisted folder mode");
+    window.m_splitPane->setViewMode(0);
+    window.m_splitPane->setCurrentUrl(left, false);
+    if (window.m_splitPane->m_job) {
+        window.m_splitPane->m_job->kill();
+        window.m_splitPane->m_job = nullptr;
+    }
+    verify(window.m_splitPane->viewMode() == 1,
+           "per-folder mode is shared across primary and split panes");
+
+    window.setDirectoryViewMode(0);
+    window.m_splitPane->setViewMode(0);
+    window.m_splitPane->setCurrentUrl(right, false);
+    if (window.m_splitPane->m_job) {
+        window.m_splitPane->m_job->kill();
+        window.m_splitPane->m_job = nullptr;
+    }
+    QMenu *viewMenu = window.m_viewButton->menu();
+    QMenu *showMenu = viewMenu
+        ? viewMenu->findChild<QMenu *>(QStringLiteral("viewShowMenu"))
+        : nullptr;
+    verify(viewMenu && showMenu, "View contains the Show submenu");
+    const auto viewActions = viewMenu->actions();
+    QMenu *iconSizeMenu = viewMenu
+        ? viewMenu->findChild<QMenu *>(QStringLiteral("viewIconSizeMenu"))
+        : nullptr;
+    verify(viewActions.size() == 9
+               && viewActions.at(0)->objectName() == QStringLiteral("viewModeAction0")
+               && viewActions.at(1)->objectName() == QStringLiteral("viewModeAction1")
+               && viewActions.at(2)->objectName() == QStringLiteral("viewModeAction2")
+               && viewActions.at(3)->objectName() == QStringLiteral("viewModeAction3")
+               && viewActions.at(4)->menu() == iconSizeMenu
+               && viewActions.at(5)->isSeparator()
+               && viewActions.at(6)->menu() == showMenu
+               && viewActions.at(7)->isSeparator()
+               && viewActions.at(8) == window.m_restoreSessionAction,
+           "View groups modes, icon sizes, Show, and session preference");
+    verify(iconSizeMenu && iconSizeMenu->actions().size() == 4,
+           "Icon size contains four real radio choices");
+    const auto showActions = showMenu->actions();
+    verify(showActions.size() == 4
+               && showActions.at(0) == window.m_showHiddenAction
+               && showActions.at(1) == window.m_thumbnailsAction
+               && showActions.at(2) == window.m_previewAction
+               && showActions.at(3) == window.m_fullNamesAction,
+           "Show contains only the four implemented display commands");
+    verify(window.m_showHiddenAction->shortcut() == QKeySequence(Qt::CTRL | Qt::Key_H)
+               && window.m_previewAction->shortcut() == QKeySequence(Qt::ALT | Qt::Key_P),
+           "Show preserves Hidden items and Preview pane shortcuts");
+
+    QAction *listModeAction = viewMenu->findChild<QAction *>(QStringLiteral("viewModeAction1"));
+    QAction *detailsModeAction = viewMenu->findChild<QAction *>(QStringLiteral("viewModeAction2"));
+    QAction *compactModeAction = viewMenu->findChild<QAction *>(QStringLiteral("viewModeAction3"));
+    verify(listModeAction && detailsModeAction && compactModeAction,
+           "View mode actions remain addressable as one radio group");
+    window.setActivePane(ThisPcWindow::PaneId::Primary);
+    listModeAction->trigger();
+    verify(window.m_directoryViewMode == 1 && window.m_splitPane->viewMode() == 0,
+           "View mode routes to the active primary pane");
+    window.setActivePane(ThisPcWindow::PaneId::Split);
+    detailsModeAction->trigger();
+    verify(window.m_directoryViewMode == 1 && window.m_splitPane->viewMode() == 2,
+           "View mode routes to the active split pane");
+    window.updateFileActionStates();
+    verify(detailsModeAction->isChecked() && !listModeAction->isChecked(),
+           "View radio state follows the active pane");
+    compactModeAction->trigger();
+    verify(window.m_directoryViewMode == 1 && window.m_splitPane->viewMode() == 3
+               && window.m_splitPane->listView()->compactMode()
+               && window.m_splitPane->listView()->flow() == QListView::TopToBottom
+               && window.m_splitPane->listView()->isWrapping(),
+           "Compact routes to the active split pane and applies a real column layout");
+
+    QAction *veryLargeAction = iconSizeMenu->findChild<QAction *>(QStringLiteral("iconSizeAction0"));
+    QAction *smallAction = iconSizeMenu->findChild<QAction *>(QStringLiteral("iconSizeAction3"));
+    verify(veryLargeAction && smallAction,
+           "icon size actions remain addressable as one radio group");
+    window.setDirectoryViewMode(0);
+    window.m_splitPane->setViewMode(0);
+    window.setActivePane(ThisPcWindow::PaneId::Primary);
+    veryLargeAction->trigger();
+    verify(window.m_directoryIconSizeMode == 0
+               && window.m_directoryList->iconSize() == QSize(96, 96)
+               && window.m_splitPane->iconSizeMode() != 0,
+           "icon size routes to active primary pane");
+    window.setActivePane(ThisPcWindow::PaneId::Split);
+    smallAction->trigger();
+    verify(window.m_splitPane->iconSizeMode() == 3
+               && window.m_splitPane->listView()->iconSize() == QSize(32, 32)
+               && window.m_directoryIconSizeMode == 0,
+           "icon size routes to active split pane");
+    window.updateFileActionStates();
+    verify(smallAction->isChecked() && !veryLargeAction->isChecked(),
+           "icon-size radio state follows the active pane");
+
+    window.setDirectoryViewMode(0);
+    window.m_splitPane->setViewMode(0);
+    window.setActivePane(ThisPcWindow::PaneId::Primary);
     auto fill = [](DirectoryListWidget *list, DirectoryTreeWidget *tree, const QUrl &directory) {
         list->clear(); tree->clear();
         for (const auto &name : {QStringLiteral("one"), QStringLiteral("two")}) {
             const QUrl url = childUrlWithName(directory, name);
-            auto *li = new QListWidgetItem(name, list);
-            li->setData(Qt::UserRole, url.toString());
-            li->setData(Qt::UserRole + 1, false);
+            FileInfo file{name, QString(), QString(), url, false, 0, 0};
+            list->addFileItem(file, QIcon(), QStringLiteral("File"),
+                              QStringLiteral("0"), QStringLiteral("Today"), QString());
             auto *ti = new QTreeWidgetItem(tree, QStringList{name, "File", "0", "Today"});
             ti->setData(0, Qt::UserRole, url.toString());
             ti->setData(0, Qt::UserRole + 1, false);
+            ti->setData(0, directory_view_detail::FileItemRole, true);
         }
     };
     fill(window.m_directoryList, window.m_directoryDetails, left);
@@ -258,7 +380,7 @@ int main(int argc, char **argv)
             }
         });
     };
-    for (int mode : {0, 1, 2}) {
+    for (int mode : {0, 1, 2, 3}) {
         window.setDirectoryViewMode(mode);
         window.m_splitPane->setViewMode(mode);
         app.processEvents();
@@ -553,5 +675,5 @@ int main(int argc, char **argv)
     verify(window.m_currentUrl == kThisPcUrl && window.m_splitPane->currentUrl() == right
                && window.m_contentStack->currentWidget() == window.m_homePage,
            "pane swap preserves This PC virtual-page semantics");
-    qInfo("PASS: %d assertions, Icons/List/Details, both panes; KIO dispatch intercepted", checks);
+    qInfo("PASS: %d assertions, Icons/List/Details/Compact, both panes; KIO dispatch intercepted", checks);
 }

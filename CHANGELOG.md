@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.30.0 — Grouping and per-folder view settings
+
+- Zapamiętywanie Icons/List/Details/Compact per znormalizowany URL folderu,
+  współdzielone przez panel główny, Split View, karty i restore session.
+- Uporządkowane menu Widok, cztery rozmiary ikon 96/64/48/32 px i gęsty widok Compact.
+- Grupowanie według typu, daty modyfikacji i rozmiaru w Icons/List/Details/Compact,
+  z prezentacyjnymi nagłówkami wyłączonymi z akcji plikowych.
+- Data używa lokalnych granic kalendarza i lekkiego przeliczenia po północy;
+  rozmiar używa istniejących metadanych KIO bez rekurencyjnego skanowania.
+- Bieżący klucz i kierunek sortowania są zachowane wewnątrz grup; osobne grupy
+  obsługują brakujące metadane, a Size rozdziela foldery i nieznane rozmiary.
+- Poprawiono obrys zaznaczenia w Icons oraz zalegający hover w widoku pogrupowanym,
+  który wizualnie przypominał drugie zaznaczenie mimo prawidłowego selection modelu.
+- Ręczny odbiór Type/Date/Size, wszystkich czterech trybów, Split View, Search,
+  trwałości, sortowania i zaznaczania został potwierdzony przed finalnym RC.
+
 ## 0.29.0 — Inteligentne nazwy nowych elementów
 
 - Pliki, foldery i elementy z szablonów proponują pierwszą wolną nazwę przed

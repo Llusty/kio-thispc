@@ -48,12 +48,13 @@ int main(int argc, char **argv)
     auto fill = [&](DirectoryListWidget *list, DirectoryTreeWidget *tree, const QUrl &url) {
         list->clear(); tree->clear();
         for (const auto &value : {url, fake}) {
-            auto *li = new QListWidgetItem(value.fileName(), list);
-            li->setData(Qt::UserRole, value.toString());
-            li->setData(Qt::UserRole + 1, false);
+            FileInfo file{value.fileName(), QString(), QString(), value, false, 7, 0};
+            list->addFileItem(file, QIcon(), QStringLiteral("File"),
+                              QStringLiteral("7"), QStringLiteral("Today"), QString());
             auto *ti = new QTreeWidgetItem(tree, QStringList{value.fileName(), "File", "7", "Today"});
             ti->setData(0, Qt::UserRole, value.toString());
             ti->setData(0, Qt::UserRole + 1, false);
+            ti->setData(0, directory_view_detail::FileItemRole, true);
         }
     };
     auto place = [&](Pane pane, bool searching, const QUrl &clicked = QUrl()) {
@@ -70,11 +71,11 @@ int main(int argc, char **argv)
         auto *view = mode == 2 ? static_cast<QAbstractItemView *>(tree) : list;
         if (multiple) {
             if (mode == 2) { tree->topLevelItem(0)->setSelected(true); tree->topLevelItem(1)->setSelected(true); }
-            else { list->item(0)->setSelected(true); list->item(1)->setSelected(true); }
+            else { list->setRowSelected(0, true); list->setRowSelected(1, true); }
         }
         window.setActivePane(pane == Pane::Primary ? Pane::Split : Pane::Primary);
         dispatch = {};
-        QTimer::singleShot(0, &window, [&, pane, expected, choice] {
+        QTimer::singleShot(0, &window, [&, pane, mode, expected, choice] {
             auto *rootMenu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
             verify(rootMenu, "real item menu opened");
             QMenu *extract = nullptr;
@@ -94,7 +95,9 @@ int main(int argc, char **argv)
                 }
             }
             verify(bool(extract) == expected, "archive menu visibility");
-            verify(sendTo, "existing Send to menu retained");
+            if (!sendTo) qFatal("FAIL: item menu became background menu (mode=%d pane=%d)",
+                                mode, pane == Pane::Primary ? 0 : 1);
+            ++checks;
             verify(window.paneContext().id == pane, "right click captures initiating pane");
             if (choice < 0) { rootMenu->close(); return; }
             verify(extract && extract->actions().size() == 2, "two extraction actions");
@@ -121,6 +124,8 @@ int main(int argc, char **argv)
         });
         const QPoint point = mode == 2 ? tree->visualItemRect(tree->topLevelItem(0)).center()
                                        : list->visualItemRect(list->item(0)).center();
+        verify(mode == 2 ? tree->itemAt(point) != nullptr : list->itemAt(point).isValid(),
+               "item point resolves after layout and scroll offsets");
         QMetaObject::invokeMethod(view, "customContextMenuRequested", Qt::DirectConnection, Q_ARG(QPoint, point));
         if (choice >= 0) {
             verify(dispatch.sources == QList<QUrl>{source}, "dispatch uses captured clicked archive, including Search");
@@ -129,21 +134,57 @@ int main(int argc, char **argv)
             verify(window.m_runningArchivePaths.isEmpty(), "dispatch releases test busy guard");
         } else verify(dispatch.kind.isEmpty(), "dismissed or ineligible menu dispatches nothing");
     };
-    for (int mode : {0, 1, 2}) {
+    auto backgroundMenu = [&](Pane pane, int mode) {
+        auto *list = pane == Pane::Primary ? window.m_directoryList : window.m_splitPane->listView();
+        auto *tree = pane == Pane::Primary ? window.m_directoryDetails : window.m_splitPane->detailsView();
+        auto *view = mode == 2 ? static_cast<QAbstractItemView *>(tree) : list;
+        view->doItemsLayout();
+        app.processEvents();
+        QPoint point = view->viewport()->rect().bottomRight() - QPoint(2, 2);
+        verify(mode == 2 ? tree->itemAt(point) == nullptr : !list->itemAt(point).isValid(),
+               "background point does not resolve to an item");
+        QTimer::singleShot(0, &window, [&, pane] {
+            auto *rootMenu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+            verify(rootMenu, "real background menu opened");
+            QStringList labels;
+            for (const QAction *action : rootMenu->actions()) labels.append(action->text());
+            verify(labels.contains("Refresh") && !labels.contains("Send to"),
+                   "background menu is distinct from item menu");
+            verify(window.paneContext().id == pane, "background right click captures initiating pane");
+            rootMenu->close();
+        });
+        QMetaObject::invokeMethod(view, "customContextMenuRequested", Qt::DirectConnection,
+                                  Q_ARG(QPoint, point));
+    };
+    for (int mode : {0, 1, 2, 3}) {
         window.setDirectoryViewMode(mode);
         window.m_splitPane->setViewMode(mode);
         stopListings();
         for (Pane pane : {Pane::Primary, Pane::Split}) {
             for (bool searching : {false, true}) {
-                for (int choice : {0, 1}) { place(pane, searching); menu(pane, mode, true, choice); }
+                for (int choice : {0, 1}) {
+                    place(pane, searching);
+                    menu(pane, mode, true, choice);
+                }
                 place(pane, searching); menu(pane, mode, false, -1, true);
                 place(pane, searching, fake); menu(pane, mode, false, -1);
                 place(pane, searching, QUrl("sftp://example.test/file.zip")); menu(pane, mode, false, -1);
             }
         }
     }
+    for (int mode : {0, 1, 2, 3}) {
+        window.setDirectoryViewMode(mode);
+        window.m_splitPane->setViewMode(mode);
+        stopListings();
+        for (Pane pane : {Pane::Primary, Pane::Split}) {
+            place(pane, false);
+            backgroundMenu(pane, mode);
+        }
+    }
     const QByteArray originalPath = qgetenv("PATH");
     qputenv("PATH", QFile::encodeName(root.filePath("no-executables")));
+    window.setDirectoryViewMode(2);
+    window.m_splitPane->setViewMode(2);
     place(Pane::Primary, false); menu(Pane::Primary, 2, false, -1);
     qputenv("PATH", originalPath);
 

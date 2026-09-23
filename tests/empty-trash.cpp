@@ -139,7 +139,7 @@ int main(int argc, char **argv)
            "invalid locations dispatch no jobs");
     verify(actions->canEmptyTrash(trash) && actions->canEmptyTrash(QUrl("trash:")),
            "root URL spellings are supported");
-    for (int mode : {0, 1, 2}) {
+    for (int mode : {0, 1, 2, 3}) {
         window.setDirectoryViewMode(mode);
         window.m_splitPane->setViewMode(mode);
         for (Pane pane : {Pane::Primary, Pane::Split}) {

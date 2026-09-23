@@ -1,36 +1,43 @@
-# Aktualizacja do 0.29.0
+# Aktualizacja do 0.30.0
 
-Wydanie dodaje inteligentne, bezpieczne propozycje nazw przy tworzeniu plików,
-folderów i elementów z szablonów.
+Wydanie dodaje zapamiętywane ustawienia widoku per folder oraz grupowanie
+Explorer-like według typu, daty modyfikacji i rozmiaru.
 
 Poniższe polecenia instalują wydanie z nowego katalogu, bez usuwania istniejącego repozytorium:
 
 ```bash
 cd ~/Pobrane
-unzip kio-thispc-0.29.0.zip
-cd kio-thispc-0.29.0
+tar -xzf kio-thispc-0.30.0.tar.gz
+cd kio-thispc-0.30.0
 chmod +x install.sh
 ./install.sh
 ```
 
 ## Nowości
 
-- Pierwsza wolna nazwa jest proponowana przed otwarciem dialogu.
-- Luki numeracji, pełne rozszerzenia, nazwy ukryte i Unicode są zachowane.
-- Ręczna edycja i routing aktywnego panelu Split View pozostają aktywne.
-- Nazwa jest sprawdzana ponownie po dialogu, bez żądania nadpisania.
-- Zdalne KIO działa asynchronicznie i fail-closed. Nie zapewnia atomowej
-  rezerwacji; wymaga wiarygodnego listowania i no-overwrite od workera/protokołu.
+- Icons/List/Details/Compact są zapamiętywane według znormalizowanego URL folderu
+  i współdzielone przez panel główny, Split View, karty i przywracanie sesji.
+- Menu Widok zawiera uporządkowane tryby widoku, podmenu Pokaż i cztery rozmiary
+  ikon: 96/64/48/32 px, również zapamiętywane per folder.
+- Compact używa gęstego układu wielokolumnowego z pionowym wypełnianiem.
+- Grupowanie: Brak / Typ / Data modyfikacji / Rozmiar. Bieżące sortowanie jest
+  zachowane wewnątrz każdej grupy.
+- Data używa lokalnego kalendarza i osobnych grup Future/Today/Yesterday/This week/
+  Last week oraz dalszych zakresów; brakująca data trafia do Unknown date.
+- Rozmiar używa wyłącznie metadanych KIO, bez rekurencyjnego skanowania lub
+  synchronicznych statów; foldery i nieznane rozmiary mają osobne grupy.
+- Nagłówki grup nie są plikami i nie trafiają do zaznaczenia, menu pliku, DnD,
+  schowka, Preview ani Quick Look.
+- Naprawiono obrys zaznaczenia nazw oraz zalegający hover w widoku pogrupowanym,
+  który mógł wyglądać jak drugie zaznaczenie mimo pojedynczej selekcji modelu.
 
-## Weryfikacja
+## Weryfikacja przed wydaniem
 
-- Kompilacja: PASS.
-- FileActions: 176 asercji PASS.
-- Routing paneli: 289 asercji PASS.
-- Pełna regresja: 23 zestawy / 5430 asercji PASS.
-- Batch Rename: 1790 asercji PASS.
-- Podstawowy ręczny Stage 1 i Stage 2: potwierdzony przez użytkownika.
-- Nie testowano wszystkich protokołów zdalnych ani awarii połączenia.
+- Ręczny odbiór Stage 1 oraz grupowania Typ/Data/Rozmiar: PASS.
+- Icons/List/Details/Compact, Split View, Search, trwałość per-folder, sortowanie,
+  Ctrl/Shift multi-select, nagłówki grup i obrys zaznaczenia: PASS ręczny.
+- Końcowy build, focused tests, pełna regresja, `git diff --check` oraz archiwum
+  z SHA-256 są wykonywane ponownie na finalnym kandydacie 0.30.0 przed commit/tag/install.
 
 ---
 

@@ -150,7 +150,7 @@ int main(int argc, char **argv)
     verify(window.m_directoryList->count() == 3 && window.m_directoryDetails->topLevelItemCount() == 3, "window displays search results in both views");
     verify(!window.m_searchProgressFrame->isVisible() && !window.m_stopSearchAction->isVisible(), "completion hides search controls");
     verify(window.m_splitPane->currentUrl() == rootB && window.m_splitPane->listView()->count() == 1, "search preserves split pane");
-    for (int mode : {0, 1, 2}) {
+    for (int mode : {0, 1, 2, 3}) {
         window.setDirectoryViewMode(mode);
         window.setSortKey(2);
         window.setSortAscending(false);
@@ -230,7 +230,7 @@ int main(int argc, char **argv)
                && window.m_searchEdit->placeholderText() == "New search"
                && !window.m_searchScopeAction->isEnabled(),
            "right Search has friendly breadcrumbs and correct shared controls");
-    for (int mode : {0, 1, 2}) {
+    for (int mode : {0, 1, 2, 3}) {
         for (auto *action : window.m_viewButton->menu()->actions())
             if (action->data().isValid() && action->data().toInt() == mode) action->trigger();
         for (auto *action : window.m_sortButton->menu()->actions())

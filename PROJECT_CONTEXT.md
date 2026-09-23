@@ -15,11 +15,33 @@ The goal is not to replace KDE with Windows UI. The goal is a familiar Explorer-
 - Undo/Redo;
 - rich transfer UI, native local transfer engine, previews, search, device/network integration, etc.
 
-## Current release candidate — 0.28.0
-**0.28.0 — Batch Rename** is being finalized as a deliberately limited release.
-Production v2 auto-recovery covers qualifying local linear Execute/Undo/Redo
-only. Swap/cycle recovery, KIO-equivalent guarantees and power-loss durability
-remain future work; see `RELEASE_NOTES_0.28.0.md`.
+## Current release candidate — 0.30.0
+**0.30.0 — Grouping and per-folder view settings** is functionally complete and
+has passed manual KDE/CachyOS acceptance. The source tree is being prepared as a
+release candidate; the final release commit, tag and installation have not been
+performed yet.
+
+Accepted 0.30.0 scope:
+- per-folder view mode/settings persisted by normalized URL and shared across the
+  main pane, Split View, tabs and restored sessions;
+- reorganized Explorer-like View menu with the existing working display options;
+- four icon sizes (96/64/48/32 px) with stable fixed-grid geometry;
+- Compact view with dense column layout and normal selection, activation, DnD
+  and file actions;
+- Group by Type, Date and Size in Icons/List/Details/Compact, including Search,
+  Split View, tabs and KIO-backed locations;
+- current sorting preserved inside groups, with non-file group headers kept out
+  of file actions, selection, clipboard, DnD, Preview and Quick Look;
+- Date grouping uses local-calendar buckets and midnight refresh; Size grouping
+  uses the non-recursive size supplied by KIO and has separate folder/unknown
+  categories;
+- selection-border rendering is consistent for short and expanded names;
+- a stale-hover rendering bug that looked like double selection was fixed; the
+  actual `QItemSelectionModel` had only one selected item, and manual retesting
+  confirmed normal single-select plus Ctrl/Shift multi-select behavior.
+
+The icon-size slider and broader keyboard-navigation work remain explicitly
+outside 0.30.0 and stay on the post-release backlog.
 
 User-confirmed working behavior includes:
 - navigation and address/breadcrumb controls;
@@ -120,26 +142,57 @@ thispc-view
 For Codex, prefer working directly in a Git checkout and running `./scripts/build.sh` after edits instead of repeatedly creating ZIPs.
 
 
-## Current state — 0.28.0
+## Current state — 0.30.0
 
-0.18.0 conflict handling is user-confirmed. 0.19.x adds persistent session restore and the stable full-name/IconMode layout. 0.20.0 adds persistent Quick Access / Favorites and Recent locations.
+0.18.0 conflict handling is user-confirmed. 0.19.x adds persistent session restore
+and the stable full-name/IconMode layout. 0.20.0 adds persistent Quick Access /
+Favorites and Recent locations.
 
-0.21.0 completes the architecture refactor and stabilization milestone. Major responsibilities were extracted from `src/thispcview.cpp` into dedicated modules without changing the user-facing behavior or settings format. The final automated suite passes 577 assertions, including real KIO operations, conflicts, Trash and Undo/Redo, and the user completed full manual KDE/CachyOS acceptance without regressions.
+0.21.0 completes the architecture refactor and stabilization milestone. Major
+responsibilities were extracted from `src/thispcview.cpp` into dedicated modules
+without changing the user-facing behavior or settings format.
 
-0.22.0 adds the user-confirmed advanced transfer window while retaining the compact popup as operation history. The detailed window opens automatically, shows active operations only, combines concurrent work, provides current/average speed, ETA, a bounded graph and prominent progress, and closes after the final active operation.
+0.22.0 adds the user-confirmed advanced transfer window while retaining the
+compact popup as operation history. 0.23.0 delivers the native local transfer
+engine with exact Pause/Resume for supported local transfers, safe partial
+publication, conflict handling and native Undo/Redo. KIO remains in use for
+remote URLs and unsupported/unresolved local cases.
 
-Manual testing in 0.22.0 showed that `KIO::CopyJob::suspend()` cannot provide exact local-transfer pause semantics, so misleading KIO-based pause was removed.
+0.24.0 completes Sidebar & Split View UX. Both panes are equal peers, shared
+controls route to the active pane, sidebar DnD uses the existing FileActions
+path, and Search plus `thispc:/` presentation work independently in both panes.
 
-0.23.0 delivers the native local transfer engine. Supported local files, directories, multiple sources and symbolic links use asynchronous native planning/execution with exact Pause/Resume, safe partial publication, conflict handling, metadata preservation, aggregate progress and native Undo/Redo. Cross-filesystem moves are verified before source removal. KIO remains in use for remote URLs and unsupported/unresolved local cases.
+0.26.0 Preview Pane and 0.27.0 Quick Look are user-confirmed. 0.28.0 Batch Rename
+was released as commit `c361c08` and tagged `v0.28.0`; its production automatic
+recovery remains deliberately limited to qualifying local-linear Execute/Undo/Redo.
+Swap/cycle recovery, equivalent KIO guarantees and power-loss durability remain
+future work.
 
-The 0.23.0 release baseline passed **842/842 assertions** with full KDE/CachyOS manual acceptance of the native transfer engine.
+0.29.0 Intelligent New Item Naming was released as commit `e56acee`, tagged
+`v0.29.0`, installed and manually confirmed. Local naming and remote KIO
+preflight use first-free suggestions and no-overwrite final operations within
+the documented backend/protocol limits.
 
-0.24.0 completes Sidebar & Split View UX. Both panes are equal peers, shared controls route to the active pane, sidebar Drag & Drop uses the existing FileActions path, the sidebar is scrollable and resizable with persisted width, and long labels use ellipsis plus full-name tooltips. Search state, filters, results, jobs and `thispc:/` presentation are independent and complete in both panes.
+0.30.0 adds persisted per-folder view settings, the reorganized View menu, four
+icon sizes, Compact mode, and grouping by Type, modification Date and Size.
+Grouping works in Icons/List/Details/Compact, both panes, tabs, Search and
+KIO-backed locations; current sort order is preserved inside groups and headers
+remain non-file UI. Date grouping uses local-calendar buckets and Size grouping
+uses the size metadata already supplied by KIO without recursive scanning.
 
-The 0.24.0 automated regression passed **1022/1022 assertions**. Full Stage 1–4 manual KDE/CachyOS acceptance passed.
+Manual acceptance is complete for the 0.30.0 functional scope, including Type,
+Date and Size grouping, Split View/Search behavior, persistence, header context
+handling, sorting, selection, Ctrl/Shift multi-select, and the short/long filename
+selection border. A rendering-only stale-hover bug that looked like a second
+selection was diagnosed separately from the selection model and fixed.
 
-The 0.26.0 full automated regression passes all **20 suites**, including **106 Preview Pane assertions** and **99 Split Layout assertions**. Full manual KDE/CachyOS acceptance has been confirmed by the user.
+The working tree is now in release-preparation state. Final RC verification
+after the 0.30.0 version/documentation bump is PASS: build PASS; focused
+`view_settings panes actions` 778 assertions PASS; full `--all` 24 suites /
+6278 assertions PASS; `git diff --check` and version/debug audits PASS. A clean
+source archive plus SHA-256 remains to be confirmed before the user authorizes
+commit/tag/install.
 
-0.27.0 adds a large, focus-safe Quick Look overlay toggled with Space in the active file view. It reuses the Preview Pane backend, follows selection and active-pane changes, closes with Esc or Space, protects text entry and dialogs, and preserves stale-result cancellation. The automated baseline is **22 suites / 3598 assertions**, including Quick Look 19, Preview Pane 106, pane routing 269 and Split Layout 99 assertions. The user confirmed all 9 manual KDE/CachyOS acceptance cases.
-
-The next roadmap work is the post-0.28 recovery backlog followed by **0.29.0 — Advanced search**.
+Post-0.30 backlog remains separate: the Icons-only fine-grained icon-size slider,
+broader keyboard navigation (including `thispc:/`, Enter/Backspace and history
+shortcuts), and later roadmap features must not be treated as 0.30.0 blockers.

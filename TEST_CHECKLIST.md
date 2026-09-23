@@ -374,3 +374,26 @@ i **99 asercji Split Layout**. Użytkownik potwierdził końcową ręczną akcep
       `kio-thispc-0.29.0.tar.gz` i `kio-thispc-0.29.0.tar.gz.sha256`, bez `.git`,
       buildów, `__pycache__` i runtime’owych dzienników recovery.
 - [ ] Finalny commit, tag `v0.29.0` i instalacja wyłącznie po osobnej zgodzie.
+
+## 0.30.0 — release candidate grouping/view settings
+
+- [x] Stage 1 per-folder Icons/List/Details/Compact persistence: manual PASS.
+- [x] Stage 1b View menu organization, active-pane routing and existing toggles: manual PASS.
+- [x] Stage 1c icon sizes 96/64/48/32 px, per-folder persistence and stable icon geometry: manual PASS.
+- [x] Stage 1d Compact in primary/Split View with directional navigation and persistence: manual PASS.
+- [x] Stage 2 Type: all four views, Split View, Search, header PPM, sorting and persistence: manual PASS.
+- [x] Stage 2 Date: documented local-calendar buckets, all four views, Split View/Search,
+      header PPM, sorting and persistence: manual PASS.
+- [x] Stage 2 Size: byte buckets/folders/unknowns, all four views, Split View/Search,
+      header PPM, sorting and persistence: manual PASS.
+- [x] Selection acceptance: plain click leaves one selected item; Ctrl/Shift multi-select remains;
+      stale categorized hover no longer looks like a second selection; short/expanded-name outline PASS.
+- [x] No selection diagnostic logging remains in production source.
+- [x] Fresh Release build after 0.30.0 version/doc bump: PASS.
+- [x] Fresh focused `view_settings panes actions`: 226 + 376 + 176 = 778 asercji PASS.
+- [x] Fresh full `tests/run-pane-actions.py --all`: 24 zestawy / 6278 asercji PASS.
+- [x] `git diff --check`: PASS.
+- [x] Version consistency audit: active release surfaces report 0.30.0; historical 0.29.0 docs stay historical; no `THISPC_SELECT`/`SELECTION_DEBUG` leftovers.
+- [ ] Source archive `kio-thispc-0.30.0.tar.gz` + `.sha256` prepared without `.git`, build,
+      `tests/__pycache__`, `.directory`, runtime recovery journals or unrelated local files.
+- [ ] Final diff/status reviewed; commit, tag `v0.30.0` and installation only after separate user approval.

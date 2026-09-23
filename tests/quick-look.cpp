@@ -6,11 +6,11 @@ static void verify(bool value, const char *description)
     ++checks;
 }
 
-static void addFixtureItem(QListWidget *list, const QUrl &url, const QString &name)
+static void addFixtureItem(DirectoryListWidget *list, const QUrl &url, const QString &name)
 {
-    auto *item = new QListWidgetItem(name, list);
-    item->setData(Qt::UserRole, url.toString());
-    item->setData(Qt::UserRole + 1, false);
+    FileInfo file{name, QString(), QString(), url, false, 0, 0};
+    list->addFileItem(file, QIcon(), QStringLiteral("File"),
+                      QStringLiteral("0"), QStringLiteral("Today"), QString());
 }
 
 int main(int argc, char **argv)

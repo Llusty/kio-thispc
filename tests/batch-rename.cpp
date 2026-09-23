@@ -2047,13 +2047,13 @@ int main(int argc, char **argv)
            "startup invalid v2 keeps persistent banner visible and mutations disabled");
     verify(QFile::remove(invalidV2Path), "startup invalid-v2 fixture is explicitly removed");
     startupWindow.updateFileActionStates();
-    verify(!startupWindow.m_recoveryStatusLabel->isHidden()
-               && startupWindow.m_recoveryStatusLabel->text().contains(
+    verify(startupWindow.m_recoveryStatusLabel->isHidden()
+               && startupWindow.statusBar()->currentMessage().contains(
                    QStringLiteral("completed"), Qt::CaseInsensitive)
-               && startupWindow.m_recoveryStatusLabel->text().contains(
+               && startupWindow.statusBar()->currentMessage().contains(
                    QStringLiteral("not restored"), Qt::CaseInsensitive)
                && startupWindow.m_newFolderAction->isEnabled(),
-           "clean re-audit keeps the truthful completion/history notice and restores mutations");
+           "clean re-audit makes the truthful completion/history notice transient and restores mutations");
     qputenv("THISPC_RECOVERY_STARTUP_DELAY_MS", QByteArrayLiteral("150"));
     auto *closingWindow = new ThisPcWindow(QUrl::fromLocalFile(files.path()), false);
     verify(BatchRenameRecoveryGate::instance().startupScanPending()

@@ -1,4 +1,28 @@
-# kio-thispc 0.29.0
+# kio-thispc 0.30.0
+
+## 0.30.0 — Grouping and per-folder view settings
+
+- Tryb Icons/List/Details/Compact jest zapamiętywany osobno dla każdego folderu i
+  odtwarzany w panelu głównym, Split View, kartach i przywróconej sesji.
+- Preferencje obejmują lokalne oraz zdalne URL-e KIO i nie wymagają skanowania
+  folderu ani dodatkowych metadanych.
+- Menu **Widok** grupuje Icons/List/Details/Compact, a podmenu **Pokaż** zawiera tylko
+  działające przełączniki: ukryte elementy, miniatury, panel podglądu i pełne nazwy.
+- Podmenu **Rozmiar ikon** udostępnia działające poziomy Bardzo duże (96 px),
+  Duże (64 px), Średnie (48 px) i Małe (32 px), zapamiętywane per folder.
+- Widok kompaktowy używa gęstych wierszy 20 px i kolumn wypełnianych od góry do
+  dołu, z elidowaniem nazw, natywną nawigacją kierunkową Qt i obsługą obu paneli.
+- Grupowanie według typu, daty modyfikacji i rozmiaru działa w Icons, List,
+  Details i Compact, w obu panelach, kartach oraz wynikach Search/KIO.
+- Nagłówki grup są prezentacyjne: nie uczestniczą w zaznaczeniu, akcjach plikowych,
+  schowku, DnD, Preview ani Quick Look. Sortowanie wewnątrz grup zachowuje bieżący
+  klucz i kierunek.
+- Grupowanie dat używa lokalnego kalendarza (m.in. Today/Yesterday/This week), a
+  grupowanie rozmiaru korzysta wyłącznie z rozmiaru już dostarczonego przez KIO;
+  foldery i brakujące rozmiary mają oddzielne deterministyczne grupy.
+- Ręczny odbiór Stage 1/2 zakończył się PASS. Poprawiono również obrys zaznaczenia
+  oraz zalegający stan hover w widoku pogrupowanym, który wizualnie przypominał
+  drugie zaznaczenie.
 
 ## 0.29.0 — Inteligentne nazwy nowych elementów
 
@@ -200,8 +224,8 @@ Funkcje z 0.15.4 — kompaktowy popup operacji, dynamiczna wysokość, anulowani
 
 ```bash
 cd ~/Pobrane
-unzip kio-thispc-0.29.0.zip
-cd kio-thispc-0.29.0
+tar -xzf kio-thispc-0.30.0.tar.gz
+cd kio-thispc-0.30.0
 chmod +x install.sh
 ./install.sh
 ```

@@ -2,7 +2,7 @@
  * thispc-view - a lightweight KDE/Qt file browser with a Windows-like
  * "This PC" home page, backed by KIO.
  *
- * Version 0.29.0
+ * Version 0.30.0
  * SPDX-License-Identifier: MIT
  */
 
@@ -122,6 +122,7 @@
 
 #include "browsercommon.h"
 #include "directoryview.h"
+#include "directoryviewsettings.h"
 #include "fileactions.h"
 #include "templatemenu.h"
 #include "operationmanager.h"
@@ -1088,12 +1089,12 @@ class ThisPcWindow : public QMainWindow
                     item->data(0, Qt::UserRole + 1).toBool()});
             }
         } else {
-            for (auto *item : list->selectedItems()) {
-                context.items.push_back({QUrl(item->data(Qt::UserRole).toString()),
-                    item->text(), item->data(Qt::UserRole + 2).toString(),
-                    item->data(Qt::UserRole + 3).toString(),
-                    item->data(Qt::UserRole + 4).toString(),
-                    item->data(Qt::UserRole + 1).toBool()});
+            for (const QModelIndex &item : list->selectedItems()) {
+                context.items.push_back({QUrl(item.data(directory_view_detail::UrlRole).toString()),
+                    item.data(Qt::DisplayRole).toString(), item.data(directory_view_detail::TypeTextRole).toString(),
+                    item.data(directory_view_detail::SizeTextRole).toString(),
+                    item.data(directory_view_detail::ModifiedTextRole).toString(),
+                    item.data(directory_view_detail::DirectoryRole).toBool()});
             }
         }
         return context;
@@ -1243,6 +1244,14 @@ public:
         setWindowTitle(trLocal("Ten komputer", "This PC"));
         setWindowIcon(QIcon::fromTheme(QStringLiteral("computer")));
 
+        m_dateGroupingTimer.setSingleShot(true);
+        connect(&m_dateGroupingTimer, &QTimer::timeout, this, [this] {
+            if (m_contentStack && m_contentStack->currentWidget() == m_directoryPage) {
+                renderDirectoryItems(true);
+            }
+            scheduleDateGroupingRefresh();
+        });
+
         QSettings settings;
         const QByteArray geometry =
             settings.value(QStringLiteral("window/geometry")).toByteArray();
@@ -1286,9 +1295,18 @@ public:
         m_recoveryStatusLabel->setObjectName(QStringLiteral("recoveryFenceStatus"));
         m_recoveryStatusLabel->setText(recoveryGate.message());
         m_recoveryStatusLabel->setToolTip(recoveryGate.message());
-        m_recoveryStatusLabel->setVisible(true);
+        m_recoveryStatusLabel->setVisible(recoveryGate.mutationsBlocked());
         statusBar()->addPermanentWidget(m_recoveryStatusLabel, 1);
-        statusBar()->showMessage(recoveryGate.message(), 0);
+        if (recoveryGate.mutationsBlocked()) {
+            statusBar()->showMessage(recoveryGate.message(), 0);
+        } else {
+            m_recoverySuccessShown = true;
+            statusBar()->showMessage(
+                trLocal(
+                    "Sprawdzanie odzyskiwania po awarii zakończone. Historia Cofnij/Ponów sprzed ponownego uruchomienia nie jest przywracana.",
+                    "Crash recovery check completed. Undo/Redo history from before restart is not restored."),
+                6000);
+        }
         recordRecoveryTestPresentation();
         if (startsRecoveryScan) {
 #ifdef THISPC_BATCH_RENAME_TEST_HOOKS
@@ -2101,7 +2119,14 @@ private:
                     QStringLiteral("directory/viewMode"),
                     0).toInt(),
                 0,
-                2);
+                3);
+
+        m_directoryIconSizeMode = std::clamp(
+            settings.value(
+                QStringLiteral("directory/iconSizeMode"),
+                DirectoryViewSettings::DefaultIconSizeMode).toInt(),
+            0,
+            3);
 
         m_sortKey =
             std::clamp(
@@ -2144,6 +2169,7 @@ private:
             QToolButton::InstantPopup);
 
         auto *viewMenu = new QMenu(m_viewButton);
+        viewMenu->setObjectName(QStringLiteral("viewMenu"));
         auto *viewGroup = new QActionGroup(viewMenu);
         viewGroup->setExclusive(true);
 
@@ -2158,6 +2184,7 @@ private:
             {0, "Ikony", "Icons", "view-list-icons"},
             {1, "Lista", "List", "view-list-text"},
             {2, "Szczegóły", "Details", "view-list-details"},
+            {3, "Kompaktowy", "Compact", "view-list-tree"},
         };
 
         for (const ViewDef &def : views) {
@@ -2167,6 +2194,8 @@ private:
             action->setCheckable(true);
             action->setChecked(def.mode == m_directoryViewMode);
             action->setData(def.mode);
+            action->setObjectName(
+                QStringLiteral("viewModeAction%1").arg(def.mode));
             viewGroup->addAction(action);
 
             connect(
@@ -2179,9 +2208,40 @@ private:
                 });
         }
 
+        QMenu *iconSizeMenu = viewMenu->addMenu(
+            themedIcon(QStringLiteral("transform-scale"), QStringLiteral("view-list-icons")),
+            trLocal("Rozmiar ikon", "Icon size"));
+        iconSizeMenu->setObjectName(QStringLiteral("viewIconSizeMenu"));
+        auto *iconSizeGroup = new QActionGroup(iconSizeMenu);
+        iconSizeGroup->setExclusive(true);
+        struct IconSizeDef { int mode; const char *pl; const char *en; };
+        const IconSizeDef iconSizes[] = {
+            {0, "Bardzo duże", "Very large"},
+            {1, "Duże", "Large"},
+            {2, "Średnie", "Medium"},
+            {3, "Małe", "Small"},
+        };
+        for (const IconSizeDef &def : iconSizes) {
+            QAction *action = iconSizeMenu->addAction(trLocal(def.pl, def.en));
+            action->setObjectName(QStringLiteral("iconSizeAction%1").arg(def.mode));
+            action->setCheckable(true);
+            action->setChecked(def.mode == m_directoryIconSizeMode);
+            action->setProperty("iconSizeMode", def.mode);
+            iconSizeGroup->addAction(action);
+            connect(action, &QAction::triggered, this, [this, mode = def.mode] {
+                if (paneContext().id == PaneId::Split) m_splitPane->setIconSizeMode(mode);
+                else setDirectoryIconSizeMode(mode);
+            });
+        }
+
         viewMenu->addSeparator();
 
-        m_showHiddenAction = viewMenu->addAction(
+        QMenu *showMenu = viewMenu->addMenu(
+            themedIcon(QStringLiteral("view-visible"), QStringLiteral("view-preview")),
+            trLocal("Pokaż", "Show"));
+        showMenu->setObjectName(QStringLiteral("viewShowMenu"));
+
+        m_showHiddenAction = showMenu->addAction(
             themedIcon(QStringLiteral("view-hidden")),
             trLocal("Ukryte elementy", "Hidden items"));
         m_showHiddenAction->setCheckable(true);
@@ -2195,7 +2255,7 @@ private:
             this,
             &ThisPcWindow::setShowHiddenFiles);
 
-        m_thumbnailsAction = viewMenu->addAction(
+        m_thumbnailsAction = showMenu->addAction(
             themedIcon(QStringLiteral("view-preview")),
             trLocal("Miniatury obrazów", "Image thumbnails"));
         m_thumbnailsAction->setCheckable(true);
@@ -2206,7 +2266,7 @@ private:
             this,
             &ThisPcWindow::setThumbnailsEnabled);
 
-        m_previewAction = viewMenu->addAction(
+        m_previewAction = showMenu->addAction(
             themedIcon(QStringLiteral("document-preview"), QStringLiteral("view-preview")),
             trLocal("Panel podglądu", "Preview pane"));
         m_previewAction->setCheckable(true);
@@ -2216,6 +2276,24 @@ private:
             if (m_previewPane) m_previewPane->setVisible(enabled);
             if (enabled) updatePreview();
         });
+
+        m_fullNamesAction = showMenu->addAction(
+            themedIcon(
+                QStringLiteral("format-text-underline"),
+                QStringLiteral("view-list-text")),
+            trLocal("Pełne nazwy", "Full names"));
+        m_fullNamesAction->setCheckable(true);
+        m_fullNamesAction->setChecked(
+            m_alwaysShowFullNames);
+        m_fullNamesAction->setToolTip(
+            trLocal(
+                "Zawsze pokazuj pełne nazwy plików i folderów. Bez tej opcji pełna nazwa rozwija się po zaznaczeniu.",
+                "Always show full file and folder names. When disabled, a selected item expands to show its full name."));
+        connect(
+            m_fullNamesAction,
+            &QAction::toggled,
+            this,
+            &ThisPcWindow::setAlwaysShowFullNames);
 
         viewMenu->addSeparator();
 
@@ -2323,28 +2401,37 @@ private:
                 else setSortAscending(false);
             });
 
+        sortMenu->addSeparator();
+        QMenu *groupMenu = sortMenu->addMenu(trLocal("Grupuj według", "Group by"));
+        auto *groupActions = new QActionGroup(groupMenu);
+        groupActions->setExclusive(true);
+        for (const auto &entry : std::initializer_list<std::pair<int, QString>>{
+                 {DirectoryViewSettings::NoGrouping, trLocal("Brak", "None")},
+                 {DirectoryViewSettings::GroupByType, trLocal("Typ", "Type")},
+                 {DirectoryViewSettings::GroupByDate, trLocal("Data modyfikacji", "Date modified")},
+                 {DirectoryViewSettings::GroupBySize, trLocal("Rozmiar", "Size")}}) {
+            QAction *action = groupMenu->addAction(entry.second);
+            action->setCheckable(true);
+            action->setData(entry.first);
+            groupActions->addAction(action);
+            connect(action, &QAction::triggered, this, [this, mode = entry.first] {
+                if (paneContext().id == PaneId::Split) m_splitPane->setGroupMode(mode);
+                else setGroupMode(mode);
+            });
+        }
+        connect(groupMenu, &QMenu::aboutToShow, this, [this, groupActions] {
+            const int mode = paneContext().id == PaneId::Split
+                ? m_splitPane->groupMode() : m_groupMode;
+            for (QAction *action : groupActions->actions())
+                action->setChecked(action->data().toInt() == mode);
+        });
+
         m_sortButton->setMenu(sortMenu);
         toolbar->addWidget(m_sortButton);
 
         toolbar->addSeparator();
 
-        m_fullNamesAction = toolbar->addAction(
-            themedIcon(
-                QStringLiteral("format-text-underline"),
-                QStringLiteral("view-list-text")),
-            trLocal("Pełne nazwy", "Full names"));
-        m_fullNamesAction->setCheckable(true);
-        m_fullNamesAction->setChecked(
-            m_alwaysShowFullNames);
-        m_fullNamesAction->setToolTip(
-            trLocal(
-                "Zawsze pokazuj pełne nazwy plików i folderów. Bez tej opcji pełna nazwa rozwija się po zaznaczeniu.",
-                "Always show full file and folder names. When disabled, a selected item expands to show its full name."));
-        connect(
-            m_fullNamesAction,
-            &QAction::toggled,
-            this,
-            &ThisPcWindow::setAlwaysShowFullNames);
+        toolbar->addAction(m_fullNamesAction);
 
         toolbar->addSeparator();
 
@@ -2753,14 +2840,14 @@ private:
         statusBar()->setSizeGripEnabled(true);
 
         m_versionLabel = new QLabel(
-            QStringLiteral("v0.29.0"),
+            QStringLiteral("v0.30.0"),
             this);
         m_versionLabel->setObjectName(
             QStringLiteral("versionLabel"));
         m_versionLabel->setToolTip(
             trLocal(
-                "Wersja thispc-view 0.29.0",
-                "thispc-view version 0.29.0"));
+                "Wersja thispc-view 0.30.0",
+                "thispc-view version 0.30.0"));
         statusBar()->addPermanentWidget(m_versionLabel);
     }
 
@@ -3088,9 +3175,9 @@ private:
 
         connect(
             m_directoryList,
-            &QListWidget::itemDoubleClicked,
+            &DirectoryListWidget::itemDoubleClicked,
             this,
-            [this](QListWidgetItem *item) {
+            [this](const QModelIndex &item) {
                 activateDirectoryItem(item);
             });
 
@@ -3104,7 +3191,7 @@ private:
 
         connect(
             m_directoryList,
-            &QListWidget::itemSelectionChanged,
+            &DirectoryListWidget::itemSelectionChanged,
             this,
             [this] { updateFileActionStates(); updatePreview(); updateQuickLook(); });
 
@@ -3679,7 +3766,9 @@ private:
                 }
             }
 
-            m_splitPane->setViewMode(splitViewMode);
+            // The tab snapshot is only a transition fallback. The target
+            // location's persisted preference is applied by setCurrentUrl().
+            m_splitPane->setViewMode(splitViewMode, false);
             m_splitPane->setSortState(
                 splitSortKey,
                 splitSortAscending);
@@ -4134,7 +4223,8 @@ private:
             m_splitPane->setViewMode(
                 state.splitViewMode >= 0
                     ? state.splitViewMode
-                    : m_directoryViewMode);
+                    : m_directoryViewMode,
+                false);
             m_splitPane->setSortState(
                 state.splitSortKey,
                 state.splitSortAscending);
@@ -4429,6 +4519,17 @@ private:
         }
 
         m_currentUrl = url;
+        m_directoryViewMode = DirectoryViewSettings::viewMode(
+            url,
+            m_directoryViewMode);
+        m_directoryIconSizeMode = DirectoryViewSettings::iconSizeMode(
+            url,
+            m_directoryIconSizeMode);
+        m_groupMode = DirectoryViewSettings::groupMode(
+            url,
+            m_groupMode);
+        scheduleDateGroupingRefresh();
+        applyDirectoryViewMode(false);
 
         if (m_adminBanner) {
             m_adminBanner->setVisible(
@@ -4661,6 +4762,8 @@ private:
 
     void renderDirectoryItems(bool preserveStatusMessage = false)
     {
+        const auto selectedListUrls = selectedDirectoryListUrls(m_directoryList);
+        const auto selectedDetailsUrls = selectedDirectoryDetailsUrls(m_directoryDetails);
         sortDirectoryFiles(
             m_pendingFiles,
             m_sortKey,
@@ -4674,6 +4777,14 @@ private:
 
         QMimeDatabase mimeDb;
         int visibleCount = 0;
+
+        struct RenderedFile {
+            FileInfo file;
+            QString typeText;
+            QString categoryDisplay;
+            QString categorySort;
+        };
+        QList<RenderedFile> rendered;
 
         for (const FileInfo &file : std::as_const(m_pendingFiles)) {
             if (!fileMatchesSearch(file)) {
@@ -4690,10 +4801,44 @@ private:
 
             ++visibleCount;
 
+            const QString typeText = fileTypeLabel(file, mimeDb);
+            if (m_groupMode == DirectoryViewSettings::GroupByDate) {
+                const auto category = directory_view_detail::dateCategoryForModification(
+                    file.modificationTime);
+                rendered.push_back({file, typeText, category.display, category.sortKey});
+            } else if (m_groupMode == DirectoryViewSettings::GroupBySize) {
+                const auto category = directory_view_detail::sizeCategoryForFile(file);
+                rendered.push_back({file, typeText, category.display, category.sortKey});
+            } else {
+                rendered.push_back({file, typeText,
+                    file.isDir ? trLocal("Foldery", "Folders") : typeText,
+                    file.isDir ? QString() : typeText.toCaseFolded()});
+            }
+        }
+
+        if (m_groupMode != DirectoryViewSettings::NoGrouping) {
+            std::stable_sort(rendered.begin(), rendered.end(),
+                [](const RenderedFile &left, const RenderedFile &right) {
+                    return left.categorySort.localeAwareCompare(right.categorySort) < 0;
+                });
+        }
+        m_directoryList->setCategorized(
+            m_groupMode != DirectoryViewSettings::NoGrouping);
+
+        QString previousCategory;
+        bool firstCategory = true;
+        for (const RenderedFile &renderedFile : std::as_const(rendered)) {
+            const FileInfo &file = renderedFile.file;
+            if (m_groupMode != DirectoryViewSettings::NoGrouping
+                && (firstCategory || renderedFile.categorySort != previousCategory)) {
+                addDirectoryGroupHeader(m_directoryDetails, renderedFile.categoryDisplay);
+                previousCategory = renderedFile.categorySort;
+                firstCategory = false;
+            }
+
             const QIcon icon =
                 iconForFile(file, mimeDb);
-            const QString typeText =
-                fileTypeLabel(file, mimeDb);
+            const QString typeText = renderedFile.typeText;
             const QString sizeText =
                 formatFileSize(file.size, file.isDir);
             const QString modifiedText =
@@ -4711,8 +4856,14 @@ private:
                 typeText,
                 sizeText,
                 modifiedText,
-                {locationText});
+                {locationText},
+                m_groupMode != DirectoryViewSettings::NoGrouping
+                    ? renderedFile.categoryDisplay : QString(),
+                m_groupMode != DirectoryViewSettings::NoGrouping
+                    ? QVariant(renderedFile.categorySort) : QVariant());
         }
+        restoreDirectorySelections(m_directoryList, m_directoryDetails,
+                                   selectedListUrls, selectedDetailsUrls);
 
         const int count = m_pendingFiles.size();
 
@@ -4746,17 +4897,17 @@ private:
         updateFileActionStates();
     }
 
-    void activateDirectoryItem(QListWidgetItem *item)
+    void activateDirectoryItem(const QModelIndex &item)
     {
-        if (!item) {
+        if (!item.isValid()) {
             return;
         }
 
         const QUrl url(
-            item->data(Qt::UserRole).toString());
+            item.data(directory_view_detail::UrlRole).toString());
 
         const bool isDir =
-            item->data(Qt::UserRole + 1).toBool();
+            item.data(directory_view_detail::DirectoryRole).toBool();
 
         if (isDir) {
             navigateTo(url, true);
@@ -4768,7 +4919,7 @@ private:
 
     void activateDetailsItem(QTreeWidgetItem *item)
     {
-        if (!item) {
+        if (!item || !item->data(0, directory_view_detail::FileItemRole).toBool()) {
             return;
         }
 
@@ -5569,6 +5720,7 @@ private:
             {0, "Ikony", "Icons", "view-list-icons"},
             {1, "Lista", "List", "view-list-text"},
             {2, "Szczegóły", "Details", "view-list-details"},
+            {3, "Kompaktowy", "Compact", "view-list-tree"},
         };
 
         for (const ViewDef &def : views) {
@@ -5592,7 +5744,11 @@ private:
 
         viewMenu->addSeparator();
 
-        QAction *hidden = viewMenu->addAction(
+        QMenu *showMenu = viewMenu->addMenu(
+            themedIcon(QStringLiteral("view-visible"), QStringLiteral("view-preview")),
+            trLocal("Pokaż", "Show"));
+
+        QAction *hidden = showMenu->addAction(
             themedIcon(QStringLiteral("view-hidden")),
             trLocal("Ukryte elementy", "Hidden items"));
         hidden->setCheckable(true);
@@ -5603,7 +5759,7 @@ private:
             this,
             &ThisPcWindow::setShowHiddenFiles);
 
-        QAction *thumbnails = viewMenu->addAction(
+        QAction *thumbnails = showMenu->addAction(
             themedIcon(QStringLiteral("view-preview")),
             trLocal("Miniatury obrazów", "Image thumbnails"));
         thumbnails->setCheckable(true);
@@ -5613,6 +5769,34 @@ private:
             &QAction::toggled,
             this,
             &ThisPcWindow::setThumbnailsEnabled);
+
+        showMenu->addAction(m_previewAction);
+        showMenu->addAction(m_fullNamesAction);
+
+        QMenu *iconSizeMenu = viewMenu->addMenu(
+            themedIcon(QStringLiteral("transform-scale"), QStringLiteral("view-list-icons")),
+            trLocal("Rozmiar ikon", "Icon size"));
+        auto *iconSizeGroup = new QActionGroup(iconSizeMenu);
+        iconSizeGroup->setExclusive(true);
+        const bool splitPane = split;
+        const int currentIconSize = splitPane
+            ? m_splitPane->iconSizeMode()
+            : m_directoryIconSizeMode;
+        const QStringList labels = {
+            trLocal("Bardzo duże", "Very large"),
+            trLocal("Duże", "Large"),
+            trLocal("Średnie", "Medium"),
+            trLocal("Małe", "Small")};
+        for (int mode = 0; mode < labels.size(); ++mode) {
+            QAction *action = iconSizeMenu->addAction(labels.at(mode));
+            action->setCheckable(true);
+            action->setChecked(mode == currentIconSize);
+            iconSizeGroup->addAction(action);
+            connect(action, &QAction::triggered, this, [this, splitPane, mode] {
+                if (splitPane) m_splitPane->setIconSizeMode(mode);
+                else setDirectoryIconSizeMode(mode);
+            });
+        }
     }
 
     void addSortSubmenu(QMenu &menu)
@@ -5702,6 +5886,26 @@ private:
                 if (pane == PaneId::Split) m_splitPane->setSortState(m_splitPane->sortKey(), false);
                 else setSortAscending(false);
             });
+
+        sortMenu->addSeparator();
+        QMenu *groupMenu = sortMenu->addMenu(trLocal("Grupuj według", "Group by"));
+        auto *groupActions = new QActionGroup(groupMenu);
+        groupActions->setExclusive(true);
+        for (const auto &entry : std::initializer_list<std::pair<int, QString>>{
+                 {DirectoryViewSettings::NoGrouping, trLocal("Brak", "None")},
+                 {DirectoryViewSettings::GroupByType, trLocal("Typ", "Type")},
+                 {DirectoryViewSettings::GroupByDate, trLocal("Data modyfikacji", "Date modified")},
+                 {DirectoryViewSettings::GroupBySize, trLocal("Rozmiar", "Size")}}) {
+            QAction *action = groupMenu->addAction(entry.second);
+            action->setCheckable(true);
+            action->setData(entry.first);
+            action->setChecked((split ? m_splitPane->groupMode() : m_groupMode) == entry.first);
+            groupActions->addAction(action);
+            connect(action, &QAction::triggered, this, [this, pane, mode = entry.first] {
+                if (pane == PaneId::Split) m_splitPane->setGroupMode(mode);
+                else setGroupMode(mode);
+            });
+        }
     }
 
     void selectAllDirectoryItems()
@@ -5860,15 +6064,17 @@ private:
 
     void showPaneContextMenu(PaneId pane, bool details, const QPoint &pos)
     {
-        setActivePane(pane);
         auto *list = pane == PaneId::Split ? m_splitPane->listView() : m_directoryList;
         auto *tree = pane == PaneId::Split ? m_splitPane->detailsView() : m_directoryDetails;
         QAbstractItemView *view = details ? static_cast<QAbstractItemView *>(tree) : list;
+        const QPersistentModelIndex clickedIndex(view->indexAt(pos));
+        setActivePane(pane);
         view->setFocus(Qt::MouseFocusReason);
         PaneItem clicked;
         bool hasItem = false;
         if (details) {
-            if (auto *item = tree->itemAt(pos)) {
+            if (auto *item = tree->itemFromIndex(clickedIndex);
+                item && item->data(0, directory_view_detail::FileItemRole).toBool()) {
                 hasItem = true;
                 if (!item->isSelected()) {
                     tree->clearSelection();
@@ -5879,18 +6085,19 @@ private:
                     item->text(0), item->text(1), item->text(2), item->text(3),
                     item->data(0, Qt::UserRole + 1).toBool()};
             }
-        } else if (auto *item = list->itemAt(pos)) {
+        } else if (const QModelIndex item = list->itemFromIndex(clickedIndex); item.isValid()) {
             hasItem = true;
-            if (!item->isSelected()) {
+            if (!list->selectionModel()->isSelected(item)) {
                 list->clearSelection();
-                list->setCurrentItem(item);
-                item->setSelected(true);
+                list->selectionModel()->setCurrentIndex(
+                    item, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Current);
             }
-            clicked = {QUrl(item->data(Qt::UserRole).toString()), item->text(),
-                item->data(Qt::UserRole + 2).toString(),
-                item->data(Qt::UserRole + 3).toString(),
-                item->data(Qt::UserRole + 4).toString(),
-                item->data(Qt::UserRole + 1).toBool()};
+            clicked = {QUrl(item.data(directory_view_detail::UrlRole).toString()),
+                item.data(Qt::DisplayRole).toString(),
+                item.data(directory_view_detail::TypeTextRole).toString(),
+                item.data(directory_view_detail::SizeTextRole).toString(),
+                item.data(directory_view_detail::ModifiedTextRole).toString(),
+                item.data(directory_view_detail::DirectoryRole).toBool()};
         }
         // Snapshot before QMenu::exec(): focus and directory contents may change.
         const PaneContext context = paneContext();
@@ -6386,6 +6593,9 @@ private:
         if (m_backAction && m_contentStack) updateNavigationActions();
         const bool split = paneContext().id == PaneId::Split;
         const int mode = split ? m_splitPane->viewMode() : m_directoryViewMode;
+        const int iconSizeMode = split
+            ? m_splitPane->iconSizeMode()
+            : m_directoryIconSizeMode;
         const int sort = split ? m_splitPane->sortKey() : m_sortKey;
         const bool ascending = split
             ? m_splitPane->sortAscending()
@@ -6394,7 +6604,8 @@ private:
             static const QStringList icons = {
                 QStringLiteral("view-list-icons"),
                 QStringLiteral("view-list-text"),
-                QStringLiteral("view-list-details")
+                QStringLiteral("view-list-details"),
+                QStringLiteral("view-list-tree")
             };
             m_viewButton->setIcon(themedIcon(icons.at(mode)));
         }
@@ -6409,6 +6620,14 @@ private:
                 if (action->data().isValid()) {
                     QSignalBlocker blocker(action);
                     action->setChecked(action->data().toInt() == mode);
+                }
+            }
+            if (QMenu *iconSizeMenu = m_viewButton->menu()->findChild<QMenu *>(
+                    QStringLiteral("viewIconSizeMenu"))) {
+                for (QAction *action : iconSizeMenu->actions()) {
+                    QSignalBlocker blocker(action);
+                    action->setChecked(
+                        action->property("iconSizeMode").toInt() == iconSizeMode);
                 }
             }
         }
@@ -6829,14 +7048,49 @@ private:
     void setDirectoryViewMode(int mode)
     {
         m_directoryViewMode =
-            std::clamp(mode, 0, 2);
+            std::clamp(mode, 0, 3);
 
         QSettings settings;
         settings.setValue(
             QStringLiteral("directory/viewMode"),
             m_directoryViewMode);
+        DirectoryViewSettings::setViewMode(
+            m_currentUrl,
+            m_directoryViewMode);
 
         applyDirectoryViewMode(false);
+    }
+
+    void setDirectoryIconSizeMode(int mode)
+    {
+        m_directoryIconSizeMode = std::clamp(mode, 0, 3);
+        QSettings settings;
+        settings.setValue(
+            QStringLiteral("directory/iconSizeMode"),
+            m_directoryIconSizeMode);
+        DirectoryViewSettings::setIconSizeMode(
+            m_currentUrl,
+            m_directoryIconSizeMode);
+        applyDirectoryViewMode(false);
+    }
+
+    void setGroupMode(int mode)
+    {
+        m_groupMode = std::clamp(
+            mode, DirectoryViewSettings::NoGrouping, DirectoryViewSettings::GroupBySize);
+        DirectoryViewSettings::setGroupMode(m_currentUrl, m_groupMode);
+        if (m_contentStack && m_contentStack->currentWidget() == m_directoryPage) {
+            renderDirectoryItems();
+        }
+        scheduleDateGroupingRefresh();
+    }
+
+    void scheduleDateGroupingRefresh()
+    {
+        m_dateGroupingTimer.stop();
+        if (m_groupMode != DirectoryViewSettings::GroupByDate) return;
+        m_dateGroupingTimer.start(
+            directory_view_detail::millisecondsUntilNextLocalDay());
     }
 
     void applyDirectoryViewMode(bool saveSetting)
@@ -6862,7 +7116,8 @@ private:
             m_directoryDetails,
             m_directoryViewStack,
             m_viewButton,
-            m_directoryViewMode);
+            m_directoryViewMode,
+            m_directoryIconSizeMode);
 
         updateFileActionStates();
     }
@@ -7452,17 +7707,34 @@ private:
     void updateRecoveryFencePresentation()
     {
         auto &gate = BatchRenameRecoveryGate::instance();
+        const QString previousRecoveryMessage = m_recoveryStatusLabel
+            ? m_recoveryStatusLabel->text()
+            : QString();
         gate.refresh();
         if (!m_recoveryStatusLabel) return;
         m_recoveryStatusLabel->setText(gate.message());
         m_recoveryStatusLabel->setToolTip(gate.message());
-        m_recoveryStatusLabel->setVisible(true);
+        m_recoveryStatusLabel->setVisible(gate.mutationsBlocked());
         recordRecoveryTestPresentation();
         if (gate.mutationsBlocked()) {
+            m_recoverySuccessShown = false;
             statusBar()->showMessage(gate.message(), 0);
-        } else if (statusBar()->currentMessage().contains(
-                       QStringLiteral("Checking crash recovery"), Qt::CaseInsensitive)) {
-            statusBar()->clearMessage();
+        } else if (!m_recoverySuccessShown) {
+            // Consume this completion exactly once even when a newer status is
+            // currently visible. Otherwise the one-second refresh timer can
+            // resurrect the success notice after its timeout or clobber a
+            // later operation message.
+            m_recoverySuccessShown = true;
+            if (statusBar()->currentMessage().isEmpty()
+                || statusBar()->currentMessage() == previousRecoveryMessage
+                || statusBar()->currentMessage().contains(
+                    QStringLiteral("Checking crash recovery"), Qt::CaseInsensitive)) {
+                statusBar()->showMessage(
+                    trLocal(
+                        "Sprawdzanie odzyskiwania po awarii zakończone. Historia Cofnij/Ponów sprzed ponownego uruchomienia nie jest przywracana.",
+                        "Crash recovery check completed. Undo/Redo history from before restart is not restored."),
+                    6000);
+            }
         }
     }
 
@@ -7564,8 +7836,11 @@ private:
     QAction *m_fullNamesAction = nullptr;
     QAction *m_restoreSessionAction = nullptr;
     int m_directoryViewMode = 0;
+    int m_directoryIconSizeMode = DirectoryViewSettings::DefaultIconSizeMode;
     int m_sortKey = 0;
     bool m_sortAscending = true;
+    int m_groupMode = DirectoryViewSettings::NoGrouping;
+    QTimer m_dateGroupingTimer;
     bool m_showHiddenFiles = false;
     bool m_thumbnailsEnabled = true;
     bool m_alwaysShowFullNames = false;
@@ -7613,6 +7888,7 @@ private:
     QLabel *m_versionLabel = nullptr;
     QLabel *m_recoveryStatusLabel = nullptr;
     QFutureWatcher<void> *m_recoveryStartupWatcher = nullptr;
+    bool m_recoverySuccessShown = false;
 
     QWidget *m_splitHomePage = nullptr;
     QLabel *m_splitHomeStatus = nullptr;
@@ -7662,7 +7938,7 @@ int main(int argc, char **argv)
     QCoreApplication::setApplicationName(
         QStringLiteral("thispc-view"));
     QCoreApplication::setApplicationVersion(
-        QStringLiteral("0.29.0"));
+        QStringLiteral("0.30.0"));
 
     app.setApplicationDisplayName(
         isPolish()

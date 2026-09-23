@@ -31,7 +31,7 @@ group.add_argument('--all', action='store_true', help='run every regression suit
 group.add_argument('--suites', nargs='+', choices=[
     'panes', 'tabs', 'properties', 'search', 'actions', 'operations',
     'local_transfer', 'transfer_plan', 'local_move', 'local_tree', 'tree_history',
-    'sidebar_dnd', 'sidebar_layout', 'split_layout', 'templates', 'trash', 'archive', 'archive_jobs', 'archive_menu', 'archive_creation', 'preview', 'quick_look', 'batch_rename'],
+    'sidebar_dnd', 'sidebar_layout', 'split_layout', 'templates', 'trash', 'archive', 'archive_jobs', 'archive_menu', 'archive_creation', 'preview', 'quick_look', 'batch_rename', 'view_settings'],
     help='build once and run only the selected regression suites')
 options = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
@@ -123,6 +123,7 @@ with tempfile.TemporaryDirectory(prefix='thispc-pane-tests-', delete=not options
     suites['preview'] = 'preview-pane.cpp'
     suites['quick_look'] = 'quick-look.cpp'
     suites['batch_rename'] = 'batch-rename.cpp'
+    suites['view_settings'] = 'directory-view-settings.cpp'
     selected = options.suites or (list(suites) if options.all else ['trash' if options.trash else 'templates' if options.templates else 'sidebar_layout' if options.sidebar_layout else 'sidebar_dnd' if options.sidebar_dnd else 'local_move' if options.local_move else 'transfer_plan' if options.transfer_plan else 'local_transfer' if options.local_transfer else 'operations' if options.operations else 'actions' if options.actions else 'tabs' if options.tabs else 'properties' if options.properties else 'search' if options.search else 'panes'])
     if 'batch_rename' in selected:
         subprocess.run(['cmake', '-S', str(root), '-B', str(root / 'build'),
@@ -150,6 +151,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_AUTOMOC ON)
 find_package(Qt6 REQUIRED COMPONENTS Core Concurrent Gui Widgets PrintSupport Pdf Test)
 find_package(KF6KIO REQUIRED)
+find_package(KF6ItemViews REQUIRED)
 find_package(LibArchive REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(TagLib REQUIRED)
@@ -158,7 +160,7 @@ file(GLOB TEST_HEADERS CONFIGURE_DEPENDS src/*.h)
 add_executable(pane-test src/thispcview.cpp ${TEST_HEADERS})
 target_compile_options(pane-test PRIVATE -g3 -O0 -fno-omit-frame-pointer -Wno-unused-function -Wno-unused-variable)
 target_include_directories(pane-test PRIVATE ${LibArchive_INCLUDE_DIRS})
-target_link_libraries(pane-test PRIVATE Qt6::Core Qt6::Concurrent Qt6::Gui Qt6::Widgets Qt6::PrintSupport Qt6::Pdf Qt6::Test KF6::KIOCore KF6::KIOWidgets ${LibArchive_LIBRARIES} ZLIB::ZLIB TagLib::TagLib Exiv2::exiv2lib)
+target_link_libraries(pane-test PRIVATE Qt6::Core Qt6::Concurrent Qt6::Gui Qt6::Widgets Qt6::PrintSupport Qt6::Pdf Qt6::Test KF6::KIOCore KF6::KIOWidgets KF6::ItemViews ${LibArchive_LIBRARIES} ZLIB::ZLIB TagLib::TagLib Exiv2::exiv2lib)
 target_compile_definitions(pane-test PRIVATE THISPC_BATCH_RENAME_TEST_HOOKS=1)
 '''
     (tmp / 'CMakeLists.txt').write_text(cmake)

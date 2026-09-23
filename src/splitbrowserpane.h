@@ -10,6 +10,7 @@
 
 #include "browsercommon.h"
 #include "directoryview.h"
+#include "directoryviewsettings.h"
 #include "pathwidgets.h"
 #include "searchcontroller.h"
 
@@ -36,7 +37,6 @@
 #include <QList>
 #include <QListView>
 #include <QListWidget>
-#include <QListWidgetItem>
 #include <QMenu>
 #include <QMimeDatabase>
 #include <QMimeType>
@@ -107,6 +107,12 @@ public:
             settings.value(
                 QStringLiteral("directory/thumbnails"),
                 true).toBool();
+
+        m_dateGroupingTimer.setSingleShot(true);
+        connect(&m_dateGroupingTimer, &QTimer::timeout, this, [this] {
+            renderItems();
+            scheduleDateGroupingRefresh();
+        });
 
         auto *outer = new QVBoxLayout(this);
         outer->setContentsMargins(0, 0, 0, 0);
@@ -267,7 +273,8 @@ public:
         const ViewDef viewDefs[] = {
             {0, "Ikony", "Icons", "view-list-icons"},
             {1, "Lista", "List", "view-list-text"},
-            {2, "Szczegóły", "Details", "view-list-details"}
+            {2, "Szczegóły", "Details", "view-list-details"},
+            {3, "Kompaktowy", "Compact", "view-list-tree"}
         };
 
         for (const ViewDef &def : viewDefs) {
@@ -366,6 +373,27 @@ public:
                 updateSortIcon();
                 Q_EMIT stateChanged();
             });
+
+        sortMenu->addSeparator();
+        QMenu *groupMenu = sortMenu->addMenu(trLocal("Grupuj według", "Group by"));
+        auto *groupActions = new QActionGroup(groupMenu);
+        groupActions->setExclusive(true);
+        for (const auto &entry : std::initializer_list<std::pair<int, QString>>{
+                 {DirectoryViewSettings::NoGrouping, trLocal("Brak", "None")},
+                 {DirectoryViewSettings::GroupByType, trLocal("Typ", "Type")},
+                 {DirectoryViewSettings::GroupByDate, trLocal("Data modyfikacji", "Date modified")},
+                 {DirectoryViewSettings::GroupBySize, trLocal("Rozmiar", "Size")}}) {
+            QAction *action = groupMenu->addAction(entry.second);
+            action->setCheckable(true);
+            action->setData(entry.first);
+            groupActions->addAction(action);
+            connect(action, &QAction::triggered, this,
+                    [this, mode = entry.first] { setGroupMode(mode); });
+        }
+        connect(groupMenu, &QMenu::aboutToShow, this, [this, groupActions] {
+            for (QAction *action : groupActions->actions())
+                action->setChecked(action->data().toInt() == m_groupMode);
+        });
 
         m_sortButton->setMenu(sortMenu);
         headerLayout->addWidget(m_sortButton);
@@ -626,9 +654,9 @@ public:
 
         connect(
             m_list,
-            &QListWidget::itemDoubleClicked,
+            &DirectoryListWidget::itemDoubleClicked,
             this,
-            [this](QListWidgetItem *item) {
+            [this](const QModelIndex &item) {
                 activateListItem(item);
             });
         connect(
@@ -663,7 +691,7 @@ public:
             this,
             &SplitBrowserPane::urlsDropped);
 
-        connect(m_list, &QListWidget::itemSelectionChanged,
+        connect(m_list, &DirectoryListWidget::itemSelectionChanged,
                 this, &SplitBrowserPane::selectionChanged);
         connect(m_details, &QTreeWidget::itemSelectionChanged,
                 this, &SplitBrowserPane::selectionChanged);
@@ -767,6 +795,11 @@ public:
         return m_viewMode;
     }
 
+    int iconSizeMode() const
+    {
+        return m_iconSizeMode;
+    }
+
     int sortKey() const
     {
         return m_sortKey;
@@ -777,10 +810,48 @@ public:
         return m_sortAscending;
     }
 
-    void setViewMode(int mode)
+    int groupMode() const
+    {
+        return m_groupMode;
+    }
+
+    void setGroupMode(int mode, bool rememberForLocation = true)
+    {
+        m_groupMode = std::clamp(
+            mode, DirectoryViewSettings::NoGrouping, DirectoryViewSettings::GroupBySize);
+        if (rememberForLocation) {
+            DirectoryViewSettings::setGroupMode(m_currentUrl, m_groupMode);
+        }
+        renderItems();
+        scheduleDateGroupingRefresh();
+        Q_EMIT stateChanged();
+    }
+
+    void setViewMode(int mode, bool rememberForLocation = true)
     {
         m_viewMode =
-            std::clamp(mode, 0, 2);
+            std::clamp(mode, 0, 3);
+        if (rememberForLocation) {
+            QSettings settings;
+            settings.setValue(
+                QStringLiteral("directory/viewMode"),
+                m_viewMode);
+            DirectoryViewSettings::setViewMode(
+                m_currentUrl,
+                m_viewMode);
+        }
+        applyViewMode();
+        Q_EMIT stateChanged();
+    }
+
+    void setIconSizeMode(int mode, bool rememberForLocation = true)
+    {
+        m_iconSizeMode = std::clamp(mode, 0, 3);
+        if (rememberForLocation) {
+            QSettings settings;
+            settings.setValue(QStringLiteral("directory/iconSizeMode"), m_iconSizeMode);
+            DirectoryViewSettings::setIconSizeMode(m_currentUrl, m_iconSizeMode);
+        }
         applyViewMode();
         Q_EMIT stateChanged();
     }
@@ -1324,6 +1395,17 @@ private:
         m_list->clear();
         m_details->clear();
         m_currentUrl = url;
+        m_viewMode = DirectoryViewSettings::viewMode(
+            url,
+            m_viewMode);
+        m_iconSizeMode = DirectoryViewSettings::iconSizeMode(
+            url,
+            m_iconSizeMode);
+        m_groupMode = DirectoryViewSettings::groupMode(
+            url,
+            m_groupMode);
+        scheduleDateGroupingRefresh();
+        applyViewMode();
         const bool search = isSearchLocation(url);
         const bool home = sameLocation(url, kThisPcUrl);
         m_list->setDropDirectory(search || home ? QUrl() : url);
@@ -1512,6 +1594,8 @@ private:
 
     void renderItems()
     {
+        const auto selectedListUrls = selectedDirectoryListUrls(m_list);
+        const auto selectedDetailsUrls = selectedDirectoryDetailsUrls(m_details);
         QMimeDatabase database;
 
         auto typeFor =
@@ -1531,6 +1615,14 @@ private:
         m_list->clear();
         m_details->clear();
 
+        struct RenderedFile {
+            FileInfo file;
+            QString typeText;
+            QString categoryDisplay;
+            QString categorySort;
+        };
+        QList<RenderedFile> rendered;
+
         int visibleCount = 0;
         for (const FileInfo &file :
              std::as_const(m_pending)) {
@@ -1543,15 +1635,45 @@ private:
                     && !file.mimeType.contains(query, Qt::CaseInsensitive)) continue;
             }
             ++visibleCount;
+            const QString typeText = fileTypeLabel(file, database);
+            if (m_groupMode == DirectoryViewSettings::GroupByDate) {
+                const auto category = directory_view_detail::dateCategoryForModification(
+                    file.modificationTime);
+                rendered.push_back({file, typeText, category.display, category.sortKey});
+            } else if (m_groupMode == DirectoryViewSettings::GroupBySize) {
+                const auto category = directory_view_detail::sizeCategoryForFile(file);
+                rendered.push_back({file, typeText, category.display, category.sortKey});
+            } else {
+                rendered.push_back({file, typeText,
+                    file.isDir ? trLocal("Foldery", "Folders") : typeText,
+                    file.isDir ? QString() : typeText.toCaseFolded()});
+            }
+        }
+
+        if (m_groupMode != DirectoryViewSettings::NoGrouping) {
+            std::stable_sort(rendered.begin(), rendered.end(),
+                [](const RenderedFile &left, const RenderedFile &right) {
+                    return left.categorySort.localeAwareCompare(right.categorySort) < 0;
+                });
+        }
+        m_list->setCategorized(m_groupMode != DirectoryViewSettings::NoGrouping);
+
+        QString previousCategory;
+        bool firstCategory = true;
+        for (const RenderedFile &renderedFile : std::as_const(rendered)) {
+            const FileInfo &file = renderedFile.file;
+            if (m_groupMode != DirectoryViewSettings::NoGrouping
+                && (firstCategory || renderedFile.categorySort != previousCategory)) {
+                addDirectoryGroupHeader(m_details, renderedFile.categoryDisplay);
+                previousCategory = renderedFile.categorySort;
+                firstCategory = false;
+            }
             const QIcon icon =
                 iconForSplitFile(
                     file,
                     database);
 
-            const QString typeText =
-                fileTypeLabel(
-                    file,
-                    database);
+            const QString typeText = renderedFile.typeText;
 
             const QString sizeText =
                 formatFileSize(
@@ -1570,8 +1692,14 @@ private:
                 typeText,
                 sizeText,
                 modifiedText,
-                {parentLocationForDisplay(file.url)});
+                {parentLocationForDisplay(file.url)},
+                m_groupMode != DirectoryViewSettings::NoGrouping
+                    ? renderedFile.categoryDisplay : QString(),
+                m_groupMode != DirectoryViewSettings::NoGrouping
+                    ? QVariant(renderedFile.categorySort) : QVariant());
         }
+        restoreDirectorySelections(m_list, m_details,
+                                   selectedListUrls, selectedDetailsUrls);
 
         if (isSearchLocation(m_currentUrl)) {
             m_status->setText(m_searchController->statusText(visibleCount, m_searchState.scope));
@@ -1582,6 +1710,14 @@ private:
             m_status->setText((isPolish() ? QStringLiteral("%1 z %2 elementów") : QStringLiteral("%1 of %2 items"))
                 .arg(visibleCount).arg(m_pending.size()));
         }
+    }
+
+    void scheduleDateGroupingRefresh()
+    {
+        m_dateGroupingTimer.stop();
+        if (m_groupMode != DirectoryViewSettings::GroupByDate) return;
+        m_dateGroupingTimer.start(
+            directory_view_detail::millisecondsUntilNextLocalDay());
     }
 
     void updateSearchProgress()
@@ -1601,7 +1737,8 @@ private:
             m_details,
             m_viewStack,
             m_viewButton,
-            m_viewMode);
+            m_viewMode,
+            m_iconSizeMode);
 
         if (m_viewButton
             && m_viewButton->menu()) {
@@ -1636,19 +1773,19 @@ private:
     }
 
     void activateListItem(
-        QListWidgetItem *item)
+        const QModelIndex &item)
     {
-        if (!item) {
+        if (!item.isValid()) {
             return;
         }
 
         const QUrl url(
-            item->data(
-                Qt::UserRole).toString());
+            item.data(
+                directory_view_detail::UrlRole).toString());
 
         const bool isDir =
-            item->data(
-                Qt::UserRole + 1).toBool();
+            item.data(
+                directory_view_detail::DirectoryRole).toBool();
 
         if (isDir) {
             navigateTo(url, true);
@@ -1660,7 +1797,7 @@ private:
     void activateDetailsItem(
         QTreeWidgetItem *item)
     {
-        if (!item) {
+        if (!item || !item->data(0, directory_view_detail::FileItemRole).toBool()) {
             return;
         }
 
@@ -1733,8 +1870,11 @@ private:
     int m_historyIndex = -1;
 
     int m_viewMode = 0;
+    int m_iconSizeMode = DirectoryViewSettings::DefaultIconSizeMode;
     int m_sortKey = 0;
     bool m_sortAscending = true;
+    int m_groupMode = DirectoryViewSettings::NoGrouping;
+    QTimer m_dateGroupingTimer;
     bool m_showHiddenFiles = false;
     bool m_thumbnailsEnabled = true;
 

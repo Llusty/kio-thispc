@@ -10,8 +10,13 @@
 
 #include "browsercommon.h"
 
+#include <KCategorizedSortFilterProxyModel>
+#include <KCategorizedView>
+#include <KCategoryDrawer>
+
 #include <QAbstractItemView>
 #include <QApplication>
+#include <QCursor>
 #include <QDir>
 #include <QDrag>
 #include <QDragEnterEvent>
@@ -20,12 +25,14 @@
 #include <QDropEvent>
 #include <QFileInfo>
 #include <QFontMetrics>
-#include <QListWidget>
+#include <QStandardItemModel>
 #include <QMimeData>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPaintEvent>
 #include <QResizeEvent>
 #include <QShowEvent>
+#include <QSet>
 #include <QStackedWidget>
 #include <QStorageInfo>
 #include <QStyledItemDelegate>
@@ -35,15 +42,202 @@
 #include <QTextLayout>
 #include <QTextOption>
 #include <QTimer>
+#include <QTimeZone>
 #include <QToolButton>
 #include <QTreeWidget>
 #include <QUrl>
 
 #include <functional>
+#include <limits>
 #include <utility>
 
 namespace directory_view_detail
 {
+enum ItemRole {
+    UrlRole = Qt::UserRole,
+    DirectoryRole,
+    TypeTextRole,
+    SizeTextRole,
+    ModifiedTextRole,
+    FileItemRole,
+    OriginalOrderRole,
+};
+
+struct DateCategory
+{
+    QString display;
+    QString sortKey;
+};
+
+// Size is the non-recursive UDS_SIZE reported for this entry by KIO.
+// Boundaries are binary multiples and lower-inclusive, upper-exclusive.
+// Directories are separate regardless of a worker's reported size.
+inline DateCategory sizeCategoryForFile(const FileInfo &file)
+{
+    if (file.isDir)
+        return {trLocal("Foldery", "Folders"), QStringLiteral("00")};
+    if (file.size < 0)
+        return {trLocal("Nieznany rozmiar", "Unknown size"), QStringLiteral("90")};
+    if (file.size == 0)
+        return {trLocal("Puste (0 B)", "Empty (0 B)"), QStringLiteral("10")};
+    if (file.size < 1024)
+        return {trLocal("1 B – 1023 B", "1 B – 1023 B"), QStringLiteral("20")};
+    if (file.size < 1024LL * 1024)
+        return {trLocal("1 KiB – poniżej 1 MiB", "1 KiB – under 1 MiB"), QStringLiteral("30")};
+    if (file.size < 1024LL * 1024 * 1024)
+        return {trLocal("1 MiB – poniżej 1 GiB", "1 MiB – under 1 GiB"), QStringLiteral("40")};
+    if (file.size < 1024LL * 1024 * 1024 * 1024)
+        return {trLocal("1 GiB – poniżej 1 TiB", "1 GiB – under 1 TiB"), QStringLiteral("50")};
+    return {trLocal("1 TiB i więcej", "1 TiB and larger"), QStringLiteral("60")};
+}
+
+// KIO exposes modification time as epoch seconds. Bucket it only after
+// conversion to the system's local calendar. Today/Yesterday take precedence
+// over ISO-week ranges, which keeps all ranges disjoint around Mondays.
+inline DateCategory dateCategoryForModification(
+    qint64 seconds,
+    const QDateTime &reference = QDateTime::currentDateTime())
+{
+    if (seconds <= 0 || !reference.isValid()) {
+        return {trLocal("Nieznana data", "Unknown date"), QStringLiteral("90")};
+    }
+    const QTimeZone zone = reference.timeZone().isValid()
+        ? reference.timeZone() : QTimeZone::systemTimeZone();
+    const QDate date = QDateTime::fromSecsSinceEpoch(seconds, zone).date();
+    const QDate today = reference.toTimeZone(zone).date();
+    if (!date.isValid() || !today.isValid()) {
+        return {trLocal("Nieznana data", "Unknown date"), QStringLiteral("90")};
+    }
+    if (date > today)
+        return {trLocal("Przyszłe", "Future"), QStringLiteral("00")};
+    if (date == today)
+        return {trLocal("Dzisiaj", "Today"), QStringLiteral("10")};
+    if (date == today.addDays(-1))
+        return {trLocal("Wczoraj", "Yesterday"), QStringLiteral("20")};
+
+    const QDate weekStart = today.addDays(1 - today.dayOfWeek());
+    if (date >= weekStart)
+        return {trLocal("Ten tydzień", "This week"), QStringLiteral("30")};
+    if (date >= weekStart.addDays(-7))
+        return {trLocal("Ostatni tydzień", "Last week"), QStringLiteral("40")};
+    if (date.year() == today.year() && date.month() == today.month())
+        return {trLocal("Wcześniej w tym miesiącu", "Earlier this month"), QStringLiteral("50")};
+    if (date.year() == today.year())
+        return {trLocal("Wcześniej w tym roku", "Earlier this year"), QStringLiteral("60")};
+    return {trLocal("Starsze", "Older"), QStringLiteral("70")};
+}
+
+inline int millisecondsUntilNextLocalDay(
+    const QDateTime &reference = QDateTime::currentDateTime())
+{
+    const QTimeZone zone = reference.timeZone().isValid()
+        ? reference.timeZone() : QTimeZone::systemTimeZone();
+    const QDateTime local = reference.toTimeZone(zone);
+    if (!local.isValid()) return 60 * 1000;
+    const QDateTime next = local.date().addDays(1).startOfDay(zone);
+    if (!next.isValid()) return 60 * 1000;
+    return int(qBound<qint64>(qint64(1000), local.msecsTo(next) + 1000,
+                              qint64(std::numeric_limits<int>::max())));
+}
+
+class StableCategoryProxy final : public KCategorizedSortFilterProxyModel
+{
+public:
+    explicit StableCategoryProxy(QObject *parent = nullptr)
+        : KCategorizedSortFilterProxyModel(parent)
+    {
+    }
+
+protected:
+    bool subSortLessThan(const QModelIndex &left, const QModelIndex &right) const override
+    {
+        return left.data(OriginalOrderRole).toInt()
+            < right.data(OriginalOrderRole).toInt();
+    }
+};
+
+inline int iconExtentForMode(int mode)
+{
+    static constexpr int extents[] = {96, 64, 48, 32};
+    return extents[std::clamp(mode, 0, 3)];
+}
+
+inline QSize iconGridSize(int iconExtent, bool fullNames)
+{
+    const int width = qMax(104, iconExtent + 72);
+    return QSize(width, iconExtent + (fullNames ? 86 : 52));
+}
+
+inline QColor blendedSelectionColor(
+    const QPalette &palette,
+    QPalette::ColorGroup group,
+    int highlightPercent)
+{
+    const QColor base = palette.color(group, QPalette::Base);
+    const QColor highlight = palette.color(group, QPalette::Highlight);
+    const int amount = qBound(0, highlightPercent, 100);
+    return QColor(
+        (base.red() * (100 - amount) + highlight.red() * amount) / 100,
+        (base.green() * (100 - amount) + highlight.green() * amount) / 100,
+        (base.blue() * (100 - amount) + highlight.blue() * amount) / 100,
+        255);
+}
+
+inline QRect selectedNameCalloutRect(
+    const QRect &itemRect,
+    int iconExtent,
+    int textHeight,
+    const QRect &viewportRect)
+{
+    const int width = qMax(1, itemRect.width() - 2);
+    const int height = qMax(1, textHeight + 8);
+    // Keep the label tied to the cell even when the item is partially clipped
+    // by the viewport. Moving the overlay on its own makes its right edge
+    // protrude by a few pixels for the first/last visible column.
+    const int x = itemRect.left() + 1;
+    const int iconBottom = itemRect.top() + iconExtent + 4;
+    int y = qBound(viewportRect.top() + 2, iconBottom,
+                   qMax(viewportRect.top() + 2, viewportRect.bottom() - height - 1));
+    return QRect(x, y, width, height);
+}
+
+inline bool selectedNameNeedsCallout(
+    const QString &text,
+    const QFont &font,
+    int innerWidth,
+    int maxGridLines)
+{
+    if (text.isEmpty() || innerWidth <= 0) return false;
+    QTextLayout layout(text, font);
+    QTextOption option;
+    option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+    layout.setTextOption(option);
+    layout.beginLayout();
+    int lineCount = 0;
+    while (true) {
+        QTextLine line = layout.createLine();
+        if (!line.isValid()) break;
+        line.setLineWidth(innerWidth);
+        ++lineCount;
+    }
+    layout.endLayout();
+    return lineCount > maxGridLines
+        || lineCount > 1
+        || QFontMetrics(font).horizontalAdvance(text) > innerWidth;
+}
+
+inline QPainterPath selectedNameOutlinePath(
+    const QRect &itemRect,
+    const QRect &calloutRect)
+{
+    QPainterPath itemPath;
+    itemPath.addRoundedRect(
+        QRectF(itemRect).adjusted(1.5, 1.5, -1.5, -1.5), 6.0, 6.0);
+    QPainterPath calloutPath;
+    calloutPath.addRect(QRectF(calloutRect).adjusted(0.5, -1.0, -0.5, -0.5));
+    return itemPath.united(calloutPath).simplified();
+}
+
 inline QString existingPathForStorage(const QString &rawPath)
 {
     QFileInfo info(rawPath);
@@ -160,18 +354,68 @@ public:
         return m_alwaysShowFullNames;
     }
 
+    void setCompactMode(bool enabled)
+    {
+        if (m_compactMode == enabled) {
+            return;
+        }
+        m_compactMode = enabled;
+        if (m_view) {
+            m_view->doItemsLayout();
+            m_view->viewport()->update();
+        }
+    }
+
     void paint(
         QPainter *painter,
         const QStyleOptionViewItem &option,
         const QModelIndex &index) const override
     {
-        if (!m_view || m_view->viewMode() != QListView::IconMode) {
+        if (!m_view) {
             QStyledItemDelegate::paint(painter, option, index);
+            return;
+        }
+
+        // KCategorizedView can hand the delegate a stale State_Selected flag
+        // for a previously selected item even though QItemSelectionModel has
+        // already moved the selection. Treat the selection model as the single
+        // source of truth for painting in every grouped list mode.
+        const bool modelSelected = m_view->selectionModel()
+            && m_view->selectionModel()->isSelected(index);
+
+        // KCategorizedView can also leave State_MouseOver on the item that was
+        // hovered before a categorized layout/selection update. Breeze paints
+        // that stale hover almost exactly like a second selection. Recompute
+        // hover from the real cursor position instead of trusting option.state.
+        const auto syncMouseOver = [this, &index](QStyleOptionViewItem &itemOption) {
+            const QPoint viewportPos =
+                m_view->viewport()->mapFromGlobal(QCursor::pos());
+            const bool actuallyHovered =
+                m_view->viewport()->rect().contains(viewportPos)
+                && m_view->indexAt(viewportPos) == index;
+            if (actuallyHovered)
+                itemOption.state |= QStyle::State_MouseOver;
+            else
+                itemOption.state &= ~QStyle::State_MouseOver;
+        };
+
+        if (m_view->viewMode() != QListView::IconMode) {
+            QStyleOptionViewItem adjusted(option);
+            if (modelSelected)
+                adjusted.state |= QStyle::State_Selected;
+            else
+                adjusted.state &= ~QStyle::State_Selected;
+            syncMouseOver(adjusted);
+            QStyledItemDelegate::paint(painter, adjusted, index);
             return;
         }
 
         QStyleOptionViewItem opt(option);
         initStyleOption(&opt, index);
+        // Never let the platform style use a stale selected bit. Icon-mode
+        // selection is painted explicitly below from QItemSelectionModel.
+        opt.state &= ~QStyle::State_Selected;
+        syncMouseOver(opt);
 
         const QString fullText = opt.text;
         opt.text.clear();
@@ -179,8 +423,51 @@ public:
         const QWidget *widget = opt.widget;
         QStyle *style = widget ? widget->style() : QApplication::style();
 
-        // 1. Draw cell background, selection/hover highlight, focus rect and decoration icon
+        // 1. Paint one restrained selection surface for the entire cell.
+        // Do not ask the platform style to paint State_Selected as well: KDE
+        // styles differ in whether they highlight the icon, text or both and
+        // can consequently add a second rectangle. An opaque palette blend
+        // stays legible over thumbnails and works in light and dark themes.
+        const bool selected = modelSelected;
+        bool expandedName = false;
+        QColor selectionBorder;
+        if (selected) {
+            const bool focusedPane = m_view->hasFocus();
+            const QPalette::ColorGroup group = focusedPane
+                ? QPalette::Active
+                : QPalette::Inactive;
+            selectionBorder = opt.palette.color(group, QPalette::Highlight);
+            selectionBorder.setAlpha(focusedPane ? 190 : 130);
+            painter->save();
+            painter->setRenderHint(QPainter::Antialiasing, true);
+            expandedName = directory_view_detail::selectedNameNeedsCallout(
+                fullText,
+                opt.font,
+                qMax(1, opt.rect.width() - 16),
+                m_alwaysShowFullNames ? 4 : 2);
+            // The style may paint over the bottom border (especially when the
+            // filename fits on one line). Fill now, but stroke AFTER it paints.
+            // Expanded names get their one unified outline in paintEvent().
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(directory_view_detail::blendedSelectionColor(
+                opt.palette, group, focusedPane ? 16 : 10));
+            painter->drawRoundedRect(
+                QRectF(opt.rect).adjusted(1.5, 1.5, -1.5, -1.5), 6.0, 6.0);
+            painter->restore();
+            opt.state &= ~QStyle::State_MouseOver;
+        }
         style->drawControl(QStyle::CE_ItemViewItem, &opt, painter, widget);
+
+        const auto paintShortNameOutline = [&] {
+            if (!selected || expandedName) return;
+            painter->save();
+            painter->setRenderHint(QPainter::Antialiasing, true);
+            painter->setPen(QPen(selectionBorder, 1.0));
+            painter->setBrush(Qt::NoBrush);
+            painter->drawRoundedRect(
+                QRectF(opt.rect).adjusted(1.5, 1.5, -1.5, -1.5), 6.0, 6.0);
+            painter->restore();
+        };
 
         // 2. Determine text area
         QRect textRect = style->subElementRect(QStyle::SE_ItemViewItemText, &opt, widget);
@@ -190,6 +477,7 @@ public:
         }
 
         if (fullText.isEmpty() || textRect.width() <= 0 || textRect.height() <= 0) {
+            paintShortNameOutline();
             return;
         }
 
@@ -238,10 +526,7 @@ public:
         const QPalette::ColorGroup cg = (opt.state & QStyle::State_Enabled)
             ? ((opt.state & QStyle::State_Active) ? QPalette::Active : QPalette::Inactive)
             : QPalette::Disabled;
-        const QPalette::ColorRole role = (opt.state & QStyle::State_Selected)
-            ? QPalette::HighlightedText
-            : QPalette::Text;
-        const QColor textColor = opt.palette.color(cg, role);
+        const QColor textColor = opt.palette.color(cg, QPalette::Text);
 
         painter->save();
         painter->setFont(opt.font);
@@ -258,6 +543,7 @@ public:
             painter->drawText(lineRect, Qt::AlignHCenter | Qt::AlignVCenter, info.text);
         }
         painter->restore();
+        paintShortNameOutline();
     }
 
     QSize sizeHint(
@@ -272,32 +558,45 @@ public:
             QStyleOptionViewItem adjusted(option);
             initStyleOption(&adjusted, index);
             const QFontMetrics metrics(adjusted.font);
-            const int width = qMax(180, m_view->viewport()->width() - 16);
-            const int height = qMax(32, metrics.lineSpacing() + 10);
+            const int width = m_compactMode
+                ? 240
+                : qMax(180, m_view->viewport()->width() - 16);
+            const int height = m_compactMode
+                ? qMax(26, metrics.lineSpacing() + 6)
+                : qMax(32, metrics.lineSpacing() + 10);
             return QSize(width, height);
         }
 
-        constexpr int itemWidth = 136;
-        constexpr int compactHeight = 116;
-        constexpr int fullHeight = 150;
-        return QSize(
-            itemWidth,
-            m_alwaysShowFullNames ? fullHeight : compactHeight);
+        return directory_view_detail::iconGridSize(
+            m_view->iconSize().width(),
+            m_alwaysShowFullNames);
     }
 
 private:
     QListView *m_view = nullptr;
     bool m_alwaysShowFullNames = false;
+    bool m_compactMode = false;
 };
 
-class DirectoryListWidget : public QListWidget
+class DirectoryListWidget : public KCategorizedView
 {
     Q_OBJECT
 
 public:
     explicit DirectoryListWidget(QWidget *parent = nullptr)
-        : QListWidget(parent)
+        : KCategorizedView(parent)
     {
+        m_sourceModel = new QStandardItemModel(this);
+        m_proxyModel = new directory_view_detail::StableCategoryProxy(this);
+        m_proxyModel->setSourceModel(m_sourceModel);
+        m_proxyModel->setDynamicSortFilter(false);
+        m_proxyModel->setCategorizedModel(false);
+        m_proxyModel->sort(0, Qt::AscendingOrder);
+        setModel(m_proxyModel);
+        setCategoryDrawer(new KCategoryDrawer(this));
+        setCategorySpacing(8);
+        setCollapsibleBlocks(false);
+
         m_nameDelegate = new ExplorerNameDelegate(this);
         setItemDelegate(m_nameDelegate);
         setTextElideMode(Qt::ElideRight);
@@ -305,34 +604,154 @@ public:
         updateGridGeometry();
 
         connect(
-            this,
-            &QListWidget::itemSelectionChanged,
+            selectionModel(),
+            &QItemSelectionModel::selectionChanged,
             this,
             [this] {
                 viewport()->update();
+                Q_EMIT itemSelectionChanged();
             });
         connect(
-            this,
-            &QListWidget::currentItemChanged,
+            selectionModel(),
+            &QItemSelectionModel::currentChanged,
             this,
             [this] {
                 viewport()->update();
             });
+        connect(this, &QAbstractItemView::doubleClicked, this,
+                [this](const QModelIndex &index) { Q_EMIT itemDoubleClicked(index); });
+    }
+
+    void clear()
+    {
+        m_sourceModel->clear();
+    }
+
+    int count() const
+    {
+        return m_proxyModel->rowCount();
+    }
+
+    QModelIndex item(int row) const
+    {
+        return m_proxyModel->index(row, 0);
+    }
+
+    QModelIndex itemFromIndex(const QModelIndex &index) const
+    {
+        return index;
+    }
+
+    QModelIndex itemAt(const QPoint &position) const
+    {
+        return indexAt(position);
+    }
+
+    QRect visualItemRect(const QModelIndex &index) const
+    {
+        return visualRect(index);
+    }
+
+    QList<QModelIndex> selectedItems() const
+    {
+        return selectedIndexes();
+    }
+
+    QModelIndex currentItem() const
+    {
+        return currentIndex();
+    }
+
+    int currentRow() const
+    {
+        return currentIndex().row();
+    }
+
+    void setCurrentRow(int row, QItemSelectionModel::SelectionFlags flags = QItemSelectionModel::ClearAndSelect)
+    {
+        const QModelIndex index = item(row);
+        if (!index.isValid()) return;
+        selectionModel()->setCurrentIndex(index, flags | QItemSelectionModel::Current);
+    }
+
+    void setRowSelected(int row, bool selected)
+    {
+        const QModelIndex index = item(row);
+        if (!index.isValid()) return;
+        selectionModel()->select(index, selected ? QItemSelectionModel::Select
+                                                 : QItemSelectionModel::Deselect);
+    }
+
+    void addFileItem(const FileInfo &file, const QIcon &icon,
+                     const QString &typeText, const QString &sizeText,
+                     const QString &modifiedText, const QString &toolTip,
+                     const QString &categoryDisplay = QString(),
+                     const QVariant &categoryOrder = QVariant())
+    {
+        auto *item = new QStandardItem(icon, file.name);
+        item->setData(file.url.toString(), directory_view_detail::UrlRole);
+        item->setData(file.isDir, directory_view_detail::DirectoryRole);
+        item->setData(typeText, directory_view_detail::TypeTextRole);
+        item->setData(sizeText, directory_view_detail::SizeTextRole);
+        item->setData(modifiedText, directory_view_detail::ModifiedTextRole);
+        item->setData(true, directory_view_detail::FileItemRole);
+        item->setData(m_sourceModel->rowCount(), directory_view_detail::OriginalOrderRole);
+        item->setData(categoryDisplay, KCategorizedSortFilterProxyModel::CategoryDisplayRole);
+        item->setData(categoryOrder, KCategorizedSortFilterProxyModel::CategorySortRole);
+        item->setToolTip(toolTip);
+        m_sourceModel->appendRow(item);
+    }
+
+    void addItem(const QString &text)
+    {
+        FileInfo file;
+        file.name = text;
+        addFileItem(file, QIcon(), QString(), QString(), QString(), QString());
+    }
+
+    void setCategorized(bool categorized)
+    {
+        m_proxyModel->setCategorizedModel(categorized);
+        m_proxyModel->invalidate();
+        m_proxyModel->sort(0, Qt::AscendingOrder);
+        doItemsLayout();
+    }
+
+    bool isCategorized() const
+    {
+        return m_proxyModel->isCategorizedModel();
     }
 
     void updateGridGeometry()
     {
         if (viewMode() == QListView::IconMode) {
-            constexpr int itemWidth = 136;
-            constexpr int compactHeight = 116;
-            constexpr int fullHeight = 150;
-            const int itemHeight = alwaysShowFullNames() ? fullHeight : compactHeight;
-            setGridSize(QSize(itemWidth, itemHeight));
+            setGridSize(directory_view_detail::iconGridSize(
+                iconSize().width(), alwaysShowFullNames()));
             setUniformItemSizes(true);
         } else {
             setGridSize(QSize());
             setUniformItemSizes(false);
         }
+    }
+
+    void setCompactMode(bool enabled)
+    {
+        if (m_compactMode == enabled) {
+            return;
+        }
+        m_compactMode = enabled;
+        if (m_nameDelegate) {
+            m_nameDelegate->setCompactMode(enabled);
+        }
+        setWordWrap(!enabled);
+        setTextElideMode(Qt::ElideRight);
+        doItemsLayout();
+        viewport()->update();
+    }
+
+    bool compactMode() const
+    {
+        return m_compactMode;
     }
 
     void setAlwaysShowFullNames(bool enabled)
@@ -356,6 +775,8 @@ public:
     }
 
 Q_SIGNALS:
+    void itemSelectionChanged();
+    void itemDoubleClicked(const QModelIndex &index);
     void urlsDropped(
         const QList<QUrl> &urls,
         const QUrl &destination,
@@ -365,7 +786,7 @@ Q_SIGNALS:
 protected:
     void paintEvent(QPaintEvent *event) override
     {
-        QListWidget::paintEvent(event);
+        KCategorizedView::paintEvent(event);
 
         if (viewMode() != QListView::IconMode) {
             return;
@@ -375,8 +796,8 @@ protected:
             return;
         }
 
-        QListWidgetItem *item = currentItem();
-        if (!item || !item->isSelected()) {
+        const QModelIndex item = currentItem();
+        if (!item.isValid() || !selectionModel()->isSelected(item)) {
             return;
         }
 
@@ -385,13 +806,13 @@ protected:
             return;
         }
 
-        const QString text = item->text();
+        const QString text = item.data(Qt::DisplayRole).toString();
         if (text.isEmpty()) {
             return;
         }
 
         const int maxGridLines = alwaysShowFullNames() ? 4 : 2;
-        const int calloutWidth = qMax(124, itemRect.width() - 4);
+        const int calloutWidth = qMax(1, itemRect.width() - 4);
         const int innerWidth = calloutWidth - 12;
 
         QTextLayout layout(text, font());
@@ -402,7 +823,6 @@ protected:
 
         layout.beginLayout();
         qreal textHeight = 0;
-        int lineCount = 0;
         while (true) {
             QTextLine line = layout.createLine();
             if (!line.isValid()) {
@@ -411,25 +831,20 @@ protected:
             line.setLineWidth(innerWidth);
             line.setPosition(QPointF(6, textHeight));
             textHeight += line.height();
-            lineCount++;
         }
         layout.endLayout();
 
-        const bool needsCallout = (lineCount > maxGridLines)
-            || (lineCount > 1)
-            || (fontMetrics().horizontalAdvance(text) > innerWidth);
+        const bool needsCallout = directory_view_detail::selectedNameNeedsCallout(
+            text, font(), innerWidth, maxGridLines);
         if (!needsCallout) {
             return;
         }
 
-        int calloutX = itemRect.center().x() - calloutWidth / 2;
-        calloutX = qBound(2, calloutX, qMax(2, viewport()->width() - calloutWidth - 2));
-
-        const int iconBottom = itemRect.top() + iconSize().height() + 4;
-        const int calloutHeight = qRound(textHeight) + 8;
-        int calloutY = qBound(2, iconBottom, qMax(2, viewport()->height() - calloutHeight - 2));
-
-        const QRect calloutRect(calloutX, calloutY, calloutWidth, calloutHeight);
+        const QRect calloutRect = directory_view_detail::selectedNameCalloutRect(
+            itemRect,
+            iconSize().height(),
+            qRound(textHeight),
+            viewport()->rect());
 
         QPainter painter(viewport());
         if (!painter.isActive()) {
@@ -438,16 +853,26 @@ protected:
         painter.setRenderHint(QPainter::Antialiasing, true);
 
         const QPalette pal = palette();
-        const QColor bgColor = pal.color(QPalette::Base);
-        const QColor borderColor = pal.color(QPalette::Highlight);
+        const bool focusedPane = hasFocus();
+        const QPalette::ColorGroup group = focusedPane
+            ? QPalette::Active
+            : QPalette::Inactive;
+        const QColor bgColor = directory_view_detail::blendedSelectionColor(
+            pal, group, focusedPane ? 16 : 10);
+        QColor borderColor = pal.color(group, QPalette::Highlight);
+        borderColor.setAlpha(focusedPane ? 190 : 130);
         const QColor textColor = pal.color(QPalette::Text);
 
-        painter.setPen(QPen(borderColor, 1.2));
+        // Fill the expanded label, then stroke the union of cell and label
+        // exactly once. This prevents the cell's bottom edge from becoming an
+        // internal second rule for two-line and longer names.
+        painter.setPen(Qt::NoPen);
         painter.setBrush(bgColor);
-        painter.drawRoundedRect(
-            QRectF(calloutRect).adjusted(0.5, 0.5, -0.5, -0.5),
-            4.0,
-            4.0);
+        painter.drawRect(calloutRect);
+        painter.setPen(QPen(borderColor, 1.0));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawPath(directory_view_detail::selectedNameOutlinePath(
+            itemRect, calloutRect));
 
         painter.setPen(textColor);
         layout.draw(&painter, QPointF(calloutRect.left(), calloutRect.top() + 4));
@@ -458,8 +883,8 @@ protected:
         Q_UNUSED(supportedActions)
 
         QList<QUrl> urls;
-        for (QListWidgetItem *item : selectedItems()) {
-            const QUrl url(item->data(Qt::UserRole).toString());
+        for (const QModelIndex &item : selectedItems()) {
+            const QUrl url(item.data(directory_view_detail::UrlRole).toString());
             if (url.isValid()) {
                 urls.push_back(url);
             }
@@ -496,7 +921,7 @@ protected:
             event->accept();
             return;
         }
-        QListWidget::dragEnterEvent(event);
+        KCategorizedView::dragEnterEvent(event);
     }
 
     void dragMoveEvent(QDragMoveEvent *event) override
@@ -516,13 +941,13 @@ protected:
             event->accept();
             return;
         }
-        QListWidget::dragMoveEvent(event);
+        KCategorizedView::dragMoveEvent(event);
     }
 
     void dropEvent(QDropEvent *event) override
     {
         if (!event->mimeData()->hasUrls()) {
-            QListWidget::dropEvent(event);
+            KCategorizedView::dropEvent(event);
             return;
         }
 
@@ -552,19 +977,19 @@ protected:
 
     void scrollContentsBy(int dx, int dy) override
     {
-        QListWidget::scrollContentsBy(dx, dy);
+        KCategorizedView::scrollContentsBy(dx, dy);
         viewport()->update();
     }
 
     void resizeEvent(QResizeEvent *event) override
     {
-        QListWidget::resizeEvent(event);
+        KCategorizedView::resizeEvent(event);
         viewport()->update();
     }
 
     void showEvent(QShowEvent *event) override
     {
-        QListWidget::showEvent(event);
+        KCategorizedView::showEvent(event);
         viewport()->update();
     }
 
@@ -572,11 +997,11 @@ private:
     QUrl dropDestinationAt(const QPoint &position) const
     {
         QUrl destination = m_dropDirectory;
-        QListWidgetItem *target = itemAt(position);
-        if (target
-            && target->data(Qt::UserRole + 1).toBool()) {
+        const QModelIndex target = itemAt(position);
+        if (target.isValid()
+            && target.data(directory_view_detail::DirectoryRole).toBool()) {
             const QUrl targetUrl(
-                target->data(Qt::UserRole).toString());
+                target.data(directory_view_detail::UrlRole).toString());
             if (targetUrl.isValid()) {
                 destination = targetUrl;
             }
@@ -585,7 +1010,10 @@ private:
     }
 
     QUrl m_dropDirectory;
+    QStandardItemModel *m_sourceModel = nullptr;
+    directory_view_detail::StableCategoryProxy *m_proxyModel = nullptr;
     ExplorerNameDelegate *m_nameDelegate = nullptr;
+    bool m_compactMode = false;
 };
 
 class DirectoryTreeWidget : public QTreeWidget
@@ -872,17 +1300,20 @@ inline void applyDirectoryViewLayout(
     DirectoryTreeWidget *details,
     QStackedWidget *stack,
     QToolButton *viewButton,
-    int viewMode)
+    int viewMode,
+    int iconSizeMode = 1)
 {
     if (!list || !details || !stack) {
         return;
     }
 
     if (viewMode == 0) {
+        list->setCompactMode(false);
         list->setViewMode(QListView::IconMode);
         list->setFlow(QListView::LeftToRight);
         list->setWrapping(true);
-        list->setIconSize(QSize(64, 64));
+        const int extent = directory_view_detail::iconExtentForMode(iconSizeMode);
+        list->setIconSize(QSize(extent, extent));
         list->setSpacing(3);
         list->updateGridGeometry();
         stack->setCurrentWidget(list);
@@ -892,6 +1323,7 @@ inline void applyDirectoryViewLayout(
                 themedIcon(QStringLiteral("view-list-icons")));
         }
     } else if (viewMode == 1) {
+        list->setCompactMode(false);
         list->setViewMode(QListView::ListMode);
         list->setFlow(QListView::TopToBottom);
         list->setWrapping(false);
@@ -904,12 +1336,29 @@ inline void applyDirectoryViewLayout(
             viewButton->setIcon(
                 themedIcon(QStringLiteral("view-list-text")));
         }
-    } else {
+    } else if (viewMode == 2) {
+        list->setCompactMode(false);
         stack->setCurrentWidget(details);
 
         if (viewButton) {
             viewButton->setIcon(
                 themedIcon(QStringLiteral("view-list-details")));
+        }
+    } else {
+        list->setCompactMode(true);
+        list->setViewMode(QListView::ListMode);
+        list->setFlow(QListView::TopToBottom);
+        list->setWrapping(true);
+        list->setResizeMode(QListView::Adjust);
+        list->setIconSize(QSize(20, 20));
+        list->setSpacing(0);
+        list->setGridSize(QSize());
+        list->setUniformItemSizes(true);
+        stack->setCurrentWidget(list);
+
+        if (viewButton) {
+            viewButton->setIcon(
+                themedIcon(QStringLiteral("view-list-tree"), QStringLiteral("view-list-text")));
         }
     }
 
@@ -949,34 +1398,17 @@ inline void addDirectoryFileItems(
     const QString &typeText,
     const QString &sizeText,
     const QString &modifiedText,
-    const QStringList &extraDetailColumns = {})
+    const QStringList &extraDetailColumns = {},
+    const QString &categoryDisplay = QString(),
+    const QVariant &categoryOrder = QVariant())
 {
-    auto *listItem = new QListWidgetItem(
-        icon,
-        file.name,
-        list);
-
-    listItem->setData(
-        Qt::UserRole,
-        file.url.toString());
-    listItem->setData(
-        Qt::UserRole + 1,
-        file.isDir);
-    listItem->setData(
-        Qt::UserRole + 2,
-        typeText);
-    listItem->setData(
-        Qt::UserRole + 3,
-        sizeText);
-    listItem->setData(
-        Qt::UserRole + 4,
-        modifiedText);
     const QString toolTip = directoryItemToolTip(
         file,
         typeText,
         sizeText,
         modifiedText);
-    listItem->setToolTip(toolTip);
+    list->addFileItem(file, icon, typeText, sizeText, modifiedText, toolTip,
+                      categoryDisplay, categoryOrder);
 
     QStringList columns{
         file.name,
@@ -999,8 +1431,63 @@ inline void addDirectoryFileItems(
         0,
         Qt::UserRole + 1,
         file.isDir);
+    detailsItem->setData(
+        0,
+        directory_view_detail::FileItemRole,
+        true);
     detailsItem->setToolTip(0, toolTip);
     detailsItem->setTextAlignment(
         2,
         Qt::AlignRight | Qt::AlignVCenter);
+}
+
+inline void addDirectoryGroupHeader(
+    DirectoryTreeWidget *details,
+    const QString &label)
+{
+    auto *header = new QTreeWidgetItem(details, QStringList{label});
+    header->setFirstColumnSpanned(true);
+    header->setFlags(Qt::ItemIsEnabled);
+    QFont font = header->font(0);
+    font.setBold(true);
+    header->setFont(0, font);
+    header->setData(0, directory_view_detail::FileItemRole, false);
+}
+
+inline QSet<QString> selectedDirectoryListUrls(const DirectoryListWidget *list)
+{
+    QSet<QString> urls;
+    for (const QModelIndex &index : list->selectedItems()) {
+        const QString url = index.data(directory_view_detail::UrlRole).toString();
+        if (!url.isEmpty()) urls.insert(url);
+    }
+    return urls;
+}
+
+inline QSet<QString> selectedDirectoryDetailsUrls(const DirectoryTreeWidget *details)
+{
+    QSet<QString> urls;
+    for (const QTreeWidgetItem *item : details->selectedItems()) {
+        if (!item->data(0, directory_view_detail::FileItemRole).toBool()) continue;
+        const QString url = item->data(0, Qt::UserRole).toString();
+        if (!url.isEmpty()) urls.insert(url);
+    }
+    return urls;
+}
+
+inline void restoreDirectorySelections(
+    DirectoryListWidget *list, DirectoryTreeWidget *details,
+    const QSet<QString> &listUrls, const QSet<QString> &detailsUrls)
+{
+    for (int row = 0; row < list->count(); ++row) {
+        const QModelIndex index = list->item(row);
+        if (listUrls.contains(index.data(directory_view_detail::UrlRole).toString()))
+            list->setRowSelected(row, true);
+    }
+    for (int row = 0; row < details->topLevelItemCount(); ++row) {
+        QTreeWidgetItem *item = details->topLevelItem(row);
+        if (item->data(0, directory_view_detail::FileItemRole).toBool()
+            && detailsUrls.contains(item->data(0, Qt::UserRole).toString()))
+            item->setSelected(true);
+    }
 }
