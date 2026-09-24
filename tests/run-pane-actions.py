@@ -39,16 +39,30 @@ source = (root / 'src/thispcview.cpp').read_text()
 
 file_actions = (root / 'src/fileactions.h').read_text()
 
+def require_once(text, needle, purpose):
+    count = text.count(needle)
+    if count != 1:
+        raise RuntimeError(
+            f'test harness seam for {purpose} must occur exactly once; found {count}: {needle!r}')
+    return needle
+
+def replace_once(text, old, new, purpose):
+    require_once(text, old, purpose)
+    return text.replace(old, new, 1)
+
 def intercept(text, signature, marker, statement, flag='interceptFileJobs'):
+    require_once(text, signature, f'{signature.strip()} method')
     start = text.index(signature)
     end = text.index('\n    }', start)
+    method = text[start:end]
+    require_once(method, marker, f'{signature.strip()} injection point')
     point = text.index(marker, start, end)
     return text[:point] + '        if (' + flag + ') { ' + statement + ' return; }\n' + text[point:]
 
 # Never execute the real global EmptyTrash job in this runner: an isolated
 # XDG_DATA_HOME alone does not isolate trash directories on other mounts.
-assert file_actions.count('KIO::emptyTrash()') == 1
-file_actions = file_actions.replace('KIO::emptyTrash()', 'makeTestEmptyTrashJob()')
+file_actions = replace_once(file_actions, 'KIO::emptyTrash()', 'makeTestEmptyTrashJob()',
+                            'isolated Empty Trash job')
 
 for signature, marker, statement in [
     ('    void trashSelected(', '        KIO::CopyJob *job =', 'dispatch = {"trash", urls, {}};'),
@@ -69,11 +83,21 @@ source = intercept(source, '    void refreshPane(', '        if (pane ==',
                    'refreshedPanes.push_back(pane == PaneId::Split ? 1 : 0);',
                    'interceptPaneRefreshes')
 
-def expose(text):
+def expose_legacy_header(text):
     return text.replace('private:', 'public:').replace('protected:', 'public:').replace('    Q_OBJECT', '    Q_OBJECT\npublic:')
 
-source = expose(source)
-source = source.replace('int main(int argc, char **argv)', 'int applicationMain(int argc, char **argv)')
+# These headers still have direct white-box coverage. Keep the debt explicit:
+# do not silently expose every header copied into the synthetic translation unit.
+legacy_exposed_headers = {
+    'appwidgets.h', 'archive-creation.h', 'archive-extraction.h',
+    'batchrename.h', 'batchrenamerecovery.h', 'directoryview.h',
+    'fileactions.h', 'localfilecopyjob.h', 'localfilemovejob.h',
+    'localtransferjob.h', 'localtransferplan.h', 'localtreehistory.h',
+    'operationmanager.h', 'pathwidgets.h', 'previewpane.h', 'quicklook.h',
+    'searchcontroller.h', 'sidebar.h', 'splitbrowserpane.h',
+    'splitcomparedialog.h', 'splitsyncexecutiondialog.h',
+    'splitsyncpreviewdialog.h', 'templatemenu.h', 'undocontroller.h',
+}
 prelude = '''#include <QtTest>
 #include <QPdfWriter>
 #include <KIO/RenameDialog>
@@ -117,7 +141,10 @@ with tempfile.TemporaryDirectory(prefix='thispc-pane-tests-', delete=not options
         print(f'Persistent pane-test build: {tmp}', flush=True)
     (tmp / 'src').mkdir()
     for header in (root / 'src').glob('*.h'):
-        (tmp / 'src' / header.name).write_text(expose(file_actions if header.name == 'fileactions.h' else header.read_text()))
+        contents = file_actions if header.name == 'fileactions.h' else header.read_text()
+        if header.name in legacy_exposed_headers:
+            contents = expose_legacy_header(contents)
+        (tmp / 'src' / header.name).write_text(contents)
     for implementation in ('appwidgets.cpp', 'applicationstyle.cpp'):
         (tmp / 'src' / implementation).write_text((root / 'src' / implementation).read_text())
     suites = {'trash': 'empty-trash.cpp', 'panes': 'pane-actions.cpp', 'templates': 'template-menu.cpp', 'tabs': 'tab-drag-drop.cpp', 'sidebar_dnd': 'sidebar-drag-drop.cpp', 'sidebar_layout': 'sidebar-layout.cpp', 'properties': 'properties-dialog.cpp', 'search': 'search-controller.cpp', 'actions': 'file-actions.cpp', 'operations': 'operation-manager.cpp', 'local_transfer': 'local-file-copy-job.cpp', 'transfer_plan': 'local-transfer-plan.cpp', 'local_move': 'local-file-move-job.cpp', 'local_tree': 'local-transfer-job.cpp', 'tree_history': 'local-tree-history.cpp', 'archive': 'archive-detection.cpp', 'archive_jobs': 'archive-extraction.cpp', 'archive_menu': 'archive-menu.cpp', 'archive_creation': 'archive-creation.cpp'}
@@ -137,7 +164,8 @@ with tempfile.TemporaryDirectory(prefix='thispc-pane-tests-', delete=not options
     for suite in selected:
         disk_data = Path(disk_tmp) / suite
         disk_data.mkdir()
-        test = (root / 'tests' / suites[suite]).read_text().replace('int main(', 'int run(')
+        test = replace_once((root / 'tests' / suites[suite]).read_text(),
+                            'int main(', 'int run(', f'{suite} suite entry point')
         # Unlike main(), an ordinary int function must return explicitly.
         end = test.rfind('}')
         test = test[:end] + '    return 0;\n' + test[end:]
@@ -164,7 +192,7 @@ add_executable(pane-test src/thispcview.cpp src/appwidgets.cpp src/applicationst
 target_compile_options(pane-test PRIVATE -g3 -O0 -fno-omit-frame-pointer -Wno-unused-function -Wno-unused-variable)
 target_include_directories(pane-test PRIVATE ${LibArchive_INCLUDE_DIRS})
 target_link_libraries(pane-test PRIVATE Qt6::Core Qt6::Concurrent Qt6::Gui Qt6::Widgets Qt6::PrintSupport Qt6::Pdf Qt6::Test KF6::KIOCore KF6::KIOWidgets KF6::ItemViews ${LibArchive_LIBRARIES} ZLIB::ZLIB TagLib::TagLib Exiv2::exiv2lib)
-target_compile_definitions(pane-test PRIVATE THISPC_BATCH_RENAME_TEST_HOOKS=1)
+target_compile_definitions(pane-test PRIVATE THISPC_BATCH_RENAME_TEST_HOOKS=1 THISPC_TEST_HARNESS=1)
 '''
     (tmp / 'CMakeLists.txt').write_text(cmake)
     subprocess.run(['cmake', '-S', str(tmp), '-B', str(tmp / 'build')], check=True)

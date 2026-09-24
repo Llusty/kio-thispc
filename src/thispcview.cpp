@@ -305,6 +305,9 @@ class ThisPcWindow : public QMainWindow
 {
     Q_OBJECT
 
+#ifdef THISPC_TEST_HARNESS
+public:
+#endif
     enum class PaneId { Primary, Split };
     struct PaneItem {
         QUrl url;
@@ -438,7 +441,11 @@ class ThisPcWindow : public QMainWindow
                                  area.center().y() - height / 2, width, height);
     }
 
+#ifdef THISPC_TEST_HARNESS
+public:
+#else
 protected:
+#endif
     bool eventFilter(QObject *watched, QEvent *event) override
     {
         if (event->type() == QEvent::KeyPress && isActiveWindow()) {
@@ -463,7 +470,11 @@ protected:
         positionQuickLook();
     }
 
+#ifdef THISPC_TEST_HARNESS
+public:
+#else
 private:
+#endif
 
     void navigatePane(PaneId pane, const QUrl &url)
     {
@@ -641,7 +652,11 @@ public:
         }
     }
 
+#ifdef THISPC_TEST_HARNESS
+public:
+#else
 protected:
+#endif
     void closeEvent(QCloseEvent *event) override
     {
         if (BatchRenameRecoveryGate::instance().unjournaledSwapRunning()) {
@@ -694,7 +709,11 @@ protected:
         QMainWindow::closeEvent(event);
     }
 
+#ifdef THISPC_TEST_HARNESS
+public:
+#else
 private:
+#endif
     void buildToolbar()
     {
         // The command bar is built first. Force navigation/address/search onto
@@ -7002,7 +7021,11 @@ private Q_SLOTS:
         });
     }
 
+#ifdef THISPC_TEST_HARNESS
+public:
+#else
 private:
+#endif
     void recordRecoveryTestPresentation()
     {
 #ifdef THISPC_BATCH_RENAME_TEST_HOOKS
@@ -7111,7 +7134,11 @@ private:
     }
 
 
+#ifdef THISPC_TEST_HARNESS
+public:
+#else
 private:
+#endif
     QAction *m_backAction = nullptr;
     QAction *m_forwardAction = nullptr;
     QAction *m_upAction = nullptr;
@@ -7238,6 +7265,7 @@ private:
     int m_searchVisibleCount = 0;
 };
 
+#ifndef THISPC_TEST_HARNESS
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
@@ -7321,5 +7349,6 @@ int main(int argc, char **argv)
 
     return app.exec();
 }
+#endif
 
 #include "thispcview.moc"
