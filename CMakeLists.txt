@@ -66,6 +66,8 @@ add_executable(thispc-view
     src/paneadapter.cpp
     src/paneadapter.h
     src/panecontext.h
+    src/tabcontroller.cpp
+    src/tabcontroller.h
     src/thispcview.cpp
     src/archive-creation.h
     src/archive-detection.h
@@ -111,6 +113,8 @@ add_executable(thispc-view-stage3c1-test EXCLUDE_FROM_ALL
     src/paneadapter.cpp
     src/paneadapter.h
     src/panecontext.h
+    src/tabcontroller.cpp
+    src/tabcontroller.h
     src/thispcview.cpp
     src/archive-creation.h
     src/archive-detection.h

@@ -26,6 +26,116 @@ static void leave(QWidget *widget)
     QApplication::sendEvent(widget, &event);
 }
 
+static TabState tabState(
+    const QUrl &left,
+    const QUrl &right,
+    bool split,
+    int viewMode)
+{
+    TabState state;
+    state.currentUrl = left;
+    state.history = {kThisPcUrl, left};
+    state.historyIndex = 1;
+    state.splitEnabled = split;
+    state.splitUrl = right;
+    state.splitViewMode = viewMode;
+    state.splitSortKey = 2;
+    state.splitSortAscending = false;
+    return state;
+}
+
+static void testTabControllerState()
+{
+    const QUrl a = QUrl::fromLocalFile(QStringLiteral("/tmp/tab-state-a"));
+    const QUrl b = QUrl::fromLocalFile(QStringLiteral("/tmp/tab-state-b"));
+    const QUrl right = QUrl::fromLocalFile(QStringLiteral("/tmp/tab-state-right"));
+    const QUrl search(QStringLiteral(
+        "thispcsearch:/?query=needle&base=file%3A%2F%2F%2Ftmp%2Ftab-state-a&type=1"));
+
+    TabController controller;
+    verify(controller.create(a, 1, true) == 0, "controller creates first tab");
+    verify(controller.create(b, 3, false) == 1, "controller appends second tab");
+    verify(controller.tabs().at(1).splitSortKey == 3
+               && !controller.tabs().at(1).splitSortAscending,
+           "new tab keeps current view sort defaults");
+    verify(controller.switchTo(0) && controller.activeIndex() == 0,
+           "controller switches active tab");
+    controller.syncActiveState(tabState(search, right, true, 2));
+    verify(controller.tabs().at(0).currentUrl == search
+               && controller.tabs().at(0).historyIndex == 1,
+           "active tab sync preserves Search URL and history");
+    verify(controller.tabs().at(0).splitEnabled
+               && controller.tabs().at(0).splitUrl == right
+               && controller.tabs().at(0).splitViewMode == 2,
+           "active tab sync preserves asymmetric Split View and view mode");
+
+    const int duplicate = controller.duplicate(0);
+    verify(duplicate == 2 && controller.tabs().at(duplicate).currentUrl == search,
+           "duplicate copies complete tab state");
+    verify(controller.tabs().at(duplicate).splitUrl == right
+               && controller.tabs().at(duplicate).splitSortKey == 2,
+           "duplicate copies split location and settings");
+    controller.switchTo(duplicate);
+    const auto closed = controller.close(duplicate);
+    verify(closed.accepted && closed.wasActive && closed.nextActive == 1,
+           "closing active last tab chooses preceding tab");
+    verify(controller.closedTabs().size() == 1 && controller.activeIndex() == -1,
+           "close records history before UI restores next tab");
+    verify(controller.reopenClosed() == 2
+               && controller.tabs().at(2).currentUrl == search,
+           "reopen restores the most recently closed tab");
+    verify(controller.closedTabs().isEmpty(), "reopen consumes closed history entry");
+
+    controller.switchTo(1);
+    verify(controller.closeOthers(1) && controller.tabs().size() == 1,
+           "close others retains exactly the selected tab");
+    verify(controller.tabs().first().currentUrl == b
+               && controller.closedTabs().size() == 2,
+           "close others records every removed tab");
+    verify(!controller.close(0).accepted && controller.tabs().size() == 1,
+           "controller refuses to remove the final usable tab");
+
+    for (int i = 0; i < 25; ++i) {
+        controller.create(QUrl::fromLocalFile(QStringLiteral("/tmp/closed-%1").arg(i)), 0, true);
+        controller.close(controller.tabs().size() - 1);
+    }
+    verify(controller.closedTabs().size() == TabController::ClosedTabLimit,
+           "closed-tab history is capped at 20");
+    verify(controller.closedTabs().first().currentUrl.toLocalFile().endsWith("closed-5")
+               && controller.closedTabs().last().currentUrl.toLocalFile().endsWith("closed-24"),
+           "closed-tab limit discards oldest entries only");
+
+    TabController persisted;
+    persisted.create(a, 0, true);
+    persisted.switchTo(0);
+    persisted.syncActiveState(tabState(search, right, true, 3));
+    persisted.create(b, 1, false);
+    persisted.switchTo(1);
+    const SessionSnapshot saved = persisted.snapshot(true);
+    verify(saved.tabs.size() == 2 && saved.activeTab == 1 && saved.splitPaneActive,
+           "session snapshot preserves multiple tabs and active pane");
+    SessionManager::save(saved);
+    const SessionSnapshot loaded = SessionManager::load(0, true);
+    verify(loaded.tabs.size() == 2 && loaded.activeTab == 1 && loaded.splitPaneActive,
+           "QSettings restores tab count, active tab and active pane");
+    verify(loaded.tabs.at(0).currentUrl == search
+               && loaded.tabs.at(0).splitUrl == right
+               && loaded.tabs.at(0).splitEnabled,
+           "QSettings restores Search and asymmetric Split View locations");
+    verify(loaded.tabs.at(0).splitViewMode == 3
+               && loaded.tabs.at(0).splitSortKey == 2
+               && !loaded.tabs.at(0).splitSortAscending,
+           "QSettings restores per-tab view settings");
+    verify(loaded.tabs.at(0).history.size() == 2
+               && loaded.tabs.at(0).historyIndex == 1,
+           "QSettings restores per-tab navigation history");
+    TabController restored;
+    restored.restore(loaded);
+    verify(restored.tabs().size() == 2 && restored.activeIndex() == 1,
+           "controller accepts restart session state");
+    QSettings().clear();
+}
+
 static bool drop(QWidget *widget, const QPoint &pos, const QMimeData &mime)
 {
     QDropEvent event(pos, Qt::CopyAction | Qt::MoveAction, &mime, Qt::LeftButton, Qt::NoModifier);
@@ -111,6 +221,85 @@ static void testTabEvents()
     verify(!moveDrag(&bar, bar.tabRect(1).center(), urls), "target invalidated during drag is rejected");
     verify(!drop(&bar, bar.tabRect(1).center(), urls), "Drop revalidates target");
     verify(!bar.m_hoverTimer.isActive(), "invalid target cancels hover");
+}
+
+static bool sameTabState(const TabState &actual, const TabState &expected)
+{
+    return actual.currentUrl == expected.currentUrl
+        && actual.history == expected.history
+        && actual.historyIndex == expected.historyIndex
+        && actual.splitEnabled == expected.splitEnabled
+        && actual.splitUrl == expected.splitUrl
+        && actual.splitViewMode == expected.splitViewMode
+        && actual.splitSortKey == expected.splitSortKey
+        && actual.splitSortAscending == expected.splitSortAscending;
+}
+
+static void testTabReorderStateIdentity()
+{
+    QTemporaryDir temp;
+    QList<QUrl> urls;
+    for (const auto *name : {"Pictures", "Music", "Downloads", "Documents"}) {
+        const QUrl url = QUrl::fromLocalFile(temp.path() + QLatin1Char('/') + QString::fromLatin1(name));
+        QDir().mkpath(url.toLocalFile());
+        urls.push_back(url);
+    }
+    QList<TabState> originals;
+    TabController controller;
+    for (int i = 0; i < urls.size(); ++i) {
+        controller.create(urls.at(i), i, i % 2 == 0);
+        const QUrl split = QUrl::fromLocalFile(temp.path() + QStringLiteral("/split-%1").arg(i));
+        TabState state = tabState(urls.at(i), split, i % 2 != 0, i);
+        state.splitSortKey = i;
+        state.splitSortAscending = i % 2 == 0;
+        controller.tabs()[i] = state;
+        originals.push_back(state);
+    }
+    controller.switchTo(0);
+    verify(controller.move(3, 0), "controller accepts reorder 4 to 1");
+    verify(controller.activeIndex() == 1,
+           "moving inactive tab 4 to 1 shifts active tab index with the UI");
+    verify(sameTabState(controller.tabs().at(0), originals.at(3))
+               && sameTabState(controller.tabs().at(1), originals.at(0))
+               && sameTabState(controller.tabs().at(2), originals.at(1))
+               && sameTabState(controller.tabs().at(3), originals.at(2)),
+           "reorder 4 to 1 preserves every complete TabState");
+    verify(controller.move(0, 3), "controller accepts symmetric reorder 1 to 4");
+    verify(controller.activeIndex() == 0,
+           "symmetric inactive move shifts active index back with the UI");
+    verify(sameTabState(controller.tabs().at(0), originals.at(0))
+               && sameTabState(controller.tabs().at(1), originals.at(1))
+               && sameTabState(controller.tabs().at(2), originals.at(2))
+               && sameTabState(controller.tabs().at(3), originals.at(3)),
+           "reorder 1 to 4 restores original order without state inheritance");
+    verify(controller.move(0, 3) && controller.move(3, 2) && controller.move(2, 0),
+           "controller accepts several consecutive reorders");
+    verify(controller.activeIndex() == 0
+               && sameTabState(controller.tabs().at(0), originals.at(0))
+               && sameTabState(controller.tabs().at(1), originals.at(1))
+               && sameTabState(controller.tabs().at(2), originals.at(2))
+               && sameTabState(controller.tabs().at(3), originals.at(3)),
+           "consecutive active-tab reorders neither duplicate nor replace state");
+
+    ThisPcWindow window(urls.at(0));
+    for (int i = 1; i < urls.size(); ++i) window.createNewTab(urls.at(i), true);
+    window.switchToTab(0);
+    QStringList signalOrder;
+    QObject::connect(window.m_tabBar, &QTabBar::tabMoved, &window,
+                     [&](int, int) { signalOrder << QStringLiteral("tabMoved"); });
+    QObject::connect(window.m_tabBar, &QTabBar::currentChanged, &window,
+                     [&](int) { signalOrder << QStringLiteral("currentChanged"); });
+    window.m_tabBar->moveTab(3, 0);
+    verify(signalOrder == QStringList({QStringLiteral("tabMoved"), QStringLiteral("currentChanged")}),
+           "Qt deterministically emits tabMoved before currentChanged for reorder");
+    verify(window.m_activeTab == 1 && window.m_tabBar->currentIndex() == 1
+               && window.m_currentUrl == urls.at(0),
+           "window and QTabBar retain the same active tab after inactive reorder");
+    verify(window.m_tabs.at(0).currentUrl == urls.at(3)
+               && window.m_tabs.at(1).currentUrl == urls.at(0)
+               && window.m_tabs.at(2).currentUrl == urls.at(1)
+               && window.m_tabs.at(3).currentUrl == urls.at(2),
+           "tabMoved integration reorders the model exactly once without copying active state");
 }
 
 static void chooseCopy(ThisPcWindow &window)
@@ -265,7 +454,10 @@ int main(int argc, char **argv)
     QApplication app(argc, argv);
     QCoreApplication::setOrganizationName("thispc-tab-test");
     QCoreApplication::setApplicationName("tab-test");
+    QSettings().clear();
+    testTabControllerState();
     testTabEvents();
+    testTabReorderStateIdentity();
     testWindow(false);
     testWindow(true);
     qInfo("PASS: %d tab DnD assertions; real Qt events/timers/window, KIO transfer dispatch intercepted", checks);

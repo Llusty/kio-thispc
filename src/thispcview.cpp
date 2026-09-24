@@ -12,6 +12,7 @@
 #include "applicationstyle.h"
 #include "appwidgets.h"
 #include "paneadapter.h"
+#include "tabcontroller.h"
 #include <KIO/CopyJob>
 #include <KIO/Global>
 #include <KIO/JobUiDelegateFactory>
@@ -1868,8 +1869,7 @@ private:
                 }
 
                 syncActiveTabState();
-                m_tabs.move(from, to);
-                m_activeTab = m_tabBar->currentIndex();
+                m_tabController.move(from, to);
             });
 
         connect(
@@ -3211,7 +3211,7 @@ private:
             return;
         }
 
-        TabState &state = m_tabs[m_activeTab];
+        TabState state;
         state.currentUrl = m_currentUrl;
         state.history = m_history;
         state.historyIndex = m_historyIndex;
@@ -3232,17 +3232,15 @@ private:
             state.splitSortAscending =
                 m_splitPane->sortAscending();
         }
+        m_tabController.syncActiveState(state);
     }
 
     void saveSessionState()
     {
         syncActiveTabState();
 
-        SessionSnapshot snapshot;
-        snapshot.tabs = m_tabs;
-        snapshot.activeTab = m_activeTab;
-        snapshot.splitPaneActive =
-            m_activePane == PaneId::Split;
+        const SessionSnapshot snapshot = m_tabController.snapshot(
+            m_activePane == PaneId::Split);
         SessionManager::save(snapshot);
     }
 
@@ -3260,7 +3258,7 @@ private:
             return false;
         }
 
-        m_tabs = snapshot.tabs;
+        m_tabController.restore(snapshot);
         m_tabChangeInProgress = true;
         for (int i = 0; i < m_tabs.size(); ++i) {
             const TabState &state = m_tabs.at(i);
@@ -3275,7 +3273,7 @@ private:
         m_tabBar->setCurrentIndex(snapshot.activeTab);
         m_tabChangeInProgress = false;
 
-        m_activeTab = -1;
+        m_tabController.clearActive();
         switchToTab(snapshot.activeTab);
 
         setActivePane(
@@ -3380,19 +3378,10 @@ private:
         const QUrl url = normalizedUrl(
             rawUrl.isValid() ? rawUrl : kThisPcUrl);
 
-        TabState state;
-        state.currentUrl = url;
-        state.history = {url};
-        state.historyIndex = 0;
-        state.splitEnabled = false;
-        state.splitUrl = url;
-        state.splitViewMode = -1;
-        state.splitSortKey = m_sortKey;
-        state.splitSortAscending =
-            m_sortAscending;
-
-        const int index = m_tabs.size();
-        m_tabs.push_back(state);
+        const int index = m_tabController.create(
+            url,
+            m_sortKey,
+            m_sortAscending);
 
         m_tabChangeInProgress = true;
         m_tabBar->addTab(
@@ -3422,9 +3411,8 @@ private:
             syncActiveTabState();
         }
 
-        const TabState source = m_tabs.at(index);
-        const int newIndex = m_tabs.size();
-        m_tabs.push_back(source);
+        const int newIndex = m_tabController.duplicate(index);
+        const TabState source = m_tabs.at(newIndex);
 
         m_tabChangeInProgress = true;
         m_tabBar->addTab(
@@ -3445,9 +3433,8 @@ private:
             return;
         }
 
-        const TabState state = m_closedTabs.takeLast();
-        const int index = m_tabs.size();
-        m_tabs.push_back(state);
+        const int index = m_tabController.reopenClosed();
+        const TabState state = m_tabs.at(index);
 
         m_tabChangeInProgress = true;
         m_tabBar->addTab(
@@ -3464,22 +3451,7 @@ private:
 
     QUrl tabDropDirectory(int index) const
     {
-        if (index < 0 || index >= m_tabs.size()) return {};
-        const QUrl url = index == m_activeTab ? m_currentUrl : m_tabs.at(index).currentUrl;
-        const QString scheme = url.scheme().toLower();
-        // The existing copy/move handler is for directories, not virtual roots
-        // or Trash (which requires KIO::trash rather than KIO::move).
-        if (!url.isValid() || scheme.isEmpty()
-            || scheme == QStringLiteral("thispc")
-            || scheme == QStringLiteral("trash")
-            || scheme == QStringLiteral("remote")
-            || scheme == QStringLiteral("filenamesearch")
-            || isSearchLocation(url)
-            || !KProtocolManager::supportsListing(url)
-            || !KProtocolManager::supportsWriting(url)) {
-            return {};
-        }
-        return url;
+        return m_tabController.dropDirectory(index, m_currentUrl);
     }
 
     void switchToTab(int index)
@@ -3495,7 +3467,7 @@ private:
 
         syncActiveTabState();
 
-        m_activeTab = index;
+        m_tabController.switchTo(index);
         const TabState state = m_tabs.at(index);
         m_history = state.history;
         m_historyIndex = state.historyIndex;
@@ -3570,30 +3542,16 @@ private:
             syncActiveTabState();
         }
 
-        m_closedTabs.push_back(m_tabs.at(index));
-        if (m_closedTabs.size() > 20) {
-            m_closedTabs.removeFirst();
-        }
-
-        const bool wasActive = index == m_activeTab;
-        int nextIndex = m_activeTab;
-
-        if (index < m_activeTab) {
-            --nextIndex;
-        } else if (wasActive) {
-            nextIndex = qMin(index, m_tabs.size() - 2);
-        }
+        const TabController::CloseResult result =
+            m_tabController.close(index);
 
         m_tabChangeInProgress = true;
-        m_tabs.removeAt(index);
         m_tabBar->removeTab(index);
         m_tabChangeInProgress = false;
 
-        if (wasActive) {
-            m_activeTab = -1;
-            switchToTab(nextIndex);
+        if (result.wasActive) {
+            switchToTab(result.nextActive);
         } else {
-            m_activeTab = nextIndex;
             m_tabChangeInProgress = true;
             m_tabBar->setCurrentIndex(m_activeTab);
             m_tabChangeInProgress = false;
@@ -3612,24 +3570,12 @@ private:
         }
 
         const TabState kept = m_tabs.at(keepIndex);
-
-        for (int i = m_tabs.size() - 1; i >= 0; --i) {
-            if (i == keepIndex) {
-                continue;
-            }
-            m_closedTabs.push_back(m_tabs.at(i));
-        }
-
-        while (m_closedTabs.size() > 20) {
-            m_closedTabs.removeFirst();
-        }
+        m_tabController.closeOthers(keepIndex);
 
         m_tabChangeInProgress = true;
         while (m_tabBar->count() > 0) {
             m_tabBar->removeTab(0);
         }
-        m_tabs.clear();
-        m_tabs.push_back(kept);
         m_tabBar->addTab(
             tabIconForUrl(kept.currentUrl),
             tabTitleForUrl(kept.currentUrl));
@@ -3639,7 +3585,6 @@ private:
         m_tabBar->setCurrentIndex(0);
         m_tabChangeInProgress = false;
 
-        m_activeTab = -1;
         switchToTab(0);
     }
 
@@ -7192,9 +7137,12 @@ private:
     QFrame *m_tabStrip = nullptr;
     ExplorerTabBar *m_tabBar = nullptr;
     QToolButton *m_newTabButton = nullptr;
-    QList<TabState> m_tabs;
-    QList<TabState> m_closedTabs;
-    int m_activeTab = -1;
+    TabController m_tabController;
+    // Transitional aliases keep the composition-root integration small while
+    // TabController owns all tab/session state and state transitions.
+    QList<TabState> &m_tabs = m_tabController.tabs();
+    QList<TabState> &m_closedTabs = m_tabController.closedTabs();
+    int &m_activeTab = m_tabController.activeIndexRef();
     bool m_tabChangeInProgress = false;
     bool m_tabRestoreInProgress = false;
 
