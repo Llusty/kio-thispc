@@ -231,6 +231,85 @@ int main(int argc, char **argv)
     fill(window.m_directoryList, window.m_directoryDetails, left);
     fill(window.m_splitPane->listView(), window.m_splitPane->detailsView(), right);
 
+    // 0.32 Stage 4: the neutral pane contract reads and routes both concrete panes.
+    window.setActivePane(ThisPcWindow::PaneId::Primary);
+    auto primaryContext = window.paneContext();
+    verify(primaryContext.id == ThisPcWindow::PaneId::Primary
+               && primaryContext.directory == left
+               && primaryContext.view == window.m_directoryList
+               && primaryContext.isDirectory,
+           "PaneContext describes the primary directory pane");
+    verify(primaryContext.items.isEmpty() && window.selectedUrls().isEmpty(),
+           "primary PaneContext and selectedUrls are empty without selection");
+    window.m_directoryList->selectionModel()->select(
+        window.m_directoryList->item(0), QItemSelectionModel::ClearAndSelect);
+    primaryContext = window.paneContext();
+    verify(primaryContext.items.size() == 1
+               && primaryContext.items.first().url == childUrlWithName(left, "one")
+               && window.selectedUrls() == QList<QUrl>{childUrlWithName(left, "one")},
+           "primary PaneContext and selectedUrls expose the primary selection");
+    window.m_directoryList->clearSelection();
+
+    window.m_directoryList->setFocus(Qt::OtherFocusReason);
+    QWidget *focusBeforeActivation = QApplication::focusWidget();
+    window.setActivePane(ThisPcWindow::PaneId::Split);
+    auto splitContext = window.paneContext();
+    verify(splitContext.id == ThisPcWindow::PaneId::Split
+               && splitContext.directory == right
+               && splitContext.view == window.m_splitPane->listView()
+               && splitContext.isDirectory,
+           "PaneContext describes the Split directory pane");
+    verify(QApplication::focusWidget() == focusBeforeActivation
+               && window.m_splitPane->property("active").toBool()
+               && !window.m_primaryPane->property("active").toBool(),
+           "setActivePane updates pane semantics without stealing focus");
+    verify(splitContext.items.isEmpty() && window.selectedUrls().isEmpty(),
+           "Split PaneContext and selectedUrls are empty without selection");
+    window.m_splitPane->listView()->selectionModel()->select(
+        window.m_splitPane->listView()->item(1), QItemSelectionModel::ClearAndSelect);
+    splitContext = window.paneContext();
+    verify(splitContext.items.size() == 1
+               && splitContext.items.first().url == childUrlWithName(right, "two")
+               && window.selectedUrls() == QList<QUrl>{childUrlWithName(right, "two")},
+           "Split PaneContext and selectedUrls expose the Split selection");
+    window.m_splitPane->listView()->clearSelection();
+
+    const QUrl primaryRoute = QUrl::fromLocalFile(files.path() + "/primary-route");
+    const QUrl splitRoute = QUrl::fromLocalFile(files.path() + "/split-route");
+    QDir().mkpath(primaryRoute.toLocalFile());
+    QDir().mkpath(splitRoute.toLocalFile());
+    window.navigatePane(ThisPcWindow::PaneId::Primary, primaryRoute);
+    window.navigatePane(ThisPcWindow::PaneId::Split, splitRoute);
+    verify(window.m_currentUrl == primaryRoute && window.m_splitPane->currentUrl() == splitRoute,
+           "navigatePane routes Primary and Split independently");
+    if (window.m_directoryJob) { window.m_directoryJob->kill(); window.m_directoryJob = nullptr; }
+    if (window.m_splitPane->m_job) { window.m_splitPane->m_job->kill(); window.m_splitPane->m_job = nullptr; }
+    window.navigateTo(left, false);
+    window.m_splitPane->setCurrentUrl(right, false);
+    if (window.m_directoryJob) { window.m_directoryJob->kill(); window.m_directoryJob = nullptr; }
+    if (window.m_splitPane->m_job) { window.m_splitPane->m_job->kill(); window.m_splitPane->m_job = nullptr; }
+
+    interceptPaneRefreshes = true;
+    refreshedPanes.clear();
+    window.refreshPane(ThisPcWindow::PaneId::Primary);
+    window.refreshPane(ThisPcWindow::PaneId::Split);
+    interceptPaneRefreshes = false;
+    verify(refreshedPanes == QList<int>({0, 1}),
+           "refreshPane routes Primary and Split independently");
+
+    window.openInOtherPane(ThisPcWindow::PaneId::Primary, splitRoute);
+    verify(window.m_currentUrl == left && window.m_splitPane->currentUrl() == splitRoute,
+           "openInOtherPane routes Primary to Split");
+    window.openInOtherPane(ThisPcWindow::PaneId::Split, primaryRoute);
+    verify(window.m_currentUrl == primaryRoute && window.m_splitPane->currentUrl() == splitRoute,
+           "openInOtherPane routes Split to Primary");
+    if (window.m_directoryJob) { window.m_directoryJob->kill(); window.m_directoryJob = nullptr; }
+    if (window.m_splitPane->m_job) { window.m_splitPane->m_job->kill(); window.m_splitPane->m_job = nullptr; }
+    window.navigateTo(left, false);
+    window.m_splitPane->setCurrentUrl(right, false);
+    if (window.m_directoryJob) { window.m_directoryJob->kill(); window.m_directoryJob = nullptr; }
+    if (window.m_splitPane->m_job) { window.m_splitPane->m_job->kill(); window.m_splitPane->m_job = nullptr; }
+
     // Stage 1: both panes own one equally aligned address section while all
     // shared controls keep operating on the pane selected by the user.
     app.processEvents();

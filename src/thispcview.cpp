@@ -11,6 +11,7 @@
 #include "archive-extraction.h"
 #include "applicationstyle.h"
 #include "appwidgets.h"
+#include "paneadapter.h"
 #include <KIO/CopyJob>
 #include <KIO/Global>
 #include <KIO/JobUiDelegateFactory>
@@ -141,6 +142,7 @@
 #include <algorithm>
 #include <functional>
 #include <utility>
+#include <memory>
 
 #ifndef Q_OS_WIN
 #include <sys/stat.h>
@@ -308,63 +310,24 @@ class ThisPcWindow : public QMainWindow
 #ifdef THISPC_TEST_HARNESS
 public:
 #endif
-    enum class PaneId { Primary, Split };
-    struct PaneItem {
-        QUrl url;
-        QString name, type, size, modified;
-        bool isDir = false;
-    };
-    struct PaneContext {
-        PaneId id = PaneId::Primary;
-        QUrl directory;
-        QAbstractItemView *view = nullptr;
-        QList<PaneItem> items;
-        bool isDirectory = false;
-    };
+    using PaneId = ::PaneId;
+    using PaneItem = ::PaneItem;
+    using PaneContext = ::PaneContext;
     PaneId m_activePane = PaneId::Primary;
     const PaneContext *m_operationContext = nullptr;
+    std::unique_ptr<PaneAdapter> m_paneAdapter;
 
     PaneContext paneContext() const
     {
         if (m_operationContext) {
             return *m_operationContext;
         }
-        PaneContext context;
-        const bool split = m_activePane == PaneId::Split
-            && m_splitPane && m_splitPane->isVisible();
-        context.id = split ? PaneId::Split : PaneId::Primary;
-        context.directory = split ? m_splitPane->currentUrl() : m_currentUrl;
-        context.isDirectory = split ? !sameLocation(context.directory, kThisPcUrl) : (m_contentStack
-            && m_contentStack->currentWidget() == m_directoryPage);
-        const int mode = split ? m_splitPane->viewMode() : m_directoryViewMode;
-        auto *list = split ? m_splitPane->listView() : m_directoryList;
-        auto *tree = split ? m_splitPane->detailsView() : m_directoryDetails;
-        context.view = mode == 2 ? static_cast<QAbstractItemView *>(tree) : list;
-        if (!context.isDirectory || !context.view) {
-            return context;
-        }
-        if (mode == 2) {
-            for (auto *item : tree->selectedItems()) {
-                context.items.push_back({QUrl(item->data(0, Qt::UserRole).toString()),
-                    item->text(0), item->text(1), item->text(2), item->text(3),
-                    item->data(0, Qt::UserRole + 1).toBool()});
-            }
-        } else {
-            for (const QModelIndex &item : list->selectedItems()) {
-                context.items.push_back({QUrl(item.data(directory_view_detail::UrlRole).toString()),
-                    item.data(Qt::DisplayRole).toString(), item.data(directory_view_detail::TypeTextRole).toString(),
-                    item.data(directory_view_detail::SizeTextRole).toString(),
-                    item.data(directory_view_detail::ModifiedTextRole).toString(),
-                    item.data(directory_view_detail::DirectoryRole).toBool()});
-            }
-        }
-        return context;
+        return m_paneAdapter ? m_paneAdapter->context(m_activePane) : PaneContext{};
     }
 
     void setActivePane(PaneId pane)
     {
-        m_activePane = pane == PaneId::Split && m_splitPane && m_splitPane->isVisible()
-            ? PaneId::Split : PaneId::Primary;
+        m_activePane = m_paneAdapter ? m_paneAdapter->availablePane(pane) : PaneId::Primary;
         for (QWidget *widget : {m_primaryPane, static_cast<QWidget *>(m_splitPane)}) {
             if (!widget) continue;
             const bool active = widget == (m_activePane == PaneId::Split
@@ -478,20 +441,17 @@ private:
 
     void navigatePane(PaneId pane, const QUrl &url)
     {
-        if (pane == PaneId::Split) m_splitPane->setCurrentUrl(url, true);
-        else navigateTo(url, true);
+        if (m_paneAdapter) m_paneAdapter->navigate(pane, url);
     }
 
     void refreshPane(PaneId pane)
     {
-        if (pane == PaneId::Split) m_splitPane->refresh();
-        else refreshCurrent();
+        if (m_paneAdapter) m_paneAdapter->refresh(pane);
     }
 
     void openInOtherPane(PaneId pane, const QUrl &url)
     {
-        if (pane == PaneId::Split) navigateTo(url, true);
-        else openInSplitPane(url);
+        if (m_paneAdapter) m_paneAdapter->openInOtherPane(pane, url);
     }
 
     void showSelectedProperties()
@@ -1951,6 +1911,28 @@ private:
             m_alwaysShowFullNames);
         m_contentSplitter->addWidget(m_splitPane);
         m_splitPane->hide();
+
+        m_paneAdapter = std::make_unique<PaneAdapter>(
+            PaneBinding{
+                [] { return true; },
+                [this] { return m_currentUrl; },
+                [this] { return m_contentStack && m_contentStack->currentWidget() == m_directoryPage; },
+                [this] { return m_directoryViewMode; },
+                [this] { return m_directoryList; },
+                [this] { return m_directoryDetails; },
+                [this](const QUrl &url) { navigateTo(url, true); },
+                [this] { refreshCurrent(); },
+                [this](const QUrl &url) { openInSplitPane(url); }},
+            PaneBinding{
+                [this] { return m_splitPane && m_splitPane->isVisible(); },
+                [this] { return m_splitPane ? m_splitPane->currentUrl() : QUrl(); },
+                [this] { return m_splitPane && !sameLocation(m_splitPane->currentUrl(), kThisPcUrl); },
+                [this] { return m_splitPane ? m_splitPane->viewMode() : 0; },
+                [this] { return m_splitPane ? m_splitPane->listView() : nullptr; },
+                [this] { return m_splitPane ? m_splitPane->detailsView() : nullptr; },
+                [this](const QUrl &url) { if (m_splitPane) m_splitPane->setCurrentUrl(url, true); },
+                [this] { if (m_splitPane) m_splitPane->refresh(); },
+                [this](const QUrl &url) { navigateTo(url, true); }});
 
         QSettings splitSettings;
         const QByteArray storedSplitState =
@@ -5873,11 +5855,14 @@ private:
 
     QList<QUrl> selectedUrls() const
     {
-        QList<QUrl> urls;
-        for (const auto &item : paneContext().items) {
-            if (item.url.isValid()) urls.push_back(item.url);
-        }
-        return urls;
+        return m_operationContext
+            ? [&] {
+                QList<QUrl> urls;
+                for (const PaneItem &item : m_operationContext->items)
+                    if (item.url.isValid()) urls.push_back(item.url);
+                return urls;
+            }()
+            : (m_paneAdapter ? m_paneAdapter->selectedUrls(m_activePane) : QList<QUrl>{});
     }
 
     void updatePreview()

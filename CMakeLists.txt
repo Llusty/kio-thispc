@@ -63,6 +63,9 @@ add_executable(thispc-view
     src/applicationstyle.h
     src/appwidgets.cpp
     src/appwidgets.h
+    src/paneadapter.cpp
+    src/paneadapter.h
+    src/panecontext.h
     src/thispcview.cpp
     src/archive-creation.h
     src/archive-detection.h
@@ -105,6 +108,9 @@ add_executable(thispc-view-stage3c1-test EXCLUDE_FROM_ALL
     src/applicationstyle.h
     src/appwidgets.cpp
     src/appwidgets.h
+    src/paneadapter.cpp
+    src/paneadapter.h
+    src/panecontext.h
     src/thispcview.cpp
     src/archive-creation.h
     src/archive-detection.h
