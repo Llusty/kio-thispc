@@ -26,7 +26,7 @@ chmod +x install.sh
 
 - Ręczny odbiór Stage 1, Stage 2 oraz Stage 3: PASS.
 - Test anulowania na 20 000 plików: 100% spójność UI ze stanem dysku (3330 skopiowano / 16670 anulowano / 0 błędów, brak częściowych plików) — PASS.
-- Końcowy build, focused tests, pełna regresja 25 zestawów / 6618 asercji PASS, `git diff --check`.
+- Końcowy build, focused tests, pełna regresja 25 zestawów / 6569 asercji PASS, `git diff --check` (korekta arytmetyczna po wydaniu: 6278 + 291; tag bez zmian).
 
 ---
 

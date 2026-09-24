@@ -288,7 +288,7 @@ zainstalowana i ręcznie potwierdzona przez użytkownika. Pełna regresja wydani
 **Wyniki testów i weryfikacji 0.31.0:**
 - Focused `split_compare`: 291/291 asercji PASS;
 - Focused pane actions (`split_layout`, `split_compare`, `local_transfer`, `transfer_plan`, `local_move`, `actions`, `operations`): 741 asercji PASS;
-- Pełna regresja (`run-pane-actions.py --all`): 25 zestawów testowych / 6618 asercji PASS (100%);
+- Pełna regresja (`run-pane-actions.py --all`): 25 zestawów testowych / 6569 asercji PASS (100%; korekta arytmetyczna po wydaniu: 6278 + 291, tag bez zmian);
 - Manualny test akceptacyjny Cancel (20 000 plików): raport 3330 skopiowano / 16670 anulowano / 0 błędów, na dysku dokładnie 3330 plików, brak plików tymczasowych/częściowych — PASS.
 
 **0.31.0 — COMPLETE**

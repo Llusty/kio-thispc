@@ -86,9 +86,12 @@ add_executable(thispc-view
     src/sessionmanager.h
     src/undocontroller.h
     src/splitbrowserpane.h
-    src/splitcompare.h
-    src/splitsyncplan.h
+    src/splitcomparemodel.h
+    src/splitsyncmodel.h
+    src/splitcomparedialog.h
+    src/splitsyncpreviewdialog.h
     src/splitsyncexecutor.h
+    src/splitsyncexecutiondialog.h
 )
 
 # Black-box startup/recovery integration binary. It is built from the exact
@@ -121,9 +124,12 @@ add_executable(thispc-view-stage3c1-test EXCLUDE_FROM_ALL
     src/sessionmanager.h
     src/undocontroller.h
     src/splitbrowserpane.h
-    src/splitcompare.h
-    src/splitsyncplan.h
+    src/splitcomparemodel.h
+    src/splitsyncmodel.h
+    src/splitcomparedialog.h
+    src/splitsyncpreviewdialog.h
     src/splitsyncexecutor.h
+    src/splitsyncexecutiondialog.h
 )
 target_compile_definitions(thispc-view-stage3c1-test PRIVATE THISPC_BATCH_RENAME_TEST_HOOKS=1)
 

@@ -134,7 +134,7 @@
 #include "sessionmanager.h"
 #include "searchcontroller.h"
 #include "splitbrowserpane.h"
-#include "splitcompare.h"
+#include "splitcomparedialog.h"
 
 #include <algorithm>
 #include <functional>

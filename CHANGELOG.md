@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.32.0 — Architecture Cleanup (Stage 2)
+
+- Uporządkowano zależności nagłówków Split Sync: modele, executor i dialogi tworzą acykliczny graf zależności; zachowanie 0.31.0 pozostaje bez zmian.
+- Korekta arytmetyczna po wydaniu 0.31.0: pełna regresja obejmuje 25 zestawów i 6569 asercji (6278 wcześniejszych + 291 `split_compare`), a nie 6618. Tag i commit wydania pozostają bez zmian.
+
 ## 0.31.0 — Split View Synchronization
 
 - Dodano bezpieczne porównywanie i synchronizację paneli Split View (skrót `Ctrl+Alt+C`, akcja w menu Narzędzia / Widok).
@@ -9,7 +14,7 @@
 - **Bezpieczeństwo operacji dyskowych:** atomowy preflight bezpośrednio przed mutacją każdego pliku (walidacja ścieżek, uprawnień, odrzucanie `.` i `..`).
 - **Deterministyczny cykl życia Anulowania (Cancel):** eliminacja wyścigu liczników (brak błędu off-by-one), oczekiwanie na sygnał terminalny aktywnego wątku roboczego i 100% zgodność raportu UI z fizycznym stanem systemu plików (potwierdzona audytem na 20 000 plików).
 - **Automatyczne odświeżanie:** natychmiastowe ponowne porównanie paneli po zakończeniu synchronizacji.
-- Pełna regresja: 25 zestawów testowych / 6618 asercji PASS; 100% manual acceptance PASS dla Stage 1, Stage 2 i Stage 3.
+- Pełna regresja: 25 zestawów testowych / 6569 asercji PASS (korekta arytmetyczna po wydaniu); 100% manual acceptance PASS dla Stage 1, Stage 2 i Stage 3.
 
 ## 0.30.0 — Grouping and per-folder view settings
 

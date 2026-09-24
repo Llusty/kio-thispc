@@ -198,5 +198,5 @@ and hover/selection fixes.
 - Automatic re-comparison after sync execution.
 
 Manual acceptance for 0.31.0 Stage 1, Stage 2 and Stage 3 has passed with 100% PASS.
-Automated regression: 25 test suites / 6618 assertions PASS.
+Automated regression: 25 test suites / 6569 assertions PASS (post-release arithmetic correction: 6278 + 291; release tag unchanged).
 The working tree is prepared for the 0.31.0 release.
