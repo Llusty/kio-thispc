@@ -250,12 +250,48 @@ zainstalowana i ręcznie potwierdzona przez użytkownika. Pełna regresja wydani
   `--all` 24 zestawy / 6278 asercji PASS, `git diff --check` i audit wersji PASS.
   Pozostaje czyste archiwum + SHA-256 oraz osobna zgoda na commit/tag/install.
 
-### 0.31.0 — Split View synchronization
-- compare left/right;
-- same / only-left / only-right / changed;
-- preview synchronization plan;
-- copy differences left/right;
-- safe sync execution.
+### 0.31.0 — Split View synchronization ✅ user-confirmed
+
+**Stage 1 — read-only pane comparison: zaimplementowany i zaakceptowany ✅**
+- porównywanie bieżącego folderu lewego i prawego panelu Split View (tylko bezpośrednie dzieci, brak rekurencji);
+- klasy wyniku: Same, Only left, Only right, Changed;
+- dopasowanie nazw z zachowaniem wielkości liter i pełną obsługą Unicode;
+- porównywanie metadanych KIO (rozmiar, czas modyfikacji mtime, typ wpisu); brak hashy;
+- foldery o tej samej nazwie klasyfikowane jako Same na poziomie obecności w bieżącym katalogu (bez diffu rekurencyjnego);
+- asynchroniczne listowanie KIO z unieważnianiem spóźnionych sygnałów i anulowaniem starych generacji;
+- blokada porównywania dla `thispc:/` oraz wyników `thispcsearch:/` z czytelnym komunikatem;
+- brak modyfikacji i mutacji plików (w 100% read-only);
+- szczegóły i semantyka: `docs/SPLIT_SYNC_STAGE1_COMPARE.md`.
+
+**Stage 2 — sync plan preview: zaimplementowany i zaakceptowany ✅**
+- czyste i deterministyczne planowanie akcji synchronizacji dla kierunków Lewy → Prawy oraz Prawy → Lewy;
+- klasy planu: Bez zmian (NoAction), Kopiuj (CopyFile), Zaktualizuj (UpdateFile), Konflikt (Conflict), Nieobsługiwane (Unsupported);
+- brak usuwania (brak Delete / brak mirror);
+- brak rekurencyjnej synchronizacji katalogów (katalogi po obu stronach = NoAction, katalog źródłowy = Unsupported);
+- brak dodatkowego I/O i hashy (bazuje na zaakceptowanym modelu CompareEntry);
+- zachowanie wielokrotności duplikatów i informacji o brakujących metadanych;
+- modalny dialog podglądu planu (SyncPlanPreviewDialog) powiązany z numerem generacji;
+- w 100% read-only podgląd z przejściem do bezpiecznego wykonania Stage 3;
+- szczegóły i semantyka: `docs/SPLIT_SYNC_STAGE2_PLAN_PREVIEW.md`.
+
+**Stage 3 — safe execution: zaimplementowany i zaakceptowany ✅**
+- bezpieczne asynchroniczne wykonanie planu synchronizacji oparte o `LocalFileCopyJob`;
+- wykonywane są wyłącznie operacje `CopyFile` i `UpdateFile`;
+- **zero usuwania**: brak operacji Delete, brak flag mirror;
+- **brak rekurencji**: brak synchronizacji poddrzew katalogów;
+- wpisy konfliktowe (`Conflict`) i nieobsługiwane (`Unsupported`) pozostają w 100% nietknięte;
+- atomowy preflight bezpośrednio przed mutacją każdego pliku (odrzucanie kropki, dwukropki, braków uprawnień);
+- deterministyczny cykl życia Anulowania (Cancel): eliminacja wyścigu liczników (brak off-by-one accounting), oczekiwanie na zakończenie aktywnego zadania wątku roboczego i dokładna zgodność raportu UI ze stanem dysku;
+- automatyczne ponowne porównanie (Re-compare) po zakończeniu synchronizacji;
+- szczegóły i semantyka: `docs/SPLIT_SYNC_STAGE3_EXECUTION.md`.
+
+**Wyniki testów i weryfikacji 0.31.0:**
+- Focused `split_compare`: 291/291 asercji PASS;
+- Focused pane actions (`split_layout`, `split_compare`, `local_transfer`, `transfer_plan`, `local_move`, `actions`, `operations`): 741 asercji PASS;
+- Pełna regresja (`run-pane-actions.py --all`): 25 zestawów testowych / 6618 asercji PASS (100%);
+- Manualny test akceptacyjny Cancel (20 000 plików): raport 3330 skopiowano / 16670 anulowano / 0 błędów, na dysku dokładnie 3330 plików, brak plików tymczasowych/częściowych — PASS.
+
+**0.31.0 — COMPLETE**
 
 ### 0.32.0 — File/folder comparison
 - external Meld/KDiff3 integration first;

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(kio-thispc VERSION 0.30.0 LANGUAGES CXX)
+project(kio-thispc VERSION 0.31.0 LANGUAGES CXX)
 
 set(QT_MIN_VERSION "6.5.0")
 set(KF_MIN_VERSION "6.17.0")
@@ -86,6 +86,9 @@ add_executable(thispc-view
     src/sessionmanager.h
     src/undocontroller.h
     src/splitbrowserpane.h
+    src/splitcompare.h
+    src/splitsyncplan.h
+    src/splitsyncexecutor.h
 )
 
 # Black-box startup/recovery integration binary. It is built from the exact
@@ -118,6 +121,9 @@ add_executable(thispc-view-stage3c1-test EXCLUDE_FROM_ALL
     src/sessionmanager.h
     src/undocontroller.h
     src/splitbrowserpane.h
+    src/splitcompare.h
+    src/splitsyncplan.h
+    src/splitsyncexecutor.h
 )
 target_compile_definitions(thispc-view-stage3c1-test PRIVATE THISPC_BATCH_RENAME_TEST_HOOKS=1)
 

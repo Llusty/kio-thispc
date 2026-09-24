@@ -2,7 +2,7 @@
  * thispc-view - a lightweight KDE/Qt file browser with a Windows-like
  * "This PC" home page, backed by KIO.
  *
- * Version 0.30.0
+ * Version 0.31.0
  * SPDX-License-Identifier: MIT
  */
 
@@ -134,6 +134,7 @@
 #include "sessionmanager.h"
 #include "searchcontroller.h"
 #include "splitbrowserpane.h"
+#include "splitcompare.h"
 
 #include <algorithm>
 #include <functional>
@@ -2459,6 +2460,17 @@ private:
         connect(m_swapPanesAction, &QAction::triggered,
                 this, &ThisPcWindow::swapSplitPanes);
 
+        m_comparePanesAction = toolbar->addAction(
+            themedIcon(QStringLiteral("view-split-left-right"),
+                       QStringLiteral("document-compare")),
+            trLocal("Porównaj panele", "Compare panels"));
+        m_comparePanesAction->setToolTip(trLocal(
+            "Porównaj zawartość lewego i prawego panelu",
+            "Compare contents of the left and right panes"));
+        m_comparePanesAction->setVisible(false);
+        connect(m_comparePanesAction, &QAction::triggered,
+                this, &ThisPcWindow::compareSplitPanes);
+
         // 0.15.1: compact operation history lives at the far-right edge of
         // the command bar and opens as a Brave-like popup.
         buildOperationManager(toolbar);
@@ -2840,14 +2852,14 @@ private:
         statusBar()->setSizeGripEnabled(true);
 
         m_versionLabel = new QLabel(
-            QStringLiteral("v0.30.0"),
+            QStringLiteral("v0.31.0"),
             this);
         m_versionLabel->setObjectName(
             QStringLiteral("versionLabel"));
         m_versionLabel->setToolTip(
             trLocal(
-                "Wersja thispc-view 0.30.0",
-                "thispc-view version 0.30.0"));
+                "Wersja thispc-view 0.31.0",
+                "thispc-view version 0.31.0"));
         statusBar()->addPermanentWidget(m_versionLabel);
     }
 
@@ -3727,6 +3739,10 @@ private:
             m_swapPanesAction->setVisible(enabled);
             m_swapPanesAction->setEnabled(enabled);
         }
+        if (m_comparePanesAction) {
+            m_comparePanesAction->setVisible(enabled);
+            m_comparePanesAction->setEnabled(enabled);
+        }
 
         if (enabled) {
             QUrl target = m_currentUrl;
@@ -3815,6 +3831,39 @@ private:
             m_splitPane->setCurrentUrl(primary, true);
         }
         syncActiveTabState();
+    }
+
+    void compareSplitPanes()
+    {
+        if (!m_splitPane || !m_splitPane->isVisible()) {
+            return;
+        }
+
+        const QUrl left = m_currentUrl;
+        const QUrl right = m_splitPane->currentUrl();
+
+        if (sameLocation(left, kThisPcUrl) || sameLocation(right, kThisPcUrl)) {
+            QMessageBox::information(
+                this,
+                trLocal("Porównanie paneli", "Compare Panels"),
+                trLocal(
+                    "Porównanie wymaga otwarcia konkretnego folderu w obu panelach (nie widoku „Ten komputer”).",
+                    "Comparison requires a specific folder to be open in both panes (not the \"This PC\" root)."));
+            return;
+        }
+
+        if (isSearchLocation(left) || isSearchLocation(right)) {
+            QMessageBox::information(
+                this,
+                trLocal("Porównanie paneli", "Compare Panels"),
+                trLocal(
+                    "Porównywanie wyników wyszukiwania nie jest obsługiwane. Otwórz zwykłe foldery w obu panelach.",
+                    "Comparing search result sets is not supported. Please open standard folder locations in both panes."));
+            return;
+        }
+
+        SplitCompareDialog dialog(left, right, m_showHiddenFiles, this);
+        dialog.exec();
     }
 
     void focusPrimaryPane()
@@ -4217,6 +4266,10 @@ private:
         if (m_swapPanesAction) {
             m_swapPanesAction->setVisible(state.splitEnabled);
             m_swapPanesAction->setEnabled(state.splitEnabled);
+        }
+        if (m_comparePanesAction) {
+            m_comparePanesAction->setVisible(state.splitEnabled);
+            m_comparePanesAction->setEnabled(state.splitEnabled);
         }
         if (state.splitEnabled) {
             m_splitPane->show();
@@ -7830,6 +7883,7 @@ private:
     QToolButton *m_sortButton = nullptr;
     QAction *m_splitViewAction = nullptr;
     QAction *m_swapPanesAction = nullptr;
+    QAction *m_comparePanesAction = nullptr;
     QAction *m_showHiddenAction = nullptr;
     QAction *m_thumbnailsAction = nullptr;
     QAction *m_previewAction = nullptr;
@@ -7938,7 +7992,7 @@ int main(int argc, char **argv)
     QCoreApplication::setApplicationName(
         QStringLiteral("thispc-view"));
     QCoreApplication::setApplicationVersion(
-        QStringLiteral("0.30.0"));
+        QStringLiteral("0.31.0"));
 
     app.setApplicationDisplayName(
         isPolish()

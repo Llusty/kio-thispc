@@ -15,13 +15,19 @@ The goal is not to replace KDE with Windows UI. The goal is a familiar Explorer-
 - Undo/Redo;
 - rich transfer UI, native local transfer engine, previews, search, device/network integration, etc.
 
-## Current release candidate — 0.30.0
-**0.30.0 — Grouping and per-folder view settings** is functionally complete and
-has passed manual KDE/CachyOS acceptance. The source tree is being prepared as a
-release candidate; the final release commit, tag and installation have not been
-performed yet.
+## Current release candidate — 0.31.0
+**0.31.0 — Split View Synchronization** is functionally complete and
+has passed manual KDE/CachyOS acceptance. Stage 1 (Read-only Compare),
+Stage 2 (Sync Plan Preview) and Stage 3 (Safe Execution & Deterministic Cancel)
+are complete and verified. The source tree is being prepared as a release candidate.
 
-Accepted 0.30.0 scope:
+Accepted 0.31.0 scope:
+- Read-only pane comparison (Stage 1) for left/right Split View folders (Same, Only left, Only right, Changed);
+- Unicode/case-sensitive name matching, non-recursive direct child scan, blocked for `thispc:/` and `thispcsearch:/`;
+- Sync plan preview (Stage 2) for Left → Right and Right → Left directions (NoAction, CopyFile, UpdateFile, Conflict, Unsupported);
+- Safe asynchronous execution (Stage 3) via `LocalFileCopyJob` with zero deletions, no recursive directory sync, conflicts/unsupported untouched, and per-file atomic preflight;
+- Deterministic Cancel lifecycle eliminating counter race conditions (UI report strictly matches disk state, verified with 20,000 files cancel audit);
+- Automatic re-comparison after execution completion.
 - per-folder view mode/settings persisted by normalized URL and shared across the
   main pane, Split View, tabs and restored sessions;
 - reorganized Explorer-like View menu with the existing working display options;
@@ -142,7 +148,7 @@ thispc-view
 For Codex, prefer working directly in a Git checkout and running `./scripts/build.sh` after edits instead of repeatedly creating ZIPs.
 
 
-## Current state — 0.30.0
+## Current state — 0.31.0
 
 0.18.0 conflict handling is user-confirmed. 0.19.x adds persistent session restore
 and the stable full-name/IconMode layout. 0.20.0 adds persistent Quick Access /
@@ -173,26 +179,24 @@ future work.
 preflight use first-free suggestions and no-overwrite final operations within
 the documented backend/protocol limits.
 
-0.30.0 adds persisted per-folder view settings, the reorganized View menu, four
-icon sizes, Compact mode, and grouping by Type, modification Date and Size.
-Grouping works in Icons/List/Details/Compact, both panes, tabs, Search and
-KIO-backed locations; current sort order is preserved inside groups and headers
-remain non-file UI. Date grouping uses local-calendar buckets and Size grouping
-uses the size metadata already supplied by KIO without recursive scanning.
+0.30.0 Grouping and per-folder view settings was released and user-confirmed,
+including Icons/List/Details/Compact, per-folder settings, Type/Date/Size grouping,
+and hover/selection fixes.
 
-Manual acceptance is complete for the 0.30.0 functional scope, including Type,
-Date and Size grouping, Split View/Search behavior, persistence, header context
-handling, sorting, selection, Ctrl/Shift multi-select, and the short/long filename
-selection border. A rendering-only stale-hover bug that looked like a second
-selection was diagnosed separately from the selection model and fixed.
+0.31.0 Split View Synchronization is complete and user-confirmed:
+- Stage 1 (Read-only compare): compares direct children between left and right
+  panes (Same, Only left, Only right, Changed), case-sensitive/Unicode matching,
+  asynchronous listing with generation tracking, blocked for virtual locations;
+- Stage 2 (Sync plan preview): deterministic plan calculation for Left → Right
+  and Right → Left (NoAction, CopyFile, UpdateFile, Conflict, Unsupported),
+  zero deletions, no recursive directory diffing, read-only preview;
+- Stage 3 (Safe execution & deterministic cancel): execution of CopyFile and
+  UpdateFile using `LocalFileCopyJob`, zero deletions, directories/conflicts/
+  unsupported untouched, atomic preflight revalidation before each file copy,
+  and deterministic Cancel lifecycle waiting for active worker thread completion
+  to guarantee strict UI-to-filesystem counter equality (verified on 20,000 files);
+- Automatic re-comparison after sync execution.
 
-The working tree is now in release-preparation state. Final RC verification
-after the 0.30.0 version/documentation bump is PASS: build PASS; focused
-`view_settings panes actions` 778 assertions PASS; full `--all` 24 suites /
-6278 assertions PASS; `git diff --check` and version/debug audits PASS. A clean
-source archive plus SHA-256 remains to be confirmed before the user authorizes
-commit/tag/install.
-
-Post-0.30 backlog remains separate: the Icons-only fine-grained icon-size slider,
-broader keyboard navigation (including `thispc:/`, Enter/Backspace and history
-shortcuts), and later roadmap features must not be treated as 0.30.0 blockers.
+Manual acceptance for 0.31.0 Stage 1, Stage 2 and Stage 3 has passed with 100% PASS.
+Automated regression: 25 test suites / 6618 assertions PASS.
+The working tree is prepared for the 0.31.0 release.

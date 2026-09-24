@@ -1,3 +1,35 @@
+# Aktualizacja do 0.31.0
+
+Wydanie wprowadza bezpieczne, nieinwazyjne porównywanie oraz synchronizację folderów w trybie podziału okna (Split View).
+
+Poniższe polecenia instalują wydanie z nowego katalogu, bez usuwania istniejącego repozytorium:
+
+```bash
+cd ~/Pobrane
+tar -xzf kio-thispc-0.31.0.tar.gz
+cd kio-thispc-0.31.0
+chmod +x install.sh
+./install.sh
+```
+
+## Nowości
+
+- Porównywanie i synchronizacja paneli Split View (skrót `Ctrl+Alt+C`).
+- **Stage 1 (Porównanie paneli):** asynchroniczne porównywanie bezpośrednich elementów lewego i prawego panelu z klasyfikacją (Takie same, Tylko po lewej, Tylko po prawej, Zmienione) na podstawie metadanych KIO (rozmiar, mtime, typ wpisu), z dopasowaniem nazw Unicode i wielkości liter.
+- **Stage 2 (Podgląd planu):** deterministyczny generator planu synchronizacji dla kierunków Lewy → Prawy oraz Prawy → Lewy z klasyfikacją akcji (Bez zmian, Kopiuj, Zaktualizuj, Konflikt, Nieobsługiwane).
+- **Stage 3 (Bezpieczne wykonanie):** asynchroniczne kopiowanie i aktualizacja plików (`LocalFileCopyJob`) z zerem operacji usuwania (brak Delete/Mirror), pomijaniem rekurencji katalogów oraz ochroną konfliktów i nieobsługiwanych wpisów.
+- **Bezpieczeństwo operacji dyskowych:** atomowy preflight bezpośrednio przed mutacją każdego pliku (walidacja ścieżek, uprawnień, odrzucanie `.` i `..`).
+- **Deterministyczny cykl życia Anulowania (Cancel):** eliminacja wyścigu liczników (brak błędu off-by-one), oczekiwanie na sygnał terminalny aktywnego wątku roboczego i 100% zgodność raportu UI z fizycznym stanem systemu plików (potwierdzona audytem na 20 000 plików).
+- **Automatyczne odświeżanie:** natychmiastowe ponowne porównanie paneli po zakończeniu synchronizacji.
+
+## Weryfikacja przed wydaniem
+
+- Ręczny odbiór Stage 1, Stage 2 oraz Stage 3: PASS.
+- Test anulowania na 20 000 plików: 100% spójność UI ze stanem dysku (3330 skopiowano / 16670 anulowano / 0 błędów, brak częściowych plików) — PASS.
+- Końcowy build, focused tests, pełna regresja 25 zestawów / 6618 asercji PASS, `git diff --check`.
+
+---
+
 # Aktualizacja do 0.30.0
 
 Wydanie dodaje zapamiętywane ustawienia widoku per folder oraz grupowanie
