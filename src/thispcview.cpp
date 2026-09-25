@@ -12,6 +12,7 @@
 #include "applicationstyle.h"
 #include "appwidgets.h"
 #include "paneadapter.h"
+#include "selectionmenucontroller.h"
 #include "tabcontroller.h"
 #include <KIO/CopyJob>
 #include <KIO/Global>
@@ -3966,508 +3967,16 @@ private:
     }
 
 
-    void addOpenWithSubmenu(
-        QMenu &menu,
-        const QList<QUrl> &urls)
-    {
-        if (urls.isEmpty()) {
-            return;
-        }
-
-        QMenu *openWithMenu =
-            menu.addMenu(
-                themedIcon(QStringLiteral("document-open-with"),
-                           QStringLiteral("system-run")),
-                trLocal("Otwórz za pomocą", "Open with"));
-
-        KFileItemList items;
-        items.reserve(urls.size());
-        for (const QUrl &url : urls) {
-            items.push_back(
-                KFileItem(
-                    url,
-                    KFileItem::NormalMimeTypeDetermination));
-        }
-
-        auto *actions =
-            new KFileItemActions(openWithMenu);
-        actions->setParentWidget(this);
-        actions->setItemListProperties(
-            KFileItemListProperties(items));
-        actions->insertOpenWithActionsTo(
-            nullptr,
-            openWithMenu,
-            {});
-
-        if (openWithMenu->actions().isEmpty()) {
-            QAction *none = openWithMenu->addAction(
-                trLocal("Brak pasujących aplikacji", "No matching applications"));
-            none->setEnabled(false);
-        }
-    }
-
-    enum class PrintableKind {
-        None,
-        Image,
-        Text,
-        Pdf
-    };
-
-    PrintableKind printableKindForUrl(
-        const QUrl &url,
-        bool isDir) const
-    {
-        if (isDir || !url.isLocalFile()) {
-            return PrintableKind::None;
-        }
-
-        QMimeDatabase database;
-        const QMimeType mime =
-            database.mimeTypeForFile(
-                url.toLocalFile(),
-                QMimeDatabase::MatchContent);
-
-        if (!mime.isValid()) {
-            return PrintableKind::None;
-        }
-
-        if (mime.name() == QStringLiteral("application/pdf")) {
-            return QStandardPaths::findExecutable(
-                       QStringLiteral("okular")).isEmpty()
-                ? PrintableKind::None
-                : PrintableKind::Pdf;
-        }
-
-        if (mime.name().startsWith(
-                QStringLiteral("image/"))) {
-            return PrintableKind::Image;
-        }
-
-        if (mime.name().startsWith(
-                QStringLiteral("text/"))) {
-            return PrintableKind::Text;
-        }
-
-        return PrintableKind::None;
-    }
-
-    bool canPrintUrl(
-        const QUrl &url,
-        bool isDir) const
-    {
-        return printableKindForUrl(url, isDir)
-            != PrintableKind::None;
-    }
-
-    void printImageUrl(const QUrl &url)
-    {
-        QImageReader reader(url.toLocalFile());
-        reader.setAutoTransform(true);
-
-        const QImage image = reader.read();
-
-        if (image.isNull()) {
-            QMessageBox::warning(
-                this,
-                trLocal("Drukowanie", "Printing"),
-                isPolish()
-                    ? QStringLiteral(
-                        "Nie udało się odczytać obrazu:\n%1")
-                        .arg(reader.errorString())
-                    : QStringLiteral(
-                        "Could not read the image:\n%1")
-                        .arg(reader.errorString()));
-            return;
-        }
-
-        QPrinter printer(QPrinter::HighResolution);
-        printer.setDocName(
-            QFileInfo(url.toLocalFile()).fileName());
-
-        QPrintDialog dialog(&printer, this);
-        dialog.setWindowTitle(
-            trLocal("Drukuj obraz", "Print image"));
-
-        if (dialog.exec() != QDialog::Accepted) {
-            return;
-        }
-
-        QPainter painter(&printer);
-        if (!painter.isActive()) {
-            QMessageBox::warning(
-                this,
-                trLocal("Drukowanie", "Printing"),
-                trLocal(
-                    "Nie udało się rozpocząć drukowania.",
-                    "Could not start printing."));
-            return;
-        }
-
-        const QRect pageRect =
-            printer.pageLayout().paintRectPixels(
-                printer.resolution());
-
-        QSize targetSize =
-            image.size();
-        targetSize.scale(
-            pageRect.size(),
-            Qt::KeepAspectRatio);
-
-        const QRect targetRect(
-            pageRect.x()
-                + (pageRect.width()
-                   - targetSize.width()) / 2,
-            pageRect.y()
-                + (pageRect.height()
-                   - targetSize.height()) / 2,
-            targetSize.width(),
-            targetSize.height());
-
-        painter.drawImage(
-            targetRect,
-            image);
-    }
-
-    void printTextUrl(const QUrl &url)
-    {
-        QFile file(url.toLocalFile());
-
-        if (!file.open(
-                QIODevice::ReadOnly
-                | QIODevice::Text)) {
-            QMessageBox::warning(
-                this,
-                trLocal("Drukowanie", "Printing"),
-                trLocal(
-                    "Nie udało się otworzyć pliku tekstowego.",
-                    "Could not open the text file."));
-            return;
-        }
-
-        // Avoid accidentally loading an enormous log into QTextDocument.
-        constexpr qint64 kMaxTextPrintBytes =
-            32LL * 1024LL * 1024LL;
-
-        if (file.size() > kMaxTextPrintBytes) {
-            QMessageBox::warning(
-                this,
-                trLocal("Drukowanie", "Printing"),
-                trLocal(
-                    "Plik tekstowy jest zbyt duży do bezpośredniego drukowania (limit 32 MiB).",
-                    "The text file is too large for direct printing (32 MiB limit)."));
-            return;
-        }
-
-        const QString text =
-            QString::fromUtf8(file.readAll());
-
-        QTextDocument document;
-        document.setPlainText(text);
-
-        QPrinter printer(QPrinter::HighResolution);
-        printer.setDocName(
-            QFileInfo(url.toLocalFile()).fileName());
-
-        QPrintDialog dialog(&printer, this);
-        dialog.setWindowTitle(
-            trLocal(
-                "Drukuj dokument tekstowy",
-                "Print text document"));
-
-        if (dialog.exec() != QDialog::Accepted) {
-            return;
-        }
-
-        document.print(&printer);
-    }
-
-    void printUrl(const QUrl &url)
-    {
-        const PrintableKind kind =
-            printableKindForUrl(url, false);
-
-        switch (kind) {
-        case PrintableKind::Image:
-            printImageUrl(url);
-            return;
-
-        case PrintableKind::Text:
-            printTextUrl(url);
-            return;
-
-        case PrintableKind::Pdf: {
-            const QString okular =
-                QStandardPaths::findExecutable(
-                    QStringLiteral("okular"));
-
-            if (okular.isEmpty()
-                || !QProcess::startDetached(
-                    okular,
-                    {
-                        QStringLiteral("--print"),
-                        url.toLocalFile()
-                    })) {
-                QMessageBox::warning(
-                    this,
-                    trLocal("Drukowanie", "Printing"),
-                    trLocal(
-                        "Nie udało się uruchomić okna drukowania PDF w Okularze.",
-                        "Could not start the PDF print dialog in Okular."));
-            }
-            return;
-        }
-
-        case PrintableKind::None:
-        default:
-            QMessageBox::information(
-                this,
-                trLocal("Drukowanie", "Printing"),
-                trLocal(
-                    "Ten typ pliku nie ma jeszcze obsługi drukowania.",
-                    "This file type does not have printing support yet."));
-            return;
-        }
-    }
-
-
-    bool isLocalImageUrl(
-        const QUrl &url,
-        bool isDir = false) const
-    {
-        if (isDir || !url.isLocalFile()) {
-            return false;
-        }
-
-        QMimeDatabase database;
-        const QMimeType mime =
-            database.mimeTypeForFile(
-                url.toLocalFile(),
-                QMimeDatabase::MatchContent);
-
-        return mime.isValid()
-            && mime.name().startsWith(
-                QStringLiteral("image/"));
-    }
-
-    bool canSetWallpaper(
-        const QUrl &url,
-        bool isDir) const
-    {
-        return isLocalImageUrl(url, isDir)
-            && !QStandardPaths::findExecutable(
-                    QStringLiteral(
-                        "plasma-apply-wallpaperimage"))
-                    .isEmpty();
-    }
-
-    void setAsDesktopWallpaper(
-        const QUrl &url)
-    {
-        if (!isLocalImageUrl(url, false)) {
-            return;
-        }
-
-        const QString executable =
-            QStandardPaths::findExecutable(
-                QStringLiteral(
-                    "plasma-apply-wallpaperimage"));
-
-        if (executable.isEmpty()) {
-            QMessageBox::information(
-                this,
-                trLocal(
-                    "Tło pulpitu",
-                    "Desktop wallpaper"),
-                trLocal(
-                    "Nie znaleziono narzędzia plasma-apply-wallpaperimage.",
-                    "plasma-apply-wallpaperimage was not found."));
-            return;
-        }
-
-        if (!QProcess::startDetached(
-                executable,
-                {url.toLocalFile()})) {
-            QMessageBox::warning(
-                this,
-                trLocal(
-                    "Tło pulpitu",
-                    "Desktop wallpaper"),
-                trLocal(
-                    "Nie udało się ustawić obrazu jako tła pulpitu.",
-                    "Could not set the image as the desktop wallpaper."));
-            return;
-        }
-
-        statusBar()->showMessage(
-            trLocal(
-                "Przekazano obraz do ustawienia jako tło pulpitu.",
-                "The image was sent to Plasma as the desktop wallpaper."),
-            4000);
-    }
-
-    bool allUrlsAreLocalFiles(
-        const QList<QUrl> &urls,
-        bool allowDirectories) const
-    {
-        if (urls.isEmpty()) {
-            return false;
-        }
-
-        for (const QUrl &url : urls) {
-            if (!url.isLocalFile()) {
-                return false;
-            }
-
-            if (!allowDirectories
-                && QFileInfo(
-                    url.toLocalFile()).isDir()) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
     void copySelectionToDirectory(const QList<QUrl> &urls, const QString &directory, const QString &successMessage)
     {
         m_fileActions->copySelectionToDirectory(urls, directory, successMessage);
-    }
-
-    void sendSelectionByEmail(
-        const QList<QUrl> &urls)
-    {
-        if (!allUrlsAreLocalFiles(
-                urls,
-                false)) {
-            return;
-        }
-
-        const QString executable =
-            QStandardPaths::findExecutable(
-                QStringLiteral("xdg-email"));
-
-        if (executable.isEmpty()) {
-            QMessageBox::information(
-                this,
-                trLocal("Wyślij e-mailem", "Send by e-mail"),
-                trLocal(
-                    "Nie znaleziono narzędzia xdg-email.",
-                    "xdg-email was not found."));
-            return;
-        }
-
-        QStringList arguments;
-
-        for (const QUrl &url : urls) {
-            arguments
-                << QStringLiteral("--attach")
-                << url.toLocalFile();
-        }
-
-        arguments
-            << QStringLiteral("--subject")
-            << trLocal(
-                "Pliki z Ten komputer",
-                "Files from This PC");
-
-        if (!QProcess::startDetached(
-                executable,
-                arguments)) {
-            QMessageBox::warning(
-                this,
-                trLocal("Wyślij e-mailem", "Send by e-mail"),
-                trLocal(
-                    "Nie udało się uruchomić domyślnego programu pocztowego.",
-                    "Could not start the default e-mail application."));
-        }
-    }
-
-    void sendSelectionByBluetooth(
-        const QList<QUrl> &urls)
-    {
-        if (!allUrlsAreLocalFiles(
-                urls,
-                false)) {
-            return;
-        }
-
-        const QString executable =
-            QStandardPaths::findExecutable(
-                QStringLiteral(
-                    "bluedevil-sendfile"));
-
-        if (executable.isEmpty()) {
-            QMessageBox::information(
-                this,
-                trLocal("Bluetooth", "Bluetooth"),
-                trLocal(
-                    "Nie znaleziono bluedevil-sendfile. Zainstaluj BlueDevil, aby wysyłać pliki przez Bluetooth.",
-                    "bluedevil-sendfile was not found. Install BlueDevil to send files over Bluetooth."));
-            return;
-        }
-
-        QStringList arguments;
-
-        // BlueDevil's current command-line interface accepts one -f/--files
-        // option per file and opens the device-selection wizard when no
-        // receiving-device option is supplied.
-        for (const QUrl &url : urls) {
-            arguments
-                << QStringLiteral("-f")
-                << url.toLocalFile();
-        }
-
-        if (!QProcess::startDetached(
-                executable,
-                arguments)) {
-            QMessageBox::warning(
-                this,
-                trLocal("Bluetooth", "Bluetooth"),
-                trLocal(
-                    "Nie udało się uruchomić kreatora wysyłania Bluetooth.",
-                    "Could not start the Bluetooth file transfer wizard."));
-        }
-    }
-
-    bool selectionHasCommonParent(
-        const QList<QUrl> &urls,
-        QString *parentPath = nullptr) const
-    {
-        if (!allUrlsAreLocalFiles(
-                urls,
-                true)) {
-            return false;
-        }
-
-        QString common;
-
-        for (const QUrl &url : urls) {
-            const QString parent =
-                QFileInfo(
-                    url.toLocalFile())
-                    .absolutePath();
-
-            if (common.isEmpty()) {
-                common = parent;
-            } else if (
-                QDir::cleanPath(common)
-                != QDir::cleanPath(parent)) {
-                return false;
-            }
-        }
-
-        if (parentPath) {
-            *parentPath = common;
-        }
-
-        return !common.isEmpty();
     }
 
     void createArchiveFromSelection(const QList<QUrl> &urls, ThisPcArchiveFormat format)
     {
         if (!mutationAllowedByRecoveryGate()) return;
         QString parent;
-        if (!selectionHasCommonParent(urls, &parent)) {
+        if (!m_selectionMenuController.selectionHasCommonParent(urls, &parent)) {
             QMessageBox::information(this, trLocal("Tworzenie archiwum", "Create archive"),
                 trLocal("Wybierz pliki i katalogi z jednego katalogu lokalnego.",
                         "Select files and folders from the same local directory."));
@@ -4570,369 +4079,6 @@ private:
         watchFileOperation(job, trLocal("Wypakowywanie zakończone i sprawdzone.", "Extraction completed and verified."),
             false, trLocal("Wypakowywanie", "Extraction"), [] {});
         job->start();
-    }
-
-    void addSendToSubmenu(
-        QMenu &menu,
-        const QList<QUrl> &urls)
-    {
-        if (urls.isEmpty()) {
-            return;
-        }
-
-        QMenu *sendMenu =
-            menu.addMenu(
-                themedIcon(
-                    QStringLiteral("document-send")),
-                trLocal(
-                    "Wyślij do",
-                    "Send to"));
-
-        const QString desktop =
-            QStandardPaths::writableLocation(
-                QStandardPaths::DesktopLocation);
-
-        QAction *desktopAction =
-            sendMenu->addAction(
-                themedIcon(
-                    QStringLiteral("user-desktop")),
-                trLocal("Pulpit", "Desktop"));
-        desktopAction->setEnabled(
-            !desktop.isEmpty());
-
-        connect(
-            desktopAction,
-            &QAction::triggered,
-            this,
-            [this, urls, desktop] {
-                copySelectionToDirectory(
-                    urls,
-                    desktop,
-                    trLocal(
-                        "Skopiowano na Pulpit",
-                        "Copied to Desktop"));
-            });
-
-        const QString documents =
-            QStandardPaths::writableLocation(
-                QStandardPaths::DocumentsLocation);
-
-        QAction *documentsAction =
-            sendMenu->addAction(
-                themedIcon(
-                    QStringLiteral("folder-documents")),
-                trLocal(
-                    "Dokumenty",
-                    "Documents"));
-        documentsAction->setEnabled(
-            !documents.isEmpty());
-
-        connect(
-            documentsAction,
-            &QAction::triggered,
-            this,
-            [this, urls, documents] {
-                copySelectionToDirectory(
-                    urls,
-                    documents,
-                    trLocal(
-                        "Skopiowano do Dokumentów",
-                        "Copied to Documents"));
-            });
-
-        sendMenu->addSeparator();
-
-        const bool plainLocalFiles =
-            allUrlsAreLocalFiles(
-                urls,
-                false);
-
-        QAction *bluetoothAction =
-            sendMenu->addAction(
-                themedIcon(
-                    QStringLiteral(
-                        "preferences-system-bluetooth")),
-                trLocal(
-                    "Bluetooth…",
-                    "Bluetooth…"));
-        bluetoothAction->setEnabled(
-            plainLocalFiles
-            && !QStandardPaths::findExecutable(
-                    QStringLiteral(
-                        "bluedevil-sendfile"))
-                    .isEmpty());
-
-        connect(
-            bluetoothAction,
-            &QAction::triggered,
-            this,
-            [this, urls] {
-                sendSelectionByBluetooth(urls);
-            });
-
-        QAction *emailAction =
-            sendMenu->addAction(
-                themedIcon(
-                    QStringLiteral("mail-send")),
-                trLocal(
-                    "E-mail…",
-                    "E-mail…"));
-        emailAction->setEnabled(
-            plainLocalFiles
-            && !QStandardPaths::findExecutable(
-                    QStringLiteral(
-                        "xdg-email"))
-                    .isEmpty());
-
-        connect(
-            emailAction,
-            &QAction::triggered,
-            this,
-            [this, urls] {
-                sendSelectionByEmail(urls);
-            });
-
-        sendMenu->addSeparator();
-
-        QString commonParent;
-        const bool canCreateArchive = selectionHasCommonParent(urls, &commonParent);
-
-        QAction *zipAction = sendMenu->addAction(
-            themedIcon(QStringLiteral("package-x-generic")),
-            trLocal("Skompresowany plik ZIP…", "Compressed ZIP file…"));
-        zipAction->setEnabled(canCreateArchive);
-        connect(zipAction, &QAction::triggered, this, [this, urls] {
-            createZipFromSelection(urls);
-        });
-
-        QAction *sevenZipAction = sendMenu->addAction(
-            themedIcon(QStringLiteral("package-x-generic")),
-            trLocal("Skompresowany plik 7z…", "Compressed 7z file…"));
-        sevenZipAction->setEnabled(canCreateArchive);
-        connect(sevenZipAction, &QAction::triggered, this, [this, urls] {
-            createArchiveFromSelection(urls, ThisPcArchiveFormat::SevenZip);
-        });
-
-        QAction *tarGzipAction = sendMenu->addAction(
-            themedIcon(QStringLiteral("package-x-generic")),
-            trLocal("Skompresowany plik tar.gz…", "Compressed tar.gz file…"));
-        tarGzipAction->setEnabled(canCreateArchive);
-        connect(tarGzipAction, &QAction::triggered, this, [this, urls] {
-            createArchiveFromSelection(urls, ThisPcArchiveFormat::TarGzip);
-        });
-    }
-
-
-    void addViewSubmenu(QMenu &menu)
-    {
-        const auto pane = paneContext().id;
-        const bool split = pane == PaneId::Split;
-        QMenu *viewMenu =
-            menu.addMenu(
-                themedIcon(QStringLiteral("view-list-icons")),
-                trLocal("Widok", "View"));
-
-        auto *group =
-            new QActionGroup(viewMenu);
-        group->setExclusive(true);
-
-        struct ViewDef {
-            int mode;
-            const char *pl;
-            const char *en;
-            const char *icon;
-        };
-
-        const ViewDef views[] = {
-            {0, "Ikony", "Icons", "view-list-icons"},
-            {1, "Lista", "List", "view-list-text"},
-            {2, "Szczegóły", "Details", "view-list-details"},
-            {3, "Kompaktowy", "Compact", "view-list-tree"},
-        };
-
-        for (const ViewDef &def : views) {
-            QAction *action = viewMenu->addAction(
-                themedIcon(QString::fromLatin1(def.icon)),
-                trLocal(def.pl, def.en));
-            action->setCheckable(true);
-            action->setChecked(
-                (split ? m_splitPane->viewMode() : m_directoryViewMode) == def.mode);
-            group->addAction(action);
-
-            connect(
-                action,
-                &QAction::triggered,
-                this,
-                [this, pane, mode = def.mode] {
-                    if (pane == PaneId::Split) m_splitPane->setViewMode(mode);
-                    else setDirectoryViewMode(mode);
-                });
-        }
-
-        viewMenu->addSeparator();
-
-        QMenu *showMenu = viewMenu->addMenu(
-            themedIcon(QStringLiteral("view-visible"), QStringLiteral("view-preview")),
-            trLocal("Pokaż", "Show"));
-
-        QAction *hidden = showMenu->addAction(
-            themedIcon(QStringLiteral("view-hidden")),
-            trLocal("Ukryte elementy", "Hidden items"));
-        hidden->setCheckable(true);
-        hidden->setChecked(m_showHiddenFiles);
-        connect(
-            hidden,
-            &QAction::toggled,
-            this,
-            &ThisPcWindow::setShowHiddenFiles);
-
-        QAction *thumbnails = showMenu->addAction(
-            themedIcon(QStringLiteral("view-preview")),
-            trLocal("Miniatury obrazów", "Image thumbnails"));
-        thumbnails->setCheckable(true);
-        thumbnails->setChecked(m_thumbnailsEnabled);
-        connect(
-            thumbnails,
-            &QAction::toggled,
-            this,
-            &ThisPcWindow::setThumbnailsEnabled);
-
-        showMenu->addAction(m_previewAction);
-        showMenu->addAction(m_fullNamesAction);
-
-        QMenu *iconSizeMenu = viewMenu->addMenu(
-            themedIcon(QStringLiteral("transform-scale"), QStringLiteral("view-list-icons")),
-            trLocal("Rozmiar ikon", "Icon size"));
-        auto *iconSizeGroup = new QActionGroup(iconSizeMenu);
-        iconSizeGroup->setExclusive(true);
-        const bool splitPane = split;
-        const int currentIconSize = splitPane
-            ? m_splitPane->iconSizeMode()
-            : m_directoryIconSizeMode;
-        const QStringList labels = {
-            trLocal("Bardzo duże", "Very large"),
-            trLocal("Duże", "Large"),
-            trLocal("Średnie", "Medium"),
-            trLocal("Małe", "Small")};
-        for (int mode = 0; mode < labels.size(); ++mode) {
-            QAction *action = iconSizeMenu->addAction(labels.at(mode));
-            action->setCheckable(true);
-            action->setChecked(mode == currentIconSize);
-            iconSizeGroup->addAction(action);
-            connect(action, &QAction::triggered, this, [this, splitPane, mode] {
-                if (splitPane) m_splitPane->setIconSizeMode(mode);
-                else setDirectoryIconSizeMode(mode);
-            });
-        }
-    }
-
-    void addSortSubmenu(QMenu &menu)
-    {
-        const auto pane = paneContext().id;
-        const bool split = pane == PaneId::Split;
-        QMenu *sortMenu =
-            menu.addMenu(
-                themedIcon(
-                    (split ? m_splitPane->sortAscending() : m_sortAscending)
-                        ? QStringLiteral("view-sort-ascending")
-                        : QStringLiteral("view-sort-descending")),
-                trLocal("Sortuj", "Sort"));
-
-        auto *keyGroup =
-            new QActionGroup(sortMenu);
-        keyGroup->setExclusive(true);
-
-        struct SortDef {
-            int key;
-            const char *pl;
-            const char *en;
-        };
-
-        const SortDef sorts[] = {
-            {0, "Nazwa", "Name"},
-            {1, "Typ", "Type"},
-            {2, "Rozmiar", "Size"},
-            {3, "Data modyfikacji", "Date modified"},
-        };
-
-        for (const SortDef &def : sorts) {
-            QAction *action =
-                sortMenu->addAction(
-                    trLocal(def.pl, def.en));
-            action->setCheckable(true);
-            action->setChecked(
-                (split ? m_splitPane->sortKey() : m_sortKey) == def.key);
-            keyGroup->addAction(action);
-
-            connect(
-                action,
-                &QAction::triggered,
-                this,
-                [this, pane, key = def.key] {
-                    if (pane == PaneId::Split) m_splitPane->setSortState(key, m_splitPane->sortAscending());
-                    else setSortKey(key);
-                });
-        }
-
-        sortMenu->addSeparator();
-
-        auto *directionGroup =
-            new QActionGroup(sortMenu);
-        directionGroup->setExclusive(true);
-
-        QAction *ascending =
-            sortMenu->addAction(
-                themedIcon(QStringLiteral("view-sort-ascending")),
-                trLocal("Rosnąco", "Ascending"));
-        ascending->setCheckable(true);
-        ascending->setChecked((split ? m_splitPane->sortAscending() : m_sortAscending));
-        directionGroup->addAction(ascending);
-
-        QAction *descending =
-            sortMenu->addAction(
-                themedIcon(QStringLiteral("view-sort-descending")),
-                trLocal("Malejąco", "Descending"));
-        descending->setCheckable(true);
-        descending->setChecked(!(split ? m_splitPane->sortAscending() : m_sortAscending));
-        directionGroup->addAction(descending);
-
-        connect(
-            ascending,
-            &QAction::triggered,
-            this,
-            [this, pane] {
-                if (pane == PaneId::Split) m_splitPane->setSortState(m_splitPane->sortKey(), true);
-                else setSortAscending(true);
-            });
-
-        connect(
-            descending,
-            &QAction::triggered,
-            this,
-            [this, pane] {
-                if (pane == PaneId::Split) m_splitPane->setSortState(m_splitPane->sortKey(), false);
-                else setSortAscending(false);
-            });
-
-        sortMenu->addSeparator();
-        QMenu *groupMenu = sortMenu->addMenu(trLocal("Grupuj według", "Group by"));
-        auto *groupActions = new QActionGroup(groupMenu);
-        groupActions->setExclusive(true);
-        for (const auto &entry : std::initializer_list<std::pair<int, QString>>{
-                 {DirectoryViewSettings::NoGrouping, trLocal("Brak", "None")},
-                 {DirectoryViewSettings::GroupByType, trLocal("Typ", "Type")},
-                 {DirectoryViewSettings::GroupByDate, trLocal("Data modyfikacji", "Date modified")},
-                 {DirectoryViewSettings::GroupBySize, trLocal("Rozmiar", "Size")}}) {
-            QAction *action = groupMenu->addAction(entry.second);
-            action->setCheckable(true);
-            action->setData(entry.first);
-            action->setChecked((split ? m_splitPane->groupMode() : m_groupMode) == entry.first);
-            groupActions->addAction(action);
-            connect(action, &QAction::triggered, this, [this, pane, mode = entry.first] {
-                if (pane == PaneId::Split) m_splitPane->setGroupMode(mode);
-                else setGroupMode(mode);
-            });
-        }
     }
 
     void selectAllDirectoryItems()
@@ -5142,8 +4288,28 @@ private:
         if (!hasItem) {
             QMenu backgroundMenu(this);
 
-            addViewSubmenu(backgroundMenu);
-            addSortSubmenu(backgroundMenu);
+            const bool split = context.id == PaneId::Split;
+            const SelectionMenuController::ViewState viewState{
+                context.id,
+                split ? m_splitPane->viewMode() : m_directoryViewMode,
+                split ? m_splitPane->iconSizeMode() : m_directoryIconSizeMode,
+                split ? m_splitPane->sortKey() : m_sortKey,
+                split ? m_splitPane->sortAscending() : m_sortAscending,
+                split ? m_splitPane->groupMode() : m_groupMode,
+                m_showHiddenFiles,
+                m_thumbnailsEnabled,
+                m_previewAction,
+                m_fullNamesAction};
+            const SelectionMenuController::ViewCallbacks viewCallbacks{
+                [this, split](int mode) { split ? m_splitPane->setViewMode(mode) : setDirectoryViewMode(mode); },
+                [this, split](int mode) { split ? m_splitPane->setIconSizeMode(mode) : setDirectoryIconSizeMode(mode); },
+                [this, split](int key) { split ? m_splitPane->setSortState(key, m_splitPane->sortAscending()) : setSortKey(key); },
+                [this, split](bool ascending) { split ? m_splitPane->setSortState(m_splitPane->sortKey(), ascending) : setSortAscending(ascending); },
+                [this, split](int mode) { split ? m_splitPane->setGroupMode(mode) : setGroupMode(mode); },
+                [this](bool value) { setShowHiddenFiles(value); },
+                [this](bool value) { setThumbnailsEnabled(value); }};
+            m_selectionMenuController.addViewSubmenu(backgroundMenu, viewState, viewCallbacks);
+            m_selectionMenuController.addSortSubmenu(backgroundMenu, viewState, viewCallbacks);
 
             backgroundMenu.addSeparator();
 
@@ -5373,7 +4539,7 @@ private:
                             "Open file location"));
         }
 
-        addOpenWithSubmenu(menu, selected);
+        m_selectionMenuController.addOpenWithSubmenu(menu, selected);
         QAction *extractHereAction = nullptr;
         QAction *extractToAction = nullptr;
 
@@ -5393,10 +4559,10 @@ private:
             themedIcon(QStringLiteral("document-print")),
             trLocal("Drukuj…", "Print…"));
         printAction->setEnabled(
-            single && canPrintUrl(url, isDir));
+            single && m_selectionMenuController.canPrintUrl(url, isDir));
 
         QAction *wallpaperAction = nullptr;
-        if (single && isLocalImageUrl(url, isDir)) {
+        if (single && m_selectionMenuController.isLocalImageUrl(url, isDir)) {
             wallpaperAction =
                 menu.addAction(
                     themedIcon(
@@ -5406,12 +4572,16 @@ private:
                         "Ustaw jako tło pulpitu",
                         "Set as desktop wallpaper"));
             wallpaperAction->setEnabled(
-                canSetWallpaper(url, isDir));
+                m_selectionMenuController.canSetWallpaper(url, isDir));
         }
 
-        addSendToSubmenu(
-            menu,
-            selected);
+        m_selectionMenuController.addSendToSubmenu(menu, selected, {
+            [this](const QList<QUrl> &urls, const QString &directory, const QString &message) {
+                copySelectionToDirectory(urls, directory, message);
+            },
+            [this](const QList<QUrl> &urls) { createZipFromSelection(urls); },
+            [this](const QList<QUrl> &urls) { createArchiveFromSelection(urls, ThisPcArchiveFormat::SevenZip); },
+            [this](const QList<QUrl> &urls) { createArchiveFromSelection(urls, ThisPcArchiveFormat::TarGzip); }});
 
         QAction *openTerminalAction =
             menu.addAction(
@@ -5527,11 +4697,13 @@ private:
         } else if (extractToAction && chosen == extractToAction) {
             extractArchiveWithArk(url, true);
         } else if (chosen == printAction) {
-            printUrl(url);
+            m_selectionMenuController.printUrl(url);
         } else if (
             wallpaperAction
             && chosen == wallpaperAction) {
-            setAsDesktopWallpaper(url);
+            m_selectionMenuController.setAsDesktopWallpaper(url, [this](const QString &message) {
+                statusBar()->showMessage(message, 4000);
+            });
         } else if (chosen == openTerminalAction) {
             openTerminalAt(url);
         } else if (
@@ -6965,6 +6137,7 @@ private:
     QPointer<KIO::ListJob> m_directoryJob;
 
     FileActions *m_fileActions = nullptr;
+    SelectionMenuController m_selectionMenuController{this};
     SearchController *m_searchController = nullptr;
     std::unique_ptr<SearchUiController> m_searchUiController;
     int m_searchVisibleCount = 0;

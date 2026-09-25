@@ -183,6 +183,19 @@ inline QColor blendedSelectionColor(
         255);
 }
 
+inline void synchronizeIconItemState(
+    QStyle::State &state,
+    bool selected,
+    bool hovered)
+{
+    state.setFlag(QStyle::State_Selected, false);
+    state.setFlag(QStyle::State_MouseOver, hovered && !selected);
+    // The current index can outlive its selection after a background click.
+    // Keeping State_HasFocus in that state makes Breeze draw a label-only
+    // focus rectangle which looks like a stale selection outline.
+    state.setFlag(QStyle::State_HasFocus, selected && state.testFlag(QStyle::State_HasFocus));
+}
+
 inline QRect selectedNameCalloutRect(
     const QRect &itemRect,
     int iconExtent,
@@ -414,8 +427,12 @@ public:
         initStyleOption(&opt, index);
         // Never let the platform style use a stale selected bit. Icon-mode
         // selection is painted explicitly below from QItemSelectionModel.
-        opt.state &= ~QStyle::State_Selected;
-        syncMouseOver(opt);
+        const QPoint viewportPos = m_view->viewport()->mapFromGlobal(QCursor::pos());
+        const bool actuallyHovered =
+            m_view->viewport()->rect().contains(viewportPos)
+            && m_view->indexAt(viewportPos) == index;
+        directory_view_detail::synchronizeIconItemState(
+            opt.state, modelSelected, actuallyHovered);
 
         const QString fullText = opt.text;
         opt.text.clear();
@@ -624,6 +641,11 @@ public:
 
     void clear()
     {
+        // KCategorizedView keeps its hovered QModelIndex internally. Clear it
+        // while the proxy index is still valid; otherwise a later Leave event
+        // can call visualRect() with an index invalidated by model clear().
+        QEvent leave(QEvent::Leave);
+        KCategorizedView::leaveEvent(&leave);
         m_sourceModel->clear();
     }
 

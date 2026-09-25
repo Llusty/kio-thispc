@@ -340,6 +340,39 @@ int main(int argc, char **argv)
     verify(darkSelection == QColor(34, 46, 60) && darkSelection.alpha() == 255,
            "selection blend remains restrained and readable in dark themes");
 
+    QStyle::State staleFocus = QStyle::State_Enabled
+        | QStyle::State_HasFocus | QStyle::State_Selected | QStyle::State_MouseOver;
+    directory_view_detail::synchronizeIconItemState(staleFocus, false, false);
+    verify(!(staleFocus & QStyle::State_Selected)
+               && !(staleFocus & QStyle::State_MouseOver)
+               && !(staleFocus & QStyle::State_HasFocus),
+           "unselected current icon drops stale selection, hover, and label focus outline");
+    QStyle::State selectedFocus = QStyle::State_Enabled | QStyle::State_HasFocus;
+    directory_view_detail::synchronizeIconItemState(selectedFocus, true, true);
+    verify((selectedFocus & QStyle::State_HasFocus)
+               && !(selectedFocus & QStyle::State_MouseOver)
+               && !(selectedFocus & QStyle::State_Selected),
+           "selected icon retains keyboard focus while custom painting owns selection and hover");
+
+    DirectoryListWidget hoverLifecycle;
+    hoverLifecycle.resize(400, 240);
+    hoverLifecycle.addItem(QStringLiteral("hovered before clear"));
+    hoverLifecycle.show();
+    app.processEvents();
+    const QPoint hoverPoint =
+        hoverLifecycle.visualItemRect(hoverLifecycle.item(0)).center();
+    QMouseEvent hoverMove(
+        QEvent::MouseMove, hoverPoint, hoverPoint,
+        hoverLifecycle.viewport()->mapToGlobal(hoverPoint),
+        Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(hoverLifecycle.viewport(), &hoverMove);
+    hoverLifecycle.clear();
+    QEvent leaveAfterClear(QEvent::Leave);
+    QApplication::sendEvent(&hoverLifecycle, &leaveAfterClear);
+    app.processEvents();
+    verify(hoverLifecycle.count() == 0,
+           "clearing a hovered categorized view makes a later Leave event safe");
+
     DirectoryViewSettings::setViewMode(localA, -4);
     verify(DirectoryViewSettings::viewMode(localA, 2) == 0,
            "writes clamp modes to the supported range");
