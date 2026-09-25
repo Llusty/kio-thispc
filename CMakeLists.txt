@@ -92,6 +92,8 @@ add_executable(thispc-view
     src/quicklook.h
     src/sidebar.h
     src/searchcontroller.h
+    src/searchuicontroller.cpp
+    src/searchuicontroller.h
     src/sessionmanager.h
     src/undocontroller.h
     src/splitbrowserpane.h
@@ -139,6 +141,8 @@ add_executable(thispc-view-stage3c1-test EXCLUDE_FROM_ALL
     src/quicklook.h
     src/sidebar.h
     src/searchcontroller.h
+    src/searchuicontroller.cpp
+    src/searchuicontroller.h
     src/sessionmanager.h
     src/undocontroller.h
     src/splitbrowserpane.h

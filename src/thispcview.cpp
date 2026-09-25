@@ -137,6 +137,7 @@
 #include "sidebar.h"
 #include "sessionmanager.h"
 #include "searchcontroller.h"
+#include "searchuicontroller.h"
 #include "splitbrowserpane.h"
 #include "splitcomparedialog.h"
 
@@ -210,19 +211,6 @@ bool isWithinLocation(const QUrl &childRaw, const QUrl &baseRaw)
 bool dropWouldCreateCycle(
     const QList<QUrl> &urls,
     const QUrl &destination);
-
-int locationDepth(const QUrl &url)
-{
-    if (url.isLocalFile()) {
-        return QDir::cleanPath(url.toLocalFile())
-            .split(QDir::separator(), Qt::SkipEmptyParts)
-            .size();
-    }
-
-    return url.path()
-        .split(QLatin1Char('/'), Qt::SkipEmptyParts)
-        .size();
-}
 
 namespace {
 
@@ -585,6 +573,17 @@ public:
 
         buildToolbar();
         buildCentralUi();
+
+        m_searchUiController = std::make_unique<SearchUiController>(
+            SearchUiController::Widgets{m_searchEdit, m_stopSearchAction,
+                m_searchScopeAction, m_searchFilterButton, m_searchScopeGroup,
+                m_searchTypeGroup, m_searchDateGroup, m_searchSizeGroup,
+                m_searchProgressFrame, m_searchProgressBar, m_directoryStatus},
+            SearchUiController::Presentation{
+                [](const char *pl, const char *en) { return trLocal(pl, en); },
+                [this](const QUrl &url) { return displayNameForLocation(url); },
+                [this] { return searchScopeMenuIcon(); },
+                [] { return isPolish(); }});
 
         connect(
             QApplication::clipboard(),
@@ -2629,235 +2628,33 @@ private:
 
     void updateSearchControls()
     {
-        if (m_searchEdit) {
-            const QSignalBlocker blocker(m_searchEdit);
-            m_searchEdit->setText(activeSearchState().text);
-            const QUrl url = activeLocation();
-            m_searchEdit->setPlaceholderText(sameLocation(url, kThisPcUrl)
-                ? trLocal("Szukaj na tym komputerze", "Search this computer")
-                : isSearchLocation(url)
-                    ? trLocal("Nowe wyszukiwanie", "New search")
-                    : (isPolish() ? QStringLiteral("Szukaj w: %1") : QStringLiteral("Search in: %1"))
-                        .arg(displayNameForLocation(url)));
-        }
-        if (m_stopSearchAction && m_searchController) {
-            const auto *controller = m_activePane == PaneId::Split && m_splitPane
-                ? m_splitPane->searchController() : m_searchController;
-            m_stopSearchAction->setVisible(controller->isRunning());
-        }
-        auto checkGroup =
-            [](QActionGroup *group, int value) {
-            if (!group) {
-                return;
-            }
-
-            for (QAction *action : group->actions()) {
-                action->setChecked(
-                    action->data().toInt() == value);
-            }
-        };
-
-        checkGroup(
-            m_searchScopeGroup,
-            activeSearchState().scope);
-        checkGroup(
-            m_searchTypeGroup,
-            activeSearchState().type);
-        checkGroup(
-            m_searchDateGroup,
-            activeSearchState().date);
-        checkGroup(
-            m_searchSizeGroup,
-            activeSearchState().size);
-
-        if (m_searchScopeAction) {
-            QString scopeName;
-
-            switch (activeSearchState().scope) {
-            case 1:
-                scopeName = trLocal(
-                    "Bieżący dysk",
-                    "Current drive");
-                break;
-            case 2:
-                scopeName = trLocal(
-                    "Ten komputer",
-                    "This PC");
-                break;
-            case 0:
-            default:
-                scopeName = trLocal(
-                    "Bieżący folder",
-                    "Current folder");
-                break;
-            }
-
-            m_searchScopeAction->setIcon(
-                searchScopeMenuIcon());
-            m_searchScopeAction->setToolTip(
-                isPolish()
-                    ? QStringLiteral(
-                        "Zakres wyszukiwania: %1\nKliknij lupę ze strzałką, aby zmienić zakres.")
-                        .arg(scopeName)
-                    : QStringLiteral(
-                        "Search scope: %1\nClick the magnifier arrow to change scope.")
-                        .arg(scopeName));
-            m_searchScopeAction->setEnabled(
-                !isSearchLocation(activeLocation()));
-        }
-
-        if (m_searchFilterButton) {
-            int activeFilters = 0;
-            activeFilters +=
-                activeSearchState().type != 0 ? 1 : 0;
-            activeFilters +=
-                activeSearchState().date != 0 ? 1 : 0;
-            activeFilters +=
-                activeSearchState().size != 0 ? 1 : 0;
-
-            m_searchFilterButton->setToolTip(
-                activeFilters == 0
-                    ? trLocal(
-                        "Filtry wyszukiwania",
-                        "Search filters")
-                    : (isPolish()
-                        ? QStringLiteral(
-                            "Filtry wyszukiwania (%1 aktywne)")
-                            .arg(activeFilters)
-                        : QStringLiteral(
-                            "Search filters (%1 active)")
-                            .arg(activeFilters)));
-        }
+        if (!m_searchUiController) return;
+        SearchController *backend = m_activePane == PaneId::Split && m_splitPane
+            ? m_splitPane->searchController() : m_searchController;
+        m_searchUiController->updateControls(
+            {activeLocation(), &activeSearchState(), backend});
     }
 
-    QUrl bestDriveRootForUrl(const QUrl &url) const
+    QList<QUrl> searchDriveRoots() const
     {
-        QUrl best;
-        int bestDepth = -1;
-
-        for (const DriveInfo &drive :
-             std::as_const(m_drives)) {
-            if (!drive.targetUrl.isValid()
-                || !isWithinLocation(
-                    url,
-                    drive.targetUrl)) {
-                continue;
-            }
-
-            const int depth =
-                locationDepth(drive.targetUrl);
-
-            if (depth > bestDepth) {
-                bestDepth = depth;
-                best = drive.targetUrl;
-            }
-        }
-
-        return best;
+        QList<QUrl> roots;
+        for (const DriveInfo &drive : std::as_const(m_drives)) roots.push_back(drive.targetUrl);
+        return roots;
     }
 
     QList<QUrl> wholeComputerSearchRoots() const
     {
-        QList<QUrl> roots;
-        QSet<QString> seen;
-
-        for (const DriveInfo &drive :
-             std::as_const(m_drives)) {
-            if (!drive.targetUrl.isValid()) {
-                continue;
-            }
-
-            const QUrl root =
-                normalizedUrl(drive.targetUrl);
-
-            const QString key =
-                root.toString(QUrl::FullyEncoded);
-
-            if (seen.contains(key)) {
-                continue;
-            }
-
-            seen.insert(key);
-            roots.push_back(root);
-        }
-
-        if (roots.isEmpty()) {
-            roots.push_back(
-                QUrl::fromLocalFile(
-                    QStringLiteral("/")));
-        }
-
-        return roots;
-    }
-
-    QUrl searchContextUrl() const
-    {
-        if (isSearchLocation(activeLocation())) {
-            const QUrl base =
-                searchBaseFromUrl(activeLocation());
-
-            if (base.isValid()) {
-                return base;
-            }
-
-            return QUrl::fromLocalFile(
-                QDir::homePath());
-        }
-
-        if (sameLocation(
-                activeLocation(),
-                kThisPcUrl)) {
-            return QUrl::fromLocalFile(
-                QDir::homePath());
-        }
-
-        return activeLocation();
+        return SearchUiController::wholeComputerSearchRoots(searchDriveRoots());
     }
 
     void startSearchFromUi()
     {
-        if (!m_searchEdit) {
-            return;
-        }
-
-        const QString query =
-            m_searchEdit->text().trimmed();
-
-        if (query.isEmpty()) {
-            return;
-        }
-
-        int scope = activeSearchState().scope;
-        QUrl base;
-
-        if (sameLocation(
-                activeLocation(),
-                kThisPcUrl)) {
-            scope = 2;
-        }
-
-        const QUrl context =
-            searchContextUrl();
-
-        if (scope == 0) {
-            base = context;
-        } else if (scope == 1) {
-            base =
-                bestDriveRootForUrl(context);
-
-            if (!base.isValid()) {
-                base = context;
-            }
-        }
-
-        navigatePane(m_activePane,
-            makeSearchLocation(
-                query,
-                scope,
-                base,
-                activeSearchState().type,
-                activeSearchState().date,
-                activeSearchState().size));
+        if (!m_searchUiController) return;
+        const auto request = m_searchUiController->requestFromUi(
+            {activeLocation(), &activeSearchState(), nullptr}, searchDriveRoots(),
+            QUrl::fromLocalFile(QDir::homePath()));
+        if (request.isValid()) navigatePane(m_activePane,
+            request.location(activeSearchState()));
     }
 
     void syncCurrentSearchFilters()
@@ -2866,17 +2663,8 @@ private:
             return;
         }
 
-        const QUrl updated =
-            makeSearchLocation(
-                searchQueryFromUrl(activeLocation()),
-                searchIntParameter(
-                    activeLocation(),
-                    QStringLiteral("scope"),
-                    activeSearchState().scope),
-                searchBaseFromUrl(activeLocation()),
-                activeSearchState().type,
-                activeSearchState().date,
-                activeSearchState().size);
+        const QUrl updated = m_searchUiController->locationWithSyncedFilters(
+            {activeLocation(), &activeSearchState(), nullptr});
 
         if (m_activePane == PaneId::Split) {
             m_splitPane->updateSearchFilters(updated);
@@ -2897,9 +2685,7 @@ private:
 
     void updateSearchProgress()
     {
-        if (m_searchProgressBar) {
-            m_searchProgressBar->setValue(m_searchController->progressPercent());
-        }
+        if (m_searchUiController) m_searchUiController->updateProgress(*m_searchController);
     }
 
     void updateSearchStatusLabel()
@@ -2909,8 +2695,8 @@ private:
             return;
         }
 
-        m_directoryStatus->setText(m_searchController->statusText(
-            m_searchVisibleCount, m_primarySearch.scope));
+        m_searchUiController->updateStatus(*m_searchController,
+            m_searchVisibleCount, m_primarySearch.scope);
     }
 
     void cancelSearch(PaneId pane, bool userRequested)
@@ -2956,23 +2742,8 @@ private:
                 : QStringLiteral("Search results: %1")
                     .arg(query));
 
-        QList<QUrl> roots;
-
-        if (m_primarySearch.scope == 2) {
-            roots =
-                wholeComputerSearchRoots();
-        } else {
-            QUrl base =
-                searchBaseFromUrl(url);
-
-            if (!base.isValid()) {
-                base =
-                    QUrl::fromLocalFile(
-                        QDir::homePath());
-            }
-
-            roots.push_back(base);
-        }
+        const QList<QUrl> roots = m_searchUiController->rootsForLocation(url,
+            m_primarySearch, searchDriveRoots(), QUrl::fromLocalFile(QDir::homePath()));
 
         m_searchVisibleCount = 0;
         m_searchProgressBar->setRange(0, 100);
@@ -7195,6 +6966,7 @@ private:
 
     FileActions *m_fileActions = nullptr;
     SearchController *m_searchController = nullptr;
+    std::unique_ptr<SearchUiController> m_searchUiController;
     int m_searchVisibleCount = 0;
 };
 

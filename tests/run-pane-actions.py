@@ -145,7 +145,7 @@ with tempfile.TemporaryDirectory(prefix='thispc-pane-tests-', delete=not options
         if header.name in legacy_exposed_headers:
             contents = expose_legacy_header(contents)
         (tmp / 'src' / header.name).write_text(contents)
-    for implementation in ('appwidgets.cpp', 'applicationstyle.cpp', 'paneadapter.cpp', 'tabcontroller.cpp'):
+    for implementation in ('appwidgets.cpp', 'applicationstyle.cpp', 'paneadapter.cpp', 'tabcontroller.cpp', 'searchuicontroller.cpp'):
         (tmp / 'src' / implementation).write_text((root / 'src' / implementation).read_text())
     suites = {'trash': 'empty-trash.cpp', 'panes': 'pane-actions.cpp', 'templates': 'template-menu.cpp', 'tabs': 'tab-drag-drop.cpp', 'sidebar_dnd': 'sidebar-drag-drop.cpp', 'sidebar_layout': 'sidebar-layout.cpp', 'properties': 'properties-dialog.cpp', 'search': 'search-controller.cpp', 'actions': 'file-actions.cpp', 'operations': 'operation-manager.cpp', 'local_transfer': 'local-file-copy-job.cpp', 'transfer_plan': 'local-transfer-plan.cpp', 'local_move': 'local-file-move-job.cpp', 'local_tree': 'local-transfer-job.cpp', 'tree_history': 'local-tree-history.cpp', 'archive': 'archive-detection.cpp', 'archive_jobs': 'archive-extraction.cpp', 'archive_menu': 'archive-menu.cpp', 'archive_creation': 'archive-creation.cpp'}
     suites['split_layout'] = 'split-layout.cpp'
@@ -188,7 +188,7 @@ find_package(ZLIB REQUIRED)
 find_package(TagLib REQUIRED)
 find_package(exiv2 REQUIRED CONFIG)
 file(GLOB TEST_HEADERS CONFIGURE_DEPENDS src/*.h)
-add_executable(pane-test src/thispcview.cpp src/appwidgets.cpp src/applicationstyle.cpp src/paneadapter.cpp src/tabcontroller.cpp ${TEST_HEADERS})
+add_executable(pane-test src/thispcview.cpp src/appwidgets.cpp src/applicationstyle.cpp src/paneadapter.cpp src/tabcontroller.cpp src/searchuicontroller.cpp ${TEST_HEADERS})
 target_compile_options(pane-test PRIVATE -g3 -O0 -fno-omit-frame-pointer -Wno-unused-function -Wno-unused-variable)
 target_include_directories(pane-test PRIVATE ${LibArchive_INCLUDE_DIRS})
 target_link_libraries(pane-test PRIVATE Qt6::Core Qt6::Concurrent Qt6::Gui Qt6::Widgets Qt6::PrintSupport Qt6::Pdf Qt6::Test KF6::KIOCore KF6::KIOWidgets KF6::ItemViews ${LibArchive_LIBRARIES} ZLIB::ZLIB TagLib::TagLib Exiv2::exiv2lib)

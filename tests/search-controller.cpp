@@ -67,6 +67,106 @@ static void testFilters()
     verify(!SearchController::matchesFile(file, db, {0, 4, 0}), "unknown date excluded");
 }
 
+static void testSearchUiContract(const QUrl &rootA, const QUrl &rootB)
+{
+    QLineEdit edit;
+    QAction stopAction(nullptr), scopeAction(nullptr);
+    QToolButton filterButton;
+    QActionGroup scopeGroup(nullptr), typeGroup(nullptr), dateGroup(nullptr), sizeGroup(nullptr);
+    const auto addChoice = [](QActionGroup &group, int value) {
+        auto *action = new QAction(&group);
+        action->setCheckable(true);
+        action->setData(value);
+        group.addAction(action);
+    };
+    for (int value = 0; value <= 2; ++value) addChoice(scopeGroup, value);
+    for (int value = 0; value <= 6; ++value) addChoice(typeGroup, value);
+    for (int value = 0; value <= 4; ++value) {
+        addChoice(dateGroup, value);
+        addChoice(sizeGroup, value);
+    }
+    QFrame progressFrame;
+    QProgressBar progressBar;
+    QLabel status;
+    SearchController backend;
+    SearchUiController ui(
+        {&edit, &stopAction, &scopeAction, &filterButton, &scopeGroup,
+         &typeGroup, &dateGroup, &sizeGroup, &progressFrame, &progressBar, &status},
+        {[](const char *, const char *en) { return QString::fromUtf8(en); },
+         [](const QUrl &url) { return url.fileName(); }, {}, [] { return false; }});
+
+    PaneSearchState state;
+    state.loadLocation(rootA);
+    state.text = QStringLiteral(" needle ");
+    state.scope = 1;
+    state.type = 3;
+    state.date = 2;
+    state.size = 1;
+    ui.updateControls({rootA, &state, &backend});
+    verify(edit.text() == QStringLiteral(" needle ")
+               && scopeGroup.checkedAction()->data().toInt() == 1,
+           "Search UI state maps to edit and scope controls");
+    verify(typeGroup.checkedAction()->data().toInt() == 3
+               && dateGroup.checkedAction()->data().toInt() == 2
+               && sizeGroup.checkedAction()->data().toInt() == 1,
+           "Search UI filters map to action groups");
+    verify(filterButton.toolTip() == QStringLiteral("Search filters (3 active)"),
+           "Search UI active-filter presentation");
+
+    edit.setText(QStringLiteral("  needle  "));
+    const auto request = ui.requestFromUi({rootA, &state, &backend},
+        {QUrl::fromLocalFile(QStringLiteral("/")), rootA}, rootB);
+    verify(request.query == QStringLiteral("needle") && request.scope == 1
+               && sameLocation(request.base, rootA),
+           "UI controls map to explicit search request");
+    const QUrl requestUrl = request.location(state);
+    verify(searchQueryFromUrl(requestUrl) == QStringLiteral("needle")
+               && searchIntParameter(requestUrl, QStringLiteral("type"), 0) == 3
+               && searchIntParameter(requestUrl, QStringLiteral("date"), 0) == 2
+               && searchIntParameter(requestUrl, QStringLiteral("size"), 0) == 1,
+           "search request preserves URL filter contract");
+
+    const QList<QUrl> roots = SearchUiController::wholeComputerSearchRoots(
+        {rootA, normalizedUrl(rootA), rootB});
+    verify(roots.size() == 2 && sameLocation(roots.at(0), rootA)
+               && sameLocation(roots.at(1), rootB),
+           "whole-computer roots are normalized and deduplicated");
+    verify(sameLocation(SearchUiController::bestDriveRootForUrl(
+                            QUrl::fromLocalFile(rootA.toLocalFile() + QStringLiteral("/nested")),
+                            {QUrl::fromLocalFile(QStringLiteral("/")), rootA}), rootA),
+           "current-drive scope selects deepest containing root");
+    verify(sameLocation(SearchUiController::searchContextUrl(kThisPcUrl, rootB), rootB),
+           "This PC search context falls back to home");
+
+    const QUrl activeSearch = makeSearchLocation(QStringLiteral("needle"), 0, rootA, 0, 0, 0);
+    state.type = 2;
+    state.date = 1;
+    state.size = 4;
+    const QUrl synced = ui.locationWithSyncedFilters({activeSearch, &state, &backend});
+    verify(searchBaseFromUrl(synced) == rootA
+               && searchIntParameter(synced, QStringLiteral("type"), 0) == 2
+               && searchIntParameter(synced, QStringLiteral("date"), 0) == 1
+               && searchIntParameter(synced, QStringLiteral("size"), 0) == 4,
+           "filter synchronization preserves search identity and updates filters");
+    verify(ui.rootsForLocation(activeSearch, state, {rootA, rootB}, rootB)
+               == QList<QUrl>{rootA},
+           "folder search URL maps to its encoded root");
+
+    ui.updateProgress(backend);
+    ui.updateStatus(backend, 7, 0);
+    verify(progressBar.value() == backend.progressPercent(),
+           "progress widget mirrors SearchController");
+    verify(status.text() == backend.statusText(7, 0),
+           "status widget mirrors SearchController text");
+
+    PaneSearchState other;
+    other.loadLocation(rootB);
+    other.text = QStringLiteral("other pane");
+    ui.updateControls({rootB, &other, &backend});
+    verify(edit.text() == QStringLiteral("other pane") && other.type == 0,
+           "active-pane change restores independent Search UI state");
+}
+
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
@@ -84,6 +184,7 @@ int main(int argc, char **argv)
         file.write("search test\n");
     }
     const QUrl rootA = QUrl::fromLocalFile(a), rootB = QUrl::fromLocalFile(b);
+    testSearchUiContract(rootA, rootB);
     const QSet<QString> expectedA{a + "/needle.txt", a + "/nested/needle-deep.txt", a + "/needle-folder"};
     SearchController search;
     QSignalSpy finished(&search, &SearchController::finished);
