@@ -478,7 +478,7 @@ int main(int argc, char **argv)
     ThisPcWindow window(QUrl::fromLocalFile(leftDir), false);
     window.resize(1200, 700);
     window.show();
-    verify(QTest::qWaitFor([&] { return !window.m_directoryJob; }, 5000),
+    verify(QTest::qWaitFor([&] { return !window.m_primaryPane->listingJob(); }, 5000),
            "primary pane loads");
     window.m_previewAction->setChecked(true);
     verify(window.m_previewPane->isVisible(), "Alt+P action exposes the shared preview pane");

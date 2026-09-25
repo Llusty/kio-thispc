@@ -37,7 +37,7 @@ int main(int argc, char **argv)
     window.activateWindow();
     QTest::qWait(150);
     window.m_refreshTimer.stop();
-    if (window.m_directoryJob) { window.m_directoryJob->kill(); window.m_directoryJob = nullptr; }
+    window.m_primaryPane->cancelListing();
 
     window.m_directoryList->clear();
     addFixtureItem(window.m_directoryList, QUrl::fromLocalFile(leftPath + "/left.txt"), "left.txt");

@@ -314,6 +314,7 @@ int main(int argc, char **argv)
 
     // Test Search location blocking in compareSplitPanes
     window.m_currentUrl = makeSearchLocation(QStringLiteral("query"), 0, leftDir, 0, 0, 0);
+    window.m_primaryPane->setCurrentUrl(window.m_currentUrl);
     // In search mode, compareSplitPanes must show information dialog and not crash
     QTimer::singleShot(50, [] {
         if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
@@ -325,6 +326,7 @@ int main(int argc, char **argv)
 
     // Test thispc:/ location blocking in compareSplitPanes
     window.m_currentUrl = QUrl(QStringLiteral("thispc:/"));
+    window.m_primaryPane->setCurrentUrl(window.m_currentUrl);
     QTimer::singleShot(50, [] {
         if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
             box->accept();
@@ -1228,5 +1230,4 @@ int main(int argc, char **argv)
     qInfo("PASS: %d Split View pane comparison, sync plan, and executor assertions", checks);
     return 0;
 }
-
 

@@ -457,7 +457,7 @@ int main(int argc, char **argv)
                             QDateTime::currentSecsSinceEpoch()};
         FileInfo datedUnknown{QStringLiteral("unknown.txt"), QStringLiteral("text/plain"), QString(),
                               childUrlWithName(localA, QStringLiteral("unknown.txt")), false, 1, 0};
-        window.m_pendingFiles = {datedUnknown, datedToday};
+        window.m_primaryPane->setFiles({datedUnknown, datedToday});
         window.setGroupMode(DirectoryViewSettings::GroupByDate);
         verify(window.m_groupMode == DirectoryViewSettings::GroupByDate
                    && window.m_directoryList->isCategorized()
@@ -479,7 +479,7 @@ int main(int argc, char **argv)
         sizedLarge.name = QStringLiteral("large.txt");
         sizedLarge.url = childUrlWithName(localA, sizedLarge.name);
         sizedLarge.size = 1024;
-        window.m_pendingFiles = {sizedLarge, sizedSmall};
+        window.m_primaryPane->setFiles({sizedLarge, sizedSmall});
         window.setGroupMode(DirectoryViewSettings::GroupBySize);
         verify(window.m_directoryList->isCategorized()
                    && window.m_directoryList->item(0).data(
@@ -497,7 +497,7 @@ int main(int argc, char **argv)
                "Size categorization retains file source URL and non-file Details header");
         window.m_directoryList->setRowSelected(0, true);
         window.m_directoryDetails->topLevelItem(1)->setSelected(true);
-        window.m_pendingFiles[0].size = 512;
+        window.m_primaryPane->mutableFiles()[0].size = 512;
         window.renderDirectoryItems();
         verify(window.m_directoryList->item(0).data(
                    KCategorizedSortFilterProxyModel::CategorySortRole).toString()

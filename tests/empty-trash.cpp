@@ -21,7 +21,7 @@ int main(int argc, char **argv)
     window.show();
     window.setSplitViewEnabled(true);
     app.processEvents();
-    if (window.m_directoryJob) { window.m_directoryJob->kill(); window.m_directoryJob = nullptr; }
+    window.m_primaryPane->cancelListing();
     if (window.m_splitPane->m_job) { window.m_splitPane->m_job->kill(); window.m_splitPane->m_job = nullptr; }
     if (window.m_driveJob) { window.m_driveJob->kill(); window.m_driveJob = nullptr; }
     using Pane = ThisPcWindow::PaneId;
@@ -30,6 +30,7 @@ int main(int argc, char **argv)
     auto place = [&](const QUrl &left, const QUrl &right) {
         // Seed view locations without listing any real trash contents.
         window.m_currentUrl = left;
+        window.m_primaryPane->setCurrentUrl(left);
         window.m_splitPane->m_currentUrl = right;
         window.m_contentStack->setCurrentWidget(window.m_directoryPage);
         window.m_splitPane->m_contentStack->setCurrentWidget(window.m_splitPane->m_directoryPage);
@@ -238,7 +239,7 @@ int main(int argc, char **argv)
     window.loadDirectory(local);
     window.statusBar()->showMessage("Trash emptied", 4000);
     window.refreshTrashViews();
-    verify(QTest::qWaitFor([&] { return !window.m_directoryJob; }, 10000),
+    verify(QTest::qWaitFor([&] { return !window.m_primaryPane->listingJob(); }, 10000),
            "real disposable directory listing completes");
     verify(window.statusBar()->currentMessage() == "Trash emptied",
            "asynchronous refresh preserves the operation result message");

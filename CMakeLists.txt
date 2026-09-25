@@ -65,6 +65,8 @@ add_executable(thispc-view
     src/appwidgets.h
     src/paneadapter.cpp
     src/paneadapter.h
+    src/primarybrowserpane.cpp
+    src/primarybrowserpane.h
     src/panecontext.h
     src/selectionmenucontroller.cpp
     src/selectionmenucontroller.h
@@ -116,6 +118,8 @@ add_executable(thispc-view-stage3c1-test EXCLUDE_FROM_ALL
     src/appwidgets.h
     src/paneadapter.cpp
     src/paneadapter.h
+    src/primarybrowserpane.cpp
+    src/primarybrowserpane.h
     src/panecontext.h
     src/selectionmenucontroller.cpp
     src/selectionmenucontroller.h

@@ -12,6 +12,7 @@
 #include "applicationstyle.h"
 #include "appwidgets.h"
 #include "paneadapter.h"
+#include "primarybrowserpane.h"
 #include "selectionmenucontroller.h"
 #include "tabcontroller.h"
 #include <KIO/CopyJob>
@@ -318,7 +319,8 @@ public:
     void setActivePane(PaneId pane)
     {
         m_activePane = m_paneAdapter ? m_paneAdapter->availablePane(pane) : PaneId::Primary;
-        for (QWidget *widget : {m_primaryPane, static_cast<QWidget *>(m_splitPane)}) {
+        for (QWidget *widget : {static_cast<QWidget *>(m_primaryPane),
+                                static_cast<QWidget *>(m_splitPane)}) {
             if (!widget) continue;
             const bool active = widget == (m_activePane == PaneId::Split
                 ? static_cast<QWidget *>(m_splitPane) : m_primaryPane);
@@ -557,7 +559,7 @@ public:
         m_searchController = new SearchController(this);
         connect(m_searchController, &SearchController::resultsChanged, this, [this] {
             if (isSearchLocation(m_currentUrl)) {
-                m_pendingFiles = m_searchController->files();
+                m_primaryPane->setFiles(m_searchController->files());
                 renderDirectoryItems();
             }
         });
@@ -1883,14 +1885,8 @@ private:
         m_contentSplitter->setChildrenCollapsible(false);
         m_contentSplitter->setHandleWidth(1);
 
-        m_primaryPane = new QWidget(m_contentSplitter);
-        m_primaryPane->setObjectName(
-            QStringLiteral("primaryBrowserPane"));
-        m_primaryPane->setProperty("active", true);
-
-        auto *primaryLayout = new QVBoxLayout(m_primaryPane);
-        primaryLayout->setContentsMargins(0, 0, 0, 0);
-        primaryLayout->setSpacing(0);
+        m_primaryPane = new PrimaryBrowserPane(m_contentSplitter);
+        auto *primaryLayout = qobject_cast<QVBoxLayout *>(m_primaryPane->layout());
 
         auto *primaryAddressHeader = new QFrame(m_primaryPane);
         primaryAddressHeader->setObjectName(
@@ -1902,7 +1898,7 @@ private:
         primaryAddressLayout->addWidget(m_addressStack, 1);
         primaryLayout->addWidget(primaryAddressHeader);
 
-        m_contentStack = new QStackedWidget(m_primaryPane);
+        m_contentStack = m_primaryPane->contentStack();
         primaryLayout->addWidget(m_contentStack, 1);
         m_contentSplitter->addWidget(m_primaryPane);
 
@@ -1915,7 +1911,7 @@ private:
         m_paneAdapter = std::make_unique<PaneAdapter>(
             PaneBinding{
                 [] { return true; },
-                [this] { return m_currentUrl; },
+                [this] { return m_primaryPane->currentUrl(); },
                 [this] { return m_contentStack && m_contentStack->currentWidget() == m_directoryPage; },
                 [this] { return m_directoryViewMode; },
                 [this] { return m_directoryList; },
@@ -2504,6 +2500,8 @@ private:
 
         m_directoryPage = page;
         m_contentStack->addWidget(m_directoryPage);
+        m_primaryPane->bindDirectoryViews(
+            m_directoryList, m_directoryDetails, m_directoryTitle, m_directoryStatus);
 
         applyDirectoryViewMode(false);
     }
@@ -2711,7 +2709,7 @@ private:
         if (m_searchProgressFrame) m_searchProgressFrame->hide();
         updateSearchControls();
         if (userRequested) {
-            m_pendingFiles = m_searchController->files();
+            m_primaryPane->setFiles(m_searchController->files());
             renderDirectoryItems();
             statusBar()->showMessage(trLocal("Wyszukiwanie anulowane", "Search canceled"), 4000);
         }
@@ -2721,7 +2719,7 @@ private:
     {
         cancelSearch(PaneId::Primary, false);
 
-        m_pendingFiles.clear();
+        m_primaryPane->mutableFiles().clear();
         m_directoryList->clear();
         m_directoryDetails->clear();
         m_directoryList->setDropDirectory(QUrl());
@@ -3547,6 +3545,7 @@ private:
         }
 
         m_currentUrl = url;
+        m_primaryPane->setCurrentUrl(url);
         m_directoryViewMode = DirectoryViewSettings::viewMode(
             url,
             m_directoryViewMode);
@@ -3566,10 +3565,7 @@ private:
 
         m_primarySearch.loadLocation(url);
 
-        if (m_directoryJob) {
-            m_directoryJob->kill();
-            m_directoryJob = nullptr;
-        }
+        m_primaryPane->cancelListing();
 
         if (sameLocation(url, kThisPcUrl)) {
             m_contentStack->setCurrentWidget(m_homePage);
@@ -3604,78 +3600,10 @@ private:
 
     void loadDirectory(const QUrl &url, bool preserveStatusMessage = false)
     {
-        m_pendingFiles.clear();
-        m_directoryList->clear();
-        m_directoryDetails->clear();
-        m_directoryList->setDropDirectory(url);
-        m_directoryDetails->setDropDirectory(url);
-
-        m_directoryTitle->setText(displayNameForLocation(url));
-        m_directoryStatus->setText(
-            trLocal("Wczytywanie…", "Loading…"));
-
-        KIO::ListJob *job = KIO::listDir(
-            url,
-            KIO::HideProgressInfo);
-        job->setUiDelegate(nullptr);
-        job->setProperty("thispcPreserveStatusMessage", preserveStatusMessage);
-        m_directoryJob = job;
-
-        connect(
-            job,
-            &KIO::ListJob::entries,
-            this,
-            [this, url, job](
-                KIO::Job *,
-                const KIO::UDSEntryList &entries) {
-            if (m_directoryJob != job) {
-                return;
-            }
-
-            for (const KIO::UDSEntry &entry : entries) {
-                const QString rawName =
-                    entry.stringValue(
-                        KIO::UDSEntry::UDS_NAME);
-                const FileInfo file =
-                    fileInfoForEntry(url, entry);
-
-                if (file.name.isEmpty()
-                    || rawName == QStringLiteral(".")
-                    || rawName == QStringLiteral("..")
-                    || (!m_showHiddenFiles
-                        && rawName.startsWith(QLatin1Char('.')))) {
-                    continue;
-                }
-
-                m_pendingFiles.push_back(file);
-            }
-        });
-
-        connect(
-            job,
-            &KJob::result,
-            this,
-            [this, job](KJob *) {
-            if (m_directoryJob != job) {
-                return;
-            }
-
-            m_directoryJob = nullptr;
-
-            if (job->error()) {
-                m_directoryStatus->setText(
-                    trLocal(
-                        "Nie udało się otworzyć tej lokalizacji.",
-                        "Could not open this location."));
-
-                statusBar()->showMessage(
-                    job->errorString(),
-                    6000);
-                return;
-            }
-
-            renderDirectoryItems(job->property("thispcPreserveStatusMessage").toBool());
-        });
+        m_primaryPane->loadDirectory(
+            url, preserveStatusMessage, m_showHiddenFiles,
+            [this](bool preserve) { renderDirectoryItems(preserve); },
+            [this](const QString &error) { statusBar()->showMessage(error, 6000); });
     }
 
     bool fileMatchesSearch(const FileInfo &file) const
@@ -3696,232 +3624,42 @@ private:
         const FileInfo &file,
         QMimeDatabase &mimeDatabase)
     {
-        const QMimeType mime =
-            resolvedMimeType(file, mimeDatabase);
-
-        QString iconName = file.iconName;
-
-        // UDS_ICON_NAME is often empty on plain/local mounts. MIME-based icons
-        // give PNG/PDF/archive/office/etc files the same type-specific look as
-        // a normal KDE file manager.
-        if (iconName.isEmpty()
-            || iconName == QStringLiteral("text-x-generic")) {
-            if (mime.isValid() && !mime.isDefault()) {
-                iconName = mime.iconName();
-                if (iconName.isEmpty()) {
-                    iconName = mime.genericIconName();
-                }
-            }
-        }
-
-        if (iconName.isEmpty()) {
-            iconName =
-                file.isDir
-                    ? QStringLiteral("folder")
-                    : QStringLiteral("unknown");
-        }
-
-        QIcon fallback = themedIcon(
-            iconName,
-            file.isDir
-                ? QStringLiteral("folder")
-                : QStringLiteral("text-x-generic"));
-
-        const QString mimeName =
-            mime.isValid() ? mime.name() : QString();
-
-        if (!m_thumbnailsEnabled
-            || file.isDir
-            || !file.url.isLocalFile()
-            || !mimeName.startsWith(
-                QStringLiteral("image/"))) {
-            return fallback;
-        }
-
-        constexpr qint64 maxThumbnailFileSize =
-            64LL * 1024LL * 1024LL;
-
-        if (file.size > maxThumbnailFileSize) {
-            return fallback;
-        }
-
-        const QString path = file.url.toLocalFile();
-        const QString cacheKey =
-            QStringLiteral("%1|%2|%3")
-                .arg(path)
-                .arg(file.modificationTime)
-                .arg(file.size);
-
-        const auto cached =
-            m_thumbnailCache.constFind(cacheKey);
-        if (cached != m_thumbnailCache.constEnd()) {
-            return cached.value();
-        }
-
-        QImageReader reader(path);
-        reader.setAutoTransform(true);
-
-        const QSize sourceSize = reader.size();
-        const QSize targetSize(128, 128);
-        if (sourceSize.isValid()
-            && (sourceSize.width() > targetSize.width()
-                || sourceSize.height() > targetSize.height())) {
-            reader.setScaledSize(
-                sourceSize.scaled(
-                    targetSize,
-                    Qt::KeepAspectRatio));
-        }
-
-        const QImage image = reader.read();
-        if (image.isNull()) {
-            return fallback;
-        }
-
-        QPixmap pixmap = QPixmap::fromImage(image);
-        pixmap = pixmap.scaled(
-            targetSize,
-            Qt::KeepAspectRatio,
-            Qt::SmoothTransformation);
-
-        QIcon icon(pixmap);
-        m_thumbnailCache.insert(cacheKey, icon);
-        return icon;
+        return m_primaryPane->iconForFile(file, mimeDatabase, m_thumbnailsEnabled);
     }
 
     void renderDirectoryItems(bool preserveStatusMessage = false)
     {
-        const auto selectedListUrls = selectedDirectoryListUrls(m_directoryList);
-        const auto selectedDetailsUrls = selectedDirectoryDetailsUrls(m_directoryDetails);
-        sortDirectoryFiles(
-            m_pendingFiles,
-            m_sortKey,
-            m_sortAscending,
-            [](const FileInfo &file) {
-                return file.mimeType;
-            });
-
-        m_directoryList->clear();
-        m_directoryDetails->clear();
-
-        QMimeDatabase mimeDb;
-        int visibleCount = 0;
-
-        struct RenderedFile {
-            FileInfo file;
-            QString typeText;
-            QString categoryDisplay;
-            QString categorySort;
+        PrimaryBrowserPane::RenderOptions options;
+        options.sortKey = m_sortKey;
+        options.sortAscending = m_sortAscending;
+        options.groupMode = m_groupMode;
+        options.thumbnailsEnabled = m_thumbnailsEnabled;
+        options.acceptsFile = [this](const FileInfo &file, QMimeDatabase &mimeDb) {
+            if (!fileMatchesSearch(file)) return false;
+            return !isSearchLocation(m_currentUrl)
+                || SearchController::matchesFile(
+                    file, mimeDb,
+                    {m_primarySearch.type, m_primarySearch.date, m_primarySearch.size});
         };
-        QList<RenderedFile> rendered;
-
-        for (const FileInfo &file : std::as_const(m_pendingFiles)) {
-            if (!fileMatchesSearch(file)) {
-                continue;
-            }
-
-            if (isSearchLocation(m_currentUrl)
-                && !SearchController::matchesFile(
-                    file,
-                    mimeDb,
-                    {m_primarySearch.type, m_primarySearch.date, m_primarySearch.size})) {
-                continue;
-            }
-
-            ++visibleCount;
-
-            const QString typeText = fileTypeLabel(file, mimeDb);
-            if (m_groupMode == DirectoryViewSettings::GroupByDate) {
-                const auto category = directory_view_detail::dateCategoryForModification(
-                    file.modificationTime);
-                rendered.push_back({file, typeText, category.display, category.sortKey});
-            } else if (m_groupMode == DirectoryViewSettings::GroupBySize) {
-                const auto category = directory_view_detail::sizeCategoryForFile(file);
-                rendered.push_back({file, typeText, category.display, category.sortKey});
-            } else {
-                rendered.push_back({file, typeText,
-                    file.isDir ? trLocal("Foldery", "Folders") : typeText,
-                    file.isDir ? QString() : typeText.toCaseFolded()});
-            }
-        }
-
-        if (m_groupMode != DirectoryViewSettings::NoGrouping) {
-            std::stable_sort(rendered.begin(), rendered.end(),
-                [](const RenderedFile &left, const RenderedFile &right) {
-                    return left.categorySort.localeAwareCompare(right.categorySort) < 0;
-                });
-        }
-        m_directoryList->setCategorized(
-            m_groupMode != DirectoryViewSettings::NoGrouping);
-
-        QString previousCategory;
-        bool firstCategory = true;
-        for (const RenderedFile &renderedFile : std::as_const(rendered)) {
-            const FileInfo &file = renderedFile.file;
-            if (m_groupMode != DirectoryViewSettings::NoGrouping
-                && (firstCategory || renderedFile.categorySort != previousCategory)) {
-                addDirectoryGroupHeader(m_directoryDetails, renderedFile.categoryDisplay);
-                previousCategory = renderedFile.categorySort;
-                firstCategory = false;
-            }
-
-            const QIcon icon =
-                iconForFile(file, mimeDb);
-            const QString typeText = renderedFile.typeText;
-            const QString sizeText =
-                formatFileSize(file.size, file.isDir);
-            const QString modifiedText =
-                formatModificationTime(
-                    file.modificationTime);
-            const QString locationText =
-                parentLocationForDisplay(
-                    file.url);
-
-            addDirectoryFileItems(
-                m_directoryList,
-                m_directoryDetails,
-                file,
-                icon,
-                typeText,
-                sizeText,
-                modifiedText,
-                {locationText},
-                m_groupMode != DirectoryViewSettings::NoGrouping
-                    ? renderedFile.categoryDisplay : QString(),
-                m_groupMode != DirectoryViewSettings::NoGrouping
-                    ? QVariant(renderedFile.categorySort) : QVariant());
-        }
-        restoreDirectorySelections(m_directoryList, m_directoryDetails,
-                                   selectedListUrls, selectedDetailsUrls);
-
-        const int count = m_pendingFiles.size();
-
-        if (isSearchLocation(m_currentUrl)) {
-            m_searchVisibleCount =
-                visibleCount;
-            updateSearchStatusLabel();
-        } else if (m_primarySearch.text.trimmed().isEmpty()) {
-            m_directoryStatus->setText(
-                isPolish()
+        options.updateStatus = [this](int visibleCount, int count) {
+            if (isSearchLocation(m_currentUrl)) {
+                m_searchVisibleCount = visibleCount;
+                updateSearchStatusLabel();
+            } else if (m_primarySearch.text.trimmed().isEmpty()) {
+                m_directoryStatus->setText(isPolish()
                     ? QStringLiteral("%1 elementów").arg(count)
                     : QStringLiteral("%1 items").arg(count));
-        } else {
-            m_directoryStatus->setText(
-                isPolish()
-                    ? QStringLiteral("%1 z %2 elementów")
-                        .arg(visibleCount)
-                        .arg(count)
-                    : QStringLiteral("%1 of %2 items")
-                        .arg(visibleCount)
-                        .arg(count));
-        }
-
+            } else {
+                m_directoryStatus->setText(isPolish()
+                    ? QStringLiteral("%1 z %2 elementów").arg(visibleCount).arg(count)
+                    : QStringLiteral("%1 of %2 items").arg(visibleCount).arg(count));
+            }
+        };
+        m_primaryPane->renderDirectoryItems(options);
         if (m_activePane == PaneId::Primary && !preserveStatusMessage) {
-            statusBar()->showMessage(
-                isSearchLocation(m_currentUrl)
-                    ? displayNameForLocation(m_currentUrl)
-                    : urlForDisplay(m_currentUrl));
+            statusBar()->showMessage(isSearchLocation(m_currentUrl)
+                ? displayNameForLocation(m_currentUrl) : urlForDisplay(m_currentUrl));
         }
-
         updateFileActionStates();
     }
 
@@ -4999,10 +4737,10 @@ private:
         // switch or navigation. Refresh only views still displaying Trash.
         if (m_currentUrl.scheme() == QStringLiteral("trash")) {
             refreshPane(PaneId::Primary);
-            if (m_directoryJob) {
+            if (m_primaryPane->listingJob()) {
                 // The listing completes later; keep the operation result
                 // visible instead of immediately replacing it with trash:/.
-                m_directoryJob->setProperty("thispcPreserveStatusMessage", true);
+                m_primaryPane->listingJob()->setProperty("thispcPreserveStatusMessage", true);
             }
         }
         if (m_splitPane && m_splitPane->isVisible()
@@ -5151,7 +4889,7 @@ private:
             enabled);
 
         if (!enabled) {
-            m_thumbnailCache.clear();
+            m_primaryPane->clearThumbnailCache();
         }
 
         if (m_contentStack
@@ -6094,7 +5832,7 @@ private:
     PreviewPane *m_previewPane = nullptr;
     QuickLookOverlay *m_quickLook = nullptr;
     QByteArray m_splitterState;
-    QWidget *m_primaryPane = nullptr;
+    PrimaryBrowserPane *m_primaryPane = nullptr;
     SplitBrowserPane *m_splitPane = nullptr;
     QStackedWidget *m_contentStack = nullptr;
 
@@ -6129,12 +5867,9 @@ private:
 
     QList<DriveInfo> m_drives;
     QList<DriveInfo> m_pendingDrives;
-    QList<FileInfo> m_pendingFiles;
-    QHash<QString, QIcon> m_thumbnailCache;
 
     QTimer m_refreshTimer;
     QPointer<KIO::ListJob> m_driveJob;
-    QPointer<KIO::ListJob> m_directoryJob;
 
     FileActions *m_fileActions = nullptr;
     SelectionMenuController m_selectionMenuController{this};

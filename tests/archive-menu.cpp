@@ -37,7 +37,7 @@ int main(int argc, char **argv)
     app.processEvents();
     window.m_refreshTimer.stop();
     auto stopListings = [&] {
-        if (window.m_directoryJob) { window.m_directoryJob->kill(); window.m_directoryJob = nullptr; }
+        window.m_primaryPane->cancelListing();
         if (window.m_splitPane->m_job) { window.m_splitPane->m_job->kill(); window.m_splitPane->m_job = nullptr; }
         if (window.m_driveJob) { window.m_driveJob->kill(); window.m_driveJob = nullptr; }
     };
@@ -59,6 +59,7 @@ int main(int argc, char **argv)
     };
     auto place = [&](Pane pane, bool searching, const QUrl &clicked = QUrl()) {
         window.m_currentUrl = pane == Pane::Primary ? (searching ? search : local) : other;
+        window.m_primaryPane->setCurrentUrl(window.m_currentUrl);
         window.m_splitPane->m_currentUrl = pane == Pane::Split ? (searching ? search : local) : other;
         window.m_contentStack->setCurrentWidget(window.m_directoryPage);
         window.m_splitPane->m_contentStack->setCurrentWidget(window.m_splitPane->m_directoryPage);
@@ -106,6 +107,7 @@ int main(int argc, char **argv)
             // The nested menu must preserve the snapshot despite focus/navigation.
             window.setActivePane(pane == Pane::Primary ? Pane::Split : Pane::Primary);
             window.m_currentUrl = other;
+            window.m_primaryPane->setCurrentUrl(other);
             window.m_splitPane->m_currentUrl = other;
             rootMenu->setActiveAction(extract->menuAction());
             QTest::keyClick(rootMenu, Qt::Key_Right);
@@ -216,9 +218,10 @@ int main(int argc, char **argv)
     verify(QFile::link(sourceDir, linkDir), "visible directory alias fixture");
     for (int combination = 0; combination < 5; ++combination) {
         window.m_currentUrl = combination == 0 || combination == 2 ? local : other;
+        window.m_primaryPane->setCurrentUrl(window.m_currentUrl);
         window.m_splitPane->m_currentUrl = combination == 1 || combination == 2
             ? QUrl::fromLocalFile(linkDir) : other;
-        if (combination == 3) window.m_currentUrl = search;
+        if (combination == 3) { window.m_currentUrl = search; window.m_primaryPane->setCurrentUrl(search); }
         if (combination == 4) { window.m_splitPane->m_currentUrl = local; window.m_splitPane->hide(); }
         refreshedPanes.clear();
         window.refreshArchiveViews(local);
@@ -230,6 +233,7 @@ int main(int argc, char **argv)
     // refreshes after the worker/process/staging have been disposed.
     window.m_splitPane->show();
     window.m_currentUrl = search;
+    window.m_primaryPane->setCurrentUrl(search);
     window.m_splitPane->m_currentUrl = other;
     interceptArchiveJobs = false;
     refreshedPanes.clear();
@@ -243,6 +247,7 @@ int main(int argc, char **argv)
     verify(!window.m_runningArchivePaths.isEmpty() && window.m_operationManager->activeCount() == 1,
            "real archive job is tracked and guarded");
     window.m_currentUrl = other;
+    window.m_primaryPane->setCurrentUrl(other);
     window.m_splitPane->m_currentUrl = target;
     window.setActivePane(Pane::Primary);
     verify(QTest::qWaitFor([&] { return window.m_runningArchivePaths.isEmpty(); }, 20000),

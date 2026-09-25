@@ -9,7 +9,7 @@ static void verify(bool value, const char *description)
 static void settle(ThisPcWindow &window)
 {
     verify(QTest::qWaitFor([&] {
-        return !window.m_directoryJob && !window.m_splitPane->m_job;
+        return !window.m_primaryPane->listingJob() && !window.m_splitPane->m_job;
     }, 5000), "directory navigation completes");
     for (int i = 0; i < 5; ++i) {
         QApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);

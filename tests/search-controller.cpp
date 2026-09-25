@@ -273,7 +273,7 @@ int main(int argc, char **argv)
     window.navigateTo(rootB, true);
     verify(!window.m_searchController->isRunning(), "navigation cancels current search");
     verify(QTest::qWaitFor([&] { return window.m_directoryList->count() == 1; }, 5000), "new directory loads after cancellation");
-    verify(window.m_currentUrl == rootB && paths(window.m_pendingFiles) == QSet<QString>{b + "/needle-second.txt"}, "late search results do not replace ordinary directory");
+    verify(window.m_currentUrl == rootB && paths(window.m_primaryPane->files()) == QSet<QString>{b + "/needle-second.txt"}, "late search results do not replace ordinary directory");
     const QString refusedRedoStatus =
         "Files or their inode identities changed; no Undo/Redo was performed. "
         "After safely restoring the expected files, you can try again.";
@@ -282,10 +282,10 @@ int main(int argc, char **argv)
     verify(window.statusBar()->currentMessage() == refusedRedoStatus,
            "renderDirectoryItems preserves an actionable Redo refusal when requested");
     window.m_undoController->m_refreshViews(true);
-    verify(window.m_directoryJob
-               && window.m_directoryJob->property("thispcPreserveStatusMessage").toBool(),
+    verify(window.m_primaryPane->listingJob()
+               && window.m_primaryPane->listingJob()->property("thispcPreserveStatusMessage").toBool(),
            "preserving refresh attaches the marker to the correct listing job");
-    verify(QTest::qWaitFor([&] { return window.m_directoryJob == nullptr; }, 5000)
+    verify(QTest::qWaitFor([&] { return window.m_primaryPane->listingJob() == nullptr; }, 5000)
                && window.statusBar()->currentMessage() == refusedRedoStatus,
            "asynchronous directory refresh does not overwrite the Redo refusal");
     // Stage 4: shared Search controls follow the active pane, including drafts,

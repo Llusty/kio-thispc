@@ -67,6 +67,17 @@ int main(int argc, char **argv)
     ThisPcWindow window(left);
     window.show();
     window.activateWindow();
+    verify(qobject_cast<PrimaryBrowserPane *>(window.m_primaryPane) != nullptr
+               && window.m_primaryPane->objectName() == QStringLiteral("primaryBrowserPane"),
+           "PrimaryBrowserPane is created with the stable style hook");
+    verify(window.m_primaryPane->contentStack() == window.m_contentStack
+               && window.m_primaryPane->listView() == window.m_directoryList
+               && window.m_primaryPane->detailsView() == window.m_directoryDetails,
+           "PrimaryBrowserPane owns the primary content and bound directory views");
+    verify(window.m_primaryPane->currentUrl() == left,
+           "PrimaryBrowserPane initializes with the requested current URL");
+    verify(window.m_paneAdapter->context(PaneId::Primary).directory == left,
+           "PaneAdapter reads the PrimaryBrowserPane URL contract");
     window.setSplitViewEnabled(true);
     window.m_splitPane->setCurrentUrl(right);
     const auto newActions = window.m_newButton->menu()->actions();
@@ -86,10 +97,7 @@ int main(int argc, char **argv)
            "window populates the template action from native XDG");
     QTest::qWait(200);
     window.m_refreshTimer.stop();
-    if (window.m_directoryJob) {
-        window.m_directoryJob->kill();
-        window.m_directoryJob = nullptr;
-    }
+    window.m_primaryPane->cancelListing();
     if (window.m_splitPane->m_job) {
         window.m_splitPane->m_job->kill();
         window.m_splitPane->m_job = nullptr;
@@ -99,16 +107,10 @@ int main(int argc, char **argv)
     // to a pane. Exercise both panes, navigation, and the shared persistence.
     window.setDirectoryViewMode(1);
     window.navigateTo(right, false);
-    if (window.m_directoryJob) {
-        window.m_directoryJob->kill();
-        window.m_directoryJob = nullptr;
-    }
+    window.m_primaryPane->cancelListing();
     window.setDirectoryViewMode(2);
     window.navigateTo(left, false);
-    if (window.m_directoryJob) {
-        window.m_directoryJob->kill();
-        window.m_directoryJob = nullptr;
-    }
+    window.m_primaryPane->cancelListing();
     verify(window.m_directoryViewMode == 1,
            "primary navigation restores the folder view mode");
     window.m_splitPane->setCurrentUrl(right, false);
@@ -282,11 +284,11 @@ int main(int argc, char **argv)
     window.navigatePane(ThisPcWindow::PaneId::Split, splitRoute);
     verify(window.m_currentUrl == primaryRoute && window.m_splitPane->currentUrl() == splitRoute,
            "navigatePane routes Primary and Split independently");
-    if (window.m_directoryJob) { window.m_directoryJob->kill(); window.m_directoryJob = nullptr; }
+    window.m_primaryPane->cancelListing();
     if (window.m_splitPane->m_job) { window.m_splitPane->m_job->kill(); window.m_splitPane->m_job = nullptr; }
     window.navigateTo(left, false);
     window.m_splitPane->setCurrentUrl(right, false);
-    if (window.m_directoryJob) { window.m_directoryJob->kill(); window.m_directoryJob = nullptr; }
+    window.m_primaryPane->cancelListing();
     if (window.m_splitPane->m_job) { window.m_splitPane->m_job->kill(); window.m_splitPane->m_job = nullptr; }
 
     interceptPaneRefreshes = true;
@@ -303,11 +305,11 @@ int main(int argc, char **argv)
     window.openInOtherPane(ThisPcWindow::PaneId::Split, primaryRoute);
     verify(window.m_currentUrl == primaryRoute && window.m_splitPane->currentUrl() == splitRoute,
            "openInOtherPane routes Split to Primary");
-    if (window.m_directoryJob) { window.m_directoryJob->kill(); window.m_directoryJob = nullptr; }
+    window.m_primaryPane->cancelListing();
     if (window.m_splitPane->m_job) { window.m_splitPane->m_job->kill(); window.m_splitPane->m_job = nullptr; }
     window.navigateTo(left, false);
     window.m_splitPane->setCurrentUrl(right, false);
-    if (window.m_directoryJob) { window.m_directoryJob->kill(); window.m_directoryJob = nullptr; }
+    window.m_primaryPane->cancelListing();
     if (window.m_splitPane->m_job) { window.m_splitPane->m_job->kill(); window.m_splitPane->m_job = nullptr; }
 
     // Stage 1: both panes own one equally aligned address section while all
@@ -426,10 +428,7 @@ int main(int argc, char **argv)
     window.m_splitPane->setViewMode(0);
     window.m_splitPane->setSortState(0, true);
     window.m_splitPane->setCurrentUrl(right, false);
-    if (window.m_directoryJob) {
-        window.m_directoryJob->kill();
-        window.m_directoryJob = nullptr;
-    }
+    window.m_primaryPane->cancelListing();
     if (window.m_splitPane->m_job) {
         window.m_splitPane->m_job->kill();
         window.m_splitPane->m_job = nullptr;
