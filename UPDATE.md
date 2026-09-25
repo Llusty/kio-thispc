@@ -1,3 +1,35 @@
+# Aktualizacja do 0.32.0
+
+Wydanie kończy porządkowanie architektury bez dodawania nowych funkcji użytkowych. Zachowanie 0.31.0 pozostaje zachowane, wraz z poprawkami regresji wykrytymi podczas refaktoru.
+
+```bash
+cd ~/Pobrane
+tar -xzf kio-thispc-0.32.0.tar.gz
+cd kio-thispc-0.32.0
+chmod +x install.sh
+./install.sh
+```
+
+## Zakres 0.32.0
+
+- acykliczne moduły Split Sync;
+- wydzielone widgety i styl aplikacji oraz utwardzony test harness;
+- `PaneContext` / `PaneAdapter`;
+- `TabController`, `SearchUiController` i `SelectionMenuController`;
+- `PrimaryBrowserPane` z własnym stanem, listingiem KIO, renderowaniem i cache miniatur;
+- Stage 9 / wspólny `BrowserPane` przeniesiony do 0.33.
+
+## Weryfikacja 0.32.0
+
+- ręczny odbiór wszystkich etapów 0.32: PASS;
+- baseline po Stage 8: 26 zestawów / 6662 asercje PASS;
+- końcowy build: PASS;
+- focused regression: 10 zestawów / 1738 asercji PASS;
+- pełna regresja: 26 zestawów / 6662 asercje PASS;
+- `git diff --check`: PASS.
+
+---
+
 # Aktualizacja do 0.31.0
 
 Wydanie wprowadza bezpieczne, nieinwazyjne porównywanie oraz synchronizację folderów w trybie podziału okna (Split View).

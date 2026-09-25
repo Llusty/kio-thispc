@@ -1,8 +1,16 @@
 # Changelog
 
-## 0.32.0 — Architecture Cleanup (Stage 2)
+## 0.32.0 — Architecture Cleanup
 
-- Uporządkowano zależności nagłówków Split Sync: modele, executor i dialogi tworzą acykliczny graf zależności; zachowanie 0.31.0 pozostaje bez zmian.
+- Zakończono behavior-preserving cleanup architektury bez dodawania nowych funkcji użytkowych.
+- Rozdzielono Split Sync na acykliczne modele, executor i dialogi, zachowując semantykę 0.31.0.
+- Wydzielono współdzielone widgety aplikacji i arkusz stylów oraz utwardzono granice test harnessu.
+- Dodano jawny kontrakt aktywnego panelu przez `PaneContext` i `PaneAdapter`.
+- Wydzielono `TabController`, `SearchUiController` i `SelectionMenuController` z `ThisPcWindow`.
+- Wydzielono rzeczywisty widget `PrimaryBrowserPane`, który posiada stan URL, listing KIO, renderowanie i cache miniatur panelu głównego.
+- Poprawki regresji objęły hover/focus oraz crash wykryty podczas ekstrakcji; nie zmieniają deklarowanego zakresu funkcjonalnego.
+- Wspólny `BrowserPane` (Stage 9) świadomie przeniesiono do 0.33; nie jest częścią 0.32.0.
+- Finalna regresja po Stage 8: 26 zestawów testowych / 6662 asercje PASS.
 - Korekta arytmetyczna po wydaniu 0.31.0: pełna regresja obejmuje 25 zestawów i 6569 asercji (6278 wcześniejszych + 291 `split_compare`), a nie 6618. Tag i commit wydania pozostają bez zmian.
 
 ## 0.31.0 — Split View Synchronization

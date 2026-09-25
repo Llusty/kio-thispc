@@ -15,39 +15,23 @@ The goal is not to replace KDE with Windows UI. The goal is a familiar Explorer-
 - Undo/Redo;
 - rich transfer UI, native local transfer engine, previews, search, device/network integration, etc.
 
-## Current release candidate — 0.31.0
-**0.31.0 — Split View Synchronization** is functionally complete and
-has passed manual KDE/CachyOS acceptance. Stage 1 (Read-only Compare),
-Stage 2 (Sync Plan Preview) and Stage 3 (Safe Execution & Deterministic Cancel)
-are complete and verified. The source tree is being prepared as a release candidate.
+## Current release candidate — 0.32.0
+**0.32.0 — Architecture Cleanup** is complete and manually accepted. It is a
+behavior-preserving refactor with regression fixes, not a user-feature release.
 
-Accepted 0.31.0 scope:
-- Read-only pane comparison (Stage 1) for left/right Split View folders (Same, Only left, Only right, Changed);
-- Unicode/case-sensitive name matching, non-recursive direct child scan, blocked for `thispc:/` and `thispcsearch:/`;
-- Sync plan preview (Stage 2) for Left → Right and Right → Left directions (NoAction, CopyFile, UpdateFile, Conflict, Unsupported);
-- Safe asynchronous execution (Stage 3) via `LocalFileCopyJob` with zero deletions, no recursive directory sync, conflicts/unsupported untouched, and per-file atomic preflight;
-- Deterministic Cancel lifecycle eliminating counter race conditions (UI report strictly matches disk state, verified with 20,000 files cancel audit);
-- Automatic re-comparison after execution completion.
-- per-folder view mode/settings persisted by normalized URL and shared across the
-  main pane, Split View, tabs and restored sessions;
-- reorganized Explorer-like View menu with the existing working display options;
-- four icon sizes (96/64/48/32 px) with stable fixed-grid geometry;
-- Compact view with dense column layout and normal selection, activation, DnD
-  and file actions;
-- Group by Type, Date and Size in Icons/List/Details/Compact, including Search,
-  Split View, tabs and KIO-backed locations;
-- current sorting preserved inside groups, with non-file group headers kept out
-  of file actions, selection, clipboard, DnD, Preview and Quick Look;
-- Date grouping uses local-calendar buckets and midnight refresh; Size grouping
-  uses the non-recursive size supplied by KIO and has separate folder/unknown
-  categories;
-- selection-border rendering is consistent for short and expanded names;
-- a stale-hover rendering bug that looked like double selection was fixed; the
-  actual `QItemSelectionModel` had only one selected item, and manual retesting
-  confirmed normal single-select plus Ctrl/Shift multi-select behavior.
+Accepted 0.32.0 scope:
+- acyclic Split Sync models, executor and dialogs;
+- extracted application widgets/style and hardened test-harness seams;
+- explicit `PaneContext` / `PaneAdapter` contract;
+- extracted `TabController`, `SearchUiController` and `SelectionMenuController`;
+- extracted `PrimaryBrowserPane`, owning the primary URL, KIO listing, rendering
+  and thumbnail cache;
+- hover/focus/crash regression fixes found during extraction;
+- Stage 9/common `BrowserPane` deferred to 0.33.
 
-The icon-size slider and broader keyboard-navigation work remain explicitly
-outside 0.30.0 and stay on the post-release backlog.
+All stages have passed manual acceptance. The automated baseline after Stage 8
+is 26 test suites / 6662 assertions PASS. No recursive sync or other new feature
+is part of 0.32.0.
 
 User-confirmed working behavior includes:
 - navigation and address/breadcrumb controls;
@@ -148,7 +132,7 @@ thispc-view
 For Codex, prefer working directly in a Git checkout and running `./scripts/build.sh` after edits instead of repeatedly creating ZIPs.
 
 
-## Current state — 0.31.0
+## Current state — 0.32.0
 
 0.18.0 conflict handling is user-confirmed. 0.19.x adds persistent session restore
 and the stable full-name/IconMode layout. 0.20.0 adds persistent Quick Access /
@@ -199,4 +183,9 @@ and hover/selection fixes.
 
 Manual acceptance for 0.31.0 Stage 1, Stage 2 and Stage 3 has passed with 100% PASS.
 Automated regression: 25 test suites / 6569 assertions PASS (post-release arithmetic correction: 6278 + 291; release tag unchanged).
-The working tree is prepared for the 0.31.0 release.
+0.32.0 Architecture Cleanup is complete. Split Sync dependencies are acyclic;
+application widgets/style and test seams are separated; pane, tab, search and
+selection-menu responsibilities use explicit controllers/contracts; and the
+primary browser pane owns its listing/rendering state. Stage 9/common
+`BrowserPane` is deferred to 0.33. Final Stage 8 regression: 26 suites / 6662
+assertions PASS. The release adds no new user-facing features.

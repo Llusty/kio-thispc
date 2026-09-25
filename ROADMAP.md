@@ -293,12 +293,24 @@ zainstalowana i ręcznie potwierdzona przez użytkownika. Pełna regresja wydani
 
 **0.31.0 — COMPLETE**
 
-### 0.32.0 — File/folder comparison
+### 0.32.0 — Architecture Cleanup ✅ complete
+- Split Sync dependencies made acyclic;
+- application widgets/style extracted and test-harness seams hardened;
+- explicit `PaneContext` / `PaneAdapter` contract;
+- `TabController`, `SearchUiController` and `SelectionMenuController` extracted;
+- primary listing/rendering state extracted into `PrimaryBrowserPane`;
+- behavior preserved, with regression fixes only and no new user-facing features;
+- final Stage 8 baseline: **26 suites / 6662 assertions PASS**;
+- common `BrowserPane` (Stage 9) deferred to 0.33.
+
+### 0.33.0 — BrowserPane consolidation and file/folder comparison
+- common `BrowserPane` contract after the accepted 0.32 extraction;
 - external Meld/KDiff3 integration first;
 - folder difference view;
-- optional hashes for stronger comparisons.
+- optional hashes for stronger comparisons;
+- recursive sync remains outside the accepted 0.32 scope.
 
-### 0.33.0 — Drives and devices
+### 0.34.0 — Drives and devices
 - mount/unmount/eject;
 - removable media;
 - MTP;
@@ -306,23 +318,23 @@ zainstalowana i ręcznie potwierdzona przez użytkownika. Pełna regresja wydani
 - filesystem/mount details;
 - sensible SMART integration where available.
 
-### 0.34.0 — Network
+### 0.35.0 — Network
 - SMB, SFTP, FTP, WebDAV via KIO where appropriate;
 - saved remote locations;
 - network discovery where reliable.
 
-### 0.35.0 — Disk usage analyzer
+### 0.36.0 — Disk usage analyzer
 - biggest directories/files;
 - background scan;
 - top-N views;
 - optional treemap later.
 
-### 0.36.0 — Duplicates + checksums
+### 0.37.0 — Duplicates + checksums
 - SHA-256 / SHA-1 / MD5 utilities;
 - duplicate discovery by size then hash;
 - safe review before removal/move.
 
-### 0.37.0 — Advanced Properties / ACL
+### 0.38.0 — Advanced Properties / ACL
 - POSIX ACL;
 - owner/group/inode/filesystem/mount;
 - atime/mtime/ctime;
@@ -330,21 +342,21 @@ zainstalowana i ręcznie potwierdzona przez użytkownika. Pełna regresja wydani
 - EXIF/media metadata;
 - continue verified NTFS behavior rather than blanket assumptions.
 
-### 0.38.0 — Administrator fallback for failed operations
+### 0.39.0 — Administrator fallback for failed operations
 When a normal operation receives permission denied, offer a targeted `admin://` retry instead of requiring an entire window to run elevated.
 
-### 0.39.0 — Transfer queue/control
+### 0.40.0 — Transfer queue/control
 - serial vs parallel;
 - concurrency limit;
 - priorities/order;
 - queue-wide control and priorities on top of backends that genuinely support them.
 
-### 0.40.0 — Notifications + operation history
+### 0.41.0 — Notifications + operation history
 - Plasma notification for long/background completions;
 - recent operation log with source/destination/result;
 - retry where meaningful.
 
-### 0.41.0 — Plugin / Service Action architecture
+### 0.42.0 — Plugin / Service Action architecture
 Allow new context-menu actions and integrations without editing the core window source.
 
 ## Backlog bez przypisanej wersji

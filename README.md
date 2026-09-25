@@ -1,4 +1,14 @@
-# kio-thispc 0.31.0
+# kio-thispc 0.32.0
+
+## 0.32.0 — Architecture Cleanup
+
+- Behavior-preserving refactor bez nowych funkcji użytkowych.
+- Split Sync ma acykliczne moduły; widgety/styl aplikacji i granice test harnessu są wydzielone i utwardzone.
+- `PaneContext`/`PaneAdapter` zapewniają jawny kontrakt aktywnego panelu.
+- Obsługa kart, Search i menu zaznaczenia została wydzielona odpowiednio do `TabController`, `SearchUiController` i `SelectionMenuController`.
+- `PrimaryBrowserPane` posiada stan URL, listing KIO, renderowanie i cache miniatur panelu głównego.
+- Stage 9, czyli wspólny `BrowserPane`, został przeniesiony do 0.33.
+- Finalny baseline po Stage 8: 26 zestawów / 6662 asercje PASS.
 
 ## 0.31.0 — Split View Synchronization
 
@@ -234,8 +244,8 @@ Funkcje z 0.15.4 — kompaktowy popup operacji, dynamiczna wysokość, anulowani
 
 ```bash
 cd ~/Pobrane
-tar -xzf kio-thispc-0.30.0.tar.gz
-cd kio-thispc-0.30.0
+tar -xzf kio-thispc-0.32.0.tar.gz
+cd kio-thispc-0.32.0
 chmod +x install.sh
 ./install.sh
 ```

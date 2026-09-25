@@ -72,6 +72,15 @@ Only test on disposable files.
 - [ ] `TMPDIR=/tmp python3 tests/run-pane-actions.py --suites split_layout panes search` przechodzi regresję szerokości paneli.
 - [x] `git diff --check` is clean
 
+## Final release verification — 0.32.0 (2026-09-25)
+
+- [x] `./scripts/build.sh` — PASS (`thispc` and `thispc-view`).
+- [x] Focused `panes tabs search selection_menu split_layout view_settings preview quick_look split_compare actions` — 10 suites / 1738 assertions PASS.
+- [x] `TMPDIR=/tmp python3 tests/run-pane-actions.py --all` — 26 suites / 6662 assertions PASS.
+- [x] Version consistency assertions expect `v0.32.0` and pass.
+- [x] `git diff --check` — PASS.
+- [x] All 0.32 stages manually accepted; Stage 9/common `BrowserPane` deferred to 0.33.
+
 ## Last verified automated baseline — 2026-09-18
 
 - [x] `git diff --check` — PASS.
