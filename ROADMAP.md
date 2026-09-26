@@ -311,6 +311,26 @@ zainstalowana i ręcznie potwierdzona przez użytkownika. Pełna regresja wydani
 - recursive sync remains outside the accepted 0.32 scope.
 
 **UI parity/polish debt — backlog for a later 0.33 polish stage**
+- Per-folder view profiles / Apply view to subfolders: today, view mode, icon
+  size and grouping use an explicit per-URL `QSettings` entry when present,
+  otherwise they fall back to the current pane state; changing view mode or
+  icon size also updates the global default. Consequently an unconfigured
+  child can appear to inherit the parent's last state, while an explicitly
+  configured child keeps its override. This is existing explicit-default
+  fallback behavior from 0.30, not a Stage 5 regression. Change the default
+  semantics so an ordinary view change affects only the current folder, and
+  add an explicit View-menu action, "Apply this view to subfolders". The
+  propagated profile must include view mode, icon size, sort key/order and
+  grouping; include hidden items, thumbnails and full-name display only if the
+  implementation deliberately promotes those currently global options into
+  the per-folder profile. Preserve explicit child overrides, define whether
+  newly created descendants inherit a stored ancestor profile or the stable
+  default, and keep Primary/Split behavior identical. Support local and remote
+  KIO URLs without uncontrolled recursive tree scans; prefer a lazy ancestor
+  profile/rule resolved when a folder is opened, with explicit per-URL values
+  taking precedence. Add regression coverage for parent A, unconfigured child,
+  parent changed to B, and an explicit child C. This item is documentation only
+  and is not implemented yet.
 - `thispc:/` drive cards: at wide window sizes the drive icon can drift too far
   from the name, capacity information and progress bar, while the compact layout
   looks correct. Keep the icon and the text/progress block at a fixed or bounded
