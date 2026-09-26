@@ -9,6 +9,7 @@
 #include "archive-creation.h"
 #include "archive-detection.h"
 #include "archive-extraction.h"
+#include "actionstatecontroller.h"
 #include "applicationstyle.h"
 #include "appwidgets.h"
 #include "locationpresentation.h"
@@ -4414,23 +4415,41 @@ private:
 
     bool canModifyCurrentDirectory() const
     {
-        const auto context = paneContext();
-        return context.isDirectory && context.directory.isValid()
-            && !sameLocation(context.directory, kThisPcUrl)
-            && context.directory.scheme() != QStringLiteral("trash")
-            && !isSearchLocation(context.directory);
+        return ActionStateController::compute(actionStateInput(false)).canModifyCurrentDirectory;
     }
 
     bool canPasteHere() const
     {
-        if (!canModifyCurrentDirectory()) {
-            return false;
+        return ActionStateController::compute(actionStateInput(false)).canPasteHere;
+    }
+
+    ActionStateInput actionStateInput(bool includeRuntimeCapabilities = true) const
+    {
+        const PaneContext context = paneContext();
+        const QMimeData *mime = QApplication::clipboard()->mimeData();
+        const bool clipboardHasUrls = mime
+            && mime->hasUrls()
+            && !mime->urls().isEmpty();
+        const bool trashRoot = FileActions::isTrashRoot(context.directory);
+
+        ActionStateInput input;
+        input.directory = context.directory;
+        input.selection = selectedUrls();
+        input.isDirectory = context.isDirectory;
+        input.isThisPcLocation = sameLocation(context.directory, kThisPcUrl);
+        input.isSearchLocation = ::isSearchLocation(context.directory);
+        input.isTrashLocation = context.directory.scheme() == QStringLiteral("trash");
+        input.isTrashRoot = trashRoot;
+        input.clipboardHasUrls = clipboardHasUrls;
+        if (includeRuntimeCapabilities) {
+            auto &recoveryGate = BatchRenameRecoveryGate::instance();
+            recoveryGate.refresh();
+            input.recoverySafe = !recoveryGate.mutationsBlocked();
+            input.emptyTrashAvailable = trashRoot
+                && m_fileActions
+                && m_fileActions->canEmptyTrash(context.directory);
         }
-
-        const QMimeData *mime =
-            QApplication::clipboard()->mimeData();
-
-        return mime && mime->hasUrls() && !mime->urls().isEmpty();
+        return input;
     }
 
     void updateFileActionStates()
@@ -4489,68 +4508,50 @@ private:
             }
         }
 
-        const QList<QUrl> selection = selectedUrls();
-        auto &recoveryGate = BatchRenameRecoveryGate::instance();
-        recoveryGate.refresh();
-        const bool recoverySafe = !recoveryGate.mutationsBlocked();
+        const ActionAvailability state =
+            ActionStateController::compute(actionStateInput());
         updateRecoveryFencePresentation();
-        const bool hasSelection = !selection.isEmpty();
-        const bool singleSelection = selection.size() == 1;
 
-        bool allLocal = hasSelection;
-        for (const QUrl &url : selection) {
-            allLocal = allLocal && url.isLocalFile();
-        }
-
-        m_copyAction->setEnabled(hasSelection);
-        m_cutAction->setEnabled(hasSelection);
-        m_renameAction->setEnabled(recoverySafe && singleSelection);
-        m_batchRenameAction->setEnabled(recoverySafe && selection.size() >= 2 && paneContext().isDirectory);
-        if (m_propertiesAction) m_propertiesAction->setEnabled(recoverySafe && singleSelection);
-        m_trashAction->setEnabled(recoverySafe && allLocal);
+        m_copyAction->setEnabled(state.copyEnabled);
+        m_cutAction->setEnabled(state.cutEnabled);
+        m_renameAction->setEnabled(state.renameEnabled);
+        m_batchRenameAction->setEnabled(state.batchRenameEnabled);
+        if (m_propertiesAction) m_propertiesAction->setEnabled(state.propertiesEnabled);
+        m_trashAction->setEnabled(state.trashEnabled);
 
         if (m_emptyTrashAction) {
-            const QUrl directory = paneContext().directory;
-            const bool atTrashRoot = FileActions::isTrashRoot(directory);
-            m_emptyTrashAction->setVisible(atTrashRoot);
-            m_emptyTrashAction->setEnabled(
-                recoverySafe && atTrashRoot && m_fileActions
-                && m_fileActions->canEmptyTrash(directory));
+            m_emptyTrashAction->setVisible(state.emptyTrashVisible);
+            m_emptyTrashAction->setEnabled(state.emptyTrashEnabled);
         }
 
-        const bool canCreate = recoverySafe && canModifyCurrentDirectory();
-        m_newFolderAction->setEnabled(canCreate);
+        m_newFolderAction->setEnabled(state.createEnabled);
         if (m_newTextFileAction) {
-            m_newTextFileAction->setEnabled(canCreate);
+            m_newTextFileAction->setEnabled(state.createEnabled);
         }
         if (m_newMarkdownAction) {
-            m_newMarkdownAction->setEnabled(canCreate);
+            m_newMarkdownAction->setEnabled(state.createEnabled);
         }
         if (m_newEmptyFileAction) {
-            m_newEmptyFileAction->setEnabled(canCreate);
+            m_newEmptyFileAction->setEnabled(state.createEnabled);
         }
         if (m_templateMenu) {
-            m_templateMenu->menuAction()->setEnabled(canCreate);
+            m_templateMenu->menuAction()->setEnabled(state.createEnabled);
         }
         if (m_newButton) {
-            m_newButton->setEnabled(canCreate);
+            m_newButton->setEnabled(state.createEnabled);
         }
-        m_pasteAction->setEnabled(
-            recoverySafe && canPasteHere());
-
-        const bool inDirectory = paneContext().isDirectory;
+        m_pasteAction->setEnabled(state.pasteEnabled);
 
         if (m_viewButton) {
-            m_viewButton->setEnabled(inDirectory);
+            m_viewButton->setEnabled(state.viewControlsEnabled);
         }
 
         if (m_sortButton) {
-            m_sortButton->setEnabled(inDirectory);
+            m_sortButton->setEnabled(state.viewControlsEnabled);
         }
 
         if (m_openDolphinAction) {
-            m_openDolphinAction->setEnabled(
-                !isSearchLocation(paneContext().directory));
+            m_openDolphinAction->setEnabled(state.openDolphinEnabled);
         }
     }
 

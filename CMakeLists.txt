@@ -59,6 +59,8 @@ install(
 # Native "This PC" view. It reads drives from thispc:/ through KIO.
 # ---------------------------------------------------------------------------
 add_executable(thispc-view
+    src/actionstatecontroller.cpp
+    src/actionstatecontroller.h
     src/applicationstyle.cpp
     src/applicationstyle.h
     src/appwidgets.cpp
@@ -118,6 +120,8 @@ add_executable(thispc-view
 # Black-box startup/recovery integration binary. It is built from the exact
 # application sources but is neither installed nor enabled in production.
 add_executable(thispc-view-stage3c1-test EXCLUDE_FROM_ALL
+    src/actionstatecontroller.cpp
+    src/actionstatecontroller.h
     src/applicationstyle.cpp
     src/applicationstyle.h
     src/appwidgets.cpp
