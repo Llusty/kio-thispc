@@ -772,15 +772,14 @@ int main(int argc, char **argv)
                && window.m_searchEdit->placeholderText() == "Search this computer"
                && window.m_searchScopeGroup->checkedAction()->data().toInt() == 2,
            "right This PC has friendly breadcrumb and whole-computer Search scope");
-    if (window.m_driveJob) { window.m_driveJob->kill(); window.m_driveJob = nullptr; }
+    window.m_driveHomeCoordinator.cancel();
     DriveInfo fixtureDrive;
     fixtureDrive.name = "Disposable drive";
     fixtureDrive.targetUrl = right;
     fixtureDrive.usedPercent = 37;
     fixtureDrive.capacityText = "100 GiB";
     fixtureDrive.freeText = "63 GiB";
-    window.m_drives = {fixtureDrive};
-    window.rebuildDriveGrid();
+    window.m_driveHomeCoordinator.setSnapshotForTesting({fixtureDrive});
     verify(window.m_drivesGrid->count() == 1 && window.m_splitDrivesGrid->count() == 1,
            "shared drive inventory renders a card in each This PC page");
     auto *leftDrive = qobject_cast<DriveFrame *>(window.m_drivesGrid->itemAt(0)->widget());
@@ -807,11 +806,11 @@ int main(int argc, char **argv)
     verify(window.m_splitPane->currentUrl() == right, "right Back restores drive after This PC");
     window.m_forwardAction->trigger();
     verify(window.m_splitPane->currentUrl() == kThisPcUrl, "right Forward restores This PC card page");
-    if (window.m_driveJob) { window.m_driveJob->kill(); window.m_driveJob = nullptr; }
+    window.m_driveHomeCoordinator.cancel();
     window.m_refreshAction->trigger();
-    verify(window.m_driveJob && !window.m_splitPane->listingJob() && window.m_navigation.currentUrl() == left,
+    verify(window.m_driveHomeCoordinator.isLoading() && !window.m_splitPane->listingJob() && window.m_navigation.currentUrl() == left,
            "right This PC Refresh uses the existing shared drive backend");
-    window.m_driveJob->kill(); window.m_driveJob = nullptr;
+    window.m_driveHomeCoordinator.cancel();
     window.navigateTo(kThisPcUrl, true);
     window.setActivePane(Pane::Primary);
     dispatch = {};

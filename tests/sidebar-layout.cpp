@@ -138,7 +138,7 @@ static void testLongLabels()
     const QString visibleDriveName = name->fontMetrics().elidedText(
         fullName, Qt::ElideRight, name->contentsRect().width());
     verify(visibleDriveName.endsWith(QChar(0x2026)), "long drive name needs an ellipsis");
-    QLabel referenceName(visibleDriveName, driveButton);
+    QLabel referenceName(visibleDriveName);
     referenceName.setTextFormat(Qt::PlainText);
     referenceName.setFont(name->font());
     referenceName.setPalette(name->palette());
@@ -157,17 +157,24 @@ static void testLongLabels()
         files.filePath(QStringLiteral("Folder with a moderately long name for resize checks")));
     window.m_sidebar->pinQuickAccessLocation(mediumUrl);
     settle();
-    auto *medium = window.m_sidebar->m_quickAccessButtons.last();
-    verifyButtonElision(medium, true);
+    auto mediumButton = [&] {
+        for (QuickAccessSidebarButton *button :
+             std::as_const(window.m_sidebar->m_quickAccessButtons)) {
+            if (sameLocation(button->url(), mediumUrl)) return button;
+        }
+        return static_cast<QuickAccessSidebarButton *>(nullptr);
+    };
+    verify(mediumButton() != nullptr, "medium Quick Access entry exists");
+    verifyButtonElision(mediumButton(), true);
     window.m_sidebarSplitter->setSizes({480, 615});
     window.m_sidebarSplitter->splitterMoved(480, 1);
     settle();
-    verifyButtonElision(medium, false);
+    verifyButtonElision(mediumButton(), false);
     verify(settings.value("sidebar/width").toInt() == 480,
            "divider remains resizable and persists its new width with long labels present");
     window.resize(500, 430);
     settle();
-    verifyButtonElision(medium, true);
+    verifyButtonElision(mediumButton(), true);
     verify(settings.value("sidebar/width").toInt() == 480
                && window.m_sidebarScrollArea->horizontalScrollBar()->maximum() == 0,
            "window compression re-elides labels without overwriting the width preference");
@@ -220,14 +227,103 @@ static void testResizePersistenceAndRebuildScroll()
            "sidebar rebuild preserves a still-valid scroll position");
 }
 
+static DriveInfo menuTestDrive(const QString &name, const QString &fileSystem,
+                               const QString &mountPoint)
+{
+    DriveInfo drive;
+    drive.name = name;
+    drive.fileSystem = fileSystem;
+    drive.mountPoint = mountPoint;
+    drive.targetUrl = QUrl::fromLocalFile(mountPoint);
+    return drive;
+}
+
+static void testDriveMenuSurvivesSnapshotReplacement(const QString &fileSystem)
+{
+    SidebarPanel panel;
+    const DriveInfo original = menuTestDrive(
+        QStringLiteral("Original %1 drive").arg(fileSystem), fileSystem,
+        QStringLiteral("/tmp/original-%1").arg(fileSystem.toLower()));
+    const DriveInfo replacement = menuTestDrive(
+        QStringLiteral("Replacement drive"), QStringLiteral("ext4"),
+        QStringLiteral("/tmp/replacement"));
+    panel.setDrives({original});
+    auto *button = panel.m_driveSidebarButtons.first();
+    QPointer<SidebarDriveButton> originalButton(button);
+    QSignalSpy activated(&panel, &SidebarPanel::activated);
+
+    QTimer::singleShot(0, &panel, [&] {
+        verify(panel.m_activeDriveContextMenus == 1,
+               "drive menu reports an active lifecycle");
+        panel.setDrives({replacement});
+        verify(panel.m_driveSidebarButtons.first() == button
+                   && panel.m_driveRebuildPending,
+               "drive snapshot replacement is deferred while menu is open");
+        auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+        verify(menu && !menu->actions().isEmpty(),
+               "real drive context menu is open");
+        QTest::mouseClick(menu, Qt::LeftButton, Qt::NoModifier,
+                          menu->actionGeometry(menu->actions().first()).center());
+    });
+
+    QContextMenuEvent event(QContextMenuEvent::Mouse, button->rect().center(),
+                            button->mapToGlobal(button->rect().center()));
+    QApplication::sendEvent(button, &event);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    QApplication::processEvents();
+
+    verify(event.isAccepted(), "drive context menu event is accepted");
+    verify(activated.count() == 1
+               && activated.first().first().toUrl() == original.targetUrl,
+           "menu action uses the original DriveInfo value snapshot");
+    verify(originalButton.isNull(),
+           "old drive button is destroyed only after the menu closes");
+    verify(panel.m_activeDriveContextMenus == 0 && !panel.m_driveRebuildPending,
+           "menu close drains the deferred rebuild without stale callbacks");
+    verify(panel.m_driveSidebarButtons.size() == 1
+               && panel.m_driveSidebarButtons.first()->url() == replacement.targetUrl,
+           "replacement drive snapshot is published after menu lifetime");
+}
+
+static void testRepeatedDriveMenuOpenClose()
+{
+    SidebarPanel panel;
+    panel.setDrives({menuTestDrive(QStringLiteral("Local drive"),
+                                   QStringLiteral("ext4"),
+                                   QStringLiteral("/tmp/local-drive"))});
+    for (int iteration = 0; iteration < 4; ++iteration) {
+        auto *button = panel.m_driveSidebarButtons.first();
+        QTimer::singleShot(0, &panel, [] {
+            if (auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget())) {
+                menu->close();
+            }
+        });
+        QContextMenuEvent event(QContextMenuEvent::Mouse, button->rect().center(),
+                                button->mapToGlobal(button->rect().center()));
+        QApplication::sendEvent(button, &event);
+        verify(panel.m_activeDriveContextMenus == 0,
+               "repeated menu close releases lifecycle guard");
+    }
+}
+
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
     QCoreApplication::setOrganizationName("thispc-sidebar-layout-test");
     QCoreApplication::setApplicationName("sidebar-layout-test");
     app.setStyleSheet(applicationStyleSheet());
+    if (qEnvironmentVariableIsSet("THISPC_SIDEBAR_MENU_ONLY")) {
+        testDriveMenuSurvivesSnapshotReplacement(QStringLiteral("ntfs"));
+        testDriveMenuSurvivesSnapshotReplacement(QStringLiteral("ext4"));
+        testRepeatedDriveMenuOpenClose();
+        qInfo("PASS: %d sidebar drive menu assertions", checks);
+        return 0;
+    }
     testScrollableSidebar();
     testLongLabels();
     testResizePersistenceAndRebuildScroll();
+    testDriveMenuSurvivesSnapshotReplacement(QStringLiteral("ntfs"));
+    testDriveMenuSurvivesSnapshotReplacement(QStringLiteral("ext4"));
+    testRepeatedDriveMenuOpenClose();
     qInfo("PASS: %d sidebar layout assertions", checks);
 }

@@ -39,7 +39,7 @@ int main(int argc, char **argv)
     auto stopListings = [&] {
         window.m_primaryPane->cancelListing();
         window.m_splitPane->cancelListing();
-        if (window.m_driveJob) { window.m_driveJob->kill(); window.m_driveJob = nullptr; }
+        window.m_driveHomeCoordinator.cancel();
     };
     stopListings();
     interceptArchiveJobs = true;

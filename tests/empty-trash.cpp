@@ -23,7 +23,7 @@ int main(int argc, char **argv)
     app.processEvents();
     window.m_primaryPane->cancelListing();
     window.m_splitPane->cancelListing();
-    if (window.m_driveJob) { window.m_driveJob->kill(); window.m_driveJob = nullptr; }
+    window.m_driveHomeCoordinator.cancel();
     using Pane = ThisPcWindow::PaneId;
     auto *actions = window.m_fileActions;
     auto *manager = window.m_operationManager;

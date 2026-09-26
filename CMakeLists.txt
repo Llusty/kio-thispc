@@ -67,6 +67,8 @@ add_executable(thispc-view
     src/appwidgets.h
     src/directorylistingcore.cpp
     src/directorylistingcore.h
+    src/drivehomecoordinator.cpp
+    src/drivehomecoordinator.h
     src/locationpresentation.cpp
     src/locationpresentation.h
     src/navigationhistory.cpp
@@ -132,6 +134,8 @@ add_executable(thispc-view-stage3c1-test EXCLUDE_FROM_ALL
     src/appwidgets.h
     src/directorylistingcore.cpp
     src/directorylistingcore.h
+    src/drivehomecoordinator.cpp
+    src/drivehomecoordinator.h
     src/locationpresentation.cpp
     src/locationpresentation.h
     src/navigationhistory.cpp

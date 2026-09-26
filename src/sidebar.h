@@ -369,6 +369,7 @@ Q_SIGNALS:
     void openInNewWindowRequested(const QUrl &url);
     void openInSplitPaneRequested(const QUrl &url);
     void openInDolphinRequested(const QUrl &url);
+    void contextMenuActiveChanged(bool active);
 
 protected:
     void mousePressEvent(QMouseEvent *event) override
@@ -402,7 +403,14 @@ protected:
 
     void contextMenuEvent(QContextMenuEvent *event) override
     {
-        QMenu menu(this);
+        // Keep both the menu and its payload independent from this widget.
+        // A drive refresh can arrive while QMenu::exec() runs its nested event
+        // loop; SidebarPanel defers rebuilding the buttons until this scope is
+        // finished, and the value copy keeps every action on the entry that
+        // originally opened the menu.
+        const DriveInfo drive = m_drive;
+        QMenu menu;
+        Q_EMIT contextMenuActiveChanged(true);
 
         QAction *openAction = menu.addAction(
             themedIcon(QStringLiteral("folder-open")),
@@ -428,19 +436,20 @@ protected:
 
         QAction *chosen = menu.exec(event->globalPos());
         if (chosen == openAction) {
-            Q_EMIT activated(m_drive.targetUrl);
+            Q_EMIT activated(drive.targetUrl);
         } else if (chosen == newTabAction) {
-            Q_EMIT openInNewTabRequested(m_drive.targetUrl, true);
+            Q_EMIT openInNewTabRequested(drive.targetUrl, true);
         } else if (chosen == newWindowAction) {
-            Q_EMIT openInNewWindowRequested(m_drive.targetUrl);
+            Q_EMIT openInNewWindowRequested(drive.targetUrl);
         } else if (chosen == splitPaneAction) {
-            Q_EMIT openInSplitPaneRequested(m_drive.targetUrl);
+            Q_EMIT openInSplitPaneRequested(drive.targetUrl);
         } else if (chosen == openDolphinAction) {
-            Q_EMIT openInDolphinRequested(m_drive.targetUrl);
+            Q_EMIT openInDolphinRequested(drive.targetUrl);
         } else if (chosen == copyPathAction) {
-            QGuiApplication::clipboard()->setText(m_drive.mountPoint);
+            QGuiApplication::clipboard()->setText(drive.mountPoint);
         }
 
+        Q_EMIT contextMenuActiveChanged(false);
         event->accept();
     }
 
@@ -649,6 +658,16 @@ public:
     {
         const int scrollPosition = verticalScrollPosition();
         m_drives = drives;
+        if (m_activeDriveContextMenus > 0) {
+            m_driveRebuildPending = true;
+            return;
+        }
+        applyDriveRebuild(scrollPosition);
+    }
+
+    void applyDriveRebuild(int scrollPosition)
+    {
+        m_driveRebuildPending = false;
         rebuildDevices();
         rebuildQuickAccess();
         rebuildRecentLocations();
@@ -1209,6 +1228,17 @@ private:
                     this, &SidebarPanel::openInSplitPaneRequested);
             connect(button, &SidebarDriveButton::openInDolphinRequested,
                     this, &SidebarPanel::openInDolphinRequested);
+            connect(button, &SidebarDriveButton::contextMenuActiveChanged,
+                    this, [this](bool active) {
+                if (active) {
+                    ++m_activeDriveContextMenus;
+                    return;
+                }
+                m_activeDriveContextMenus = std::max(0, m_activeDriveContextMenus - 1);
+                if (m_activeDriveContextMenus == 0 && m_driveRebuildPending) {
+                    applyDriveRebuild(verticalScrollPosition());
+                }
+            });
             registerTransferDropTarget(button, drive.targetUrl);
 
             m_devicesLayout->addWidget(button);
@@ -1405,6 +1435,8 @@ private:
     QList<QuickAccessSidebarButton *> m_quickAccessButtons;
     QList<SidebarButton *> m_staticSidebarButtons;
     QList<SidebarDriveButton *> m_driveSidebarButtons;
+    int m_activeDriveContextMenus = 0;
+    bool m_driveRebuildPending = false;
     SidebarButton *m_thisPcButton = nullptr;
     QHash<QObject *, QUrl> m_transferDropTargets;
 };

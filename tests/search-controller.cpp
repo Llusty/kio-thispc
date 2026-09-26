@@ -239,7 +239,7 @@ int main(int argc, char **argv)
     ThisPcWindow window(rootA, false);
     window.show();
     window.m_refreshTimer.stop();
-    if (window.m_driveJob) { window.m_driveJob->kill(); window.m_driveJob = nullptr; }
+    window.m_driveHomeCoordinator.cancel();
     window.setSplitViewEnabled(true);
     window.m_splitPane->setCurrentUrl(rootB);
     verify(QTest::qWaitFor([&] { return window.m_splitPane->listView()->count() == 1; }, 5000), "split pane loads test directory");
@@ -374,7 +374,7 @@ int main(int argc, char **argv)
     // Current drive must use the right location, with test-only drive roots.
     DriveInfo driveA; driveA.name = "A"; driveA.targetUrl = rootA;
     DriveInfo driveB; driveB.name = "B"; driveB.targetUrl = rootB;
-    window.m_drives = {driveA, driveB};
+    window.m_driveHomeCoordinator.setSnapshotForTesting({driveA, driveB});
     split->setCurrentUrl(QUrl::fromLocalFile(a + "/nested"));
     choose(window.m_searchScopeGroup, 1);
     window.m_searchEdit->setText("needle");
@@ -459,8 +459,7 @@ int main(int argc, char **argv)
                && window.m_searchEdit->placeholderText() == "Search this computer",
            "right Search This PC breadcrumb navigates right and updates shared Search state");
     // Restrict whole-computer Search to disposable roots in this test.
-    if (window.m_driveJob) { window.m_driveJob->kill(); window.m_driveJob = nullptr; }
-    window.m_drives = {driveA, driveB};
+    window.m_driveHomeCoordinator.setSnapshotForTesting({driveA, driveB});
     window.m_searchEdit->setText("needle");
     QTest::keyClick(window.m_searchEdit, Qt::Key_Return);
     verify(searchIntParameter(split->currentUrl(), "scope", -1) == 2

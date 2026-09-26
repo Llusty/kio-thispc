@@ -12,6 +12,7 @@
 #include "actionstatecontroller.h"
 #include "applicationstyle.h"
 #include "appwidgets.h"
+#include "drivehomecoordinator.h"
 #include "locationpresentation.h"
 #include "navigationhistory.h"
 #include "paneadapter.h"
@@ -545,6 +546,22 @@ public:
             &QClipboard::dataChanged,
             this,
             &ThisPcWindow::updateFileActionStates);
+
+        connect(&m_driveHomeCoordinator, &DriveHomeCoordinator::loadingStarted, this, [this] {
+            m_homeStatus->setText(trLocal("Odświeżanie…", "Refreshing…"));
+            m_splitHomeStatus->setText(m_homeStatus->text());
+        });
+        connect(&m_driveHomeCoordinator, &DriveHomeCoordinator::drivesChanged, this,
+            [this](const QList<DriveInfo> &) {
+                rebuildDriveGrid();
+                if (m_sidebar) m_sidebar->setDrives(m_driveHomeCoordinator.drives());
+                rebuildBreadcrumbs();
+                updateSidebarCurrent();
+            });
+        connect(&m_driveHomeCoordinator, &DriveHomeCoordinator::error, this, [this](const QString &) {
+            m_homeStatus->setText(trLocal("Nie udało się odczytać thispc:/.", "Could not read thispc:/."));
+            m_splitHomeStatus->setText(m_homeStatus->text());
+        });
 
         m_refreshTimer.setInterval(15000);
         connect(
@@ -2590,7 +2607,7 @@ private:
     QList<QUrl> searchDriveRoots() const
     {
         QList<QUrl> roots;
-        for (const DriveInfo &drive : std::as_const(m_drives)) roots.push_back(drive.targetUrl);
+        for (const DriveInfo &drive : m_driveHomeCoordinator.drives()) roots.push_back(drive.targetUrl);
         return roots;
     }
 
@@ -4670,7 +4687,7 @@ private:
 
     QString displayNameForLocation(const QUrl &url) const
     {
-        return LocationPresentation::primaryTitle(url, m_drives);
+        return LocationPresentation::primaryTitle(url, m_driveHomeCoordinator.drives());
     }
 
     void rebuildBreadcrumbs()
@@ -4734,7 +4751,7 @@ private:
         if (m_navigation.currentUrl().isLocalFile()) {
             const auto segments = LocationPresentation::localPathSegments(
                 m_navigation.currentUrl(),
-                m_drives);
+                m_driveHomeCoordinator.drives());
             for (qsizetype index = 0; index < segments.size(); ++index) {
                 if (index > 0) addSeparator();
                 const auto &segment = segments.at(index);
@@ -4865,7 +4882,7 @@ private Q_SLOTS:
     void goUp()
     {
         const QUrl previousUrl = m_navigation.currentUrl();
-        const QUrl parent = m_navigation.up(m_drives);
+        const QUrl parent = m_navigation.up(m_driveHomeCoordinator.drives());
 
         if (parent.isValid()) {
             recordRecentLocation(parent);
@@ -4892,110 +4909,7 @@ private Q_SLOTS:
 
     void reloadDrives()
     {
-        if (m_driveJob) {
-            return;
-        }
-
-        m_pendingDrives.clear();
-
-        m_homeStatus->setText(trLocal("Odświeżanie…", "Refreshing…"));
-        m_splitHomeStatus->setText(m_homeStatus->text());
-
-        KIO::ListJob *job = KIO::listDir(
-            kThisPcUrl,
-            KIO::HideProgressInfo);
-
-        job->setUiDelegate(nullptr);
-        m_driveJob = job;
-
-        connect(
-            job,
-            &KIO::ListJob::entries,
-            this,
-            [this](
-                KIO::Job *,
-                const KIO::UDSEntryList &entries) {
-            for (const KIO::UDSEntry &entry : entries) {
-                const QString name =
-                    entry.stringValue(
-                        KIO::UDSEntry::UDS_DISPLAY_NAME);
-
-                if (name.isEmpty()
-                    || name == QStringLiteral(".")) {
-                    continue;
-                }
-
-                const QString target =
-                    entry.stringValue(
-                        KIO::UDSEntry::UDS_TARGET_URL);
-
-                if (target.isEmpty()) {
-                    continue;
-                }
-
-                DriveInfo drive;
-                drive.name = name;
-                drive.targetUrl = QUrl(target);
-                drive.iconName =
-                    entry.stringValue(
-                        KIO::UDSEntry::UDS_ICON_NAME);
-                drive.freeText =
-                    entry.stringValue(
-                        KIO::UDSEntry::UDS_EXTRA + 0);
-                drive.capacityText =
-                    entry.stringValue(
-                        KIO::UDSEntry::UDS_EXTRA + 1);
-                drive.usedText =
-                    entry.stringValue(
-                        KIO::UDSEntry::UDS_EXTRA + 2);
-                drive.fileSystem =
-                    entry.stringValue(
-                        KIO::UDSEntry::UDS_EXTRA + 3);
-                drive.mountPoint =
-                    entry.stringValue(
-                        KIO::UDSEntry::UDS_EXTRA + 4);
-
-                QString percentText =
-                    drive.usedText;
-                percentText.remove(
-                    QLatin1Char('%'));
-
-                bool ok = false;
-                const int percent =
-                    percentText.toInt(&ok);
-
-                drive.usedPercent =
-                    ok
-                        ? std::clamp(percent, 0, 100)
-                        : 0;
-
-                m_pendingDrives.push_back(drive);
-            }
-        });
-
-        connect(
-            job,
-            &KJob::result,
-            this,
-            [this, job](KJob *) {
-            if (m_driveJob == job) {
-                m_driveJob = nullptr;
-            }
-
-            if (job->error()) {
-                m_homeStatus->setText(trLocal("Nie udało się odczytać thispc:/.", "Could not read thispc:/."));
-                m_splitHomeStatus->setText(m_homeStatus->text());
-                return;
-            }
-
-            m_drives = m_pendingDrives;
-            rebuildDriveGrid();
-            if (m_sidebar) {
-                m_sidebar->setDrives(m_drives);
-            }
-            rebuildBreadcrumbs();
-            updateSidebarCurrent();
-        });
+        m_driveHomeCoordinator.refresh();
     }
 
 #ifdef THISPC_TEST_HARNESS
@@ -5069,14 +4983,15 @@ private:
     {
         rebuildDriveGrid(PaneId::Primary, m_homePage, m_homeStatus, m_drivesGrid);
         rebuildDriveGrid(PaneId::Split, m_splitHomePage, m_splitHomeStatus, m_splitDrivesGrid);
-        m_splitPane->setDrives(m_drives);
+        m_splitPane->setDrives(m_driveHomeCoordinator.drives());
     }
 
     void rebuildDriveGrid(PaneId pane, QWidget *homePage, QLabel *homeStatus, QGridLayout *drivesGrid)
     {
         clearLayout(drivesGrid);
 
-        if (m_drives.isEmpty()) {
+        const QList<DriveInfo> &drives = m_driveHomeCoordinator.drives();
+        if (drives.isEmpty()) {
             homeStatus->setText(
                 trLocal(
                     "Nie znaleziono dysków.",
@@ -5087,11 +5002,11 @@ private:
         homeStatus->clear();
 
         for (int i = 0;
-             i < m_drives.size();
+             i < drives.size();
              ++i) {
             DriveFrame *card =
                 makeDriveCard(
-                    m_drives.at(i),
+                    drives.at(i),
                     homePage);
 
             connect(
@@ -5230,11 +5145,8 @@ private:
     QSet<QString> m_runningArchivePaths;
     NavigationHistory m_navigation;
 
-    QList<DriveInfo> m_drives;
-    QList<DriveInfo> m_pendingDrives;
-
     QTimer m_refreshTimer;
-    QPointer<KIO::ListJob> m_driveJob;
+    DriveHomeCoordinator m_driveHomeCoordinator{this};
 
     FileActions *m_fileActions = nullptr;
     SelectionMenuController m_selectionMenuController{this};
