@@ -3607,6 +3607,7 @@ private:
 
     void activateDirectoryItem(const QModelIndex &item)
     {
+        m_directoryList->cancelEditingForActivation();
         if (!item.isValid()) {
             return;
         }
@@ -3627,6 +3628,7 @@ private:
 
     void activateDetailsItem(QTreeWidgetItem *item)
     {
+        m_directoryDetails->cancelEditingForActivation();
         if (!item || !item->data(0, directory_view_detail::FileItemRole).toBool()) {
             return;
         }

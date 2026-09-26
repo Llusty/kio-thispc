@@ -616,6 +616,17 @@ public:
 
         m_nameDelegate = new ExplorerNameDelegate(this);
         setItemDelegate(m_nameDelegate);
+        // Activation and renaming are separate operations.  In particular,
+        // QAbstractItemView's DoubleClicked edit trigger must not race the
+        // doubleClicked activation signal (which can immediately hand focus
+        // to an external application).  SelectedClicked deliberately remains:
+        // Qt delays that trigger by the double-click interval and cancels it
+        // when the click sequence becomes a double-click, which preserves the
+        // Explorer-style slow second-click rename.  Keep keyboard editing too;
+        // F2/the explicit Rename action is handled by the pane shortcuts.
+        setEditTriggers((editTriggers()
+            & ~QAbstractItemView::DoubleClicked)
+            | QAbstractItemView::SelectedClicked);
         setTextElideMode(Qt::ElideRight);
         setWordWrap(true);
         updateGridGeometry();
@@ -789,6 +800,23 @@ public:
     {
         return m_nameDelegate
             && m_nameDelegate->alwaysShowFullNames();
+    }
+
+    void cancelEditingForActivation()
+    {
+        if (state() != QAbstractItemView::EditingState) {
+            return;
+        }
+
+        QWidget *editor = focusWidget();
+        if (editor && editor != this && editor != viewport()) {
+            closeEditor(editor, QAbstractItemDelegate::RevertModelCache);
+        }
+    }
+
+    bool isEditingName() const
+    {
+        return state() == QAbstractItemView::EditingState;
     }
 
     void setDropDirectory(const QUrl &url)
@@ -1046,6 +1074,26 @@ public:
     explicit DirectoryTreeWidget(QWidget *parent = nullptr)
         : QTreeWidget(parent)
     {
+        setEditTriggers((editTriggers()
+            & ~QAbstractItemView::DoubleClicked)
+            | QAbstractItemView::SelectedClicked);
+    }
+
+    void cancelEditingForActivation()
+    {
+        if (state() != QAbstractItemView::EditingState) {
+            return;
+        }
+
+        QWidget *editor = focusWidget();
+        if (editor && editor != this && editor != viewport()) {
+            closeEditor(editor, QAbstractItemDelegate::RevertModelCache);
+        }
+    }
+
+    bool isEditingName() const
+    {
+        return state() == QAbstractItemView::EditingState;
     }
 
     void setDropDirectory(const QUrl &url)
@@ -1061,6 +1109,14 @@ Q_SIGNALS:
         Qt::KeyboardModifiers modifiers);
 
 protected:
+    bool edit(const QModelIndex &index, EditTrigger trigger, QEvent *event) override
+    {
+        if (index.column() != 0) {
+            return false;
+        }
+        return QTreeWidget::edit(index, trigger, event);
+    }
+
     void startDrag(Qt::DropActions supportedActions) override
     {
         Q_UNUSED(supportedActions)
@@ -1443,6 +1499,7 @@ inline void addDirectoryFileItems(
     auto *detailsItem = new QTreeWidgetItem(
         details,
         columns);
+    detailsItem->setFlags(detailsItem->flags() | Qt::ItemIsEditable);
 
     detailsItem->setIcon(0, icon);
     detailsItem->setData(

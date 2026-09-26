@@ -658,7 +658,207 @@ int main(int argc, char **argv)
                    && restored.m_splitPane->listView()->compactMode(),
                "session restore reapplies the split Compact folder preference");
         verify(restored.m_splitPane->iconSizeMode() == 3,
-               "session restore reapplies the split folder icon size");
+                   "session restore reapplies the split folder icon size");
+    }
+
+    // Regression: QListView's default DoubleClicked edit trigger used to open
+    // an inline editor at the same time as file activation.  A directory hid
+    // the race by replacing the model during navigation; a file left the
+    // editor visible while focus moved to the external application.
+    for (const QString &paneName : {QStringLiteral("Primary"), QStringLiteral("Split")}) {
+        QStackedWidget activationStack;
+        DirectoryListWidget activationView;
+        DirectoryTreeWidget activationDetails;
+        activationStack.addWidget(&activationView);
+        activationStack.addWidget(&activationDetails);
+        activationView.resize(800, 420);
+        activationView.setSelectionMode(QAbstractItemView::ExtendedSelection);
+        const FileInfo activationFile{
+            QStringLiteral("Roadmap.md"), QStringLiteral("text/markdown"), QString(),
+            childUrlWithName(localA, QStringLiteral("Roadmap.md")), false, 8, 0};
+        const FileInfo activationFolder{
+            QStringLiteral("Folder"), QStringLiteral("inode/directory"), QString(),
+            childUrlWithName(localA, QStringLiteral("Folder")), true, -1, 0};
+        addDirectoryFileItems(&activationView, &activationDetails, activationFile,
+                              QIcon(), QStringLiteral("Markdown"), QStringLiteral("8 B"),
+                              QStringLiteral("Today"));
+        addDirectoryFileItems(&activationView, &activationDetails, activationFolder,
+                              QIcon(), QStringLiteral("Folder"), QStringLiteral("—"),
+                              QStringLiteral("Today"));
+        QSignalSpy activations(&activationView, &DirectoryListWidget::itemDoubleClicked);
+        QModelIndex fileIndex;
+        QModelIndex folderIndex;
+        for (int row = 0; row < activationView.count(); ++row) {
+            const QModelIndex index = activationView.item(row);
+            if (index.data(directory_view_detail::DirectoryRole).toBool())
+                folderIndex = index;
+            else
+                fileIndex = index;
+        }
+        verify(fileIndex.isValid() && folderIndex.isValid(),
+               "activation fixture contains one file and one folder");
+
+        for (int mode : {0, 1, 3}) {
+            applyDirectoryViewLayout(&activationView, &activationDetails,
+                                     &activationStack, nullptr, mode);
+            activationStack.show();
+            activationView.show();
+            activationView.setFocus();
+            app.processEvents();
+            verify(!(activationView.editTriggers() & QAbstractItemView::DoubleClicked)
+                       && (activationView.editTriggers() & QAbstractItemView::SelectedClicked)
+                       && (activationView.editTriggers() & QAbstractItemView::EditKeyPressed),
+                   "double-click editing is disabled while slow-click and keyboard editing remain available");
+
+            const QPoint filePoint = activationView.visualItemRect(fileIndex).center();
+            QTest::mouseClick(activationView.viewport(), Qt::LeftButton, {}, filePoint);
+            app.processEvents();
+            verify(!activationView.isEditingName()
+                       && activationView.selectionModel()->isSelected(fileIndex),
+                   "single click selects a file without opening an editor");
+            QTest::mouseDClick(activationView.viewport(), Qt::LeftButton, {}, filePoint);
+            app.processEvents();
+            verify(activations.count() >= 1
+                       && !activationView.isEditingName(),
+                   "double-click file activates without an inline editor");
+
+            QTest::qWait(QApplication::doubleClickInterval() + 50);
+            verify(!activationView.isEditingName(),
+                   "fast double-click cancels the delayed SelectedClicked edit");
+
+            QTest::mouseClick(activationView.viewport(), Qt::LeftButton, {}, filePoint);
+            verify(QTest::qWaitFor(
+                       [&] { return activationView.isEditingName(); },
+                       QApplication::doubleClickInterval() + 250),
+                   "slow second click on a selected file opens the inline editor");
+            activationView.cancelEditingForActivation();
+            app.processEvents();
+            verify(!activationView.isEditingName(),
+                   "activation cancellation closes a slow-click editor");
+
+            activationView.edit(fileIndex);
+            app.processEvents();
+            verify(activationView.isEditingName(),
+                   "explicit keyboard/action rename still opens the inline editor");
+            activationView.cancelEditingForActivation();
+            app.processEvents();
+
+            const int beforeFolderActivation = activations.count();
+            QMetaObject::invokeMethod(
+                &activationView, "doubleClicked", Qt::DirectConnection,
+                Q_ARG(QModelIndex, folderIndex));
+            app.processEvents();
+            verify(activations.count() == beforeFolderActivation + 1
+                       && !activationView.isEditingName(),
+                   "double-click folder activates without an inline editor");
+
+            for (int repeat = 0; repeat < 3; ++repeat) {
+                QTest::mouseDClick(activationView.viewport(), Qt::LeftButton, {}, filePoint);
+                app.processEvents();
+            }
+            QTest::qWait(QApplication::doubleClickInterval() + 50);
+            verify(!activationView.isEditingName()
+                       && activationView.currentIndex().isValid()
+                       && activationView.selectionModel()->isSelected(
+                           activationView.currentIndex()),
+                   "repeated double-clicks leave no editor or stale current selection");
+
+            QTest::mouseClick(activationView.viewport(), Qt::LeftButton, {}, filePoint);
+            verify(QTest::qWaitFor(
+                       [&] { return activationView.isEditingName(); },
+                       QApplication::doubleClickInterval() + 250),
+                   "slow second click still renames after repeated fast double-clicks");
+            activationView.cancelEditingForActivation();
+            app.processEvents();
+        }
+
+        applyDirectoryViewLayout(&activationView, &activationDetails,
+                                 &activationStack, nullptr, 2);
+        activationDetails.resize(800, 420);
+        activationDetails.setSelectionMode(QAbstractItemView::ExtendedSelection);
+        activationDetails.show();
+        activationDetails.setFocus();
+        app.processEvents();
+        auto *detailsFileItem = activationDetails.topLevelItem(0);
+        auto *detailsFolderItem = activationDetails.topLevelItem(1);
+        const QModelIndex detailsFileName = activationDetails.indexFromItem(detailsFileItem, 0);
+        const QPoint detailsFile = activationDetails.visualItemRect(detailsFileItem).center();
+        QSignalSpy detailsActivations(&activationDetails, &QTreeWidget::itemDoubleClicked);
+        QObject::connect(&activationDetails, &QTreeWidget::itemDoubleClicked,
+                         &activationDetails,
+                         [&activationDetails](QTreeWidgetItem *, int) {
+                             activationDetails.cancelEditingForActivation();
+                         });
+        verify((detailsFileItem->flags() & Qt::ItemIsEditable)
+                   && !(activationDetails.editTriggers() & QAbstractItemView::DoubleClicked)
+                   && (activationDetails.editTriggers() & QAbstractItemView::SelectedClicked),
+               "Details file and folder rows support slow-click editing without double-click editing");
+
+        QTest::mouseClick(activationDetails.viewport(), Qt::LeftButton, {}, detailsFile);
+        QTest::qWait(QApplication::doubleClickInterval() + 50);
+        verify(detailsFileItem->isSelected() && !activationDetails.isEditingName(),
+               "single click selects a Details file without opening an editor");
+
+        QTest::mouseDClick(activationDetails.viewport(), Qt::LeftButton, {}, detailsFile);
+        app.processEvents();
+        QTest::qWait(QApplication::doubleClickInterval() + 50);
+        verify(detailsActivations.count() >= 1 && !activationDetails.isEditingName(),
+               "fast double-click activates a Details file without an inline editor");
+
+        QTest::mouseClick(activationDetails.viewport(), Qt::LeftButton, {}, detailsFile);
+        verify(QTest::qWaitFor(
+                   [&] { return activationDetails.isEditingName(); },
+                   QApplication::doubleClickInterval() + 250),
+               "slow second click opens the Details Name editor");
+        verify(activationDetails.currentIndex().column() == 0,
+               "Details inline rename is confined to the Name column");
+        activationDetails.cancelEditingForActivation();
+        app.processEvents();
+
+        activationDetails.editItem(detailsFileItem, 1);
+        app.processEvents();
+        verify(!activationDetails.isEditingName(),
+               "Details Type/Size/Date columns cannot open an inline editor");
+        activationDetails.editItem(detailsFileItem, 0);
+        app.processEvents();
+        verify(activationDetails.isEditingName()
+                   && activationDetails.currentIndex() == detailsFileName,
+               "explicit Details name editing remains available");
+        activationDetails.cancelEditingForActivation();
+
+        const int beforeFolderDetails = detailsActivations.count();
+        QMetaObject::invokeMethod(
+            &activationDetails, "itemDoubleClicked", Qt::DirectConnection,
+            Q_ARG(QTreeWidgetItem *, detailsFolderItem), Q_ARG(int, 0));
+        app.processEvents();
+        verify(detailsActivations.count() == beforeFolderDetails + 1,
+               "Details folder double-click emits exactly one activation");
+        verify(!activationDetails.isEditingName(),
+               "Details folder activation leaves no stale editor");
+
+        for (int repeat = 0; repeat < 3; ++repeat) {
+            QTest::mouseDClick(activationDetails.viewport(), Qt::LeftButton, {}, detailsFile);
+            app.processEvents();
+        }
+        QTest::qWait(QApplication::doubleClickInterval() + 50);
+        verify(!activationDetails.isEditingName(),
+               "repeated fast Details double-clicks leave no editor");
+        QTest::mouseClick(activationDetails.viewport(), Qt::LeftButton, {}, detailsFile);
+        verify(QTest::qWaitFor(
+                   [&] { return activationDetails.isEditingName(); },
+                   QApplication::doubleClickInterval() + 250),
+               "Details slow-click rename still works after repeated activation");
+        activationDetails.cancelEditingForActivation();
+
+        applyDirectoryViewLayout(&activationView, &activationDetails,
+                                 &activationStack, nullptr, 0);
+        app.processEvents();
+        auto *staleDetailsEditor = activationDetails.findChild<QLineEdit *>();
+        verify(!activationDetails.isEditingName()
+                   && (!staleDetailsEditor || !staleDetailsEditor->isVisible())
+                   && !qobject_cast<QLineEdit *>(QApplication::focusWidget()),
+               "switching away from Details leaves no stale editor or focus");
+        Q_UNUSED(paneName)
     }
 
     qInfo("PASS: %d per-folder view settings assertions", checks);

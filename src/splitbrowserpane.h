@@ -1347,6 +1347,7 @@ private:
     void activateListItem(
         const QModelIndex &item)
     {
+        m_list->cancelEditingForActivation();
         if (!item.isValid()) {
             return;
         }
@@ -1369,6 +1370,7 @@ private:
     void activateDetailsItem(
         QTreeWidgetItem *item)
     {
+        m_details->cancelEditingForActivation();
         if (!item || !item->data(0, directory_view_detail::FileItemRole).toBool()) {
             return;
         }
