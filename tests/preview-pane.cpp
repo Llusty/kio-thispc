@@ -468,12 +468,20 @@ int main(int argc, char **argv)
     verify(QDir().mkpath(leftDir) && QDir().mkpath(rightDir), "create pane fixtures");
     QFile leftFile(QDir(leftDir).filePath(QStringLiteral("left.txt")));
     QFile rightFile(QDir(rightDir).filePath(QStringLiteral("right.txt")));
+    QFile leftExtra(QDir(leftDir).filePath(QStringLiteral("z-extra.txt")));
+    QFile rightExtra(QDir(rightDir).filePath(QStringLiteral("z-extra.txt")));
     verify(leftFile.open(QIODevice::WriteOnly) && rightFile.open(QIODevice::WriteOnly),
            "create pane preview files");
+    verify(leftExtra.open(QIODevice::WriteOnly) && rightExtra.open(QIODevice::WriteOnly),
+           "create extra pane preview files");
     leftFile.write("left preview");
     rightFile.write("right preview");
+    leftExtra.write("left extra");
+    rightExtra.write("right extra");
     leftFile.close();
     rightFile.close();
+    leftExtra.close();
+    rightExtra.close();
 
     ThisPcWindow window(QUrl::fromLocalFile(leftDir), false);
     window.resize(1200, 700);
@@ -482,6 +490,15 @@ int main(int argc, char **argv)
            "primary pane loads");
     window.m_previewAction->setChecked(true);
     verify(window.m_previewPane->isVisible(), "Alt+P action exposes the shared preview pane");
+    window.m_directoryList->clearSelection();
+    QApplication::processEvents();
+    verify(window.m_previewPane->m_title->text().isEmpty(),
+           "zero primary selections clear Preview");
+    window.m_directoryList->selectionModel()->select(window.m_directoryList->item(0), QItemSelectionModel::Select);
+    window.m_directoryList->selectionModel()->select(window.m_directoryList->item(1), QItemSelectionModel::Select);
+    QApplication::processEvents();
+    verify(window.m_previewPane->m_title->text().isEmpty(),
+           "multiple primary selections clear Preview");
     window.m_directoryList->setCurrentRow(0, QItemSelectionModel::ClearAndSelect);
     verify(QTest::qWaitFor([&] { return window.m_previewPane->m_title->text() == QStringLiteral("left.txt")
                                       && window.m_previewPane->m_text->toPlainText() == QStringLiteral("left preview"); }, 3000),
@@ -492,6 +509,17 @@ int main(int argc, char **argv)
     verify(QTest::qWaitFor([&] { return !window.m_splitPane->m_job; }, 5000),
            "split pane loads");
     window.setActivePane(ThisPcWindow::PaneId::Split);
+    window.m_splitPane->listView()->clearSelection();
+    QApplication::processEvents();
+    verify(window.m_previewPane->m_title->text().isEmpty(),
+           "zero split selections clear Preview");
+    window.m_splitPane->listView()->selectionModel()->select(
+        window.m_splitPane->listView()->item(0), QItemSelectionModel::Select);
+    window.m_splitPane->listView()->selectionModel()->select(
+        window.m_splitPane->listView()->item(1), QItemSelectionModel::Select);
+    QApplication::processEvents();
+    verify(window.m_previewPane->m_title->text().isEmpty(),
+           "multiple split selections clear Preview");
     window.m_splitPane->listView()->setCurrentRow(0, QItemSelectionModel::ClearAndSelect);
     verify(QTest::qWaitFor([&] { return window.m_previewPane->m_title->text() == QStringLiteral("right.txt")
                                       && window.m_previewPane->m_text->toPlainText() == QStringLiteral("right preview"); }, 3000),

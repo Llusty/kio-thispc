@@ -15,6 +15,7 @@
 #include "navigationhistory.h"
 #include "paneadapter.h"
 #include "primarybrowserpane.h"
+#include "previewcoordinator.h"
 #include "selectionmenucontroller.h"
 #include "tabcontroller.h"
 #include <KIO/CopyJob>
@@ -345,57 +346,22 @@ public:
         updateSidebarCurrent();
         updateSearchControls();
         updateFileActionStates();
-        updatePreview();
-        updateQuickLook();
-    }
-
-    bool quickLookFocusIsEligible() const
-    {
-        if (QApplication::activeModalWidget() || QApplication::activePopupWidget()) return false;
-        QWidget *focus = QApplication::focusWidget();
-        const PaneContext context = paneContext();
-        return focus && context.view
-            && (focus == context.view || context.view->isAncestorOf(focus))
-            && !qobject_cast<QLineEdit *>(focus)
-            && !qobject_cast<QPlainTextEdit *>(focus)
-            && !qobject_cast<QTextEdit *>(focus);
+        updatePreviewAndQuickLook();
     }
 
     void setQuickLookVisible(bool visible)
     {
-        if (!m_quickLook) return;
-        if (!visible) {
-            m_quickLook->hide();
-            return;
-        }
-        const PaneContext context = paneContext();
-        if (context.items.size() != 1) return;
-        positionQuickLook();
-        m_quickLook->show();
-        m_quickLook->raise();
-        updateQuickLook();
+        if (m_previewCoordinator) m_previewCoordinator->setQuickLookVisible(visible);
     }
 
-    void updateQuickLook()
+    void updatePreviewAndQuickLook()
     {
-        if (!m_quickLook || !m_quickLook->isVisible()) return;
-        const PaneContext context = paneContext();
-        if (context.items.size() != 1) {
-            m_quickLook->previewPane()->preview(QUrl(), false);
-            return;
-        }
-        const PaneItem &item = context.items.first();
-        m_quickLook->previewPane()->preview(item.url, item.isDir);
+        if (m_previewCoordinator) m_previewCoordinator->selectionChanged();
     }
 
     void positionQuickLook()
     {
-        if (!m_quickLook || !centralWidget()) return;
-        const QRect area = centralWidget()->rect().adjusted(36, 36, -36, -36);
-        const int width = qMin(1100, qMax(420, area.width() * 4 / 5));
-        const int height = qMin(760, qMax(300, area.height() * 4 / 5));
-        m_quickLook->setGeometry(area.center().x() - width / 2,
-                                 area.center().y() - height / 2, width, height);
+        if (m_previewCoordinator) m_previewCoordinator->repositionQuickLook();
     }
 
 #ifdef THISPC_TEST_HARNESS
@@ -403,24 +369,6 @@ public:
 #else
 protected:
 #endif
-    bool eventFilter(QObject *watched, QEvent *event) override
-    {
-        if (event->type() == QEvent::KeyPress && isActiveWindow()) {
-            auto *key = static_cast<QKeyEvent *>(event);
-            if (m_quickLook && m_quickLook->isVisible()
-                && key->key() == Qt::Key_Escape && key->modifiers() == Qt::NoModifier) {
-                setQuickLookVisible(false);
-                return true;
-            }
-            if (key->key() == Qt::Key_Space && key->modifiers() == Qt::NoModifier
-                && !key->isAutoRepeat() && quickLookFocusIsEligible()) {
-                setQuickLookVisible(!m_quickLook->isVisible());
-                return true;
-            }
-        }
-        return QMainWindow::eventFilter(watched, event);
-    }
-
     void resizeEvent(QResizeEvent *event) override
     {
         QMainWindow::resizeEvent(event);
@@ -1515,8 +1463,7 @@ private:
         m_previewAction->setShortcut(QKeySequence(Qt::ALT | Qt::Key_P));
         addAction(m_previewAction);
         connect(m_previewAction, &QAction::toggled, this, [this](bool enabled) {
-            if (m_previewPane) m_previewPane->setVisible(enabled);
-            if (enabled) updatePreview();
+            if (m_previewCoordinator) m_previewCoordinator->setPreviewVisible(enabled);
         });
 
         m_fullNamesAction = showMenu->addAction(
@@ -1732,7 +1679,6 @@ private:
         m_quickLook = new QuickLookOverlay(central);
         connect(m_quickLook->closeButton(), &QToolButton::clicked,
                 this, [this] { setQuickLookVisible(false); });
-        qApp->installEventFilter(this);
 
         m_sidebarSplitter = new QSplitter(Qt::Horizontal, central);
         m_sidebarSplitter->setObjectName(QStringLiteral("sidebarSplitter"));
@@ -2024,7 +1970,7 @@ private:
             });
 
         connect(m_splitPane, &SplitBrowserPane::selectionChanged,
-                this, [this] { updateFileActionStates(); updatePreview(); updateQuickLook(); });
+                this, [this] { updateFileActionStates(); updatePreviewAndQuickLook(); });
         connect(m_splitPane, &SplitBrowserPane::activated,
                 this, [this] { setActivePane(PaneId::Split); });
         connect(m_splitPane, &SplitBrowserPane::contextMenuRequested,
@@ -2069,6 +2015,9 @@ private:
         m_previewPane = new PreviewPane(m_previewSplitter);
         m_previewSplitter->addWidget(m_previewPane);
         m_previewPane->hide();
+        m_previewCoordinator = new PreviewCoordinator(
+            {this, centralWidget(), m_previewPane, m_quickLook},
+            [this] { return paneContext(); }, this);
         m_previewSplitter->setStretchFactor(0, 1);
         m_previewSplitter->setStretchFactor(1, 0);
         m_previewSplitter->setSizes({850, 320});
@@ -2461,7 +2410,7 @@ private:
             m_directoryList,
             &DirectoryListWidget::itemSelectionChanged,
             this,
-            [this] { updateFileActionStates(); updatePreview(); updateQuickLook(); });
+            [this] { updateFileActionStates(); updatePreviewAndQuickLook(); });
 
         connect(
             m_directoryList,
@@ -2489,7 +2438,7 @@ private:
             m_directoryDetails,
             &QTreeWidget::itemSelectionChanged,
             this,
-            [this] { updateFileActionStates(); updatePreview(); updateQuickLook(); });
+            [this] { updateFileActionStates(); updatePreviewAndQuickLook(); });
 
         connect(
             m_directoryDetails,
@@ -4463,18 +4412,6 @@ private:
             : (m_paneAdapter ? m_paneAdapter->selectedUrls(m_activePane) : QList<QUrl>{});
     }
 
-    void updatePreview()
-    {
-        if (!m_previewPane || !m_previewPane->isVisible()) return;
-        const PaneContext context = paneContext();
-        if (context.items.size() != 1) {
-            m_previewPane->preview(QUrl(), false);
-            return;
-        }
-        const PaneItem &item = context.items.first();
-        m_previewPane->preview(item.url, item.isDir);
-    }
-
     bool canModifyCurrentDirectory() const
     {
         const auto context = paneContext();
@@ -5603,6 +5540,7 @@ private:
     QSplitter *m_previewSplitter = nullptr;
     PreviewPane *m_previewPane = nullptr;
     QuickLookOverlay *m_quickLook = nullptr;
+    PreviewCoordinator *m_previewCoordinator = nullptr;
     QByteArray m_splitterState;
     PrimaryBrowserPane *m_primaryPane = nullptr;
     SplitBrowserPane *m_splitPane = nullptr;
