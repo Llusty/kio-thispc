@@ -310,6 +310,18 @@ zainstalowana i ręcznie potwierdzona przez użytkownika. Pełna regresja wydani
 - optional hashes for stronger comparisons;
 - recursive sync remains outside the accepted 0.32 scope.
 
+**UI parity/polish debt — backlog for a later 0.33 polish stage**
+- `thispc:/` drive cards: at wide window sizes the drive icon can drift too far
+  from the name, capacity information and progress bar, while the compact layout
+  looks correct. Keep the icon and the text/progress block at a fixed or bounded
+  horizontal distance regardless of window width. This is pre-existing UX debt,
+  not a Stage 2 regression, and is not implemented yet.
+- Split/right pane address bar parity: Primary/left pane enters manual address
+  editing when practically any point in the breadcrumb/address area is clicked,
+  while Split currently requires a direct click on the displayed path. Make the
+  entire Split address/breadcrumb bar a click target for manual edit, matching
+  Primary. This is also pre-existing UX debt and is not implemented yet.
+
 ### 0.34.0 — Drives and devices
 - mount/unmount/eject;
 - removable media;
