@@ -63,6 +63,8 @@ add_executable(thispc-view
     src/applicationstyle.h
     src/appwidgets.cpp
     src/appwidgets.h
+    src/locationpresentation.cpp
+    src/locationpresentation.h
     src/paneadapter.cpp
     src/paneadapter.h
     src/primarybrowserpane.cpp
@@ -116,6 +118,8 @@ add_executable(thispc-view-stage3c1-test EXCLUDE_FROM_ALL
     src/applicationstyle.h
     src/appwidgets.cpp
     src/appwidgets.h
+    src/locationpresentation.cpp
+    src/locationpresentation.h
     src/paneadapter.cpp
     src/paneadapter.h
     src/primarybrowserpane.cpp

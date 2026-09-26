@@ -11,6 +11,7 @@
 #include "archive-extraction.h"
 #include "applicationstyle.h"
 #include "appwidgets.h"
+#include "locationpresentation.h"
 #include "paneadapter.h"
 #include "primarybrowserpane.h"
 #include "selectionmenucontroller.h"
@@ -5104,58 +5105,7 @@ private:
 
     QString displayNameForLocation(const QUrl &url) const
     {
-        if (sameLocation(url, kThisPcUrl)) {
-            return trLocal("Ten komputer", "This PC");
-        }
-
-        if (isSearchLocation(url)) {
-            const QString query =
-                searchQueryFromUrl(url);
-
-            return query.isEmpty()
-                ? trLocal(
-                    "Wyniki wyszukiwania",
-                    "Search results")
-                : (isPolish()
-                    ? QStringLiteral("Wyniki dla: %1").arg(query)
-                    : QStringLiteral("Results for: %1").arg(query));
-        }
-
-        for (const DriveInfo &drive : m_drives) {
-            if (sameLocation(drive.targetUrl, url)) {
-                return drive.name;
-            }
-        }
-
-        if (url.isLocalFile()) {
-            const QString path = url.toLocalFile();
-
-            if (path == QDir::homePath()) {
-                return trLocal("Katalog domowy", "Home");
-            }
-
-            const QString fileName =
-                QFileInfo(path).fileName();
-
-            return fileName.isEmpty()
-                ? path
-                : fileName;
-        }
-
-        if (url.scheme() == QStringLiteral("trash")) {
-            return trLocal("Kosz", "Trash");
-        }
-
-        if (url.scheme() == QStringLiteral("remote")) {
-            return trLocal("Sieć", "Network");
-        }
-
-        const QString last =
-            QFileInfo(url.path()).fileName();
-
-        return last.isEmpty()
-            ? url.toDisplayString()
-            : last;
+        return LocationPresentation::primaryTitle(url, m_drives);
     }
 
     void rebuildBreadcrumbs()
@@ -5216,112 +5166,19 @@ private:
             return;
         }
 
-        QString baseName;
-        QUrl baseUrl;
-        QString relativePath;
-
-        for (const DriveInfo &drive : m_drives) {
-            if (!drive.targetUrl.isLocalFile()
-                || !m_currentUrl.isLocalFile()) {
-                continue;
-            }
-
-            const QString drivePath =
-                QDir::cleanPath(
-                    drive.targetUrl.toLocalFile());
-
-            const QString currentPath =
-                QDir::cleanPath(
-                    m_currentUrl.toLocalFile());
-
-            if (currentPath == drivePath
-                || currentPath.startsWith(
-                    drivePath + QDir::separator())) {
-                baseName = drive.name;
-                baseUrl = drive.targetUrl;
-                relativePath =
-                    QDir(drivePath).relativeFilePath(
-                        currentPath);
-                break;
-            }
-        }
-
         if (m_currentUrl.isLocalFile()) {
-            const QString currentPath =
-                QDir::cleanPath(
-                    m_currentUrl.toLocalFile());
-
-            const QString homePath =
-                QDir::cleanPath(QDir::homePath());
-
-            if (baseUrl.isEmpty()
-                && (currentPath == homePath
-                    || currentPath.startsWith(
-                        homePath + QDir::separator()))) {
-                baseName =
-                    trLocal("Katalog domowy", "Home");
-                baseUrl =
-                    QUrl::fromLocalFile(homePath);
-                relativePath =
-                    QDir(homePath).relativeFilePath(
-                        currentPath);
-            }
-
-            if (baseUrl.isEmpty()) {
-                baseName = QStringLiteral("/");
-                baseUrl = QUrl::fromLocalFile(
-                    QStringLiteral("/"));
-                relativePath =
-                    QDir(QStringLiteral("/"))
-                        .relativeFilePath(currentPath);
-            }
-
-            bool baseIsDrive = false;
-            for (const DriveInfo &drive : m_drives) {
-                if (sameLocation(drive.targetUrl, baseUrl)) {
-                    baseIsDrive = true;
-                    break;
-                }
-            }
-
-            if (baseIsDrive) {
+            const auto segments = LocationPresentation::localPathSegments(
+                m_currentUrl,
+                m_drives);
+            for (qsizetype index = 0; index < segments.size(); ++index) {
+                if (index > 0) addSeparator();
+                const auto &segment = segments.at(index);
                 addCrumb(
-                    trLocal("Ten komputer", "This PC"),
-                    themedIcon(QStringLiteral("computer")),
-                    kThisPcUrl);
-                addSeparator();
-            }
-
-            addCrumb(
-                baseName,
-                themedIcon(
-                    baseName == QStringLiteral("/")
-                        ? QStringLiteral("folder-root")
-                        : (baseIsDrive
-                            ? QStringLiteral("drive-harddisk")
-                            : QStringLiteral("folder"))),
-                baseUrl);
-
-            if (relativePath != QStringLiteral(".")
-                && !relativePath.isEmpty()) {
-                QString cumulative =
-                    baseUrl.toLocalFile();
-
-                const QStringList parts =
-                    relativePath.split(
-                        QDir::separator(),
-                        Qt::SkipEmptyParts);
-
-                for (const QString &part : parts) {
-                    addSeparator();
-                    cumulative =
-                        QDir(cumulative).filePath(part);
-
-                    addCrumb(
-                        part,
-                        QIcon(),
-                        QUrl::fromLocalFile(cumulative));
-                }
+                    segment.text,
+                    segment.iconName.isEmpty()
+                        ? QIcon()
+                        : themedIcon(segment.iconName),
+                    segment.url);
             }
         } else {
             QString rootLabel =
@@ -5388,52 +5245,10 @@ private:
 
     QUrl parentUrl() const
     {
-        if (sameLocation(m_currentUrl, kThisPcUrl)) {
-            return {};
-        }
-
-        if (isSearchLocation(m_currentUrl)) {
-            const QUrl base =
-                searchBaseFromUrl(m_currentUrl);
-
-            return base.isValid()
-                ? base
-                : kThisPcUrl;
-        }
-
-        for (const DriveInfo &drive : m_drives) {
-            if (sameLocation(
-                    drive.targetUrl,
-                    m_currentUrl)) {
-                return kThisPcUrl;
-            }
-        }
-
-        QUrl parent = m_currentUrl;
-        QString path = parent.path();
-
-        if (path.isEmpty()
-            || path == QStringLiteral("/")) {
-            return kThisPcUrl;
-        }
-
-        while (path.size() > 1
-               && path.endsWith(
-                   QLatin1Char('/'))) {
-            path.chop(1);
-        }
-
-        const int slash =
-            path.lastIndexOf(QLatin1Char('/'));
-
-        if (slash <= 0) {
-            path = QStringLiteral("/");
-        } else {
-            path = path.left(slash);
-        }
-
-        parent.setPath(path);
-        return parent;
+        return LocationPresentation::parentUrl(
+            m_currentUrl,
+            m_drives,
+            LocationPresentation::ParentProfile::Primary);
     }
 
     void updateNavigationActions()

@@ -11,6 +11,7 @@
 #include "browsercommon.h"
 #include "directoryview.h"
 #include "directoryviewsettings.h"
+#include "locationpresentation.h"
 #include "pathwidgets.h"
 #include "searchcontroller.h"
 
@@ -962,172 +963,19 @@ private:
     QString friendlyLocationText(
         const QUrl &url) const
     {
-        if (sameLocation(url, kThisPcUrl)) {
-            return trLocal(
-                "Ten komputer",
-                "This PC");
-        }
-
-        if (isSearchLocation(url)) {
-            return (isPolish() ? QStringLiteral("Wyniki dla: %1") : QStringLiteral("Results for: %1"))
-                .arg(searchQueryFromUrl(url));
-        }
-
-        if (url.isLocalFile()) {
-            const QString path =
-                QDir::cleanPath(
-                    url.toLocalFile());
-
-            QStorageInfo storage(path);
-            QString root =
-                QDir::cleanPath(
-                    storage.rootPath());
-            QString rootName =
-                storage.displayName();
-
-            if (rootName.trimmed().isEmpty()) {
-                rootName =
-                    QFileInfo(root).fileName();
-            }
-
-            if (rootName.trimmed().isEmpty()
-                || root == QStringLiteral("/")) {
-                rootName =
-                    trLocal(
-                        "System",
-                        "System");
-            }
-
-            QString result =
-                trLocal(
-                    "Ten komputer",
-                    "This PC")
-                + QStringLiteral("  ›  ")
-                + rootName;
-
-            QString relative =
-                QDir(root).relativeFilePath(path);
-
-            if (!relative.isEmpty()
-                && relative != QStringLiteral(".")) {
-                const QStringList parts =
-                    relative.split(
-                        QLatin1Char('/'),
-                        Qt::SkipEmptyParts);
-
-                for (const QString &part : parts) {
-                    result +=
-                        QStringLiteral("  ›  ")
-                        + part;
-                }
-            }
-
-            return result;
-        }
-
-        if (isAdminUrl(url)) {
-            QString result =
-                trLocal(
-                    "Administrator",
-                    "Administrator");
-
-            const QStringList parts =
-                url.path().split(
-                    QLatin1Char('/'),
-                    Qt::SkipEmptyParts);
-            for (const QString &part : parts) {
-                result +=
-                    QStringLiteral("  ›  ")
-                    + part;
-            }
-            return result;
-        }
-
-        return urlForDisplay(url);
+        return LocationPresentation::splitLocationText(url);
     }
 
     QString friendlyTitle(
         const QUrl &url) const
     {
-        if (sameLocation(url, kThisPcUrl)) {
-            return trLocal(
-                "Ten komputer",
-                "This PC");
-        }
-
-        if (isSearchLocation(url)) {
-            return (isPolish() ? QStringLiteral("Wyniki dla: %1") : QStringLiteral("Results for: %1"))
-                .arg(searchQueryFromUrl(url));
-        }
-
-        if (url.isLocalFile()) {
-            const QString path =
-                QDir::cleanPath(
-                    url.toLocalFile());
-            const QFileInfo info(path);
-
-            QStorageInfo storage(path);
-            const QString root =
-                QDir::cleanPath(
-                    storage.rootPath());
-
-            if (path == root) {
-                QString label =
-                    storage.displayName();
-                if (!label.trimmed().isEmpty()) {
-                    return label;
-                }
-            }
-
-            if (!info.fileName().isEmpty()) {
-                return info.fileName();
-            }
-        }
-
-        const QString path =
-            url.path();
-        const QString name =
-            QFileInfo(path).fileName();
-
-        if (!name.isEmpty()) {
-            return name;
-        }
-
-        return urlForDisplay(url);
+        return LocationPresentation::splitTitle(url);
     }
 
     QIcon locationIcon(
         const QUrl &url) const
     {
-        if (sameLocation(url, kThisPcUrl)) {
-            return themedIcon(
-                QStringLiteral("computer"));
-        }
-
-        if (isSearchLocation(url)) return themedIcon(QStringLiteral("system-search"));
-
-        if (isAdminUrl(url)) {
-            return themedIcon(
-                QStringLiteral("security-high"));
-        }
-
-        if (url.isLocalFile()) {
-            const QString path =
-                QDir::cleanPath(
-                    url.toLocalFile());
-            QStorageInfo storage(path);
-
-            if (QDir::cleanPath(
-                    storage.rootPath())
-                == path) {
-                return themedIcon(
-                    QStringLiteral(
-                        "drive-harddisk"));
-            }
-        }
-
-        return themedIcon(
-            QStringLiteral("folder"));
+        return themedIcon(LocationPresentation::iconName(url));
     }
 
     // Use the same root selection as the primary breadcrumb: a matching drive,
@@ -1135,47 +983,8 @@ private:
     QVector<SegmentedPathButton::Segment> localPathSegments(const QUrl &url) const
     {
         QVector<SegmentedPathButton::Segment> segments;
-        if (!url.isLocalFile()) return segments;
-
-        const QString path = QDir::cleanPath(url.toLocalFile());
-        QString baseName;
-        QUrl baseUrl;
-        for (const DriveInfo &drive : m_drives) {
-            if (!drive.targetUrl.isLocalFile()) continue;
-            const QString drivePath = QDir::cleanPath(drive.targetUrl.toLocalFile());
-            if (path == drivePath || path.startsWith(drivePath + QDir::separator())) {
-                baseName = drive.name;
-                baseUrl = drive.targetUrl;
-                break;
-            }
-        }
-
-        const QString homePath = QDir::cleanPath(QDir::homePath());
-        if (baseUrl.isEmpty()
-            && (path == homePath || path.startsWith(homePath + QDir::separator()))) {
-            baseName = trLocal("Katalog domowy", "Home");
-            baseUrl = QUrl::fromLocalFile(homePath);
-        }
-        if (baseUrl.isEmpty()) {
-            baseName = QStringLiteral("/");
-            baseUrl = QUrl::fromLocalFile(QStringLiteral("/"));
-        }
-
-        for (const DriveInfo &drive : m_drives) {
-            if (sameLocation(drive.targetUrl, baseUrl)) {
-                segments.append({trLocal("Ten komputer", "This PC"), kThisPcUrl});
-                break;
-            }
-        }
-        segments.append({baseName, baseUrl});
-
-        const QString relative = QDir(baseUrl.toLocalFile()).relativeFilePath(path);
-        if (!relative.isEmpty() && relative != QStringLiteral(".")) {
-            QString cumulative = baseUrl.toLocalFile();
-            for (const QString &part : relative.split(QLatin1Char('/'), Qt::SkipEmptyParts)) {
-                cumulative = QDir(cumulative).filePath(part);
-                segments.append({part, QUrl::fromLocalFile(cumulative)});
-            }
+        for (const auto &segment : LocationPresentation::localPathSegments(url, m_drives)) {
+            segments.append({segment.text, segment.url});
         }
         return segments;
     }
@@ -1198,15 +1007,8 @@ private:
         if (m_currentUrl.isLocalFile()) {
             segments = localPathSegments(m_currentUrl);
         } else if (isAdminUrl(m_currentUrl)) {
-            QUrl cumulative = m_currentUrl;
-            cumulative.setPath(QStringLiteral("/"));
-            segments.append({trLocal("Administrator", "Administrator"), cumulative});
-            QString path;
-            for (const QString &part : m_currentUrl.path().split(QLatin1Char('/'),
-                                                                 Qt::SkipEmptyParts)) {
-                path += QLatin1Char('/') + part;
-                cumulative.setPath(path);
-                segments.append({part, cumulative});
+            for (const auto &segment : LocationPresentation::adminPathSegments(m_currentUrl)) {
+                segments.append({segment.text, segment.url});
             }
         }
         if (m_currentUrl.isLocalFile()) {
@@ -1229,58 +1031,10 @@ private:
 
     QUrl parentUrl() const
     {
-        if (!m_currentUrl.isValid()
-            || sameLocation(
-                m_currentUrl,
-                kThisPcUrl)) {
-            return {};
-        }
-
-        if (isSearchLocation(m_currentUrl)) {
-            const QUrl base = searchBaseFromUrl(m_currentUrl);
-            return base.isValid() ? base : kThisPcUrl;
-        }
-        for (const DriveInfo &drive : m_drives) {
-            if (sameLocation(drive.targetUrl, m_currentUrl)) return kThisPcUrl;
-        }
-
-        QUrl parent = m_currentUrl;
-        QString path = parent.path();
-
-        if (path.isEmpty()
-            || path == QStringLiteral("/")) {
-            return kThisPcUrl;
-        }
-
-        while (path.size() > 1
-               && path.endsWith(
-                   QLatin1Char('/'))) {
-            path.chop(1);
-        }
-
-        const int slash =
-            path.lastIndexOf(
-                QLatin1Char('/'));
-
-        path =
-            slash <= 0
-                ? QStringLiteral("/")
-                : path.left(slash);
-
-        parent.setPath(path);
-        parent.setQuery(QString());
-
-        if (parent.isLocalFile()
-            && QFileInfo(
-                parent.toLocalFile())
-                   .absoluteFilePath()
-                == QFileInfo(
-                    m_currentUrl.toLocalFile())
-                       .absoluteFilePath()) {
-            return kThisPcUrl;
-        }
-
-        return normalizedUrl(parent);
+        return LocationPresentation::parentUrl(
+            m_currentUrl,
+            m_drives,
+            LocationPresentation::ParentProfile::Split);
     }
 
     void navigateTo(
