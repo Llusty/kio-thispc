@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.33.0 — Architecture Cleanup Continuation
+
+- Kontynuowano behavior-preserving modularizację bez dodawania nowych funkcji użytkowych.
+- Wydzielono `LocationPresentation`, `NavigationHistory`, `PreviewCoordinator`, `ActionStateController`, `DirectoryListingCore`, `PaneMenuController` i `DriveHomeCoordinator` z dotychczasowych ścieżek okna i paneli.
+- Panel główny i Split View korzystają ze wspólnego `DirectoryListingCore`, zachowując własny stan oraz istniejącą semantykę KIO.
+- Poprawiono cykl życia menu kontekstowego sidebara podczas odświeżania dysków, eliminując crash od nieaktualnych akcji.
+- Poprawiono aktywację inline rename: szybki double-click nadal otwiera element, a wolny drugi click uruchamia edycję nazwy.
+- Finalna regresja po poprawce inline rename: 31 zestawów testowych / 7852 asercje PASS.
+- Wspólny `BrowserPane` oraz odłożone elementy UX pozostają poza zakresem 0.33.0.
+
 ## 0.32.0 — Architecture Cleanup
 
 - Zakończono behavior-preserving cleanup architektury bez dodawania nowych funkcji użytkowych.

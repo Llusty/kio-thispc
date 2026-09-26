@@ -1,3 +1,36 @@
+# Aktualizacja do 0.33.0
+
+Wydanie kontynuuje porządkowanie architektury bez dodawania nowych funkcji użytkowych. Zachowanie 0.32.0 pozostaje zachowane, wraz z poprawkami regresji wykrytymi podczas ekstrakcji.
+
+```bash
+cd ~/Pobrane
+tar -xzf kio-thispc-0.33.0.tar.gz
+cd kio-thispc-0.33.0
+chmod +x install.sh
+./install.sh
+```
+
+## Zakres 0.33.0
+
+- `LocationPresentation` i `NavigationHistory`;
+- `PreviewCoordinator` i `ActionStateController`;
+- wspólny dla Primary/Split `DirectoryListingCore`;
+- `PaneMenuController` i `DriveHomeCoordinator`;
+- poprawka crashu menu kontekstowego sidebara podczas odświeżania dysków;
+- poprawka aktywacji inline rename;
+- wspólny `BrowserPane` i odłożony UX pozostają poza zakresem wydania.
+
+## Weryfikacja 0.33.0
+
+- ręczny odbiór Stage 1–8 i poprawki inline rename: PASS;
+- baseline po poprawce inline rename: 31 zestawów / 7852 asercje PASS;
+- finalny build: PASS;
+- pełna regresja: 31 zestawów / 7852 asercje PASS;
+- izolowany install/launch smoke: PASS;
+- `git diff --check`: PASS.
+
+---
+
 # Aktualizacja do 0.32.0
 
 Wydanie kończy porządkowanie architektury bez dodawania nowych funkcji użytkowych. Zachowanie 0.31.0 pozostaje zachowane, wraz z poprawkami regresji wykrytymi podczas refaktoru.

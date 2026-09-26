@@ -1,7 +1,7 @@
 /*
  * kio-thispc - KF6 KIO worker providing thispc:/
  *
- * Version 0.3.1
+ * Version 0.33.0
  * SPDX-License-Identifier: MIT
  */
 

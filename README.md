@@ -1,14 +1,14 @@
-# kio-thispc 0.32.0
+# kio-thispc 0.33.0
 
-## 0.32.0 — Architecture Cleanup
+## 0.33.0 — Architecture Cleanup Continuation
 
-- Behavior-preserving refactor bez nowych funkcji użytkowych.
-- Split Sync ma acykliczne moduły; widgety/styl aplikacji i granice test harnessu są wydzielone i utwardzone.
-- `PaneContext`/`PaneAdapter` zapewniają jawny kontrakt aktywnego panelu.
-- Obsługa kart, Search i menu zaznaczenia została wydzielona odpowiednio do `TabController`, `SearchUiController` i `SelectionMenuController`.
-- `PrimaryBrowserPane` posiada stan URL, listing KIO, renderowanie i cache miniatur panelu głównego.
-- Stage 9, czyli wspólny `BrowserPane`, został przeniesiony do 0.33.
-- Finalny baseline po Stage 8: 26 zestawów / 6662 asercje PASS.
+- Behavior-preserving kontynuacja modularizacji bez nowych funkcji użytkowych.
+- Wydzielono `LocationPresentation`, `NavigationHistory`, `PreviewCoordinator`, `ActionStateController`, `DirectoryListingCore`, `PaneMenuController` i `DriveHomeCoordinator`.
+- Primary i Split korzystają ze wspólnego rdzenia listowania, zachowując dotychczasowe zachowanie KIO, widoków i sesji.
+- Poprawiono crash cyklu życia menu sidebara podczas odświeżania dysków.
+- Poprawiono aktywację inline rename bez zmiany zachowania szybkiego double-click.
+- Wspólny `BrowserPane` i odłożone elementy UX pozostają poza zakresem wydania.
+- Finalny baseline po poprawce inline rename: 31 zestawów / 7852 asercje PASS.
 
 ## 0.31.0 — Split View Synchronization
 
@@ -244,8 +244,8 @@ Funkcje z 0.15.4 — kompaktowy popup operacji, dynamiczna wysokość, anulowani
 
 ```bash
 cd ~/Pobrane
-tar -xzf kio-thispc-0.32.0.tar.gz
-cd kio-thispc-0.32.0
+tar -xzf kio-thispc-0.33.0.tar.gz
+cd kio-thispc-0.33.0
 chmod +x install.sh
 ./install.sh
 ```

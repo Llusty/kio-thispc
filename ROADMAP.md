@@ -303,14 +303,18 @@ zainstalowana i ręcznie potwierdzona przez użytkownika. Pełna regresja wydani
 - final Stage 8 baseline: **26 suites / 6662 assertions PASS**;
 - common `BrowserPane` (Stage 9) deferred to 0.33.
 
-### 0.33.0 — BrowserPane consolidation and file/folder comparison
-- common `BrowserPane` contract after the accepted 0.32 extraction;
-- external Meld/KDiff3 integration first;
-- folder difference view;
-- optional hashes for stronger comparisons;
-- recursive sync remains outside the accepted 0.32 scope.
+### 0.33.0 — Architecture Cleanup Continuation ✅ release-ready
+- `LocationPresentation`, `NavigationHistory`, `PreviewCoordinator` and
+  `ActionStateController` extracted;
+- shared `DirectoryListingCore` used by Primary and Split;
+- `PaneMenuController` and `DriveHomeCoordinator` extracted;
+- drive-sidebar context-menu lifetime crash fixed;
+- inline rename activation fixed without changing fast double-click open;
+- final accepted baseline before release prep: **31 suites / 7852 assertions PASS**;
+- common `BrowserPane`, file/folder comparison and the UX debt below remain
+  deferred and are not part of 0.33.0.
 
-**UI parity/polish debt — backlog for a later 0.33 polish stage**
+**UI parity/polish debt — backlog for a later release**
 - Per-folder view profiles / Apply view to subfolders: today, view mode, icon
   size and grouping use an explicit per-URL `QSettings` entry when present,
   otherwise they fall back to the current pane state; changing view mode or

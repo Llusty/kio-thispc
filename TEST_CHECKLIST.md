@@ -72,6 +72,17 @@ Only test on disposable files.
 - [ ] `TMPDIR=/tmp python3 tests/run-pane-actions.py --suites split_layout panes search` przechodzi regresję szerokości paneli.
 - [x] `git diff --check` is clean
 
+## Final release verification — 0.33.0 (2026-09-27)
+
+- [x] `./scripts/build.sh` — PASS (`thispc` and `thispc-view`).
+- [x] `TMPDIR=/tmp python3 tests/run-pane-actions.py --all` — 31 suites / 7852 assertions PASS.
+- [x] Version consistency assertions expect `v0.33.0` and pass.
+- [x] New-module header/implementation build and include-cycle audit pass.
+- [x] Isolated `DESTDIR` install and offscreen launch smoke — PASS.
+- [x] `git diff --check` — PASS.
+- [x] Stage 1–8 and inline rename fix manually accepted before release prep.
+- [ ] Final manual release smoke accepted.
+
 ## Final release verification — 0.32.0 (2026-09-25)
 
 - [x] `./scripts/build.sh` — PASS (`thispc` and `thispc-view`).

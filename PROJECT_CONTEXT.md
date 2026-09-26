@@ -15,23 +15,23 @@ The goal is not to replace KDE with Windows UI. The goal is a familiar Explorer-
 - Undo/Redo;
 - rich transfer UI, native local transfer engine, previews, search, device/network integration, etc.
 
-## Current release candidate — 0.32.0
-**0.32.0 — Architecture Cleanup** is complete and manually accepted. It is a
-behavior-preserving refactor with regression fixes, not a user-feature release.
+## Current release candidate — 0.33.0
+**0.33.0 — Architecture Cleanup Continuation** is release-ready pending final
+manual smoke. It is a behavior-preserving refactor with regression fixes, not a
+user-feature release.
 
-Accepted 0.32.0 scope:
-- acyclic Split Sync models, executor and dialogs;
-- extracted application widgets/style and hardened test-harness seams;
-- explicit `PaneContext` / `PaneAdapter` contract;
-- extracted `TabController`, `SearchUiController` and `SelectionMenuController`;
-- extracted `PrimaryBrowserPane`, owning the primary URL, KIO listing, rendering
-  and thumbnail cache;
-- hover/focus/crash regression fixes found during extraction;
-- Stage 9/common `BrowserPane` deferred to 0.33.
+Accepted 0.33.0 scope:
+- extracted `LocationPresentation`, `NavigationHistory`, `PreviewCoordinator`
+  and `ActionStateController`;
+- shared `DirectoryListingCore` used by Primary and Split;
+- extracted `PaneMenuController` and `DriveHomeCoordinator`;
+- drive-sidebar context-menu lifetime crash fix;
+- inline rename activation fix;
+- common `BrowserPane` and deferred UX work remain outside this release.
 
-All stages have passed manual acceptance. The automated baseline after Stage 8
-is 26 test suites / 6662 assertions PASS. No recursive sync or other new feature
-is part of 0.32.0.
+All extraction stages and the inline-rename fix have passed manual acceptance.
+The automated baseline is 31 test suites / 7852 assertions PASS. No new user
+feature is part of 0.33.0.
 
 User-confirmed working behavior includes:
 - navigation and address/breadcrumb controls;
@@ -132,7 +132,7 @@ thispc-view
 For Codex, prefer working directly in a Git checkout and running `./scripts/build.sh` after edits instead of repeatedly creating ZIPs.
 
 
-## Current state — 0.32.0
+## Current state — 0.33.0
 
 0.18.0 conflict handling is user-confirmed. 0.19.x adds persistent session restore
 and the stable full-name/IconMode layout. 0.20.0 adds persistent Quick Access /
@@ -187,5 +187,8 @@ Automated regression: 25 test suites / 6569 assertions PASS (post-release arithm
 application widgets/style and test seams are separated; pane, tab, search and
 selection-menu responsibilities use explicit controllers/contracts; and the
 primary browser pane owns its listing/rendering state. Stage 9/common
-`BrowserPane` is deferred to 0.33. Final Stage 8 regression: 26 suites / 6662
-assertions PASS. The release adds no new user-facing features.
+`BrowserPane` was deferred. Final Stage 8 regression: 26 suites / 6662 assertions
+PASS. 0.33.0 continues the cleanup with seven extracted modules, shared Primary/
+Split listing logic, and focused drive-menu lifetime and inline-rename activation
+fixes. Common `BrowserPane` remains deferred. Baseline: 31 suites / 7852 assertions
+PASS. The release adds no new user-facing features.

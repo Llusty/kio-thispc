@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(kio-thispc VERSION 0.32.0 LANGUAGES CXX)
+project(kio-thispc VERSION 0.33.0 LANGUAGES CXX)
 
 set(QT_MIN_VERSION "6.5.0")
 set(KF_MIN_VERSION "6.17.0")
