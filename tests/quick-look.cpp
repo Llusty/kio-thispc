@@ -84,7 +84,7 @@ int main(int argc, char **argv)
     window.setSplitViewEnabled(true);
     window.m_splitPane->setCurrentUrl(QUrl::fromLocalFile(rightPath), false);
     QTest::qWait(100);
-    if (window.m_splitPane->m_job) { window.m_splitPane->m_job->kill(); window.m_splitPane->m_job = nullptr; }
+    window.m_splitPane->cancelListing();
     window.m_splitPane->listView()->clear();
     addFixtureItem(window.m_splitPane->listView(),
                    QUrl::fromLocalFile(rightPath + "/right.txt"), "right.txt");

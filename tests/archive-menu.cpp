@@ -38,7 +38,7 @@ int main(int argc, char **argv)
     window.m_refreshTimer.stop();
     auto stopListings = [&] {
         window.m_primaryPane->cancelListing();
-        if (window.m_splitPane->m_job) { window.m_splitPane->m_job->kill(); window.m_splitPane->m_job = nullptr; }
+        window.m_splitPane->cancelListing();
         if (window.m_driveJob) { window.m_driveJob->kill(); window.m_driveJob = nullptr; }
     };
     stopListings();

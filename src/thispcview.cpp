@@ -3524,6 +3524,7 @@ private:
     {
         m_primaryPane->loadDirectory(
             url, preserveStatusMessage, m_showHiddenFiles,
+            m_directoryViewMode == 2,
             [this](bool preserve) { renderDirectoryItems(preserve); },
             [this](const QString &error) { statusBar()->showMessage(error, 6000); });
     }
@@ -3556,6 +3557,7 @@ private:
         options.sortAscending = m_sortAscending;
         options.groupMode = m_groupMode;
         options.thumbnailsEnabled = m_thumbnailsEnabled;
+        options.detailsActive = m_directoryViewMode == 2;
         options.acceptsFile = [this](const FileInfo &file, QMimeDatabase &mimeDb) {
             if (!fileMatchesSearch(file)) return false;
             return !isSearchLocation(m_navigation.currentUrl())
@@ -4897,6 +4899,9 @@ private:
 
     void setDirectoryViewMode(int mode)
     {
+        const DirectorySelectionSnapshot selection =
+            captureDirectorySelection(
+                m_directoryList, m_directoryDetails, m_directoryViewMode == 2);
         m_directoryViewMode =
             std::clamp(mode, 0, 3);
 
@@ -4909,6 +4914,7 @@ private:
             m_directoryViewMode);
 
         applyDirectoryViewMode(false);
+        restoreDirectorySelection(m_directoryList, m_directoryDetails, selection);
     }
 
     void setDirectoryIconSizeMode(int mode)
@@ -4957,9 +4963,6 @@ private:
                 QStringLiteral("directory/viewMode"),
                 m_directoryViewMode);
         }
-
-        m_directoryList->clearSelection();
-        m_directoryDetails->clearSelection();
 
         applyDirectoryViewLayout(
             m_directoryList,

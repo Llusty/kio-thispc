@@ -65,6 +65,8 @@ add_executable(thispc-view
     src/applicationstyle.h
     src/appwidgets.cpp
     src/appwidgets.h
+    src/directorylistingcore.cpp
+    src/directorylistingcore.h
     src/locationpresentation.cpp
     src/locationpresentation.h
     src/navigationhistory.cpp
@@ -126,6 +128,8 @@ add_executable(thispc-view-stage3c1-test EXCLUDE_FROM_ALL
     src/applicationstyle.h
     src/appwidgets.cpp
     src/appwidgets.h
+    src/directorylistingcore.cpp
+    src/directorylistingcore.h
     src/locationpresentation.cpp
     src/locationpresentation.h
     src/navigationhistory.cpp

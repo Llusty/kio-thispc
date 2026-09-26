@@ -1,3 +1,5 @@
+#include <QSignalSpy>
+
 // Appended to a temporary, instrumented copy by run-pane-actions.py.
 static int checks = 0;
 static void verify(bool value, const char *description)
@@ -121,6 +123,94 @@ int main(int argc, char **argv)
                    0, directory_view_detail::FileItemRole).toBool()
                && !(categorizedDetails.topLevelItem(3)->flags() & Qt::ItemIsSelectable),
            "Details group header is explicitly non-file and non-selectable");
+
+    // Regression: refresh captures selection before model reset and restores
+    // the surviving URLs, including a selected current item, in both views.
+    categorized.setSelectionMode(QAbstractItemView::ExtendedSelection);
+    categorizedDetails.setSelectionMode(QAbstractItemView::ExtendedSelection);
+    categorized.selectionModel()->setCurrentIndex(
+        categorized.item(1),
+        QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Current);
+    categorized.selectionModel()->select(
+        categorized.item(2), QItemSelectionModel::Select);
+    const DirectorySelectionSnapshot refreshSelection =
+        captureDirectorySelection(&categorized, &categorizedDetails, false);
+    verify(refreshSelection.urls.size() == 2
+               && refreshSelection.currentUrl == categoryFiles.at(1).url.toString(),
+           "refresh snapshot captures multi-selection and its selected current URL before reset");
+    categorized.clear();
+    categorizedDetails.clear();
+    addDirectoryFileItems(&categorized, &categorizedDetails, categoryFiles.at(1), QIcon(),
+                          QStringLiteral("Text file"), QStringLiteral("2 B"), QStringLiteral("—"));
+    restoreDirectorySelection(&categorized, &categorizedDetails, refreshSelection);
+    verify(categorized.selectedItems().size() == 1
+               && categorizedDetails.selectedItems().size() == 1
+               && categorized.selectedItems().first().data(
+                      directory_view_detail::UrlRole).toString()
+                      == categoryFiles.at(1).url.toString(),
+           "refresh restore preserves surviving URLs in list and Details and ignores removed items");
+    verify(categorized.currentIndex().isValid()
+               && categorized.selectionModel()->isSelected(categorized.currentIndex())
+               && categorizedDetails.currentItem()
+               && categorizedDetails.currentItem()->isSelected(),
+           "refresh restore keeps currentIndex aligned with restored selection in both views");
+
+    // Restore must replace any selection already present in the target view.
+    // This models a queued/current-view selection update arriving before the
+    // List -> Details transfer and makes the formerly intermittent failure
+    // deterministic.
+    DirectoryListWidget replacementList;
+    DirectoryTreeWidget replacementDetails;
+    replacementList.setSelectionMode(QAbstractItemView::ExtendedSelection);
+    replacementDetails.setSelectionMode(QAbstractItemView::ExtendedSelection);
+    for (const FileInfo &file : categoryFiles) {
+        addDirectoryFileItems(&replacementList, &replacementDetails, file, QIcon(),
+                              QStringLiteral("File"), QStringLiteral("1 B"),
+                              QStringLiteral("Today"));
+    }
+    replacementList.selectionModel()->setCurrentIndex(
+        replacementList.item(1),
+        QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Current);
+    const DirectorySelectionSnapshot replacementSnapshot =
+        captureDirectorySelection(&replacementList, &replacementDetails, false);
+    replacementDetails.selectAll();
+    QSignalSpy replacementChanges(
+        replacementDetails.selectionModel(), &QItemSelectionModel::selectionChanged);
+    restoreDirectorySelection(
+        &replacementList, &replacementDetails, replacementSnapshot);
+    const int changesAfterRestore = replacementChanges.count();
+    app.processEvents();
+    verify(selectedDirectoryListUrls(&replacementList) == replacementSnapshot.urls
+               && selectedDirectoryDetailsUrls(&replacementDetails) == replacementSnapshot.urls,
+           "restore replaces pre-existing target selection with the exact snapshot set");
+    verify(replacementDetails.currentItem()
+               && replacementDetails.currentItem()->isSelected()
+               && replacementDetails.currentItem()->data(0, Qt::UserRole).toString()
+                   == replacementSnapshot.currentUrl,
+           "replacement restore keeps current inside the exact selected set");
+    verify(replacementChanges.count() == changesAfterRestore,
+           "queued events do not emit a later selection expansion after restore");
+    QStyle::State restoredPaintState =
+        QStyle::State_Selected | QStyle::State_HasFocus | QStyle::State_MouseOver;
+    directory_view_detail::synchronizeIconItemState(
+        restoredPaintState, true, false);
+    verify(!(restoredPaintState & QStyle::State_MouseOver)
+               && (restoredPaintState & QStyle::State_HasFocus),
+           "selection restore does not revive stale hover state");
+
+    categorized.clearSelection();
+    categorizedDetails.clearSelection();
+    categorizedDetails.setCurrentItem(
+        categorizedDetails.topLevelItem(0), 0,
+        QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Current);
+    const DirectorySelectionSnapshot viewSwitchSelection =
+        captureDirectorySelection(&categorized, &categorizedDetails, true);
+    restoreDirectorySelection(&categorized, &categorizedDetails, viewSwitchSelection);
+    verify(categorized.selectedItems().size() == 1
+               && categorizedDetails.selectedItems().size() == 1
+               && categorized.selectionModel()->isSelected(categorized.currentIndex())
+               && categorizedDetails.currentItem()->isSelected(),
+           "view-mode transfer mirrors selected/current URL between list and Details adapters");
 
     // Regression: a normal click must not retain stale selections in a
     // categorized QListView. Ctrl-click still supports intentional multi-
@@ -536,14 +626,14 @@ int main(int argc, char **argv)
                "split pane applies Small preference before session save");
         verify(window.m_splitPane->groupMode() == DirectoryViewSettings::NoGrouping,
                "split pane applies its independent grouping preference");
-        window.m_splitPane->m_pending = {datedUnknown, datedToday};
+        window.m_splitPane->setFiles({datedUnknown, datedToday});
         window.m_splitPane->setGroupMode(DirectoryViewSettings::GroupByDate);
         verify(window.m_splitPane->groupMode() == DirectoryViewSettings::GroupByDate
                    && window.m_splitPane->listView()->isCategorized()
                    && window.m_splitPane->m_dateGroupingTimer.isActive(),
                "split Date action routes independently and schedules its own boundary refresh");
         window.m_splitPane->setGroupMode(DirectoryViewSettings::NoGrouping);
-        window.m_splitPane->m_pending = {sizedLarge, sizedSmall};
+        window.m_splitPane->setFiles({sizedLarge, sizedSmall});
         window.m_splitPane->setGroupMode(DirectoryViewSettings::GroupBySize);
         verify(window.m_splitPane->listView()->isCategorized()
                    && window.m_splitPane->listView()->item(0).data(

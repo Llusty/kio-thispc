@@ -506,7 +506,7 @@ int main(int argc, char **argv)
 
     window.setSplitViewEnabled(true);
     window.m_splitPane->setCurrentUrl(QUrl::fromLocalFile(rightDir), true);
-    verify(QTest::qWaitFor([&] { return !window.m_splitPane->m_job; }, 5000),
+    verify(QTest::qWaitFor([&] { return !window.m_splitPane->listingJob(); }, 5000),
            "split pane loads");
     window.setActivePane(ThisPcWindow::PaneId::Split);
     window.m_splitPane->listView()->clearSelection();

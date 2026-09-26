@@ -320,7 +320,7 @@ int main(int argc, char **argv)
     verify(window.m_navigation.currentUrl() == rootB && window.m_primarySearch.text == "second",
            "right Search preserves left location and draft");
     waitForSearch(*split->searchController());
-    verify(paths(split->m_pending) == expectedA && split->listView()->count() == 3,
+    verify(paths(split->files()) == expectedA && split->listView()->count() == 3,
            "right Search receives real recursive KIO results");
     verify(!split->m_details->isColumnHidden(4)
                && split->m_details->topLevelItem(0)->text(4)

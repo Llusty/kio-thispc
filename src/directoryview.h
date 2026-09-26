@@ -1497,19 +1497,88 @@ inline QSet<QString> selectedDirectoryDetailsUrls(const DirectoryTreeWidget *det
     return urls;
 }
 
+struct DirectorySelectionSnapshot {
+    QSet<QString> urls;
+    QString currentUrl;
+};
+
+inline DirectorySelectionSnapshot captureDirectorySelection(
+    const DirectoryListWidget *list, const DirectoryTreeWidget *details,
+    bool detailsActive)
+{
+    DirectorySelectionSnapshot snapshot;
+    snapshot.urls = detailsActive
+        ? selectedDirectoryDetailsUrls(details)
+        : selectedDirectoryListUrls(list);
+
+    if (detailsActive) {
+        QTreeWidgetItem *current = details->currentItem();
+        const QString url = current
+            ? current->data(0, Qt::UserRole).toString() : QString();
+        if (current && current->isSelected() && snapshot.urls.contains(url))
+            snapshot.currentUrl = url;
+    } else {
+        const QModelIndex current = list->currentIndex();
+        const QString url =
+            current.data(directory_view_detail::UrlRole).toString();
+        if (current.isValid() && list->selectionModel()->isSelected(current)
+            && snapshot.urls.contains(url)) {
+            snapshot.currentUrl = url;
+        }
+    }
+    return snapshot;
+}
+
+inline void restoreDirectorySelection(
+    DirectoryListWidget *list, DirectoryTreeWidget *details,
+    const DirectorySelectionSnapshot &snapshot)
+{
+    // Restore is replacement, not an additive update.  In particular,
+    // QStackedWidget/QAbstractItemView can leave selection in the view that is
+    // becoming current while its layout and current index settle.  Starting
+    // from that state with Select/setSelected(true) made repeated restores
+    // non-idempotent and could retain rows outside the snapshot.
+    list->clearSelection();
+    details->clearSelection();
+
+    QModelIndex firstListSelection;
+    QModelIndex currentListSelection;
+    for (int row = 0; row < list->count(); ++row) {
+        const QModelIndex index = list->item(row);
+        const QString url = index.data(directory_view_detail::UrlRole).toString();
+        if (!snapshot.urls.contains(url)) continue;
+        list->setRowSelected(row, true);
+        if (!firstListSelection.isValid()) firstListSelection = index;
+        if (url == snapshot.currentUrl) currentListSelection = index;
+    }
+    if (!currentListSelection.isValid()) currentListSelection = firstListSelection;
+    if (currentListSelection.isValid())
+        list->selectionModel()->setCurrentIndex(
+            currentListSelection, QItemSelectionModel::NoUpdate);
+
+    QTreeWidgetItem *firstDetailsSelection = nullptr;
+    QTreeWidgetItem *currentDetailsSelection = nullptr;
+    for (int row = 0; row < details->topLevelItemCount(); ++row) {
+        QTreeWidgetItem *item = details->topLevelItem(row);
+        const QString url = item->data(0, Qt::UserRole).toString();
+        if (!item->data(0, directory_view_detail::FileItemRole).toBool()
+            || !snapshot.urls.contains(url)) continue;
+        item->setSelected(true);
+        if (!firstDetailsSelection) firstDetailsSelection = item;
+        if (url == snapshot.currentUrl) currentDetailsSelection = item;
+    }
+    if (!currentDetailsSelection) currentDetailsSelection = firstDetailsSelection;
+    if (currentDetailsSelection)
+        details->setCurrentItem(currentDetailsSelection, 0,
+                                QItemSelectionModel::NoUpdate);
+}
+
 inline void restoreDirectorySelections(
     DirectoryListWidget *list, DirectoryTreeWidget *details,
     const QSet<QString> &listUrls, const QSet<QString> &detailsUrls)
 {
-    for (int row = 0; row < list->count(); ++row) {
-        const QModelIndex index = list->item(row);
-        if (listUrls.contains(index.data(directory_view_detail::UrlRole).toString()))
-            list->setRowSelected(row, true);
-    }
-    for (int row = 0; row < details->topLevelItemCount(); ++row) {
-        QTreeWidgetItem *item = details->topLevelItem(row);
-        if (item->data(0, directory_view_detail::FileItemRole).toBool()
-            && detailsUrls.contains(item->data(0, Qt::UserRole).toString()))
-            item->setSelected(true);
-    }
+    DirectorySelectionSnapshot snapshot;
+    snapshot.urls = listUrls;
+    snapshot.urls.unite(detailsUrls);
+    restoreDirectorySelection(list, details, snapshot);
 }

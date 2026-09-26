@@ -98,10 +98,7 @@ int main(int argc, char **argv)
     QTest::qWait(200);
     window.m_refreshTimer.stop();
     window.m_primaryPane->cancelListing();
-    if (window.m_splitPane->m_job) {
-        window.m_splitPane->m_job->kill();
-        window.m_splitPane->m_job = nullptr;
-    }
+    window.m_splitPane->cancelListing();
 
     // 0.30 Stage 1: the mode belongs to the normalized location rather than
     // to a pane. Exercise both panes, navigation, and the shared persistence.
@@ -114,28 +111,19 @@ int main(int argc, char **argv)
     verify(window.m_directoryViewMode == 1,
            "primary navigation restores the folder view mode");
     window.m_splitPane->setCurrentUrl(right, false);
-    if (window.m_splitPane->m_job) {
-        window.m_splitPane->m_job->kill();
-        window.m_splitPane->m_job = nullptr;
-    }
+    window.m_splitPane->cancelListing();
     verify(window.m_splitPane->viewMode() == 2,
            "split pane restores the same persisted folder mode");
     window.m_splitPane->setViewMode(0);
     window.m_splitPane->setCurrentUrl(left, false);
-    if (window.m_splitPane->m_job) {
-        window.m_splitPane->m_job->kill();
-        window.m_splitPane->m_job = nullptr;
-    }
+    window.m_splitPane->cancelListing();
     verify(window.m_splitPane->viewMode() == 1,
            "per-folder mode is shared across primary and split panes");
 
     window.setDirectoryViewMode(0);
     window.m_splitPane->setViewMode(0);
     window.m_splitPane->setCurrentUrl(right, false);
-    if (window.m_splitPane->m_job) {
-        window.m_splitPane->m_job->kill();
-        window.m_splitPane->m_job = nullptr;
-    }
+    window.m_splitPane->cancelListing();
     QMenu *viewMenu = window.m_viewButton->menu();
     QMenu *showMenu = viewMenu
         ? viewMenu->findChild<QMenu *>(QStringLiteral("viewShowMenu"))
@@ -285,11 +273,11 @@ int main(int argc, char **argv)
     verify(window.m_navigation.currentUrl() == primaryRoute && window.m_splitPane->currentUrl() == splitRoute,
            "navigatePane routes Primary and Split independently");
     window.m_primaryPane->cancelListing();
-    if (window.m_splitPane->m_job) { window.m_splitPane->m_job->kill(); window.m_splitPane->m_job = nullptr; }
+    window.m_splitPane->cancelListing();
     window.navigateTo(left, false);
     window.m_splitPane->setCurrentUrl(right, false);
     window.m_primaryPane->cancelListing();
-    if (window.m_splitPane->m_job) { window.m_splitPane->m_job->kill(); window.m_splitPane->m_job = nullptr; }
+    window.m_splitPane->cancelListing();
 
     interceptPaneRefreshes = true;
     refreshedPanes.clear();
@@ -306,11 +294,11 @@ int main(int argc, char **argv)
     verify(window.m_navigation.currentUrl() == primaryRoute && window.m_splitPane->currentUrl() == splitRoute,
            "openInOtherPane routes Split to Primary");
     window.m_primaryPane->cancelListing();
-    if (window.m_splitPane->m_job) { window.m_splitPane->m_job->kill(); window.m_splitPane->m_job = nullptr; }
+    window.m_splitPane->cancelListing();
     window.navigateTo(left, false);
     window.m_splitPane->setCurrentUrl(right, false);
     window.m_primaryPane->cancelListing();
-    if (window.m_splitPane->m_job) { window.m_splitPane->m_job->kill(); window.m_splitPane->m_job = nullptr; }
+    window.m_splitPane->cancelListing();
 
     // Stage 1: both panes own one equally aligned address section while all
     // shared controls keep operating on the pane selected by the user.
@@ -429,12 +417,131 @@ int main(int argc, char **argv)
     window.m_splitPane->setSortState(0, true);
     window.m_splitPane->setCurrentUrl(right, false);
     window.m_primaryPane->cancelListing();
-    if (window.m_splitPane->m_job) {
-        window.m_splitPane->m_job->kill();
-        window.m_splitPane->m_job = nullptr;
-    }
+    window.m_splitPane->cancelListing();
     fill(window.m_directoryList, window.m_directoryDetails, left);
     fill(window.m_splitPane->listView(), window.m_splitPane->detailsView(), right);
+
+    auto appendThird = [](DirectoryListWidget *list, DirectoryTreeWidget *tree,
+                          const QUrl &directory) {
+        const QString name = QStringLiteral("three");
+        const QUrl url = childUrlWithName(directory, name);
+        FileInfo file{name, QString(), QString(), url, false, 0, 0};
+        addDirectoryFileItems(list, tree, file, QIcon(), QStringLiteral("File"),
+                              QStringLiteral("0"), QStringLiteral("Today"));
+    };
+    appendThird(window.m_directoryList, window.m_directoryDetails, left);
+    appendThird(window.m_splitPane->listView(), window.m_splitPane->detailsView(), right);
+
+    auto selectedUrls = [](QAbstractItemView *view) {
+        QSet<QString> urls;
+        for (const QModelIndex &index : view->selectionModel()->selectedRows()) {
+            const QString url = qobject_cast<DirectoryTreeWidget *>(view)
+                ? index.siblingAtColumn(0).data(Qt::UserRole).toString()
+                : index.data(directory_view_detail::UrlRole).toString();
+            if (!url.isEmpty()) urls.insert(url);
+        }
+        return urls;
+    };
+    auto verifyExactSelection = [&](QAbstractItemView *view,
+                                    const QSet<QString> &expected,
+                                    const char *description) {
+        const QSet<QString> actual = selectedUrls(view);
+        verify(actual == expected
+                   && view->currentIndex().isValid()
+                   && view->selectionModel()->isSelected(view->currentIndex())
+                   && expected.contains(qobject_cast<DirectoryTreeWidget *>(view)
+                       ? view->currentIndex().siblingAtColumn(0).data(Qt::UserRole).toString()
+                       : view->currentIndex().data(directory_view_detail::UrlRole).toString()),
+               description);
+    };
+
+    // GUI/offscreen regression for the intermittent Icons -> List -> Details
+    // expansion.  Repeat the real pane paths so queued layout/current events
+    // are drained between every transition.
+    for (int iteration = 0; iteration < 50; ++iteration) {
+        for (bool split : {false, true}) {
+            DirectoryListWidget *list = split
+                ? window.m_splitPane->listView() : window.m_directoryList;
+            DirectoryTreeWidget *details = split
+                ? window.m_splitPane->detailsView() : window.m_directoryDetails;
+            const QUrl directory = split ? right : left;
+            const auto setMode = [&](int mode) {
+                if (split) window.m_splitPane->setViewMode(mode);
+                else window.setDirectoryViewMode(mode);
+                app.processEvents();
+            };
+            const QString middle = childUrlWithName(directory, QStringLiteral("two")).toString();
+            const QString last = childUrlWithName(directory, QStringLiteral("three")).toString();
+
+            setMode(0);
+            list->selectionModel()->setCurrentIndex(
+                list->item(1), QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Current);
+            const QSet<QString> one{middle};
+            setMode(1);
+            verifyExactSelection(list, one,
+                "Icons -> List preserves exactly the single selected URL");
+            setMode(2);
+            verifyExactSelection(details, one,
+                "Icons -> List -> Details preserves exactly the single selected URL");
+            app.processEvents();
+            verifyExactSelection(details, one,
+                "queued events do not expand Details selection after restore");
+            setMode(3);
+            verifyExactSelection(list, one,
+                "Details -> Compact preserves the exact single selection");
+            setMode(0);
+            verifyExactSelection(list, one,
+                "Compact -> Icons preserves the exact single selection");
+
+            list->selectionModel()->setCurrentIndex(
+                list->item(1), QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Current);
+            list->selectionModel()->select(list->item(2), QItemSelectionModel::Select);
+            const QSet<QString> two{middle, last};
+            for (int mode : {1, 2, 3, 0}) {
+                setMode(mode);
+                QAbstractItemView *active = mode == 2
+                    ? static_cast<QAbstractItemView *>(details)
+                    : static_cast<QAbstractItemView *>(list);
+                verifyExactSelection(active, two,
+                    "all view modes preserve exactly two of three selected URLs");
+            }
+        }
+    }
+
+    // Restore the original two-item fixture expected by the remaining pane
+    // action matrix.
+    fill(window.m_directoryList, window.m_directoryDetails, left);
+    fill(window.m_splitPane->listView(), window.m_splitPane->detailsView(), right);
+
+    for (QAbstractItemView *view : {
+             static_cast<QAbstractItemView *>(window.m_directoryList),
+             static_cast<QAbstractItemView *>(window.m_splitPane->listView())}) {
+        view->selectionModel()->setCurrentIndex(
+            view->model()->index(0, 0),
+            QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+        view->selectionModel()->select(
+            view->model()->index(1, 0),
+            QItemSelectionModel::Select | QItemSelectionModel::Rows);
+    }
+    for (int mode : {2, 3, 1, 0}) {
+        window.setDirectoryViewMode(mode);
+        window.m_splitPane->setViewMode(mode);
+        QAbstractItemView *primary = mode == 2
+            ? static_cast<QAbstractItemView *>(window.m_directoryDetails)
+            : static_cast<QAbstractItemView *>(window.m_directoryList);
+        QAbstractItemView *split = mode == 2
+            ? static_cast<QAbstractItemView *>(window.m_splitPane->detailsView())
+            : static_cast<QAbstractItemView *>(window.m_splitPane->listView());
+        verify(primary->selectionModel()->selectedRows().size() == 2
+                   && primary->currentIndex().isValid()
+                   && primary->selectionModel()->isSelected(primary->currentIndex()),
+               "Primary Icons/List/Details/Compact switch preserves multi-selection and current");
+        verify(split->selectionModel()->selectedRows().size() == 2
+                   && split->currentIndex().isValid()
+                   && split->selectionModel()->isSelected(split->currentIndex()),
+               "Split Icons/List/Details/Compact switch preserves multi-selection and current");
+    }
+
     auto focus = [&](QAbstractItemView *view) {
         window.activateWindow(); view->setFocus(); app.processEvents();
     };
@@ -651,7 +758,7 @@ int main(int argc, char **argv)
                && window.m_activePane == Pane::Split,
            "sidebar This PC targets the active right pane");
     verify(window.m_splitPane->contentStack()->currentWidget() == window.m_splitHomePage
-               && window.m_splitHomePage->isVisible() && window.m_splitPane->m_job == nullptr,
+               && window.m_splitHomePage->isVisible() && window.m_splitPane->listingJob() == nullptr,
            "right This PC presents the card page without a directory-list job");
     verify(!window.paneContext().isDirectory && !window.m_upAction->isEnabled()
                && !window.m_viewButton->isEnabled() && !window.m_sortButton->isEnabled()
@@ -702,7 +809,7 @@ int main(int argc, char **argv)
     verify(window.m_splitPane->currentUrl() == kThisPcUrl, "right Forward restores This PC card page");
     if (window.m_driveJob) { window.m_driveJob->kill(); window.m_driveJob = nullptr; }
     window.m_refreshAction->trigger();
-    verify(window.m_driveJob && !window.m_splitPane->m_job && window.m_navigation.currentUrl() == left,
+    verify(window.m_driveJob && !window.m_splitPane->listingJob() && window.m_navigation.currentUrl() == left,
            "right This PC Refresh uses the existing shared drive backend");
     window.m_driveJob->kill(); window.m_driveJob = nullptr;
     window.navigateTo(kThisPcUrl, true);

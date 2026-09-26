@@ -2,12 +2,11 @@
 #pragma once
 
 #include "browsercommon.h"
+#include "directorylistingcore.h"
+#include "directoryview.h"
 #include <QFrame>
-#include <QHash>
-#include <QPointer>
 #include <functional>
 
-namespace KIO { class ListJob; }
 class DirectoryListWidget;
 class DirectoryTreeWidget;
 class QLabel;
@@ -23,6 +22,7 @@ public:
         bool sortAscending = true;
         int groupMode = 0;
         bool thumbnailsEnabled = true;
+        bool detailsActive = false;
         std::function<bool(const FileInfo &, QMimeDatabase &)> acceptsFile;
         std::function<void(int, int)> updateStatus;
     };
@@ -33,12 +33,12 @@ public:
     void bindDirectoryViews(DirectoryListWidget *, DirectoryTreeWidget *, QLabel *, QLabel *);
     DirectoryListWidget *listView() const { return m_directoryList; }
     DirectoryTreeWidget *detailsView() const { return m_directoryDetails; }
-    const QList<FileInfo> &files() const { return m_pendingFiles; }
-    QList<FileInfo> &mutableFiles() { return m_pendingFiles; }
-    void setFiles(const QList<FileInfo> &files) { m_pendingFiles = files; }
+    const QList<FileInfo> &files() const { return m_listingCore.files(); }
+    QList<FileInfo> &mutableFiles() { return m_listingCore.mutableFiles(); }
+    void setFiles(const QList<FileInfo> &files) { m_listingCore.setFiles(files); }
     KIO::ListJob *listingJob() const;
-    void clearThumbnailCache() { m_thumbnailCache.clear(); }
-    void loadDirectory(const QUrl &, bool, bool,
+    void clearThumbnailCache() { m_listingCore.clearThumbnailCache(); }
+    void loadDirectory(const QUrl &, bool, bool, bool,
                        const std::function<void(bool)> &,
                        const std::function<void(const QString &)> &);
     void renderDirectoryItems(const RenderOptions &);
@@ -54,7 +54,6 @@ private:
     QLabel *m_directoryTitle = nullptr;
     QLabel *m_directoryStatus = nullptr;
     QUrl m_currentUrl = kThisPcUrl;
-    QList<FileInfo> m_pendingFiles;
-    QHash<QString, QIcon> m_thumbnailCache;
-    QPointer<KIO::ListJob> m_directoryJob;
+    DirectoryListingCore m_listingCore;
+    DirectorySelectionSnapshot m_pendingSelection;
 };
