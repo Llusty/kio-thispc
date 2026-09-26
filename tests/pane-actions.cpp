@@ -282,7 +282,7 @@ int main(int argc, char **argv)
     QDir().mkpath(splitRoute.toLocalFile());
     window.navigatePane(ThisPcWindow::PaneId::Primary, primaryRoute);
     window.navigatePane(ThisPcWindow::PaneId::Split, splitRoute);
-    verify(window.m_currentUrl == primaryRoute && window.m_splitPane->currentUrl() == splitRoute,
+    verify(window.m_navigation.currentUrl() == primaryRoute && window.m_splitPane->currentUrl() == splitRoute,
            "navigatePane routes Primary and Split independently");
     window.m_primaryPane->cancelListing();
     if (window.m_splitPane->m_job) { window.m_splitPane->m_job->kill(); window.m_splitPane->m_job = nullptr; }
@@ -300,10 +300,10 @@ int main(int argc, char **argv)
            "refreshPane routes Primary and Split independently");
 
     window.openInOtherPane(ThisPcWindow::PaneId::Primary, splitRoute);
-    verify(window.m_currentUrl == left && window.m_splitPane->currentUrl() == splitRoute,
+    verify(window.m_navigation.currentUrl() == left && window.m_splitPane->currentUrl() == splitRoute,
            "openInOtherPane routes Primary to Split");
     window.openInOtherPane(ThisPcWindow::PaneId::Split, primaryRoute);
-    verify(window.m_currentUrl == primaryRoute && window.m_splitPane->currentUrl() == splitRoute,
+    verify(window.m_navigation.currentUrl() == primaryRoute && window.m_splitPane->currentUrl() == splitRoute,
            "openInOtherPane routes Split to Primary");
     window.m_primaryPane->cancelListing();
     if (window.m_splitPane->m_job) { window.m_splitPane->m_job->kill(); window.m_splitPane->m_job = nullptr; }
@@ -373,13 +373,13 @@ int main(int argc, char **argv)
     window.m_sidebar->activated(sidebarTarget);
     verify(window.m_activePane == ThisPcWindow::PaneId::Split
                && window.m_splitPane->currentUrl() == sidebarTarget
-               && window.m_currentUrl == left,
+               && window.m_navigation.currentUrl() == left,
            "sidebar navigates right active pane and preserves pane selection");
     const QUrl otherPaneTarget = QUrl::fromLocalFile(files.path() + "/other-pane-target");
     QDir().mkpath(otherPaneTarget.toLocalFile());
     window.m_sidebar->openInSplitPaneRequested(otherPaneTarget);
     verify(window.m_activePane == ThisPcWindow::PaneId::Split
-               && window.m_currentUrl == otherPaneTarget
+               && window.m_navigation.currentUrl() == otherPaneTarget
                && window.m_splitPane->currentUrl() == sidebarTarget,
            "sidebar Open in other pane targets left from active right pane");
     window.navigateTo(left, false);
@@ -647,7 +647,7 @@ int main(int argc, char **argv)
     window.m_splitPane->setCurrentUrl(right);
     window.setActivePane(Pane::Split);
     window.m_sidebar->activated(kThisPcUrl);
-    verify(window.m_splitPane->currentUrl() == kThisPcUrl && window.m_currentUrl == left
+    verify(window.m_splitPane->currentUrl() == kThisPcUrl && window.m_navigation.currentUrl() == left
                && window.m_activePane == Pane::Split,
            "sidebar This PC targets the active right pane");
     verify(window.m_splitPane->contentStack()->currentWidget() == window.m_splitHomePage
@@ -690,7 +690,7 @@ int main(int argc, char **argv)
     QTest::keyClick(window.m_splitPane->m_addressEdit, Qt::Key_Escape);
     rightDrive->setFocus();
     QTest::keyClick(rightDrive, Qt::Key_Return);
-    verify(window.m_splitPane->currentUrl() == right && window.m_currentUrl == left
+    verify(window.m_splitPane->currentUrl() == right && window.m_navigation.currentUrl() == left
                && window.m_activePane == Pane::Split,
            "right drive card keyboard activation opens its real target in right pane");
     window.m_upAction->trigger();
@@ -702,7 +702,7 @@ int main(int argc, char **argv)
     verify(window.m_splitPane->currentUrl() == kThisPcUrl, "right Forward restores This PC card page");
     if (window.m_driveJob) { window.m_driveJob->kill(); window.m_driveJob = nullptr; }
     window.m_refreshAction->trigger();
-    verify(window.m_driveJob && !window.m_splitPane->m_job && window.m_currentUrl == left,
+    verify(window.m_driveJob && !window.m_splitPane->m_job && window.m_navigation.currentUrl() == left,
            "right This PC Refresh uses the existing shared drive backend");
     window.m_driveJob->kill(); window.m_driveJob = nullptr;
     window.navigateTo(kThisPcUrl, true);
@@ -734,23 +734,23 @@ int main(int argc, char **argv)
     // Point the real card interaction at a disposable folder for this test.
     folderCard->m_url = right;
     QTest::mouseDClick(folderCard, Qt::LeftButton);
-    verify(window.m_splitPane->currentUrl() == right && window.m_currentUrl == kThisPcUrl,
+    verify(window.m_splitPane->currentUrl() == right && window.m_navigation.currentUrl() == kThisPcUrl,
            "right folder card double-click affects only its owning pane");
     window.setActivePane(Pane::Split);
     leftDrive->setFocus();
     QTest::keyClick(leftDrive, Qt::Key_Return);
-    verify(window.m_currentUrl == right && window.m_splitPane->currentUrl() == right
+    verify(window.m_navigation.currentUrl() == right && window.m_splitPane->currentUrl() == right
                && window.m_activePane == Pane::Primary,
            "left drive card retains its accepted pane-local routing");
     window.setActivePane(Pane::Split);
     window.beginAddressEdit(Pane::Split);
     window.m_splitPane->m_addressEdit->setText("thispc:/");
     QTest::keyClick(window.m_splitPane->m_addressEdit, Qt::Key_Return);
-    verify(window.m_splitPane->currentUrl() == kThisPcUrl && window.m_currentUrl == right
+    verify(window.m_splitPane->currentUrl() == kThisPcUrl && window.m_navigation.currentUrl() == right
                && window.m_splitPane->m_locationStack->currentWidget() == window.m_splitPane->m_breadcrumbFrame,
            "right address submission opens This PC and restores its breadcrumb");
     window.swapSplitPanes();
-    verify(window.m_currentUrl == kThisPcUrl && window.m_splitPane->currentUrl() == right
+    verify(window.m_navigation.currentUrl() == kThisPcUrl && window.m_splitPane->currentUrl() == right
                && window.m_contentStack->currentWidget() == window.m_homePage,
            "pane swap preserves This PC virtual-page semantics");
     qInfo("PASS: %d assertions, Icons/List/Details/Compact, both panes; KIO dispatch intercepted", checks);

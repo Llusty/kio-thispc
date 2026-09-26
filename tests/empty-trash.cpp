@@ -29,7 +29,7 @@ int main(int argc, char **argv)
     auto *manager = window.m_operationManager;
     auto place = [&](const QUrl &left, const QUrl &right) {
         // Seed view locations without listing any real trash contents.
-        window.m_currentUrl = left;
+        window.m_navigation.updateCurrent(left);
         window.m_primaryPane->setCurrentUrl(left);
         window.m_splitPane->m_currentUrl = right;
         window.m_contentStack->setCurrentWidget(window.m_directoryPage);

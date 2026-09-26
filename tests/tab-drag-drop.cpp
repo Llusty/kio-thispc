@@ -293,7 +293,7 @@ static void testTabReorderStateIdentity()
     verify(signalOrder == QStringList({QStringLiteral("tabMoved"), QStringLiteral("currentChanged")}),
            "Qt deterministically emits tabMoved before currentChanged for reorder");
     verify(window.m_activeTab == 1 && window.m_tabBar->currentIndex() == 1
-               && window.m_currentUrl == urls.at(0),
+               && window.m_navigation.currentUrl() == urls.at(0),
            "window and QTabBar retain the same active tab after inactive reorder");
     verify(window.m_tabs.at(0).currentUrl == urls.at(3)
                && window.m_tabs.at(1).currentUrl == urls.at(0)
@@ -381,7 +381,7 @@ static void testWindow(bool split)
         verify(enter(bar, target, mime), "A to B dragEnter");
         verify(moveDrag(bar, target, mime), "A to B dragMove");
         QTest::qWait(730);
-        verify(window.m_activeTab == 1 && window.m_currentUrl == b, "hover loads B through switchToTab");
+        verify(window.m_activeTab == 1 && window.m_navigation.currentUrl() == b, "hover loads B through switchToTab");
         verify(window.m_splitPane->isVisible() == split, "hover preserves split state of B");
         leave(bar);
         QAbstractItemView *view = mode == 2 ? static_cast<QAbstractItemView *>(window.m_directoryDetails) : window.m_directoryList;

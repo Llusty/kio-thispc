@@ -313,8 +313,8 @@ int main(int argc, char **argv)
     verify(true, "dialog destroyed during active jobs safely");
 
     // Test Search location blocking in compareSplitPanes
-    window.m_currentUrl = makeSearchLocation(QStringLiteral("query"), 0, leftDir, 0, 0, 0);
-    window.m_primaryPane->setCurrentUrl(window.m_currentUrl);
+    window.m_navigation.updateCurrent(makeSearchLocation(QStringLiteral("query"), 0, leftDir, 0, 0, 0));
+    window.m_primaryPane->setCurrentUrl(window.m_navigation.currentUrl());
     // In search mode, compareSplitPanes must show information dialog and not crash
     QTimer::singleShot(50, [] {
         if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
@@ -325,8 +325,8 @@ int main(int argc, char **argv)
     verify(true, "compareSplitPanes safely blocks search locations");
 
     // Test thispc:/ location blocking in compareSplitPanes
-    window.m_currentUrl = QUrl(QStringLiteral("thispc:/"));
-    window.m_primaryPane->setCurrentUrl(window.m_currentUrl);
+    window.m_navigation.updateCurrent(QUrl(QStringLiteral("thispc:/")));
+    window.m_primaryPane->setCurrentUrl(window.m_navigation.currentUrl());
     QTimer::singleShot(50, [] {
         if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
             box->accept();

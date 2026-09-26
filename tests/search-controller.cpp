@@ -261,7 +261,7 @@ int main(int argc, char **argv)
     window.syncCurrentSearchFilters();
     window.renderDirectoryItems();
     verify(window.m_directoryList->count() == 1 && window.m_searchVisibleCount == 1, "changing type filter reuses current results");
-    verify(searchIntParameter(window.m_currentUrl, "type", 0) == 1, "filter stored in search history URL");
+    verify(searchIntParameter(window.m_navigation.currentUrl(), "type", 0) == 1, "filter stored in search history URL");
     window.navigateTo(makeSearchLocation("needle", 0, rootA, 0, 0, 0), true);
     auto *job = window.m_searchController->m_searchJobs.first().data();
     job->entries(job, {entry(a + "/needle.txt")});
@@ -273,7 +273,7 @@ int main(int argc, char **argv)
     window.navigateTo(rootB, true);
     verify(!window.m_searchController->isRunning(), "navigation cancels current search");
     verify(QTest::qWaitFor([&] { return window.m_directoryList->count() == 1; }, 5000), "new directory loads after cancellation");
-    verify(window.m_currentUrl == rootB && paths(window.m_primaryPane->files()) == QSet<QString>{b + "/needle-second.txt"}, "late search results do not replace ordinary directory");
+    verify(window.m_navigation.currentUrl() == rootB && paths(window.m_primaryPane->files()) == QSet<QString>{b + "/needle-second.txt"}, "late search results do not replace ordinary directory");
     const QString refusedRedoStatus =
         "Files or their inode identities changed; no Undo/Redo was performed. "
         "After safely restoring the expected files, you can try again.";
@@ -317,7 +317,7 @@ int main(int argc, char **argv)
     verify(isSearchLocation(rightSearch) && searchBaseFromUrl(rightSearch) == rootA
                && searchIntParameter(rightSearch, "scope", -1) == 0,
            "Enter routes recursive Search to the right folder");
-    verify(window.m_currentUrl == rootB && window.m_primarySearch.text == "second",
+    verify(window.m_navigation.currentUrl() == rootB && window.m_primarySearch.text == "second",
            "right Search preserves left location and draft");
     waitForSearch(*split->searchController());
     verify(paths(split->m_pending) == expectedA && split->listView()->count() == 3,
@@ -360,7 +360,7 @@ int main(int argc, char **argv)
     verify(split->m_locationStack->currentWidget() == split->m_breadcrumbFrame,
            "right Escape restores Search breadcrumb");
     window.m_upAction->trigger();
-    verify(split->currentUrl() == rootA && window.m_currentUrl == rootB
+    verify(split->currentUrl() == rootA && window.m_navigation.currentUrl() == rootB
                && split->m_details->isColumnHidden(4),
            "right Search Up returns to base and hides result-location column");
     window.m_backAction->trigger();
@@ -392,7 +392,7 @@ int main(int argc, char **argv)
     waitForSearch(*split->searchController());
     verify(split->listView()->count() == 1, "replacement right query displays fresh results");
     window.m_refreshAction->trigger();
-    verify(split->searchController()->isRunning() && window.m_currentUrl == rootB,
+    verify(split->searchController()->isRunning() && window.m_navigation.currentUrl() == rootB,
            "shared Refresh restarts only the active right Search");
     waitForSearch(*split->searchController());
 
@@ -453,9 +453,9 @@ int main(int argc, char **argv)
     verify(split->listView()->count() == 3 && split->searchState().type == 0
                && split->searchState().date == 0 && split->searchState().size == 0,
            "Clear filters resets only active right Search filters");
-    const QUrl leftBeforeCrumb = window.m_currentUrl;
+    const QUrl leftBeforeCrumb = window.m_navigation.currentUrl();
     QTest::mouseClick(split->m_thisPcCrumb, Qt::LeftButton);
-    verify(split->currentUrl() == kThisPcUrl && window.m_currentUrl == leftBeforeCrumb
+    verify(split->currentUrl() == kThisPcUrl && window.m_navigation.currentUrl() == leftBeforeCrumb
                && window.m_searchEdit->placeholderText() == "Search this computer",
            "right Search This PC breadcrumb navigates right and updates shared Search state");
     // Restrict whole-computer Search to disposable roots in this test.
