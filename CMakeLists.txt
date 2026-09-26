@@ -73,6 +73,8 @@ add_executable(thispc-view
     src/navigationhistory.h
     src/paneadapter.cpp
     src/paneadapter.h
+    src/panemenucontroller.cpp
+    src/panemenucontroller.h
     src/primarybrowserpane.cpp
     src/primarybrowserpane.h
     src/previewcoordinator.cpp
@@ -136,6 +138,8 @@ add_executable(thispc-view-stage3c1-test EXCLUDE_FROM_ALL
     src/navigationhistory.h
     src/paneadapter.cpp
     src/paneadapter.h
+    src/panemenucontroller.cpp
+    src/panemenucontroller.h
     src/primarybrowserpane.cpp
     src/primarybrowserpane.h
     src/previewcoordinator.cpp

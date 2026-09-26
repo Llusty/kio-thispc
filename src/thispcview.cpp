@@ -15,6 +15,7 @@
 #include "locationpresentation.h"
 #include "navigationhistory.h"
 #include "paneadapter.h"
+#include "panemenucontroller.h"
 #include "primarybrowserpane.h"
 #include "previewcoordinator.h"
 #include "selectionmenucontroller.h"
@@ -3947,9 +3948,11 @@ private:
     void showPaneMenu(const PaneContext &context, const PaneItem &clicked,
                       bool hasItem, const QPoint &globalPosition)
     {
+        const ActionAvailability availability =
+            ActionStateController::compute(actionStateInput());
+
         if (!hasItem) {
             QMenu backgroundMenu(this);
-
             const bool split = context.id == PaneId::Split;
             const SelectionMenuController::ViewState viewState{
                 context.id,
@@ -3970,435 +3973,85 @@ private:
                 [this, split](int mode) { split ? m_splitPane->setGroupMode(mode) : setGroupMode(mode); },
                 [this](bool value) { setShowHiddenFiles(value); },
                 [this](bool value) { setThumbnailsEnabled(value); }};
-            m_selectionMenuController.addViewSubmenu(backgroundMenu, viewState, viewCallbacks);
-            m_selectionMenuController.addSortSubmenu(backgroundMenu, viewState, viewCallbacks);
-
-            backgroundMenu.addSeparator();
-
-            QAction *refresh =
-                backgroundMenu.addAction(
-                    themedIcon(QStringLiteral("view-refresh")),
-                    trLocal("Odśwież", "Refresh"));
-
-            QAction *selectAll =
-                backgroundMenu.addAction(
-                    themedIcon(QStringLiteral("edit-select-all")),
-                    trLocal("Zaznacz wszystko", "Select all"));
-
-            backgroundMenu.addSeparator();
-
-            QAction *newFolder =
-                backgroundMenu.addAction(
-                    themedIcon(QStringLiteral("folder-new")),
-                    trLocal("Nowy folder", "New folder"));
-            newFolder->setEnabled(
-                canModifyCurrentDirectory());
-
-            QAction *paste =
-                backgroundMenu.addAction(
-                    themedIcon(QStringLiteral("edit-paste")),
-                    trLocal("Wklej", "Paste"));
-            paste->setEnabled(canPasteHere());
-
-            QAction *emptyTrash = nullptr;
-            if (context.isDirectory && FileActions::isTrashRoot(context.directory)) {
-                backgroundMenu.addSeparator();
-                emptyTrash = backgroundMenu.addAction(
-                    themedIcon(QStringLiteral("user-trash")),
-                    trLocal("Opróżnij kosz", "Empty Trash"));
-                emptyTrash->setEnabled(m_fileActions->canEmptyTrash(context.directory));
-            }
-
-            backgroundMenu.addSeparator();
-
-            QAction *openDolphin =
-                backgroundMenu.addAction(
-                    themedIcon(QStringLiteral("system-file-manager")),
-                    trLocal(
-                        "Otwórz w Dolphinie",
-                        "Open in Dolphin"));
-            openDolphin->setEnabled(
-                !isSearchLocation(context.directory));
-
-            QAction *duplicateTabAction =
-                backgroundMenu.addAction(
-                    themedIcon(QStringLiteral("tab-new")),
-                    trLocal(
-                        "Otwórz ten folder w nowej karcie",
-                        "Open this folder in new tab"));
-            duplicateTabAction->setEnabled(
-                !isSearchLocation(context.directory));
-
-            QAction *newWindowAction =
-                backgroundMenu.addAction(
-                    themedIcon(QStringLiteral("window-new")),
-                    trLocal(
-                        "Otwórz ten folder w nowym oknie",
-                        "Open this folder in new window"));
-            newWindowAction->setEnabled(
-                !isSearchLocation(context.directory));
-
-            QAction *openSplitAction =
-                backgroundMenu.addAction(
-                    themedIcon(QStringLiteral("view-split-left-right"), QStringLiteral("view-list-details")),
-                    trLocal(
-                        "Otwórz ten folder w drugim panelu",
-                        "Open this folder in other pane"));
-            openSplitAction->setEnabled(
-                !isSearchLocation(context.directory));
-
-            QAction *quickAccessAction = nullptr;
-            if (canQuickAccessLocation(context.directory)) {
-                const bool pinned =
-                    isQuickAccessPinned(context.directory);
-                quickAccessAction = backgroundMenu.addAction(
-                    themedIcon(
-                        pinned
-                            ? QStringLiteral("list-remove")
-                            : QStringLiteral("folder-favorites")),
-                    pinned
-                        ? trLocal(
-                            "Odepnij od Szybkiego dostępu",
-                            "Unpin from Quick access")
-                        : trLocal(
-                            "Przypnij do Szybkiego dostępu",
-                            "Pin to Quick access"));
-            }
-
-            QAction *openTerminal =
-                backgroundMenu.addAction(
-                    themedIcon(QStringLiteral("utilities-terminal")),
-                    trLocal(
-                        "Otwórz terminal tutaj",
-                        "Open terminal here"));
-            openTerminal->setEnabled(
-                context.directory.isLocalFile());
-
-            QAction *openAdmin = nullptr;
-            if (context.directory.isLocalFile()) {
-                backgroundMenu.addSeparator();
-                openAdmin =
-                    backgroundMenu.addAction(
-                        themedIcon(QStringLiteral("security-high")),
-                        trLocal(
-                            "Otwórz ten folder jako administrator",
-                            "Open this folder as administrator"));
-            }
-
-            QAction *chosen =
-                backgroundMenu.exec(
-                    globalPosition);
-
-            if (chosen == refresh) {
-                refreshPane(context.id);
-            } else if (chosen == selectAll) {
-                selectAllDirectoryItems();
-            } else if (chosen == newFolder) {
-                createNewFolder();
-            } else if (chosen == paste) {
-                pasteClipboard();
-            } else if (emptyTrash && chosen == emptyTrash) {
-                emptyTrashAt(context.directory);
-            } else if (chosen == openDolphin) {
-                openInDolphin(context.directory);
-            } else if (chosen == duplicateTabAction) {
-                createNewTab(context.directory, true);
-            } else if (chosen == newWindowAction) {
-                openInNewWindow(context.directory);
-            } else if (chosen == openSplitAction) {
-                openInOtherPane(context.id, context.directory);
-            } else if (
-                quickAccessAction
-                && chosen == quickAccessAction) {
-                toggleQuickAccessLocation(context.directory);
-            } else if (chosen == openTerminal) {
-                openTerminalAt(context.directory);
-            } else if (
-                openAdmin
-                && chosen == openAdmin) {
-                openAsAdministrator(
-                    context.directory,
-                    true);
-            }
-
+            const bool quickAccess = canQuickAccessLocation(context.directory);
+            m_paneMenuController.buildBackgroundMenu(backgroundMenu,
+                {context.directory, availability, viewState, quickAccess,
+                 quickAccess && isQuickAccessPinned(context.directory),
+                 context.directory.isLocalFile(), context.directory.isLocalFile()},
+                {viewCallbacks,
+                 [this, pane = context.id] { refreshPane(pane); },
+                 [this] { selectAllDirectoryItems(); },
+                 [this] { createNewFolder(); },
+                 [this] { pasteClipboard(); },
+                 [this, directory = context.directory] { emptyTrashAt(directory); },
+                 [this, directory = context.directory] { openInDolphin(directory); },
+                 [this, directory = context.directory] { createNewTab(directory, true); },
+                 [this, directory = context.directory] { openInNewWindow(directory); },
+                 [this, pane = context.id, directory = context.directory] {
+                     openInOtherPane(pane, directory);
+                 },
+                 [this, directory = context.directory] { toggleQuickAccessLocation(directory); },
+                 [this, directory = context.directory] { openTerminalAt(directory); },
+                 [this, directory = context.directory] { openAsAdministrator(directory, true); }});
+            backgroundMenu.exec(globalPosition);
             return;
         }
 
         const QUrl url = clicked.url;
         const bool isDir = clicked.isDir;
-
         const QList<QUrl> selected = selectedUrls();
         const bool single = selected.size() == 1;
-
         QMenu menu(this);
-
-        QAction *openAction = menu.addAction(
-            themedIcon(
-                isDir
-                    ? QStringLiteral("folder-open")
-                    : QStringLiteral("document-open")),
-            trLocal("Otwórz", "Open"));
-
-        QAction *openNewTabAction = nullptr;
-        QAction *openNewWindowAction = nullptr;
-        if (single && isDir) {
-            openNewTabAction = menu.addAction(
-                themedIcon(QStringLiteral("tab-new")),
-                trLocal(
-                    "Otwórz w nowej karcie",
-                    "Open in new tab"));
-
-            openNewWindowAction = menu.addAction(
-                themedIcon(QStringLiteral("window-new")),
-                trLocal(
-                    "Otwórz w nowym oknie",
-                    "Open in new window"));
-        }
-
-        QAction *openSplitPaneAction = nullptr;
-        if (single && isDir) {
-            openSplitPaneAction = menu.addAction(
-                themedIcon(QStringLiteral("view-split-left-right"), QStringLiteral("view-list-details")),
-                trLocal(
-                    "Otwórz w drugim panelu",
-                    "Open in other pane"));
-        }
-
-        QAction *quickAccessAction = nullptr;
-        if (single && isDir && canQuickAccessLocation(url)) {
-            const bool pinned = isQuickAccessPinned(url);
-            quickAccessAction = menu.addAction(
-                themedIcon(
-                    pinned
-                        ? QStringLiteral("list-remove")
-                        : QStringLiteral("folder-favorites")),
-                pinned
-                    ? trLocal(
-                        "Odepnij od Szybkiego dostępu",
-                        "Unpin from Quick access")
-                    : trLocal(
-                        "Przypnij do Szybkiego dostępu",
-                        "Pin to Quick access"));
-        }
-
-        QAction *openDolphinAction = menu.addAction(
-            themedIcon(QStringLiteral("system-file-manager")),
-            trLocal(
-                "Otwórz w Dolphinie",
-                "Open in Dolphin"));
-
-        QAction *openLocationAction = nullptr;
-        if (isSearchLocation(context.directory) && single) {
-            openLocationAction =
-                menu.addAction(
-                    themedIcon(QStringLiteral("folder-open")),
-                    isDir
-                        ? trLocal(
-                            "Otwórz folder nadrzędny",
-                            "Open parent folder")
-                        : trLocal(
-                            "Otwórz lokalizację pliku",
-                            "Open file location"));
-        }
-
-        m_selectionMenuController.addOpenWithSubmenu(menu, selected);
-        QAction *extractHereAction = nullptr;
-        QAction *extractToAction = nullptr;
-
-        if (single && thispcCanExtractArchive(url, isDir)) {
-            QMenu *extractMenu = menu.addMenu(
-                themedIcon(QStringLiteral("archive-extract")),
-                trLocal("Wypakuj", "Extract"));
-
-            extractHereAction = extractMenu->addAction(
-                trLocal("Wypakuj tutaj", "Extract Here"));
-
-            extractToAction = extractMenu->addAction(
-                trLocal("Wypakuj do…", "Extract To…"));
-        }
-
-        QAction *printAction = menu.addAction(
-            themedIcon(QStringLiteral("document-print")),
-            trLocal("Drukuj…", "Print…"));
-        printAction->setEnabled(
-            single && m_selectionMenuController.canPrintUrl(url, isDir));
-
-        QAction *wallpaperAction = nullptr;
-        if (single && m_selectionMenuController.isLocalImageUrl(url, isDir)) {
-            wallpaperAction =
-                menu.addAction(
-                    themedIcon(
-                        QStringLiteral(
-                            "preferences-desktop-wallpaper")),
-                    trLocal(
-                        "Ustaw jako tło pulpitu",
-                        "Set as desktop wallpaper"));
-            wallpaperAction->setEnabled(
-                m_selectionMenuController.canSetWallpaper(url, isDir));
-        }
-
-        m_selectionMenuController.addSendToSubmenu(menu, selected, {
-            [this](const QList<QUrl> &urls, const QString &directory, const QString &message) {
-                copySelectionToDirectory(urls, directory, message);
-            },
-            [this](const QList<QUrl> &urls) { createZipFromSelection(urls); },
-            [this](const QList<QUrl> &urls) { createArchiveFromSelection(urls, ThisPcArchiveFormat::SevenZip); },
-            [this](const QList<QUrl> &urls) { createArchiveFromSelection(urls, ThisPcArchiveFormat::TarGzip); }});
-
-        QAction *openTerminalAction =
-            menu.addAction(
-                themedIcon(QStringLiteral("utilities-terminal")),
-                trLocal(
-                    "Otwórz terminal tutaj",
-                    "Open terminal here"));
-        openTerminalAction->setEnabled(
-            isDir && url.isLocalFile());
-
-        QAction *openAdminAction = nullptr;
-        if (single && url.isLocalFile()) {
-            openAdminAction =
-                menu.addAction(
-                    themedIcon(QStringLiteral("security-high")),
-                    isDir
-                        ? trLocal(
-                            "Otwórz jako administrator",
-                            "Open as administrator")
-                        : trLocal(
-                            "Otwórz lokalizację jako administrator",
-                            "Open location as administrator"));
-        }
-
-        menu.addSeparator();
-
-        QAction *cutAction = menu.addAction(
-            themedIcon(QStringLiteral("edit-cut")),
-            trLocal("Wytnij", "Cut"));
-
-        QAction *copyAction = menu.addAction(
-            themedIcon(QStringLiteral("edit-copy")),
-            trLocal("Kopiuj", "Copy"));
-
-        QAction *renameAction = menu.addAction(
-            themedIcon(QStringLiteral("edit-rename")),
-            trLocal("Zmień nazwę", "Rename"));
-        renameAction->setEnabled(single);
-
-        QAction *batchRenameAction = menu.addAction(
-            themedIcon(QStringLiteral("edit-rename")),
-            trLocal("Zmień nazwy zbiorczo…", "Batch Rename…"));
-        batchRenameAction->setEnabled(selected.size() >= 2);
-
-        QAction *trashAction = menu.addAction(
-            themedIcon(QStringLiteral("user-trash")),
-            trLocal("Do Kosza", "Trash"));
-
-        bool allLocal = !selected.isEmpty();
-        for (const QUrl &selectedUrl : selected) {
-            allLocal = allLocal && selectedUrl.isLocalFile();
-        }
-        trashAction->setEnabled(allLocal);
-
-        QAction *pasteIntoAction =
-            menu.addAction(
-                themedIcon(QStringLiteral("edit-paste")),
-                trLocal(
-                    "Wklej do tego folderu",
-                    "Paste into this folder"));
-        pasteIntoAction->setEnabled(
-            isDir
-            && QApplication::clipboard()->mimeData()
-            && QApplication::clipboard()->mimeData()->hasUrls());
-
-        menu.addSeparator();
-
-        QAction *copyAddressAction = menu.addAction(
-            themedIcon(QStringLiteral("edit-copy")),
-            trLocal(
-                "Kopiuj adres",
-                "Copy address"));
-
-        QAction *propertiesAction =
-            menu.addAction(
-                themedIcon(QStringLiteral("document-properties")),
-                trLocal("Właściwości", "Properties"));
-
-        QAction *chosen =
-            menu.exec(
-                globalPosition);
-
-        if (chosen == openAction) {
-            if (isDir) {
-                navigatePane(context.id, url);
-            } else {
-                QDesktopServices::openUrl(url);
-            }
-        } else if (
-            openNewTabAction
-            && chosen == openNewTabAction) {
-            createNewTab(url, true);
-        } else if (
-            openNewWindowAction
-            && chosen == openNewWindowAction) {
-            openInNewWindow(url);
-        } else if (
-            openSplitPaneAction
-            && chosen == openSplitPaneAction) {
-            openInOtherPane(context.id, url);
-        } else if (
-            quickAccessAction
-            && chosen == quickAccessAction) {
-            toggleQuickAccessLocation(url);
-        } else if (chosen == openDolphinAction) {
-            openInDolphin(url);
-        } else if (
-            openLocationAction
-            && chosen == openLocationAction) {
-            openResultLocation(url);
-        } else if (extractHereAction && chosen == extractHereAction) {
-            extractArchiveWithArk(url, false);
-        } else if (extractToAction && chosen == extractToAction) {
-            extractArchiveWithArk(url, true);
-        } else if (chosen == printAction) {
-            m_selectionMenuController.printUrl(url);
-        } else if (
-            wallpaperAction
-            && chosen == wallpaperAction) {
-            m_selectionMenuController.setAsDesktopWallpaper(url, [this](const QString &message) {
-                statusBar()->showMessage(message, 4000);
-            });
-        } else if (chosen == openTerminalAction) {
-            openTerminalAt(url);
-        } else if (
-            openAdminAction
-            && chosen == openAdminAction) {
-            openAsAdministrator(
-                url,
-                isDir);
-        } else if (chosen == cutAction) {
-            putSelectionOnClipboard(true);
-        } else if (chosen == copyAction) {
-            putSelectionOnClipboard(false);
-        } else if (chosen == renameAction) {
-            renameSelected();
-        } else if (chosen == batchRenameAction) {
-            batchRenameSelected();
-        } else if (chosen == trashAction) {
-            trashSelected();
-        } else if (chosen == pasteIntoAction) {
-            pasteClipboardInto(url);
-        } else if (chosen == copyAddressAction) {
-            QGuiApplication::clipboard()->setText(
-                urlForDisplay(url));
-        } else if (chosen == propertiesAction) {
-            showPropertiesDialog(
-                clicked.name,
-                url,
-                isDir,
-                clicked.type,
-                clicked.size,
-                clicked.modified);
-        }
-
+        const bool quickAccess = single && isDir && canQuickAccessLocation(url);
+        const QMimeData *mime = QApplication::clipboard()->mimeData();
+        m_paneMenuController.buildItemMenu(menu,
+            {url, selected, availability, isDir, isSearchLocation(context.directory),
+             quickAccess, quickAccess && isQuickAccessPinned(url),
+             single && thispcCanExtractArchive(url, isDir),
+             m_selectionMenuController.canPrintUrl(url, isDir),
+             m_selectionMenuController.isLocalImageUrl(url, isDir),
+             m_selectionMenuController.canSetWallpaper(url, isDir),
+             isDir && mime && mime->hasUrls(), isDir && url.isLocalFile(),
+             single && url.isLocalFile()},
+            {[this, pane = context.id, url, isDir] {
+                 if (isDir)
+                     navigatePane(pane, url);
+                 else
+                     QDesktopServices::openUrl(url);
+             },
+             [this, url] { createNewTab(url, true); },
+             [this, url] { openInNewWindow(url); },
+             [this, pane = context.id, url] { openInOtherPane(pane, url); },
+             [this, url] { toggleQuickAccessLocation(url); },
+             [this, url] { openInDolphin(url); },
+             [this, url] { openResultLocation(url); },
+             [this, url] { extractArchiveWithArk(url, false); },
+             [this, url] { extractArchiveWithArk(url, true); },
+             [this, url] { m_selectionMenuController.printUrl(url); },
+             [this, url] {
+                 m_selectionMenuController.setAsDesktopWallpaper(url,
+                     [this](const QString &message) { statusBar()->showMessage(message, 4000); });
+             },
+             {[this](const QList<QUrl> &urls, const QString &directory, const QString &message) {
+                  copySelectionToDirectory(urls, directory, message);
+              },
+              [this](const QList<QUrl> &urls) { createZipFromSelection(urls); },
+              [this](const QList<QUrl> &urls) { createArchiveFromSelection(urls, ThisPcArchiveFormat::SevenZip); },
+              [this](const QList<QUrl> &urls) { createArchiveFromSelection(urls, ThisPcArchiveFormat::TarGzip); }},
+             [this, url] { openTerminalAt(url); },
+             [this, url, isDir] { openAsAdministrator(url, isDir); },
+             [this] { putSelectionOnClipboard(true); },
+             [this] { putSelectionOnClipboard(false); },
+             [this] { renameSelected(); },
+             [this] { batchRenameSelected(); },
+             [this] { trashSelected(); },
+             [this, url] { pasteClipboardInto(url); },
+             [url] { QGuiApplication::clipboard()->setText(urlForDisplay(url)); },
+             [this, clicked] {
+                 showPropertiesDialog(clicked.name, clicked.url, clicked.isDir,
+                                      clicked.type, clicked.size, clicked.modified);
+             }});
+        menu.exec(globalPosition);
         updateFileActionStates();
     }
 
@@ -5585,6 +5238,7 @@ private:
 
     FileActions *m_fileActions = nullptr;
     SelectionMenuController m_selectionMenuController{this};
+    PaneMenuController m_paneMenuController{&m_selectionMenuController};
     SearchController *m_searchController = nullptr;
     std::unique_ptr<SearchUiController> m_searchUiController;
     int m_searchVisibleCount = 0;

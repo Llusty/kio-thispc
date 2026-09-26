@@ -1,8 +1,10 @@
 #include "selectionmenucontroller.h"
+#include "panemenucontroller.h"
 
 #include <QAction>
 #include <QFile>
 #include <QMenu>
+#include <QPointer>
 #include <QTemporaryDir>
 
 static int checks = 0;
@@ -27,6 +29,44 @@ static QAction *action(QMenu &menu, const QString &text)
             if (QAction *nested = action(*candidate->menu(), text)) return nested;
     }
     return nullptr;
+}
+
+static QAction *actionById(QMenu &menu, const QString &id)
+{
+    for (QAction *candidate : menu.actions()) {
+        if (candidate->objectName() == id) return candidate;
+        if (candidate->menu())
+            if (QAction *nested = actionById(*candidate->menu(), id)) return nested;
+    }
+    return nullptr;
+}
+
+static int actionIdCount(QMenu &menu, const QString &id)
+{
+    int count = 0;
+    for (QAction *candidate : menu.actions()) {
+        count += candidate->objectName() == id;
+        if (candidate->menu()) count += actionIdCount(*candidate->menu(), id);
+    }
+    return count;
+}
+
+static ActionAvailability availability(const QUrl &directory,
+                                       const QList<QUrl> &selection = {},
+                                       bool clipboard = false)
+{
+    ActionStateInput input;
+    input.directory = directory;
+    input.selection = selection;
+    input.isDirectory = true;
+    input.isThisPcLocation = directory.scheme() == QStringLiteral("thispc");
+    input.isSearchLocation = directory.scheme() == QStringLiteral("thispcsearch");
+    input.isTrashLocation = directory.scheme() == QStringLiteral("trash");
+    input.isTrashRoot = input.isTrashLocation && directory.path() == QStringLiteral("/");
+    input.clipboardHasUrls = clipboard;
+    input.recoverySafe = true;
+    input.emptyTrashAvailable = true;
+    return ActionStateController::compute(input);
 }
 
 int main(int argc, char **argv)
@@ -117,6 +157,197 @@ int main(int argc, char **argv)
     verify(sortKey == 0 && ascending, "Sort routes to active-pane callbacks");
     verify(groupMode == DirectoryViewSettings::GroupBySize, "Grouping routes to active-pane callback");
     verify(hidden && !thumbnails, "Show toggles route through callbacks");
+
+    PaneMenuController paneMenus(&controller);
+    PaneMenuController::BackgroundCallbacks backgroundCallbacks;
+    backgroundCallbacks.view = callbacks;
+    int backgroundRoute = 0;
+    backgroundCallbacks.refresh = [&] { backgroundRoute = 1; };
+    backgroundCallbacks.openNewTab = [&] { backgroundRoute = 2; };
+    backgroundCallbacks.emptyTrash = [&] { backgroundRoute = 3; };
+    backgroundCallbacks.openAdmin = [&] { backgroundRoute = 4; };
+
+    const QUrl localDirectory = QUrl::fromLocalFile(folderPath);
+    PaneMenuController::BackgroundState localBackground{
+        localDirectory, availability(localDirectory, {}, true), state,
+        true, false, true, true};
+    QMenu localBackgroundMenu(&parent);
+    paneMenus.buildBackgroundMenu(localBackgroundMenu, localBackground,
+                                  backgroundCallbacks);
+    verify(actionById(localBackgroundMenu, QStringLiteral("pane.newFolder"))->isEnabled(),
+           "local background enables New Folder from ActionAvailability");
+    verify(actionById(localBackgroundMenu, QStringLiteral("pane.paste"))->isEnabled(),
+           "local background enables Paste from ActionAvailability");
+    verify(actionById(localBackgroundMenu, QStringLiteral("pane.quickAccess")),
+           "local background exposes Quick Access");
+    verify(actionById(localBackgroundMenu, QStringLiteral("pane.openAdmin")),
+           "local background exposes administrator action");
+    verify(actionIdCount(localBackgroundMenu, QStringLiteral("pane.openNewTab")) == 1,
+           "background navigation action is not duplicated");
+    actionById(localBackgroundMenu, QStringLiteral("pane.refresh"))->trigger();
+    verify(backgroundRoute == 1, "background action routes through callback");
+
+    const QUrl searchDirectory(QStringLiteral("thispcsearch:/query"));
+    QMenu searchBackgroundMenu(&parent);
+    auto searchBackground = localBackground;
+    searchBackground.directory = searchDirectory;
+    searchBackground.availability = availability(searchDirectory, {}, true);
+    searchBackground.quickAccessVisible = false;
+    searchBackground.terminalEnabled = false;
+    searchBackground.adminVisible = false;
+    paneMenus.buildBackgroundMenu(searchBackgroundMenu, searchBackground,
+                                  backgroundCallbacks);
+    verify(!actionById(searchBackgroundMenu, QStringLiteral("pane.newFolder"))->isEnabled()
+               && !actionById(searchBackgroundMenu, QStringLiteral("pane.paste"))->isEnabled(),
+           "Search background blocks mutation actions");
+    verify(!actionById(searchBackgroundMenu, QStringLiteral("pane.openNewTab"))->isEnabled()
+               && !actionById(searchBackgroundMenu, QStringLiteral("pane.openNewWindow"))->isEnabled(),
+           "Search background blocks tab and window navigation");
+
+    const QUrl trashDirectory(QStringLiteral("trash:/"));
+    QMenu trashBackgroundMenu(&parent);
+    auto trashBackground = localBackground;
+    trashBackground.directory = trashDirectory;
+    trashBackground.availability = availability(trashDirectory);
+    trashBackground.quickAccessVisible = false;
+    trashBackground.terminalEnabled = false;
+    trashBackground.adminVisible = false;
+    paneMenus.buildBackgroundMenu(trashBackgroundMenu, trashBackground,
+                                  backgroundCallbacks);
+    QAction *emptyTrash = actionById(trashBackgroundMenu, QStringLiteral("pane.emptyTrash"));
+    verify(emptyTrash && emptyTrash->isEnabled(), "Trash root exposes enabled Empty Trash");
+    emptyTrash->trigger();
+    verify(backgroundRoute == 3, "Empty Trash routes through supplied backend callback");
+
+    const QUrl thisPcDirectory(QStringLiteral("thispc:/"));
+    QMenu thisPcBackgroundMenu(&parent);
+    auto thisPcBackground = localBackground;
+    thisPcBackground.directory = thisPcDirectory;
+    thisPcBackground.availability = availability(thisPcDirectory);
+    thisPcBackground.quickAccessVisible = false;
+    thisPcBackground.terminalEnabled = false;
+    thisPcBackground.adminVisible = false;
+    paneMenus.buildBackgroundMenu(thisPcBackgroundMenu, thisPcBackground,
+                                  backgroundCallbacks);
+    verify(!actionById(thisPcBackgroundMenu, QStringLiteral("pane.newFolder"))->isEnabled(),
+           "thispc background blocks creation");
+    verify(actionById(thisPcBackgroundMenu, QStringLiteral("pane.view"))->isEnabled(),
+           "thispc directory context preserves view controls");
+
+    const QUrl remoteDirectory(QStringLiteral("sftp://example.test/folder"));
+    QMenu remoteBackgroundMenu(&parent);
+    auto remoteBackground = localBackground;
+    remoteBackground.directory = remoteDirectory;
+    remoteBackground.availability = availability(remoteDirectory, {}, true);
+    remoteBackground.quickAccessVisible = false;
+    remoteBackground.terminalEnabled = false;
+    remoteBackground.adminVisible = false;
+    paneMenus.buildBackgroundMenu(remoteBackgroundMenu, remoteBackground,
+                                  backgroundCallbacks);
+    verify(actionById(remoteBackgroundMenu, QStringLiteral("pane.newFolder"))->isEnabled()
+               && actionById(remoteBackgroundMenu, QStringLiteral("pane.paste"))->isEnabled(),
+           "remote KIO background preserves directory mutations");
+    verify(!actionById(remoteBackgroundMenu, QStringLiteral("pane.openTerminal"))->isEnabled(),
+           "remote KIO background disables terminal");
+
+    PaneMenuController::ItemCallbacks itemCallbacks;
+    int itemRoute = 0;
+    itemCallbacks.openNewTab = [&] { itemRoute = 1; };
+    itemCallbacks.openOtherPane = [&] { itemRoute = 2; };
+    itemCallbacks.extractHere = [&] { itemRoute = 3; };
+    itemCallbacks.openAdmin = [&] { itemRoute = 4; };
+    itemCallbacks.rename = [&] { itemRoute = 5; };
+    itemCallbacks.sendTo = {[](const QList<QUrl> &, const QString &, const QString &) {},
+                            [](const QList<QUrl> &) {}, [](const QList<QUrl> &) {},
+                            [](const QList<QUrl> &) {}};
+
+    QMenu fileMenu(&parent);
+    PaneMenuController::ItemState fileState{
+        localFile, {localFile}, availability(localDirectory, {localFile}),
+        false, false, false, false, false, true, false, false, false, false, true};
+    paneMenus.buildItemMenu(fileMenu, fileState, itemCallbacks);
+    verify(!actionById(fileMenu, QStringLiteral("item.openNewTab")),
+           "single file has no folder navigation actions");
+    verify(actionById(fileMenu, QStringLiteral("item.rename"))->isEnabled()
+               && actionById(fileMenu, QStringLiteral("item.properties"))->isEnabled(),
+           "single file uses single-selection availability");
+    verify(actionById(fileMenu, QStringLiteral("item.openAdmin")),
+           "single local file exposes administrator action");
+
+    QMenu folderMenu(&parent);
+    PaneMenuController::ItemState folderState{
+        localFolder, {localFolder}, availability(localDirectory, {localFolder}),
+        true, false, true, true, false, false, false, false, true, true, true};
+    paneMenus.buildItemMenu(folderMenu, folderState, itemCallbacks);
+    verify(actionById(folderMenu, QStringLiteral("item.openNewTab"))
+               && actionById(folderMenu, QStringLiteral("item.openNewWindow"))
+               && actionById(folderMenu, QStringLiteral("item.openOtherPane")),
+           "single folder exposes tab, window and other-pane navigation");
+    verify(actionIdCount(folderMenu, QStringLiteral("item.openOtherPane")) == 1,
+           "folder navigation action is not duplicated");
+
+    QMenu multiMenu(&parent);
+    PaneMenuController::ItemState multiState{
+        localFile, {localFile, localFolder},
+        availability(localDirectory, {localFile, localFolder}), false};
+    paneMenus.buildItemMenu(multiMenu, multiState, itemCallbacks);
+    verify(!actionById(multiMenu, QStringLiteral("item.rename"))->isEnabled()
+               && actionById(multiMenu, QStringLiteral("item.batchRename"))->isEnabled(),
+           "multi-selection swaps Rename for Batch Rename availability");
+    verify(!actionById(multiMenu, QStringLiteral("item.openAdmin")),
+           "multi-selection hides administrator action");
+
+    QMenu archiveMenu(&parent);
+    auto archiveState = fileState;
+    archiveState.archiveExtractable = true;
+    paneMenus.buildItemMenu(archiveMenu, archiveState, itemCallbacks);
+    verify(actionById(archiveMenu, QStringLiteral("item.extractHere"))
+               && actionById(archiveMenu, QStringLiteral("item.extractTo")),
+           "archive selection exposes both extraction routes");
+    actionById(archiveMenu, QStringLiteral("item.extractHere"))->trigger();
+    verify(itemRoute == 3, "archive action routes through supplied backend callback");
+
+    QMenu searchItemMenu(&parent);
+    auto searchItemState = fileState;
+    searchItemState.searchLocation = true;
+    paneMenus.buildItemMenu(searchItemMenu, searchItemState, itemCallbacks);
+    verify(actionById(searchItemMenu, QStringLiteral("item.openLocation")),
+           "Search item exposes Open Location special case");
+
+    int routedPane = -1;
+    const int snapshottedPane = int(PaneId::Primary);
+    int currentlyActivePane = int(PaneId::Primary);
+    auto snapshotCallbacks = itemCallbacks;
+    snapshotCallbacks.openOtherPane = [&, snapshottedPane] { routedPane = snapshottedPane; };
+    QMenu snapshotMenu(&parent);
+    paneMenus.buildItemMenu(snapshotMenu, folderState, snapshotCallbacks);
+    currentlyActivePane = int(PaneId::Split);
+    actionById(snapshotMenu, QStringLiteral("item.openOtherPane"))->trigger();
+    verify(routedPane == snapshottedPane && routedPane != currentlyActivePane,
+           "item callback keeps the pane snapshot captured when menu was built");
+
+    int destroyedRoute = 0;
+    QPointer<QAction> destroyedAction;
+    {
+        auto *ephemeral = new QMenu(&parent);
+        auto lifecycleCallbacks = itemCallbacks;
+        lifecycleCallbacks.rename = [&] { ++destroyedRoute; };
+        paneMenus.buildItemMenu(*ephemeral, fileState, lifecycleCallbacks);
+        destroyedAction = actionById(*ephemeral, QStringLiteral("item.rename"));
+        delete ephemeral;
+    }
+    verify(destroyedAction.isNull() && destroyedRoute == 0,
+           "destroying a built menu destroys actions without firing callbacks");
+
+    const QStringList expectedPrefix{
+        QStringLiteral("item.open"), QStringLiteral("item.openNewTab"),
+        QStringLiteral("item.openNewWindow"), QStringLiteral("item.openOtherPane")};
+    QStringList actualPrefix;
+    for (QAction *candidate : folderMenu.actions()) {
+        if (!candidate->objectName().isEmpty()) actualPrefix << candidate->objectName();
+        if (actualPrefix.size() == expectedPrefix.size()) break;
+    }
+    verify(actualPrefix == expectedPrefix, "user-visible folder navigation ordering is stable");
 
     qInfo("PASS: %d selection menu controller assertions", checks);
     return 0;
