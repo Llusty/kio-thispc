@@ -162,7 +162,7 @@ zainstalowana i ręcznie potwierdzona przez użytkownika. Pełna regresja wydani
 - Testy: brak konfliktu, luki w numeracji, zajęte kolejne numery, rozszerzenia i Unicode, foldery, szablony, dowiązania symboliczne, ręczna edycja, jednoczesne utworzenie nazwy przez inny proces, oba panele i brak utraty istniejących danych.
 - Kryterium odbioru: użytkownik widzi wolną nazwę od razu, może ją zmienić, a żaden test kolizji nie nadpisuje istniejącego elementu.
 
-### 0.30.0 — Grouping and per-folder view settings — zakres zakończony, RC
+### 0.30.0 — Grouping and per-folder view settings ✅ wydane i zaakceptowane
 
 **Stage 1 — per-folder view mode: zaimplementowany i ręcznie zaakceptowany**
 - zapamiętywanie Icons/List/Details według znormalizowanego URL katalogu;
@@ -246,9 +246,9 @@ zainstalowana i ręcznie potwierdzona przez użytkownika. Pełna regresja wydani
   stale `State_MouseOver` i został usunięty przez wyliczanie hover z pozycji kursora;
 - weryfikacje po wycinkach: Type 24/6197 PASS, Date 24/6213 PASS; Size build,
   test granic/ustawień 190 asercji i pełna regresja 24 zestawów PASS;
-- finalny RC po bumpie wersji: build PASS, focused 778 asercji PASS, pełne
+- finalny baseline po bumpie wersji: build PASS, focused 778 asercji PASS, pełne
   `--all` 24 zestawy / 6278 asercji PASS, `git diff --check` i audit wersji PASS.
-  Pozostaje czyste archiwum + SHA-256 oraz osobna zgoda na commit/tag/install.
+  Wydanie zostało zaakceptowane przez użytkownika.
 
 ### 0.31.0 — Split View synchronization ✅ user-confirmed
 
@@ -301,71 +301,74 @@ zainstalowana i ręcznie potwierdzona przez użytkownika. Pełna regresja wydani
 - primary listing/rendering state extracted into `PrimaryBrowserPane`;
 - behavior preserved, with regression fixes only and no new user-facing features;
 - final Stage 8 baseline: **26 suites / 6662 assertions PASS**;
-- common `BrowserPane` (Stage 9) deferred to 0.33.
+- dalsze łączenie obu powłok UI w common `BrowserPane` pozostawiono do ponownej
+  oceny w 0.33.
 
-### 0.33.0 — Architecture Cleanup Continuation ✅ release-ready
+### 0.33.0 — Architecture Cleanup Continuation ✅ wydane, zainstalowane i potwierdzone przez użytkownika
 - `LocationPresentation`, `NavigationHistory`, `PreviewCoordinator` and
   `ActionStateController` extracted;
 - shared `DirectoryListingCore` used by Primary and Split;
 - `PaneMenuController` and `DriveHomeCoordinator` extracted;
 - drive-sidebar context-menu lifetime crash fixed;
 - inline rename activation fixed without changing fast double-click open;
-- final accepted baseline before release prep: **31 suites / 7852 assertions PASS**;
-- common `BrowserPane`, file/folder comparison and the UX debt below remain
-  deferred and are not part of 0.33.0.
+- final release baseline: **31 suites / 7852 assertions PASS**;
+- release commit `a3710e466920542aa2a52ac90cdd9a4d3b5c2312`, tag `v0.33.0`;
+- obecny model `DirectoryListingCore + osobne UI shells` jest zaakceptowanym
+  końcowym rozwiązaniem architektonicznym. Wspólny `BrowserPane` nie jest już
+  obowiązkowym przyszłym etapem; temat może wrócić wyłącznie wtedy, gdy konkretna
+  nowa duplikacja uzasadni koszt i ryzyko kolejnego scalenia powłok UI.
 
-**UI parity/polish debt — backlog for a later release**
-- Per-folder view profiles / Apply view to subfolders: today, view mode, icon
-  size and grouping use an explicit per-URL `QSettings` entry when present,
-  otherwise they fall back to the current pane state; changing view mode or
-  icon size also updates the global default. Consequently an unconfigured
-  child can appear to inherit the parent's last state, while an explicitly
-  configured child keeps its override. This is existing explicit-default
-  fallback behavior from 0.30, not a Stage 5 regression. Change the default
-  semantics so an ordinary view change affects only the current folder, and
-  add an explicit View-menu action, "Apply this view to subfolders". The
-  propagated profile must include view mode, icon size, sort key/order and
-  grouping; include hidden items, thumbnails and full-name display only if the
-  implementation deliberately promotes those currently global options into
-  the per-folder profile. Preserve explicit child overrides, define whether
-  newly created descendants inherit a stored ancestor profile or the stable
-  default, and keep Primary/Split behavior identical. Support local and remote
-  KIO URLs without uncontrolled recursive tree scans; prefer a lazy ancestor
-  profile/rule resolved when a folder is opened, with explicit per-URL values
-  taking precedence. Add regression coverage for parent A, unconfigured child,
-  parent changed to B, and an explicit child C. This item is documentation only
-  and is not implemented yet.
-- `thispc:/` drive cards: at wide window sizes the drive icon can drift too far
-  from the name, capacity information and progress bar, while the compact layout
-  looks correct. Keep the icon and the text/progress block at a fixed or bounded
-  horizontal distance regardless of window width. This is pre-existing UX debt,
-  not a Stage 2 regression, and is not implemented yet.
-- Split/right pane address bar parity: Primary/left pane enters manual address
-  editing when practically any point in the breadcrumb/address area is clicked,
-  while Split currently requires a direct click on the displayed path. Make the
-  entire Split address/breadcrumb bar a click target for manual edit, matching
-  Primary. This is also pre-existing UX debt and is not implemented yet.
+### 0.34.0 — Explorer UX / View & Navigation Polish
+- poprawić geometrię i pozycjonowanie inline rename, szczególnie w trybie Icons;
+- F2 oraz PPM → Rename dla jednego elementu mają uruchamiać ten sam inline
+  editor zamiast osobnego dialogu; Batch Rename i multi-select pozostają osobną
+  ścieżką;
+- w kartach dysków `thispc:/` utrzymać stały lub ograniczony odstęp ikony od
+  nazwy, informacji o pojemności i paska zajętości również w szerokim oknie;
+- zapewnić parity paska adresu prawego panelu Split View: kliknięcie w dowolnym
+  miejscu obszaru breadcrumb/address przełącza w ręczną edycję jak w Primary;
+- dodać profile widoku per-folder i „Apply this view to subfolders” przez leniwie
+  rozwiązywaną regułę/profil przodka, bez rekurencyjnego skanowania KIO;
+  jawny override katalogu potomnego ma pierwszeństwo, a profil obejmuje co
+  najmniej view mode, icon size, sort key/order i grouping. Zwykła zmiana widoku
+  dotyczy tylko bieżącego folderu; Primary i Split muszą mieć tę samą semantykę;
+- dodać dla Icons suwak rozmiaru ikon z około 8–10 stopniami, zapamiętywany
+  per-folder i routowany do aktywnego panelu; opcjonalnie obsłużyć Ctrl+wheel.
+  Suwak nie przełącza do List, Details ani Compact;
+- zapewnić pełną nawigację klawiaturą również w `thispc:/`: strzałki, Enter,
+  Backspace, Alt+Left/Alt+Right i Alt+Up, z prawidłowym routingiem active pane;
+  Search, edycja adresu, inline rename i dialogi zachowują własne zdarzenia;
+- wizualnie przygasić ukryte pliki i foldery, gdy `Show hidden` jest włączone,
+  zachowując czytelną selection, hover i focus;
+- naprawić CLI: `--version` nie może kończyć się kodem 134 i ma czysto zwracać
+  wersję 0.33/0.34 odpowiednią dla danego buildu;
+- candidate, nie blocker wydania: dopracować status bar o liczbę elementów i
+  zaznaczonych, sumę rozmiaru zaznaczenia oraz wolne miejsce.
 
-### 0.34.0 — Drives and devices
+### 0.35.0 — Drives & Devices
 - mount/unmount/eject;
 - removable media;
 - MTP;
 - ISO mount/unmount;
 - filesystem/mount details;
-- sensible SMART integration where available.
+- sensible SMART integration where available;
+- czytelny stan mounted/unmounted/read-only oraz typ filesystemu i mount point;
+- bezpieczny i jednoznaczny UX dla remove/eject;
+- dla NTFS utrzymywać verified behavior zamiast blanket assumptions.
 
-### 0.35.0 — Network
+### 0.36.0 — Network & Remote Locations
 - SMB, SFTP, FTP, WebDAV via KIO where appropriate;
 - saved remote locations;
-- network discovery where reliable.
+- recent locations i reconnect tam, gdzie są użyteczne;
+- KWallet integration dla poświadczeń tam, gdzie jest właściwa;
+- discovery tylko tam, gdzie jest niezawodne; nigdy nie jest wymagane do
+  ręcznego połączenia.
 
-### 0.36.0 — Disk usage analyzer
+### 0.37.0 — Storage Tools
 - biggest directories/files;
 - background scan;
 - top-N views;
-- optional treemap later.
-
-### 0.37.0 — Duplicates + checksums
+- optional treemap later;
 - SHA-256 / SHA-1 / MD5 utilities;
 - duplicate discovery by size then hash;
 - safe review before removal/move.
@@ -376,24 +379,53 @@ zainstalowana i ręcznie potwierdzona przez użytkownika. Pełna regresja wydani
 - atime/mtime/ctime;
 - MIME/checksum;
 - EXIF/media metadata;
+- stan `Hidden` / `Ukryty` oraz semantyka zmiany zależna od backendu; dla
+  lokalnego Unix zwykle przez rename z wiodącą kropką i zwykłą ścieżkę operacji
+  plikowej, a nie kosmetyczną flagę;
+- xattrs;
+- symlink target;
+- numeric permissions, np. `0755`;
 - continue verified NTFS behavior rather than blanket assumptions.
 
-### 0.39.0 — Administrator fallback for failed operations
+### 0.39.0 — Advanced Search
+- type/name/extension/date/size filters;
+- files-only/folders-only;
+- saved searches;
+- Baloo acceleration when available, current search fallback otherwise;
+- szybki filtr bieżącego folderu jako lekkie rozszerzenie in-place, jeśli jego
+  semantyka pozostanie spójna z wyszukiwaniem.
+
+### 0.40.0 — Administrator fallback for failed operations
 When a normal operation receives permission denied, offer a targeted `admin://` retry instead of requiring an entire window to run elevated.
 
-### 0.40.0 — Transfer queue/control
+### 0.41.0 — Transfer Queue & Control
 - serial vs parallel;
 - concurrency limit;
 - priorities/order;
-- queue-wide control and priorities on top of backends that genuinely support them.
+- queue-wide pause/resume/control;
+- optional bandwidth limit wyłącznie dla backendów, które realnie mogą go
+  zapewnić.
 
-### 0.41.0 — Notifications + operation history
+### 0.42.0 — Notifications + Operation History
 - Plasma notification for long/background completions;
 - recent operation log with source/destination/result;
-- retry where meaningful.
+- retry where meaningful and safe;
+- „Show in folder” po zakończeniu tam, gdzie ma sens.
 
-### 0.42.0 — Plugin / Service Action architecture
-Allow new context-menu actions and integrations without editing the core window source.
+### 0.43.0 — Extensions / Service Actions
+- preferować wykorzystanie KDE Service Actions i prostego extension contract
+  zamiast budowania pełnego własnego plugin ecosystemu bez konkretnej potrzeby;
+- pozwolić dodawać nowe context actions i integracje bez edycji core window source.
+
+### 0.44.0 — Advanced Split Sync
+- opcjonalne recursive compare/sync;
+- dry-run i plan preview przed wykonaniem;
+- ignore patterns;
+- jawne conflict policies;
+- domyślnie nadal zero-delete;
+- mirror/delete dopiero jako jawny, wyraźnie niebezpieczny tryb z osobnym
+  potwierdzeniem;
+- zachować model safety, preflight i revalidation wypracowany w 0.31.
 
 ## Backlog bez przypisanej wersji
 
@@ -413,11 +445,17 @@ Allow new context-menu actions and integrations without editing the core window 
   gwarancji niemożliwych dla bezwarunkowego `RENAME_EXCHANGE`;
 - ręcznie sprawdzić różnice wizualne trybów lewego/prawego panelu Split View.
 
-### Advanced search — przeniesione z planu 0.29.0 (wersja do ustalenia)
-- type/name/extension/date/size filters;
-- files-only/folders-only;
-- saved searches;
-- Baloo acceleration when available, current search fallback otherwise.
+### Smaller features — wersje do ustalenia
+- Ctrl+Shift+T — reopen closed tab;
+- opcjonalne pinned tabs;
+- Copy Path / Copy Filename;
+- Recent Files jako rozszerzenie Recent Locations;
+- lepszy Trash z Original location i Deletion date;
+- video thumbnails przez infrastrukturę KDE/KIO thumbnail i `ffmpegthumbs`,
+  asynchronicznie, z cache i fallbackiem, bez blokowania UI oraz z ostrożnym
+  zachowaniem dla remote KIO;
+- status bar details (liczba elementów/zaznaczonych, suma rozmiaru zaznaczenia,
+  wolne miejsce), jeśli candidate nie wejdzie do 0.34.
 
 ## Before 1.0
 Stability-focused cycle covering:
@@ -429,6 +467,7 @@ Stability-focused cycle covering:
 - Undo/Redo conflicts;
 - device hotplug;
 - crash recovery;
-- memory/resource leaks;
-- keyboard accessibility audit;
+- long-running session i resource-leak soak tests;
+- końcowy accessibility/keyboard pass;
+- high-DPI i multi-monitor polish;
 - regression tests for file-operation safety.
