@@ -15,6 +15,22 @@ class QKeyEvent;
 class QLayout;
 class QMouseEvent;
 
+class AddressBarFrame : public QFrame
+{
+    Q_OBJECT
+
+public:
+    explicit AddressBarFrame(QWidget *parent = nullptr);
+    void addBlankClickTarget(QWidget *target);
+
+Q_SIGNALS:
+    void blankClicked();
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
+    void mousePressEvent(QMouseEvent *event) override;
+};
+
 class AddressLineEdit : public QLineEdit
 {
     Q_OBJECT
@@ -33,7 +49,7 @@ protected:
 
 class PathScrollArea;
 
-class BreadcrumbFrame : public QFrame
+class BreadcrumbFrame : public AddressBarFrame
 {
     Q_OBJECT
 

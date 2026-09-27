@@ -103,9 +103,41 @@ void AddressLineEdit::focusOutEvent(QFocusEvent *event)
     Q_EMIT focusLeft();
 }
 
-BreadcrumbFrame::BreadcrumbFrame(QWidget *parent)
+AddressBarFrame::AddressBarFrame(QWidget *parent)
     : QFrame(parent)
 {
+}
+
+void AddressBarFrame::addBlankClickTarget(QWidget *target)
+{
+    target->installEventFilter(this);
+}
+
+bool AddressBarFrame::eventFilter(QObject *watched, QEvent *event)
+{
+    if (event->type() == QEvent::MouseButtonPress) {
+        const auto *mouseEvent = static_cast<QMouseEvent *>(event);
+        if (mouseEvent->button() == Qt::LeftButton) {
+            Q_EMIT blankClicked();
+            return true;
+        }
+    }
+    return QFrame::eventFilter(watched, event);
+}
+
+void AddressBarFrame::mousePressEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton) {
+        Q_EMIT blankClicked();
+    }
+    QFrame::mousePressEvent(event);
+}
+
+BreadcrumbFrame::BreadcrumbFrame(QWidget *parent)
+    : AddressBarFrame(parent)
+{
+    connect(this, &AddressBarFrame::blankClicked,
+            this, &BreadcrumbFrame::clicked);
     setCursor(Qt::IBeamCursor);
     auto *row = new QHBoxLayout(this);
     row->setContentsMargins(4, 2, 4, 2);
@@ -150,11 +182,7 @@ QWidget *BreadcrumbFrame::contentsWidget() const
 
 void BreadcrumbFrame::mousePressEvent(QMouseEvent *event)
 {
-    if (event->button() == Qt::LeftButton) {
-        Q_EMIT clicked();
-    }
-
-    QFrame::mousePressEvent(event);
+    AddressBarFrame::mousePressEvent(event);
 }
 
 ClickableFrame::ClickableFrame(const QUrl &url, QWidget *parent)
@@ -277,6 +305,7 @@ DriveFrame *makeDriveCard(const DriveInfo &drive, QWidget *parent)
     outer->setSpacing(12);
 
     auto *icon = new QLabel(card);
+    icon->setObjectName(QStringLiteral("driveCardIcon"));
 
     QString themeIcon = QStringLiteral("drive-harddisk");
     if (drive.iconName.contains(QStringLiteral("removable"))) {
@@ -289,7 +318,12 @@ DriveFrame *makeDriveCard(const DriveInfo &drive, QWidget *parent)
     icon->setAlignment(Qt::AlignCenter);
     makePassive(icon);
 
-    auto *body = new QVBoxLayout;
+    auto *bodyWidget = new QWidget(card);
+    bodyWidget->setObjectName(QStringLiteral("driveCardContent"));
+    bodyWidget->setMaximumWidth(335);
+    bodyWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+
+    auto *body = new QVBoxLayout(bodyWidget);
     body->setContentsMargins(0, 0, 0, 0);
     body->setSpacing(4);
 
@@ -322,7 +356,8 @@ DriveFrame *makeDriveCard(const DriveInfo &drive, QWidget *parent)
     body->addWidget(subtitle);
 
     outer->addWidget(icon, 0, Qt::AlignVCenter);
-    outer->addLayout(body, 1);
+    outer->addWidget(bodyWidget, 1);
+    outer->addStretch(1);
 
     return card;
 }

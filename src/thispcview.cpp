@@ -2,7 +2,7 @@
  * thispc-view - a lightweight KDE/Qt file browser with a Windows-like
  * "This PC" home page, backed by KIO.
  *
- * Version 0.33.0
+ * Version 0.34.0-dev
  * SPDX-License-Identifier: MIT
  */
 
@@ -150,6 +150,8 @@
 #include "splitcomparedialog.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstring>
 #include <functional>
 #include <utility>
 #include <memory>
@@ -5161,6 +5163,13 @@ private:
 #ifndef THISPC_TEST_HARNESS
 int main(int argc, char **argv)
 {
+    if (argc > 1
+        && (std::strcmp(argv[1], "--version") == 0
+            || std::strcmp(argv[1], "-v") == 0)) {
+        std::printf("thispc-view %s\n", THISPC_VERSION);
+        return 0;
+    }
+
     QApplication app(argc, argv);
 
     QCoreApplication::setOrganizationName(
@@ -5170,7 +5179,7 @@ int main(int argc, char **argv)
     QCoreApplication::setApplicationName(
         QStringLiteral("thispc-view"));
     QCoreApplication::setApplicationVersion(
-        QStringLiteral("0.33.0"));
+        QStringLiteral(THISPC_VERSION));
 
     app.setApplicationDisplayName(
         isPolish()

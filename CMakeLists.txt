@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(kio-thispc VERSION 0.33.0 LANGUAGES CXX)
+project(kio-thispc VERSION 0.34.0 LANGUAGES CXX)
 
 set(QT_MIN_VERSION "6.5.0")
 set(KF_MIN_VERSION "6.17.0")
@@ -123,6 +123,10 @@ add_executable(thispc-view
     src/splitsyncexecutiondialog.h
 )
 
+target_compile_definitions(thispc-view PRIVATE
+    THISPC_VERSION="${PROJECT_VERSION}-dev"
+)
+
 # Black-box startup/recovery integration binary. It is built from the exact
 # application sources but is neither installed nor enabled in production.
 add_executable(thispc-view-stage3c1-test EXCLUDE_FROM_ALL
@@ -189,7 +193,10 @@ add_executable(thispc-view-stage3c1-test EXCLUDE_FROM_ALL
     src/splitsyncexecutor.h
     src/splitsyncexecutiondialog.h
 )
-target_compile_definitions(thispc-view-stage3c1-test PRIVATE THISPC_BATCH_RENAME_TEST_HOOKS=1)
+target_compile_definitions(thispc-view-stage3c1-test PRIVATE
+    THISPC_BATCH_RENAME_TEST_HOOKS=1
+    THISPC_VERSION="${PROJECT_VERSION}-dev"
+)
 
 # Exiv2 reports malformed metadata through C++ exceptions. Keep exception
 # support scoped to the GUI target that reads EXIF in the worker task.

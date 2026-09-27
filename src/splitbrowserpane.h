@@ -9,6 +9,7 @@
 #pragma once
 
 #include "browsercommon.h"
+#include "appwidgets.h"
 #include "directorylistingcore.h"
 #include "directoryview.h"
 #include "directoryviewsettings.h"
@@ -150,9 +151,10 @@ public:
         m_locationStack = new QStackedWidget(header);
         m_locationStack->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
 
-        m_breadcrumbFrame = new QFrame(m_locationStack);
+        m_breadcrumbFrame = new AddressBarFrame(m_locationStack);
         m_breadcrumbFrame->setObjectName(
             QStringLiteral("splitBreadcrumbFrame"));
+        m_breadcrumbFrame->setCursor(Qt::IBeamCursor);
 
         auto *breadcrumbLayout =
             new QHBoxLayout(m_breadcrumbFrame);
@@ -187,6 +189,7 @@ public:
 
         m_breadcrumbScroll = new PathScrollArea(m_breadcrumbFrame);
         m_breadcrumbScroll->setWidgetResizable(false);
+        m_breadcrumbFrame->addBlankClickTarget(m_breadcrumbScroll->viewport());
         m_breadcrumbButton = new SegmentedPathButton(m_breadcrumbScroll);
         m_breadcrumbButton->setObjectName(QStringLiteral("splitBreadcrumbButton"));
         m_breadcrumbButton->setAutoRaise(true);
@@ -224,7 +227,7 @@ public:
         m_breadcrumbNext->hide();
 
         m_addressEdit =
-            new QLineEdit(m_locationStack);
+            new AddressLineEdit(m_locationStack);
         m_addressEdit->setObjectName(
             QStringLiteral("splitAddressEdit"));
         m_addressEdit->setClearButtonEnabled(true);
@@ -589,19 +592,19 @@ public:
             &SplitBrowserPane::swapRequested);
 
         connect(
+            m_breadcrumbFrame,
+            &AddressBarFrame::blankClicked,
+            this,
+            [this] {
+                beginAddressEdit();
+            });
+
+        connect(
             m_breadcrumbButton,
             &QToolButton::clicked,
             this,
             [this] {
-                Q_EMIT activated();
-                m_addressEdit->setText(
-                    urlForDisplay(
-                        m_currentUrl));
-                m_locationStack->setCurrentWidget(
-                    m_addressEdit);
-                m_addressEdit->setFocus(
-                    Qt::ShortcutFocusReason);
-                m_addressEdit->selectAll();
+                beginAddressEdit();
             });
 
         m_breadcrumbButton->setNavigateCallback([this](const QUrl &url) {
@@ -632,18 +635,31 @@ public:
                 }
             });
 
-        auto *escapeAddress =
-            new QShortcut(
-                QKeySequence(Qt::Key_Escape),
-                m_addressEdit);
         connect(
-            escapeAddress,
-            &QShortcut::activated,
+            m_addressEdit,
+            &AddressLineEdit::canceled,
             this,
             [this] {
                 m_locationStack->setCurrentWidget(
                     m_breadcrumbFrame);
                 updateLocationPresentation();
+            });
+
+        connect(
+            m_addressEdit,
+            &AddressLineEdit::focusLeft,
+            this,
+            [this] {
+                // Match Primary: let Qt complete the focus transition before
+                // canceling the transient editor presentation.
+                QTimer::singleShot(0, this, [this] {
+                    if (m_addressEdit
+                        && !m_addressEdit->hasFocus()
+                        && m_locationStack->currentWidget() == m_addressEdit) {
+                        m_locationStack->setCurrentWidget(m_breadcrumbFrame);
+                        updateLocationPresentation();
+                    }
+                });
             });
 
         connect(
@@ -1424,13 +1440,13 @@ private:
     QAction *m_sortAscendingAction = nullptr;
 
     QStackedWidget *m_locationStack = nullptr;
-    QFrame *m_breadcrumbFrame = nullptr;
+    AddressBarFrame *m_breadcrumbFrame = nullptr;
     QLabel *m_breadcrumbIcon = nullptr;
     QToolButton *m_breadcrumbPrevious = nullptr;
     PathScrollArea *m_breadcrumbScroll = nullptr;
     QToolButton *m_breadcrumbNext = nullptr;
     SegmentedPathButton *m_breadcrumbButton = nullptr;
-    QLineEdit *m_addressEdit = nullptr;
+    AddressLineEdit *m_addressEdit = nullptr;
 
     QLabel *m_title = nullptr;
     QLabel *m_status = nullptr;

@@ -36,6 +36,57 @@ static QImage rendered(QWidget *widget)
     return image;
 }
 
+static void verifyDriveCardGeometry()
+{
+    DriveInfo drive;
+    drive.name = QStringLiteral("System");
+    drive.freeText = QStringLiteral("40 GiB");
+    drive.capacityText = QStringLiteral("100 GiB");
+    drive.fileSystem = QStringLiteral("ext4");
+    drive.mountPoint = QStringLiteral("/");
+    drive.targetUrl = QUrl::fromLocalFile(QStringLiteral("/"));
+    drive.iconName = QStringLiteral("drive-harddisk");
+    drive.usedPercent = 60;
+    QWidget host;
+    auto *layout = new QVBoxLayout(&host);
+    auto *primary = makeDriveCard(drive, &host);
+    auto *split = makeDriveCard(drive, &host);
+    layout->addWidget(primary);
+    layout->addWidget(split);
+    host.show();
+
+    const auto verifyAtWidth = [&](int width) {
+        host.resize(width, 240);
+        for (int i = 0; i < 3; ++i) {
+            QApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+            QApplication::processEvents();
+        }
+        const auto verifyCard = [&](DriveFrame *card) {
+            auto *icon = card->findChild<QLabel *>(QStringLiteral("driveCardIcon"));
+            auto *content = card->findChild<QWidget *>(QStringLiteral("driveCardContent"));
+            verify(icon && content, "drive card exposes its shared bounded content geometry");
+            verify(content->width() <= 335, "drive card content width remains bounded");
+            const int gap = content->geometry().left() - icon->geometry().right() - 1;
+            verify(gap >= 0 && gap <= 12, "drive icon-to-content distance remains bounded");
+            return card->contentsRect().right() - content->geometry().right();
+        };
+        const int primaryTrailing = verifyCard(primary);
+        const int splitTrailing = verifyCard(split);
+        verify(primary->findChild<QWidget *>(QStringLiteral("driveCardContent"))->geometry()
+                   == split->findChild<QWidget *>(QStringLiteral("driveCardContent"))->geometry(),
+               "Primary and Split use identical drive-card geometry");
+        verify(primaryTrailing == splitTrailing,
+               "Primary and Split leave identical trailing drive-card space");
+        return primaryTrailing;
+    };
+
+    const int compactTrailing = verifyAtWidth(420);
+    const int mediumTrailing = verifyAtWidth(640);
+    const int wideTrailing = verifyAtWidth(1000);
+    verify(mediumTrailing > compactTrailing && wideTrailing > mediumTrailing,
+           "trailing free space grows instead of stretching drive content");
+}
+
 static void verifyOverflow(ThisPcWindow &window, const QUrl &left, const QUrl &right)
 {
     auto *frame = window.m_breadcrumbFrame;
@@ -95,6 +146,7 @@ int main(int argc, char **argv)
     app.setStyleSheet(applicationStyleSheet());
     QSettings settings;
     settings.clear();
+    verifyDriveCardGeometry();
     QTemporaryDir files;
     verify(files.isValid(), "disposable paths");
     const QUrl shortPath = QUrl::fromLocalFile(files.filePath("short"));
@@ -109,6 +161,88 @@ int main(int argc, char **argv)
     window.resize(1400, 720);
     window.show();
     window.setSplitViewEnabled(true);
+    window.m_splitPane->setCurrentUrl(shortPath, true);
+    settle(window);
+
+    auto *splitFrame = window.m_splitPane->m_breadcrumbFrame;
+    auto *splitViewport = window.m_splitPane->m_breadcrumbScroll->viewport();
+    verify(splitFrame->cursor().shape() == window.m_breadcrumbFrame->cursor().shape()
+               && splitFrame->cursor().shape() == Qt::IBeamCursor,
+           "Split neutral address-bar cursor matches Primary text cursor");
+    verify(splitViewport->cursor().shape() == Qt::IBeamCursor,
+           "Split blank viewport inherits the neutral text cursor");
+    QTest::mouseClick(splitViewport, Qt::LeftButton, Qt::NoModifier,
+                      QPoint(splitViewport->width() - 2, splitViewport->height() / 2));
+    verify(window.m_splitPane->m_locationStack->currentWidget()
+               == window.m_splitPane->m_addressEdit,
+           "clicking blank Split address-bar viewport begins address editing");
+    QTest::keyClick(window.m_splitPane->m_addressEdit, Qt::Key_Escape);
+    verify(window.m_splitPane->m_locationStack->currentWidget() == splitFrame,
+           "Escape restores the Split breadcrumb presentation");
+
+    QTest::mouseClick(splitFrame, Qt::LeftButton, Qt::NoModifier,
+                      QPoint(2, splitFrame->height() / 2));
+    verify(window.m_splitPane->m_locationStack->currentWidget()
+               == window.m_splitPane->m_addressEdit,
+           "clicking the Split address-bar margin begins address editing");
+    QTest::keyClick(window.m_splitPane->m_addressEdit, Qt::Key_Escape);
+
+    const QRect splitSegment = window.m_splitPane->m_breadcrumbButton->segmentRect(0);
+    QTest::mouseMove(window.m_splitPane->m_breadcrumbButton, splitSegment.center());
+    verify(window.m_splitPane->m_breadcrumbButton->cursor().shape()
+               == Qt::PointingHandCursor,
+           "Split breadcrumb segment retains its interactive cursor");
+    QTest::mouseClick(window.m_splitPane->m_breadcrumbButton, Qt::LeftButton,
+                      Qt::NoModifier, splitSegment.center());
+    verify(window.m_splitPane->m_locationStack->currentWidget() == splitFrame,
+           "clicking a Split breadcrumb segment keeps navigation behavior");
+
+    window.m_splitPane->setCurrentUrl(deepPath, true);
+    settle(window);
+    auto *splitPrevious = window.m_splitPane->m_breadcrumbPrevious;
+    const int beforeScroll = window.m_splitPane->m_breadcrumbScroll
+                                 ->horizontalScrollBar()->value();
+    QTest::mouseClick(splitPrevious, Qt::LeftButton);
+    verify(window.m_splitPane->m_locationStack->currentWidget() == splitFrame,
+           "Split breadcrumb scroll control is not captured as blank edit");
+    verify(window.m_splitPane->m_breadcrumbScroll->horizontalScrollBar()->value()
+               < beforeScroll,
+           "Split breadcrumb scroll control retains scrolling behavior");
+
+    window.m_splitPane->setCurrentUrl(shortPath, true);
+    settle(window);
+    window.m_splitPane->beginAddressEdit();
+    verify(window.m_splitPane->m_addressEdit->text() == urlForDisplay(shortPath),
+           "Split editing starts with the complete raw address");
+    QTest::mouseClick(window.m_splitPane->m_list->viewport(), Qt::LeftButton,
+                      Qt::NoModifier, QPoint(2, 2));
+    QApplication::processEvents();
+    verify(QTest::qWaitFor([&] {
+        return window.m_splitPane->m_locationStack->currentWidget() == splitFrame;
+    }), "Split focus-out hides the editor and restores breadcrumbs");
+
+    window.m_splitPane->beginAddressEdit();
+    window.m_splitPane->m_addressEdit->setText(urlForDisplay(longName));
+    QTest::keyClick(window.m_splitPane->m_addressEdit, Qt::Key_Return);
+    settle(window);
+    verify(sameLocation(window.m_splitPane->currentUrl(), longName),
+           "Split Enter navigates to a valid address");
+    verify(window.m_splitPane->m_locationStack->currentWidget() == splitFrame,
+           "Split Enter returns to breadcrumb presentation");
+
+    window.navigateTo(shortPath, true);
+    settle(window);
+    QTest::mouseClick(window.m_breadcrumbFrame, Qt::LeftButton, Qt::NoModifier,
+                      QPoint(2, window.m_breadcrumbFrame->height() / 2));
+    verify(window.m_addressStack->currentWidget() == window.m_addressEdit,
+           "Primary blank address-bar click behavior is unchanged");
+    QTest::mouseClick(window.m_primaryPane->listView()->viewport(), Qt::LeftButton,
+                      Qt::NoModifier, QPoint(2, 2));
+    QApplication::processEvents();
+    verify(QTest::qWaitFor([&] {
+        return window.m_addressStack->currentWidget() == window.m_breadcrumbFrame;
+    }), "Primary focus-out behavior remains unchanged");
+
     window.m_splitPane->setCurrentUrl(shortPath, true);
     settle(window);
     window.m_contentSplitter->setSizes({620, 500});
