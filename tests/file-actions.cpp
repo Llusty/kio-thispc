@@ -131,8 +131,7 @@ int main(int argc, char **argv)
     actions.createNewFolder(rootA);
     waitJob(2);
     verify(QFileInfo(a + "/folder").isDir(), "folder created");
-    answerName("renamed.txt");
-    actions.renameSelected({QUrl::fromLocalFile(a + "/created.txt")}, "created.txt");
+    actions.renameTo(QUrl::fromLocalFile(a + "/created.txt"), "renamed.txt");
     waitJob(3);
     verify(QFile::exists(a + "/renamed.txt") && !QFile::exists(a + "/created.txt"), "rename performed");
     undoRedo([&] { return QFile::exists(a + "/created.txt"); },

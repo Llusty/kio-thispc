@@ -286,37 +286,11 @@ public:
         createNewFolderWithName(directory, name);
     }
 
-    void renameSelected(const QList<QUrl> &urls, QString oldName)
+    void renameTo(const QUrl &source, const QString &requestedName)
     {
-        if (!mutationAllowed()) return;
-
-        if (urls.size() != 1) {
-            return;
-        }
-
-        const QUrl source = urls.first();
-
-
-        if (oldName.isEmpty()) {
-            oldName =
-                QFileInfo(source.path()).fileName();
-        }
-
-        bool ok = false;
-
-        const QString newName =
-            QInputDialog::getText(
-                m_parentWidget,
-                trLocal("Zmień nazwę", "Rename"),
-                trLocal("Nowa nazwa:", "New name:"),
-                QLineEdit::Normal,
-                oldName,
-                &ok)
-                .trimmed();
-
-        if (!ok || newName == oldName) {
-            return;
-        }
+        if (!mutationAllowed() || !source.isValid()) return;
+        const QString newName = requestedName.trimmed();
+        if (newName == source.fileName()) return;
 
         if (!validNewName(newName)) {
             QMessageBox::warning(
@@ -330,8 +304,6 @@ public:
 
         const QUrl destination =
             siblingUrlWithName(source, newName);
-
-        if (!mutationAllowed()) return;
 
         KIO::CopyJob *job =
             KIO::moveAs(

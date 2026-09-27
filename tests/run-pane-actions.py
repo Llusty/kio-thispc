@@ -67,7 +67,7 @@ file_actions = replace_once(file_actions, 'KIO::emptyTrash()', 'makeTestEmptyTra
 
 for signature, marker, statement in [
     ('    void trashSelected(', '        KIO::CopyJob *job =', 'dispatch = {"trash", urls, {}};'),
-    ('    void renameSelected(', '        KIO::CopyJob *job =', 'dispatch = {"rename", {source}, destination};'),
+    ('    void renameTo(', '        KIO::CopyJob *job =', 'dispatch = {"rename", {source}, destination};'),
     ('    void pasteClipboardInto(', '        if (startNativeSingleFileTransfer(', 'dispatch = {cut ? "move" : "copy", urls, destination};'),
     ('    void createNewFolderWithName(', '        KIO::MkdirJob *job =', 'dispatch = {"mkdir", {}, destination};'),
     ('    void createNewFileWithName(', '        KIO::StoredTransferJob *job =', 'dispatch = {"create", {}, destination};'),

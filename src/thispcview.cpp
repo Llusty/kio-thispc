@@ -1992,6 +1992,11 @@ private:
 
         connect(m_splitPane, &SplitBrowserPane::selectionChanged,
                 this, [this] { updateFileActionStates(); updatePreviewAndQuickLook(); });
+        const auto splitRename = [this](const QUrl &source, const QString &name) {
+            if (m_fileActions) m_fileActions->renameTo(source, name);
+        };
+        m_splitPane->listView()->setRenameRequestHandler(splitRename);
+        m_splitPane->detailsView()->setRenameRequestHandler(splitRename);
         connect(m_splitPane, &SplitBrowserPane::activated,
                 this, [this] { setActivePane(PaneId::Split); });
         connect(m_splitPane, &SplitBrowserPane::contextMenuRequested,
@@ -2467,6 +2472,12 @@ private:
             this,
             &ThisPcWindow::handleDroppedUrls);
 
+        const auto primaryRename = [this](const QUrl &source, const QString &name) {
+            if (m_fileActions) m_fileActions->renameTo(source, name);
+        };
+        m_directoryList->setRenameRequestHandler(primaryRename);
+        m_directoryDetails->setRenameRequestHandler(primaryRename);
+
         installPaneShortcuts(m_directoryViewStack, PaneId::Primary);
         installPaneShortcuts(m_splitPane->shortcutScope(), PaneId::Split);
 
@@ -2512,10 +2523,6 @@ private:
         addViewShortcut(
             QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_N),
             [this] { createNewFolder(); });
-
-        addViewShortcut(
-            QKeySequence(Qt::Key_F2),
-            [this] { renameSelected(); });
 
         addViewShortcut(
             QKeySequence(Qt::Key_Delete),
@@ -4294,7 +4301,16 @@ private:
     void renameSelected()
     {
         const auto context = paneContext();
-        m_fileActions->renameSelected(selectedUrls(), context.items.isEmpty() ? QString() : context.items.first().name);
+        if (context.items.size() != 1 || !context.view) return;
+        QModelIndex index = context.view->currentIndex();
+        if (auto *tree = qobject_cast<DirectoryTreeWidget *>(context.view)) {
+            if (QTreeWidgetItem *item = tree->itemFromIndex(index))
+                tree->editItem(item, 0);
+            return;
+        }
+        if (auto *list = qobject_cast<DirectoryListWidget *>(context.view)) {
+            if (index.isValid()) list->edit(index);
+        }
     }
 
     void batchRenameSelected()

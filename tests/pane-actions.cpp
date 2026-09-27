@@ -213,6 +213,7 @@ int main(int argc, char **argv)
             list->addFileItem(file, QIcon(), QStringLiteral("File"),
                               QStringLiteral("0"), QStringLiteral("Today"), QString());
             auto *ti = new QTreeWidgetItem(tree, QStringList{name, "File", "0", "Today"});
+            ti->setFlags(ti->flags() | Qt::ItemIsEditable);
             ti->setData(0, Qt::UserRole, url.toString());
             ti->setData(0, Qt::UserRole + 1, false);
             ti->setData(0, directory_view_detail::FileItemRole, true);
@@ -601,10 +602,41 @@ int main(int argc, char **argv)
             QTest::keyClick(other, Qt::Key_V, Qt::ControlModifier);
             verify(dispatch.kind == "copy" && dispatch.destination == (split ? left : right), "copy paste destination");
             focus(view); dispatch = {};
-            dialog(true, true, other);
             QTest::keyClick(view, Qt::Key_F2);
+            QWidget *renameEditor = nullptr;
+            verify(QTest::qWaitFor([&] {
+                       renameEditor = view->findChild<QLineEdit *>();
+                       if (!renameEditor) {
+                           for (QPlainTextEdit *candidate : view->findChildren<QPlainTextEdit *>()) {
+                               if (candidate->isVisible()) { renameEditor = candidate; break; }
+                           }
+                       }
+                       return renameEditor && renameEditor->isVisible();
+                   }, 250),
+                   "F2 opens the inline rename editor");
+            if (auto *line = qobject_cast<QLineEdit *>(renameEditor)) line->selectAll();
+            if (auto *plain = qobject_cast<QPlainTextEdit *>(renameEditor)) plain->selectAll();
+            QTest::keyClicks(renameEditor, "renamed");
+            QTest::keyClick(renameEditor, Qt::Key_Return);
+            app.processEvents();
             verify(dispatch.kind == "rename" && dispatch.sources == QList<QUrl>{file}
                 && dispatch.destination == childUrlWithName(directory, "renamed"), "F2 keeps source and parent");
+            dispatch = {};
+            window.renameSelected();
+            QWidget *menuRenameEditor = nullptr;
+            verify(QTest::qWaitFor([&] {
+                       menuRenameEditor = view->findChild<QLineEdit *>();
+                       if (!menuRenameEditor) {
+                           for (QPlainTextEdit *candidate : view->findChildren<QPlainTextEdit *>()) {
+                               if (candidate->isVisible()) { menuRenameEditor = candidate; break; }
+                           }
+                       }
+                       return menuRenameEditor && menuRenameEditor->isVisible();
+                   }, 250),
+                   "single-item Rename action opens the same inline editor");
+            QTest::keyClick(menuRenameEditor, Qt::Key_Escape);
+            verify(dispatch.kind.isEmpty(),
+                   "canceling Rename action inline editor starts no backend operation");
             focus(view); dispatch = {};
             QTest::keyClick(view, Qt::Key_Return, Qt::AltModifier);
             verify(dispatch.kind == "properties" && dispatch.sources == QList<QUrl>{file}, "Alt+Enter properties");

@@ -1981,11 +1981,17 @@ int main(int argc, char **argv)
     const int beforeRenameFence = fenceDispatches;
     const QString alphaOriginal = alpha.toLocalFile();
     const QString alphaBlockedName = files.filePath(QStringLiteral("blocked-rename.txt"));
-    journalDuringInput([&] { fencedActions.renameSelected({alpha}, QStringLiteral("alpha.txt")); },
-                       QStringLiteral("blocked-rename.txt"));
+    QFile lateRenameFence(fenceJournal);
+    verify(lateRenameFence.open(QIODevice::WriteOnly | QIODevice::NewOnly)
+               && lateRenameFence.write(fenceBytes) == fenceBytes.size(),
+           "rename fence fixture is written in isolated recovery root");
+    lateRenameFence.close();
+    fencedActions.renameTo(alpha, QStringLiteral("blocked-rename.txt"));
     verify(fenceDispatches == beforeRenameFence && QFileInfo::exists(alphaOriginal)
                && !QFileInfo::exists(alphaBlockedName),
-           "journal appearing in rename dialog prevents dispatch and rename");
+           "pending journal prevents direct rename dispatch");
+    verify(QFile::remove(fenceJournal), "rename fence fixture is explicitly removed");
+    BatchRenameRecoveryGate::instance().refresh();
 
     const int beforeFileFence = fenceDispatches;
     const QString blockedFile = files.filePath(QStringLiteral("blocked-new.txt"));
@@ -2287,8 +2293,8 @@ int main(int argc, char **argv)
     verify(BatchRenameRecoveryGate::instance().unjournaledSwapRunning()
                && !asyncSwapUndo.isEnabled() && !asyncSwapRedo.isEnabled(),
            "swap worker holds global mutation fence before GUI resumes");
-    asyncSwapActions.renameSelected({QUrl::fromLocalFile(untouched.fileName())},
-                                    QStringLiteral("untouched"));
+    asyncSwapActions.renameTo(QUrl::fromLocalFile(untouched.fileName()),
+                              QStringLiteral("renamed"));
     verify(QFileInfo::exists(untouched.fileName())
                && !QFileInfo::exists(asyncSwapFiles.filePath(QStringLiteral("renamed")))
                && asyncSwapKioJobs == 0,
@@ -2396,8 +2402,8 @@ int main(int argc, char **argv)
     verify(!gapClose.isAccepted(),
            "main-window close is rejected in the gap between two exchanges");
     const int gapJobs = asyncSwapKioJobs;
-    asyncSwapActions.renameSelected({QUrl::fromLocalFile(untouched.fileName())},
-                                    QStringLiteral("untouched"));
+    asyncSwapActions.renameTo(QUrl::fromLocalFile(untouched.fileName()),
+                              QStringLiteral("renamed"));
     verify(asyncSwapKioJobs == gapJobs && QFileInfo::exists(untouched.fileName())
                && pairOriginal(secondGapPair),
            "competing mutation cannot dispatch in the gap between two exchanges");

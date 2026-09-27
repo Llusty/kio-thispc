@@ -25,11 +25,15 @@
 #include <QDropEvent>
 #include <QFileInfo>
 #include <QFontMetrics>
+#include <QKeyEvent>
+#include <QLineEdit>
 #include <QStandardItemModel>
 #include <QMimeData>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPaintEvent>
+#include <QPlainTextEdit>
+#include <QPersistentModelIndex>
 #include <QResizeEvent>
 #include <QShowEvent>
 #include <QSet>
@@ -71,6 +75,127 @@ inline qreal itemOpacity(bool hidden, bool selected, bool hovered, bool focused)
     return hidden && !selected && !hovered && !focused
         ? HiddenItemOpacity : 1.0;
 }
+
+// The option must have been populated by QStyledItemDelegate::initStyleOption().
+// Asking the style with only option.rect set loses the decoration position and
+// makes some styles return most of the item as the text sub-element.
+inline QRect nameEditorRect(const QStyleOptionViewItem &initializedOption,
+                            const QWidget *widget)
+{
+    QStyle *style = widget ? widget->style() : QApplication::style();
+    return style->subElementRect(
+        QStyle::SE_ItemViewItemText, &initializedOption, widget);
+}
+
+// Inline rename is single-line even when an icon label can wrap. Anchor it
+// to the first line that paint() draws instead of vertically centering it in
+// the style's complete (usually two-line) label container.
+inline QRect singleLineNameRect(const QRect &nameRect, const QFont &font)
+{
+    QRect lineRect = nameRect;
+    lineRect.setHeight(qMin(nameRect.height(), QFontMetrics(font).lineSpacing()));
+    return lineRect;
+}
+
+inline void configureNameEditor(QWidget *editor, Qt::Alignment alignment)
+{
+    auto *lineEdit = qobject_cast<QLineEdit *>(editor);
+    if (!lineEdit)
+        return;
+    // A frame gives QLineEdit a style-specific contents inset which the item
+    // label does not have. With a frameless editor and symmetric zero text
+    // margins, centering matches the delegate's drawText() rectangle.
+    lineEdit->setFrame(false);
+    lineEdit->setTextMargins(0, 0, 0, 0);
+    lineEdit->setAlignment(alignment);
+}
+
+inline void applyNameEditorGeometry(QWidget *editor, const QRect &rect)
+{
+    if (auto *lineEdit = qobject_cast<QLineEdit *>(editor)) {
+        // QStyledItemDelegate can create Qt's expanding line edit. Once its
+        // text is installed it may grow back to its size hint after the
+        // delegate has positioned it. Keep scrolling inside the single-line
+        // editor instead of allowing a long icon name to escape its callout.
+        lineEdit->setMinimumWidth(0);
+        lineEdit->setMaximumWidth(qMax(1, rect.width()));
+    }
+    editor->setGeometry(rect);
+}
+
+class IconNameEditor final : public QPlainTextEdit
+{
+public:
+    explicit IconNameEditor(QWidget *parent = nullptr) : QPlainTextEdit(parent)
+    {
+        setFrameStyle(QFrame::NoFrame);
+        setLineWrapMode(QPlainTextEdit::WidgetWidth);
+        setWordWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+        setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        setTabChangesFocus(true);
+        setContentsMargins(0, 0, 0, 0);
+        document()->setDocumentMargin(0);
+        QTextOption textOption = document()->defaultTextOption();
+        textOption.setAlignment(Qt::AlignHCenter);
+        textOption.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+        document()->setDefaultTextOption(textOption);
+    }
+
+    QString fileName() const
+    {
+        QString value = toPlainText();
+        value.remove(QLatin1Char('\r'));
+        value.remove(QLatin1Char('\n'));
+        return value.trimmed();
+    }
+
+    void setFileName(const QString &value) { setPlainText(sanitized(value)); }
+
+    void selectFileNameStem()
+    {
+        const QString value = toPlainText();
+        const int suffixSeparator = value.lastIndexOf(QLatin1Char('.'));
+        QTextCursor selection(document());
+        selection.setPosition(0);
+        selection.setPosition(suffixSeparator > 0 ? suffixSeparator : value.size(),
+                              QTextCursor::KeepAnchor);
+        setTextCursor(selection);
+    }
+
+    std::function<void()> commit;
+    std::function<void()> cancel;
+
+protected:
+    void keyPressEvent(QKeyEvent *event) override
+    {
+        if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) {
+            if (commit) commit();
+            event->accept();
+            return;
+        }
+        if (event->key() == Qt::Key_Escape) {
+            if (cancel) cancel();
+            event->accept();
+            return;
+        }
+        QPlainTextEdit::keyPressEvent(event);
+    }
+
+    void insertFromMimeData(const QMimeData *source) override
+    {
+        if (!source || !source->hasText()) return;
+        insertPlainText(sanitized(source->text()));
+    }
+
+private:
+    static QString sanitized(QString value)
+    {
+        value.remove(QLatin1Char('\r'));
+        value.remove(QLatin1Char('\n'));
+        return value;
+    }
+};
 
 struct DateCategory
 {
@@ -353,6 +478,13 @@ inline void configureDirectoryDragDrop(QAbstractItemView *view)
 class ExplorerNameDelegate : public QStyledItemDelegate
 {
 public:
+    struct IconPaintLayers {
+        bool backgroundAndSelection = true;
+        bool decoration = true;
+        bool text = true;
+    };
+
+    using RenameRequest = std::function<void(const QUrl &, const QString &)>;
     explicit ExplorerNameDelegate(QListView *view)
         : QStyledItemDelegate(view)
         , m_view(view)
@@ -374,6 +506,161 @@ public:
     bool alwaysShowFullNames() const
     {
         return m_alwaysShowFullNames;
+    }
+
+    void setRenameRequest(RenameRequest request)
+    {
+        m_renameRequest = std::move(request);
+    }
+
+    QRect styledNameRect(const QStyleOptionViewItem &option,
+                         const QModelIndex &index) const
+    {
+        QStyleOptionViewItem adjusted(option);
+        initStyleOption(&adjusted, index);
+        return directory_view_detail::nameEditorRect(adjusted, m_view);
+    }
+
+    QRect decorationRect(const QStyleOptionViewItem &option,
+                         const QModelIndex &index) const
+    {
+        QStyleOptionViewItem adjusted(option);
+        initStyleOption(&adjusted, index);
+        QStyle *style = m_view ? m_view->style() : QApplication::style();
+        return style->subElementRect(
+            QStyle::SE_ItemViewItemDecoration, &adjusted, m_view);
+    }
+
+    QRect nameEditorRect(const QStyleOptionViewItem &option,
+                         const QModelIndex &index) const
+    {
+        QStyleOptionViewItem adjusted(option);
+        initStyleOption(&adjusted, index);
+        QRect rect = styledNameRect(option, index);
+        if (!m_view || m_view->viewMode() != QListView::IconMode)
+            return rect;
+
+        const QString text = index.data(Qt::DisplayRole).toString();
+        const int innerWidth = qMax(1, adjusted.rect.width() - 16);
+        const int maxLines = m_alwaysShowFullNames ? 4 : 2;
+        const bool expanded = m_view->selectionModel()
+            && m_view->selectionModel()->isSelected(index)
+            && directory_view_detail::selectedNameNeedsCallout(
+                text, adjusted.font, innerWidth, maxLines);
+        if (expanded) {
+            QTextLayout layout(text, adjusted.font);
+            QTextOption textOption;
+            textOption.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+            layout.setTextOption(textOption);
+            layout.beginLayout();
+            qreal height = 0;
+            while (true) {
+                QTextLine line = layout.createLine();
+                if (!line.isValid()) break;
+                line.setLineWidth(innerWidth);
+                height += line.height();
+            }
+            layout.endLayout();
+            rect = directory_view_detail::selectedNameCalloutRect(
+                adjusted.rect, adjusted.decorationSize.height(), qRound(height),
+                m_view->viewport()->rect()).adjusted(6, 3, -6, -3);
+        }
+        return expanded ? rect
+                        : directory_view_detail::singleLineNameRect(rect, adjusted.font);
+    }
+
+    QWidget *createEditor(QWidget *parent,
+                          const QStyleOptionViewItem &option,
+                          const QModelIndex &index) const override
+    {
+        if (m_view && m_view->viewMode() == QListView::IconMode) {
+            auto *editor = new directory_view_detail::IconNameEditor(parent);
+            m_editingIconIndex = index;
+            if (m_view->viewport())
+                m_view->viewport()->update(m_view->visualRect(index));
+            QObject::connect(editor, &QObject::destroyed,
+                             const_cast<ExplorerNameDelegate *>(this),
+                             [this, persistentIndex = QPersistentModelIndex(index)] {
+                if (m_editingIconIndex != persistentIndex)
+                    return;
+                m_editingIconIndex = QPersistentModelIndex();
+                if (m_view && m_view->viewport())
+                    m_view->viewport()->update(m_view->visualRect(persistentIndex));
+            });
+            editor->setFont(option.font);
+            editor->setCenterOnScroll(false);
+            editor->commit = [this, editor] {
+                Q_EMIT const_cast<ExplorerNameDelegate *>(this)->commitData(editor);
+                Q_EMIT const_cast<ExplorerNameDelegate *>(this)->closeEditor(editor);
+            };
+            editor->cancel = [this, editor] {
+                Q_EMIT const_cast<ExplorerNameDelegate *>(this)->closeEditor(
+                    editor, QAbstractItemDelegate::RevertModelCache);
+            };
+            return editor;
+        }
+        QWidget *editor = QStyledItemDelegate::createEditor(parent, option, index);
+        QStyleOptionViewItem adjusted(option);
+        initStyleOption(&adjusted, index);
+        const Qt::Alignment alignment = m_view
+                && m_view->viewMode() == QListView::IconMode
+            ? Qt::AlignHCenter | Qt::AlignVCenter
+            : adjusted.displayAlignment;
+        directory_view_detail::configureNameEditor(editor, alignment);
+        return editor;
+    }
+
+    void destroyEditor(QWidget *editor,
+                       const QModelIndex &index) const override
+    {
+        if (m_editingIconIndex == index) {
+            m_editingIconIndex = QPersistentModelIndex();
+            if (m_view && m_view->viewport())
+                m_view->viewport()->update(m_view->visualRect(index));
+        }
+        QStyledItemDelegate::destroyEditor(editor, index);
+    }
+
+    bool suppressesOriginalIconText(const QModelIndex &index) const
+    {
+        return m_view && m_view->viewMode() == QListView::IconMode
+            && m_editingIconIndex == index;
+    }
+
+    IconPaintLayers iconPaintLayers(const QModelIndex &index) const
+    {
+        return {true, true, !suppressesOriginalIconText(index)};
+    }
+
+    void setEditorData(QWidget *editor, const QModelIndex &index) const override
+    {
+        if (auto *iconEditor = dynamic_cast<directory_view_detail::IconNameEditor *>(editor)) {
+            iconEditor->setFileName(index.data(Qt::EditRole).toString());
+            iconEditor->selectFileNameStem();
+            return;
+        }
+        QStyledItemDelegate::setEditorData(editor, index);
+    }
+
+    void updateEditorGeometry(QWidget *editor,
+                              const QStyleOptionViewItem &option,
+                              const QModelIndex &index) const override
+    {
+        directory_view_detail::applyNameEditorGeometry(
+            editor, nameEditorRect(option, index));
+    }
+
+    void setModelData(QWidget *editor, QAbstractItemModel *,
+                      const QModelIndex &index) const override
+    {
+        const auto *lineEdit = qobject_cast<QLineEdit *>(editor);
+        const auto *iconEditor = dynamic_cast<directory_view_detail::IconNameEditor *>(editor);
+        const QString proposed = iconEditor ? iconEditor->fileName()
+            : lineEdit ? lineEdit->text().trimmed() : QString();
+        const QString oldName = index.data(Qt::DisplayRole).toString();
+        const QUrl source(index.data(directory_view_detail::UrlRole).toString());
+        if (m_renameRequest && source.isValid() && proposed != oldName)
+            m_renameRequest(source, proposed);
     }
 
     void setCompactMode(bool enabled)
@@ -517,8 +804,18 @@ public:
             painter->restore();
         };
 
+        // The inline editor is the sole filename representation while an
+        // Icons item is being renamed.  The style has already painted the
+        // background, selection/hover/focus surface and decoration above;
+        // skip only this delegate's custom wrapped-text pass.
+        if (!iconPaintLayers(index).text) {
+            paintShortNameOutline();
+            if (dimmed) painter->restore();
+            return;
+        }
+
         // 2. Determine text area
-        QRect textRect = style->subElementRect(QStyle::SE_ItemViewItemText, &opt, widget);
+        QRect textRect = directory_view_detail::nameEditorRect(opt, widget);
         if (!textRect.isValid() || textRect.isEmpty()) {
             const int iconBottom = opt.rect.top() + opt.decorationSize.height() + 4;
             textRect = QRect(opt.rect.left() + 4, iconBottom, opt.rect.width() - 8, opt.rect.bottom() - iconBottom);
@@ -626,6 +923,8 @@ private:
     QListView *m_view = nullptr;
     bool m_alwaysShowFullNames = false;
     bool m_compactMode = false;
+    RenameRequest m_renameRequest;
+    mutable QPersistentModelIndex m_editingIconIndex;
 };
 
 class DirectoryListWidget : public KCategorizedView
@@ -836,6 +1135,11 @@ public:
             && m_nameDelegate->alwaysShowFullNames();
     }
 
+    void setRenameRequestHandler(ExplorerNameDelegate::RenameRequest request)
+    {
+        m_nameDelegate->setRenameRequest(std::move(request));
+    }
+
     void cancelEditingForActivation()
     {
         if (state() != QAbstractItemView::EditingState) {
@@ -868,6 +1172,16 @@ Q_SIGNALS:
         Qt::KeyboardModifiers modifiers);
 
 protected:
+    void keyPressEvent(QKeyEvent *event) override
+    {
+        if (event->key() == Qt::Key_F2 && selectedIndexes().size() == 1) {
+            edit(currentIndex());
+            event->accept();
+            return;
+        }
+        KCategorizedView::keyPressEvent(event);
+    }
+
     void paintEvent(QPaintEvent *event) override
     {
         KCategorizedView::paintEvent(event);
@@ -1111,8 +1425,9 @@ public:
         class HiddenDetailsDelegate final : public QStyledItemDelegate
         {
         public:
-            explicit HiddenDetailsDelegate(QTreeWidget *view)
-                : QStyledItemDelegate(view), m_view(view) {}
+            HiddenDetailsDelegate(QTreeWidget *view,
+                                  ExplorerNameDelegate::RenameRequest *request)
+                : QStyledItemDelegate(view), m_view(view), m_request(request) {}
 
             void paint(QPainter *painter, const QStyleOptionViewItem &option,
                        const QModelIndex &index) const override
@@ -1131,13 +1446,55 @@ public:
                 painter->restore();
             }
 
+            void updateEditorGeometry(QWidget *editor,
+                                      const QStyleOptionViewItem &option,
+                                      const QModelIndex &index) const override
+            {
+                QStyleOptionViewItem adjusted(option);
+                initStyleOption(&adjusted, index);
+                directory_view_detail::applyNameEditorGeometry(
+                    editor, directory_view_detail::nameEditorRect(
+                        adjusted, m_view));
+            }
+
+            QWidget *createEditor(QWidget *parent,
+                                  const QStyleOptionViewItem &option,
+                                  const QModelIndex &index) const override
+            {
+                QWidget *editor = QStyledItemDelegate::createEditor(
+                    parent, option, index);
+                QStyleOptionViewItem adjusted(option);
+                initStyleOption(&adjusted, index);
+                directory_view_detail::configureNameEditor(
+                    editor, adjusted.displayAlignment);
+                return editor;
+            }
+
+            void setModelData(QWidget *editor, QAbstractItemModel *,
+                              const QModelIndex &index) const override
+            {
+                const auto *lineEdit = qobject_cast<QLineEdit *>(editor);
+                const QString proposed = lineEdit ? lineEdit->text().trimmed() : QString();
+                const QModelIndex nameIndex = index.siblingAtColumn(0);
+                const QString oldName = nameIndex.data(Qt::DisplayRole).toString();
+                const QUrl source(nameIndex.data(Qt::UserRole).toString());
+                if (m_request && *m_request && source.isValid() && proposed != oldName)
+                    (*m_request)(source, proposed);
+            }
+
         private:
             QTreeWidget *m_view;
+            ExplorerNameDelegate::RenameRequest *m_request;
         };
-        setItemDelegate(new HiddenDetailsDelegate(this));
+        setItemDelegate(new HiddenDetailsDelegate(this, &m_renameRequest));
         setEditTriggers((editTriggers()
             & ~QAbstractItemView::DoubleClicked)
             | QAbstractItemView::SelectedClicked);
+    }
+
+    void setRenameRequestHandler(ExplorerNameDelegate::RenameRequest request)
+    {
+        m_renameRequest = std::move(request);
     }
 
     void cancelEditingForActivation()
@@ -1170,6 +1527,16 @@ Q_SIGNALS:
         Qt::KeyboardModifiers modifiers);
 
 protected:
+    void keyPressEvent(QKeyEvent *event) override
+    {
+        if (event->key() == Qt::Key_F2 && selectedItems().size() == 1) {
+            editItem(selectedItems().first(), 0);
+            event->accept();
+            return;
+        }
+        QTreeWidget::keyPressEvent(event);
+    }
+
     bool edit(const QModelIndex &index, EditTrigger trigger, QEvent *event) override
     {
         if (index.column() != 0) {
@@ -1278,6 +1645,7 @@ protected:
     }
 
 private:
+    ExplorerNameDelegate::RenameRequest m_renameRequest;
     QUrl dropDestinationAt(const QPoint &position) const
     {
         QUrl destination = m_dropDirectory;

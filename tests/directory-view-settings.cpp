@@ -1,4 +1,5 @@
 #include <QSignalSpy>
+#include <QClipboard>
 
 // Appended to a temporary, instrumented copy by run-pane-actions.py.
 static int checks = 0;
@@ -864,6 +865,15 @@ int main(int argc, char **argv)
                "slow second click opens the Details Name editor");
         verify(activationDetails.currentIndex().column() == 0,
                "Details inline rename is confined to the Name column");
+        if (auto *detailsEditor = activationDetails.findChild<QLineEdit *>()) {
+            const QRect nameCell = activationDetails.visualRect(detailsFileName);
+            const QRect typeCell = activationDetails.visualRect(detailsFileName.siblingAtColumn(1));
+            verify(nameCell.adjusted(-2, -1, 2, 1).contains(detailsEditor->geometry())
+                       && !typeCell.intersects(detailsEditor->geometry()),
+                   "Details editor geometry is confined to the Name column and excludes Type");
+        } else {
+            verify(false, "Details editor widget is available for geometry verification");
+        }
         activationDetails.cancelEditingForActivation();
         app.processEvents();
 
@@ -901,6 +911,243 @@ int main(int argc, char **argv)
                    QApplication::doubleClickInterval() + 250),
                "Details slow-click rename still works after repeated activation");
         activationDetails.cancelEditingForActivation();
+
+        QStackedWidget geometryStack;
+        DirectoryListWidget geometryView;
+        DirectoryTreeWidget geometryDetails;
+        geometryStack.addWidget(&geometryView);
+        geometryStack.addWidget(&geometryDetails);
+        geometryView.resize(520, 360);
+        FileInfo geometryFile{QStringLiteral("short.txt"), QStringLiteral("text/plain"), {},
+            QUrl(QStringLiteral("sftp://example.test/path/short.txt")), false, 1, 0};
+        QPixmap geometryIconPixmap(16, 16);
+        geometryIconPixmap.fill(Qt::blue);
+        geometryView.addFileItem(
+            geometryFile, QIcon(geometryIconPixmap), {}, {}, {}, {});
+        geometryStack.show();
+        geometryView.setCurrentRow(0);
+        geometryView.setFocus();
+        app.processEvents();
+        auto *nameDelegate = dynamic_cast<ExplorerNameDelegate *>(geometryView.itemDelegate());
+        verify(nameDelegate != nullptr, "directory list uses Explorer name delegate");
+        for (int mode : {0, 1, 3}) {
+            applyDirectoryViewLayout(&geometryView, &geometryDetails,
+                                     &geometryStack, nullptr, mode);
+            geometryStack.show(); geometryView.show(); app.processEvents();
+            const QModelIndex index = geometryView.currentIndex();
+            QStyleOptionViewItem option;
+            option.rect = geometryView.visualRect(index);
+            option.widget = &geometryView;
+            const QRect editorRect = nameDelegate->nameEditorRect(option, index);
+            const QRect labelRect = nameDelegate->styledNameRect(option, index);
+            const QRect iconRect = nameDelegate->decorationRect(option, index);
+            verify((mode == 0
+                        ? editorRect == directory_view_detail::singleLineNameRect(
+                              labelRect, geometryView.font())
+                        : editorRect == labelRect),
+                   mode == 0 ? "Icons editor equals the painted first-line rect"
+                             : mode == 1 ? "List editor equals the initialized style text rect"
+                                         : "Compact editor equals the initialized style text rect");
+            verify(mode != 0 || (editorRect.top() >= iconRect.bottom()
+                       && !editorRect.intersects(iconRect)),
+                   "Icons short-name editor is below the icon and does not cover it");
+
+            QLineEdit positionedEditor(geometryView.viewport());
+            nameDelegate->updateEditorGeometry(&positionedEditor, option, index);
+            verify(positionedEditor.geometry() == editorRect,
+                   mode == 0 ? "Icons updateEditorGeometry uses the name geometry contract"
+                             : mode == 1 ? "List updateEditorGeometry uses the name geometry contract"
+                                         : "Compact updateEditorGeometry uses the name geometry contract");
+
+            QWidget *created = nameDelegate->createEditor(
+                geometryView.viewport(), option, index);
+            auto *lineEditor = qobject_cast<QLineEdit *>(created);
+            auto *iconEditor = dynamic_cast<directory_view_detail::IconNameEditor *>(created);
+            verify(mode == 0 ? iconEditor != nullptr
+                             : lineEditor && !lineEditor->hasFrame()
+                                 && lineEditor->textMargins() == QMargins(),
+                   mode == 0 ? "Icons uses the wrapped filename editor"
+                             : "list editor removes frame and content margins that shift the text");
+            verify(mode != 0 || (iconEditor
+                       && iconEditor->lineWrapMode() == QPlainTextEdit::WidgetWidth
+                       && iconEditor->wordWrapMode()
+                           == QTextOption::WrapAtWordBoundaryOrAnywhere),
+                   "Icons editor wraps at the bounded widget width");
+            verify(mode == 0
+                       ? nameDelegate->suppressesOriginalIconText(index)
+                       : !nameDelegate->suppressesOriginalIconText(index),
+                   mode == 0
+                       ? "active short-name Icons editor suppresses the original label"
+                       : "List and Compact editors do not enter Icons text suppression");
+            if (lineEditor) {
+                nameDelegate->updateEditorGeometry(lineEditor, option, index);
+                verify(qAbs(lineEditor->geometry().center().y()
+                                - editorRect.center().y()) <= 1,
+                       mode == 0 ? "Icons editor baseline anchor stays on the painted first line"
+                                 : mode == 1 ? "List editor vertical anchor matches the text rect"
+                                             : "Compact editor vertical anchor matches the text rect");
+            }
+            delete created;
+            app.processEvents();
+            verify(!nameDelegate->suppressesOriginalIconText(index),
+                   "destroying an editor restores normal label painting");
+        }
+
+        applyDirectoryViewLayout(&geometryView, &geometryDetails,
+                                 &geometryStack, nullptr, 0);
+        QModelIndex geometryIndex = geometryView.currentIndex();
+        const QSize gridBefore = geometryView.gridSize();
+        FileInfo neighborFile{QStringLiteral("neighbor.txt"), QStringLiteral("text/plain"), {},
+            QUrl(QStringLiteral("sftp://example.test/path/neighbor.txt")), false, 1, 0};
+        geometryView.addFileItem(
+            neighborFile, QIcon(geometryIconPixmap), {}, {}, {}, {});
+        geometryView.model()->setData(geometryIndex,
+            QStringLiteral("a very long wrapped filename that needs an expanded selected callout.txt"));
+        app.processEvents();
+        geometryIndex = geometryView.currentIndex();
+        QStyleOptionViewItem longOption;
+        longOption.rect = geometryView.visualRect(geometryIndex);
+        longOption.widget = &geometryView;
+        const QRect longEditorRect = nameDelegate->nameEditorRect(longOption, geometryIndex);
+        const QRect longIconRect = nameDelegate->decorationRect(
+            longOption, geometryIndex);
+        const QRect longCellRect = geometryView.visualRect(geometryIndex);
+        const QRect neighborCellRect = geometryView.visualRect(
+            geometryView.model()->index(1, 0));
+        verify(longEditorRect.isValid()
+                   && longEditorRect.top() >= longIconRect.bottom()
+                   && !longEditorRect.intersects(longIconRect)
+                   && longEditorRect.height() >= 2 * QFontMetrics(geometryView.font()).lineSpacing()
+                   && geometryView.gridSize() == gridBefore,
+               "wrapped selected-name editor has multiple visual lines below the icon without changing grid rows");
+        verify(longEditorRect.left() >= longCellRect.left()
+                   && longEditorRect.right() <= longCellRect.right(),
+               "wrapped Icons editor width stays inside its bounded grid-label cell");
+        verify(!longEditorRect.intersects(neighborCellRect),
+               "wrapped Icons editor does not intersect the neighboring item cell");
+
+        QStackedWidget splitGeometryStack;
+        DirectoryListWidget splitGeometryView;
+        DirectoryTreeWidget splitGeometryDetails;
+        splitGeometryStack.addWidget(&splitGeometryView);
+        splitGeometryStack.addWidget(&splitGeometryDetails);
+        splitGeometryView.resize(520, 360);
+        splitGeometryView.addFileItem(
+            geometryFile, QIcon(geometryIconPixmap), {}, {}, {}, {});
+        splitGeometryStack.show();
+        splitGeometryView.setCurrentRow(0);
+        applyDirectoryViewLayout(&splitGeometryView, &splitGeometryDetails,
+                                 &splitGeometryStack, nullptr, 0);
+        QModelIndex splitGeometryIndex = splitGeometryView.currentIndex();
+        splitGeometryView.model()->setData(splitGeometryIndex,
+            geometryIndex.data(Qt::DisplayRole));
+        splitGeometryView.selectionModel()->setCurrentIndex(splitGeometryIndex,
+            QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Current);
+        app.processEvents();
+        QStyleOptionViewItem splitLongOption;
+        splitLongOption.rect = splitGeometryView.visualRect(splitGeometryIndex);
+        splitLongOption.widget = &splitGeometryView;
+        auto *splitNameDelegate = dynamic_cast<ExplorerNameDelegate *>(
+            splitGeometryView.itemDelegate());
+        verify(splitNameDelegate
+                   && splitNameDelegate->nameEditorRect(
+                          splitLongOption, splitGeometryIndex).size()
+                       == longEditorRect.size(),
+               "Primary and Split Icons use the same bounded long-name editor geometry");
+        QWidget *splitEditor = splitNameDelegate->createEditor(
+            splitGeometryView.viewport(), splitLongOption, splitGeometryIndex);
+        verify(splitNameDelegate->suppressesOriginalIconText(splitGeometryIndex),
+               "Split active Icons editor suppresses its original label like Primary");
+        delete splitEditor;
+        app.processEvents();
+        verify(!splitNameDelegate->suppressesOriginalIconText(splitGeometryIndex),
+               "Split label painting returns when its editor is destroyed");
+        splitGeometryStack.hide();
+
+        int renameRequests = 0;
+        QUrl requestedSource;
+        QString requestedName;
+        geometryView.setRenameRequestHandler([&](const QUrl &source, const QString &name) {
+            ++renameRequests; requestedSource = source; requestedName = name;
+        });
+        geometryView.selectionModel()->setCurrentIndex(geometryIndex,
+            QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Current);
+        geometryStack.show();
+        geometryView.show();
+        geometryView.setFocus();
+        app.processEvents();
+        QStyleOptionViewItem liveLongOption;
+        liveLongOption.rect = geometryView.visualRect(geometryIndex);
+        liveLongOption.widget = &geometryView;
+        const QRect liveLongEditorRect = nameDelegate->nameEditorRect(
+            liveLongOption, geometryIndex);
+        geometryView.edit(geometryIndex);
+        app.processEvents();
+        directory_view_detail::IconNameEditor *cancelEditor = nullptr;
+        for (QPlainTextEdit *candidate : geometryView.findChildren<QPlainTextEdit *>()) {
+            if (auto *typed = dynamic_cast<directory_view_detail::IconNameEditor *>(candidate)) {
+                cancelEditor = typed;
+                break;
+            }
+        }
+        verify(cancelEditor && cancelEditor->isVisible(), "explicit Icons rename creates a wrapped editor");
+        verify(nameDelegate->suppressesOriginalIconText(geometryIndex)
+                   && !nameDelegate->suppressesOriginalIconText(
+                       geometryView.model()->index(1, 0)),
+               "long-name suppression applies only to the actively edited index");
+        const auto activeLayers = nameDelegate->iconPaintLayers(geometryIndex);
+        verify(activeLayers.backgroundAndSelection && activeLayers.decoration
+                   && !activeLayers.text,
+               "active Icons editing suppresses only text, preserving selection and icon layers");
+        verify(cancelEditor
+                   && cancelEditor->geometry().width() <= liveLongEditorRect.width()
+                   && cancelEditor->geometry().height() <= liveLongEditorRect.height()
+                   && cancelEditor->geometry().right()
+                       <= geometryView.visualRect(geometryIndex).right()
+                   && !cancelEditor->geometry().intersects(geometryView.visualRect(
+                       geometryView.model()->index(1, 0))),
+               "live long-name editor remains bounded after Qt installs its text");
+
+        QTest::keyClick(cancelEditor, Qt::Key_Escape);
+        app.processEvents();
+        verify(renameRequests == 0
+                   && geometryIndex.data(Qt::DisplayRole).toString().startsWith(QStringLiteral("a very long")),
+               "Escape cancels without backend request or local model mutation");
+        verify(!nameDelegate->suppressesOriginalIconText(geometryIndex),
+               "Escape restores original long-name label painting");
+
+        QWidget *commitLifecycleEditor = nameDelegate->createEditor(
+            geometryView.viewport(), liveLongOption, geometryIndex);
+        verify(nameDelegate->suppressesOriginalIconText(geometryIndex),
+               "commit lifecycle re-enters original-label suppression");
+        nameDelegate->destroyEditor(commitLifecycleEditor, geometryIndex);
+        verify(!nameDelegate->suppressesOriginalIconText(geometryIndex),
+               "commit/close editor destruction restores original label painting");
+        renameRequests = 0;
+        directory_view_detail::IconNameEditor commitEditor;
+        commitEditor.setFileName(QStringLiteral("remote-renamed.txt"));
+        nameDelegate->setModelData(&commitEditor, geometryView.model(), geometryIndex);
+        verify(renameRequests == 1 && requestedSource == geometryFile.url
+                   && requestedName == QStringLiteral("remote-renamed.txt")
+                   && geometryIndex.data(Qt::DisplayRole).toString().startsWith(QStringLiteral("a very long")),
+               "Enter requests backend rename for the source URL without optimistic model edit");
+
+        renameRequests = 0;
+        directory_view_detail::IconNameEditor pasteEditor;
+        pasteEditor.setFileName(QStringLiteral("archive.tar.gz"));
+        pasteEditor.selectFileNameStem();
+        verify(pasteEditor.textCursor().selectedText() == QStringLiteral("archive.tar"),
+               "Icons editor preserves stem-without-extension selection semantics");
+        pasteEditor.setFocus();
+        QApplication::clipboard()->setText(QStringLiteral("safe\r\nname.txt"));
+        QTest::keyClick(&pasteEditor, Qt::Key_V, Qt::ControlModifier);
+        verify(!pasteEditor.toPlainText().contains(QLatin1Char('\r'))
+                   && !pasteEditor.toPlainText().contains(QLatin1Char('\n')),
+               "pasted CR/LF cannot enter the filename value");
+        nameDelegate->setModelData(&pasteEditor, geometryView.model(), geometryIndex);
+        verify(renameRequests == 1 && !requestedName.contains(QLatin1Char('\n'))
+                   && !requestedName.contains(QLatin1Char('\r')),
+               "sanitized multiline paste reaches the existing rename backend as one filename");
 
         applyDirectoryViewLayout(&activationView, &activationDetails,
                                  &activationStack, nullptr, 0);
