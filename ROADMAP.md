@@ -427,7 +427,45 @@ When a normal operation receives permission denied, offer a targeted `admin://` 
   potwierdzeniem;
 - zachować model safety, preflight i revalidation wypracowany w 0.31.
 
+### 0.45.0 — Image Printing / Print Pictures workflow
+- zastąpić i rozszerzyć obecną pojedynczą ścieżkę `Print` własnym, przewidywalnym
+  workflow drukowania obrazów; obecnie `Print` jest wyłączone przy zaznaczeniu
+  wielu obrazów i samo odblokowanie starej akcji nie jest rozwiązaniem;
+- obsłużyć kilka lub kilkanaście zaznaczonych plików graficznych w jednym
+  zadaniu, z bezpiecznym dopuszczaniem tylko wspieranych formatów i czytelną
+  obsługą mixed selection;
+- zapewnić ergonomię zbliżoną funkcjonalnie do Windows 11 „Print Pictures”, bez
+  kopiowania wyglądu 1:1: duży podgląd bieżącej strony/obrazu, liczba stron oraz
+  nawigacja po stronach zestawu;
+- dodać chooser presetów układu, np. cała strona, 13×18, 10×15 oraz wiele zdjęć
+  na stronie; opcjonalny contact sheet traktować jako naturalne rozszerzenie;
+- udostępnić wybór drukarki, rozmiaru papieru, liczby kopii i przełącznik
+  fit-to-frame/crop, a jakość/DPI oraz typ papieru/nośnika pokazywać tylko wtedy,
+  gdy backend lub sterownik faktycznie zgłasza takie możliwości;
+- korzystać z Qt Print Support oraz wykrywania capabilities przez CUPS/IPP tam,
+  gdzie jest to dostępne; nie hardcode'ować opcji niewspieranych przez drukarkę;
+- utrzymać preview i layout engine na tyle niezależne od systemowego modalnego
+  print dialogu, aby UX oraz wynik rozmieszczenia były przewidywalne;
+- zapewnić identyczne działanie dla Primary i Split View oraz testy layoutu,
+  paginacji, capability fallback, mixed selection i wieloplikowego jobu.
+
 ## Backlog bez przypisanej wersji
+
+### Ark → ThisPC Drag & Drop interoperability — audyt i plan
+- przyjmować external Drag & Drop z Ark/KDE archive views do zwykłego folderu
+  w ThisPC dla plików i folderów, zarówno single-, jak i multi-selection;
+- najpierw zbadać rzeczywisty kontrakt MIME/URI/temporary extraction Ark/KIO;
+  nie zakładać, że Ark zawsze wystawia lokalne URL-e `file://`, ani nie obiecywać
+  implementacji opartej na prostym `copy` bez tego audytu;
+- domyślnie stosować semantykę Copy; Move udostępniać wyłącznie wtedy, gdy
+  źródło i backend rzeczywiście je wspierają, a operacja jest bezpieczna;
+- obsłużyć konflikty oraz Undo/Redo tylko tam, gdzie ich gwarancje można realnie
+  zachować dla kontraktu dostarczonego przez źródło;
+- nie blokować DnD wyłącznie dlatego, że źródłem jest zewnętrzna aplikacja;
+- zapewnić parity Primary/Split i wszystkich trybów widoku;
+- testować parser/negocjację przez synthetic `QMimeData`, a rzeczywistą
+  interoperacyjność przez ręczny Ark smoke test dla plików, folderów oraz wielu
+  zaznaczonych elementów.
 
 ### Po 0.28.0 — recovery i domknięcie Batch Rename (wersja do ustalenia)
 
