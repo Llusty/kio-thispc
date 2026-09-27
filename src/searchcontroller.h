@@ -515,38 +515,15 @@ public:
                         const QString rawName =
                             entry.stringValue(
                                 KIO::UDSEntry::UDS_NAME);
+                        const FileInfo file = fileInfoForEntry(root, entry);
 
                         if (name.isEmpty()
                             || rawName == QStringLiteral(".")
                             || rawName == QStringLiteral("..")
                             || (!m_showHiddenFiles
-                                && rawName.startsWith(
-                                    QLatin1Char('.')))) {
+                                && fileInfoForEntry(root, entry).isHidden)) {
                             continue;
                         }
-
-                        FileInfo file;
-                        file.name = name;
-                        file.mimeType =
-                            entry.stringValue(
-                                KIO::UDSEntry::UDS_MIME_TYPE);
-                        file.iconName =
-                            entry.stringValue(
-                                KIO::UDSEntry::UDS_ICON_NAME);
-                        file.url =
-                            childUrlForEntry(
-                                root,
-                                entry);
-                        file.isDir =
-                            entryIsDirectory(entry);
-                        file.size =
-                            entry.numberValue(
-                                KIO::UDSEntry::UDS_SIZE,
-                                -1);
-                        file.modificationTime =
-                            entry.numberValue(
-                                KIO::UDSEntry::UDS_MODIFICATION_TIME,
-                                0);
 
                         if (!file.url.isValid()
                             || file.url.isEmpty()) {

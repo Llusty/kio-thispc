@@ -70,7 +70,7 @@ bool DirectoryListingCore::acceptsEntry(const KIO::UDSEntry &entry,
     return !emptyName
         && rawName != QStringLiteral(".")
         && rawName != QStringLiteral("..")
-        && (options.showHiddenFiles || !rawName.startsWith(QLatin1Char('.')));
+        && (options.showHiddenFiles || !file.isHidden);
 }
 
 void DirectoryListingCore::appendEntries(QList<FileInfo> &files, const QUrl &url,

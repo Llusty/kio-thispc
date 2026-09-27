@@ -495,6 +495,17 @@ When a normal operation receives permission denied, offer a targeted `admin://` 
 - status bar details (liczba elementów/zaznaczonych, suma rozmiaru zaznaczenia,
   wolne miejsce), jeśli candidate nie wejdzie do 0.34.
 
+## Pomysły do rozważenia w przyszłości / Future ideas
+
+Punkty w tej sekcji nie są zobowiązaniem do implementacji ani przypisaniem do
+wersji. Przy każdym kolejnym przeglądzie roadmapy należy ponownie ocenić ich
+sens i usunąć je, jeśli przestaną być użyteczne.
+
+- opcjonalny appearance candidate: regulacja siły przygaszenia widocznych
+  hidden items (obecny domyślny poziom: 0.40). Na razie bez decyzji, czy takie
+  ustawienie jest w ogóle potrzebne; jeśli kiedyś powstanie, preferować prostą
+  preferencję wyglądu lub kilka presetów zamiast suwaka w menu Widok.
+
 ## Before 1.0
 Stability-focused cycle covering:
 - large files/directories;

@@ -102,6 +102,7 @@ struct FileInfo
     bool isDir = false;
     qint64 size = -1;
     qint64 modificationTime = 0;
+    bool isHidden = false;
 };
 
 
@@ -380,6 +381,10 @@ inline FileInfo fileInfoForEntry(
     file.modificationTime = entry.numberValue(
         KIO::UDSEntry::UDS_MODIFICATION_TIME,
         0);
+    const QString rawName = entry.stringValue(KIO::UDSEntry::UDS_NAME);
+    file.isHidden = entry.contains(KIO::UDSEntry::UDS_HIDDEN)
+        ? entry.numberValue(KIO::UDSEntry::UDS_HIDDEN, 0) != 0
+        : rawName.startsWith(QLatin1Char('.'));
     return file;
 }
 

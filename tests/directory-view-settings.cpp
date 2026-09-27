@@ -444,6 +444,58 @@ int main(int argc, char **argv)
                && !(selectedFocus & QStyle::State_Selected),
            "selected icon retains keyboard focus while custom painting owns selection and hover");
 
+    DirectoryListWidget hiddenFocusLifecycle;
+    hiddenFocusLifecycle.resize(400, 240);
+    hiddenFocusLifecycle.setSelectionMode(QAbstractItemView::ExtendedSelection);
+    FileInfo hiddenLifecycleFile;
+    hiddenLifecycleFile.name = QStringLiteral(".hidden");
+    hiddenLifecycleFile.url = QUrl::fromLocalFile(QStringLiteral("/.hidden"));
+    hiddenLifecycleFile.isHidden = true;
+    hiddenFocusLifecycle.addFileItem(
+        hiddenLifecycleFile, QIcon(), QString(), QString(), QString(), QString());
+    hiddenFocusLifecycle.show();
+    hiddenFocusLifecycle.setFocus();
+    app.processEvents();
+    const QModelIndex hiddenLifecycleIndex = hiddenFocusLifecycle.model()->index(0, 0);
+    QTest::mouseClick(hiddenFocusLifecycle.viewport(), Qt::LeftButton,
+                      Qt::NoModifier,
+                      hiddenFocusLifecycle.visualRect(hiddenLifecycleIndex).center());
+    verify(hiddenFocusLifecycle.selectionModel()->isSelected(hiddenLifecycleIndex)
+               && hiddenFocusLifecycle.currentIndex() == hiddenLifecycleIndex
+               && directory_view_detail::itemOpacity(true, true, false, true) == 1.0,
+           "keyboard-focused selected hidden item remains fully readable");
+    const QPoint hiddenBackgroundPoint =
+        hiddenFocusLifecycle.viewport()->rect().bottomRight() - QPoint(2, 2);
+    verify(!hiddenFocusLifecycle.indexAt(hiddenBackgroundPoint).isValid(),
+           "hidden lifecycle test uses actual empty viewport background");
+    QTest::mouseClick(hiddenFocusLifecycle.viewport(), Qt::LeftButton,
+                      Qt::NoModifier, hiddenBackgroundPoint);
+    app.processEvents();
+    const bool selectedAfterBackground =
+        hiddenFocusLifecycle.selectionModel()->isSelected(hiddenLifecycleIndex);
+    const bool currentAfterBackground =
+        hiddenFocusLifecycle.currentIndex() == hiddenLifecycleIndex;
+    const bool visibleKeyboardFocus = selectedAfterBackground
+        && hiddenFocusLifecycle.hasFocus() && currentAfterBackground;
+    verify(!selectedAfterBackground,
+           "background click clears the hidden item selection");
+    verify(currentAfterBackground,
+           "background click preserves the hidden item current index");
+    verify(directory_view_detail::itemOpacity(
+               true, selectedAfterBackground, false, visibleKeyboardFocus)
+               == directory_view_detail::HiddenItemOpacity,
+           "current-but-unselected hidden item immediately returns to dim opacity");
+    app.processEvents();
+    verify(directory_view_detail::itemOpacity(
+               true,
+               hiddenFocusLifecycle.selectionModel()->isSelected(hiddenLifecycleIndex),
+               false,
+               hiddenFocusLifecycle.selectionModel()->isSelected(hiddenLifecycleIndex)
+                   && hiddenFocusLifecycle.hasFocus()
+                   && hiddenFocusLifecycle.currentIndex() == hiddenLifecycleIndex)
+               == directory_view_detail::HiddenItemOpacity,
+           "event drain does not revive stale current or hover brightness");
+
     DirectoryListWidget hoverLifecycle;
     hoverLifecycle.resize(400, 240);
     hoverLifecycle.addItem(QStringLiteral("hovered before clear"));

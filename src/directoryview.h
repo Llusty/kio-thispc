@@ -61,7 +61,16 @@ enum ItemRole {
     ModifiedTextRole,
     FileItemRole,
     OriginalOrderRole,
+    HiddenRole,
 };
+
+inline constexpr qreal HiddenItemOpacity = 0.40;
+
+inline qreal itemOpacity(bool hidden, bool selected, bool hovered, bool focused)
+{
+    return hidden && !selected && !hovered && !focused
+        ? HiddenItemOpacity : 1.0;
+}
 
 struct DateCategory
 {
@@ -419,7 +428,18 @@ public:
             else
                 adjusted.state &= ~QStyle::State_Selected;
             syncMouseOver(adjusted);
+            const bool hovered = adjusted.state & QStyle::State_MouseOver;
+            // A background click clears selection but intentionally leaves the
+            // current index in place for keyboard navigation.  That stale
+            // current index is not a visible keyboard-focus state.
+            const bool focused = modelSelected && m_view->hasFocus()
+                && m_view->currentIndex() == index;
+            painter->save();
+            painter->setOpacity(painter->opacity() * directory_view_detail::itemOpacity(
+                index.data(directory_view_detail::HiddenRole).toBool(),
+                modelSelected, hovered, focused));
             QStyledItemDelegate::paint(painter, adjusted, index);
+            painter->restore();
             return;
         }
 
@@ -433,6 +453,17 @@ public:
             && m_view->indexAt(viewportPos) == index;
         directory_view_detail::synchronizeIconItemState(
             opt.state, modelSelected, actuallyHovered);
+
+        const bool dimmed = directory_view_detail::itemOpacity(
+            index.data(directory_view_detail::HiddenRole).toBool(),
+            modelSelected, actuallyHovered,
+            modelSelected && m_view->hasFocus()
+                && m_view->currentIndex() == index) < 1.0;
+        if (dimmed) {
+            painter->save();
+            painter->setOpacity(painter->opacity()
+                * directory_view_detail::HiddenItemOpacity);
+        }
 
         const QString fullText = opt.text;
         opt.text.clear();
@@ -495,6 +526,7 @@ public:
 
         if (fullText.isEmpty() || textRect.width() <= 0 || textRect.height() <= 0) {
             paintShortNameOutline();
+            if (dimmed) painter->restore();
             return;
         }
 
@@ -561,6 +593,7 @@ public:
         }
         painter->restore();
         paintShortNameOutline();
+        if (dimmed) painter->restore();
     }
 
     QSize sizeHint(
@@ -728,6 +761,7 @@ public:
         item->setData(sizeText, directory_view_detail::SizeTextRole);
         item->setData(modifiedText, directory_view_detail::ModifiedTextRole);
         item->setData(true, directory_view_detail::FileItemRole);
+        item->setData(file.isHidden, directory_view_detail::HiddenRole);
         item->setData(m_sourceModel->rowCount(), directory_view_detail::OriginalOrderRole);
         item->setData(categoryDisplay, KCategorizedSortFilterProxyModel::CategoryDisplayRole);
         item->setData(categoryOrder, KCategorizedSortFilterProxyModel::CategorySortRole);
@@ -1074,6 +1108,33 @@ public:
     explicit DirectoryTreeWidget(QWidget *parent = nullptr)
         : QTreeWidget(parent)
     {
+        class HiddenDetailsDelegate final : public QStyledItemDelegate
+        {
+        public:
+            explicit HiddenDetailsDelegate(QTreeWidget *view)
+                : QStyledItemDelegate(view), m_view(view) {}
+
+            void paint(QPainter *painter, const QStyleOptionViewItem &option,
+                       const QModelIndex &index) const override
+            {
+                const QModelIndex first = index.siblingAtColumn(0);
+                const bool selected = option.state & QStyle::State_Selected;
+                const bool hovered = option.state & QStyle::State_MouseOver;
+                const bool focused = selected && m_view && m_view->hasFocus()
+                    && m_view->currentIndex().row() == index.row();
+                painter->save();
+                painter->setOpacity(painter->opacity()
+                    * directory_view_detail::itemOpacity(
+                        first.data(directory_view_detail::HiddenRole).toBool(),
+                        selected, hovered, focused));
+                QStyledItemDelegate::paint(painter, option, index);
+                painter->restore();
+            }
+
+        private:
+            QTreeWidget *m_view;
+        };
+        setItemDelegate(new HiddenDetailsDelegate(this));
         setEditTriggers((editTriggers()
             & ~QAbstractItemView::DoubleClicked)
             | QAbstractItemView::SelectedClicked);
@@ -1514,6 +1575,10 @@ inline void addDirectoryFileItems(
         0,
         directory_view_detail::FileItemRole,
         true);
+    detailsItem->setData(
+        0,
+        directory_view_detail::HiddenRole,
+        file.isHidden);
     detailsItem->setToolTip(0, toolTip);
     detailsItem->setTextAlignment(
         2,

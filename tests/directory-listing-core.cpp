@@ -78,6 +78,24 @@ int main(int argc, char **argv)
            "UDS child URL preserves remote KIO base");
     verify(!mapped.isDir && mapped.size == 42 && mapped.modificationTime == modified,
            "UDS type size and modification time map to FileInfo");
+    verify(!mapped.isHidden, "ordinary remote KIO entry is not hidden");
+
+    const FileInfo dotFile = DirectoryListingCore::mapEntry(
+        base, entry(QStringLiteral(".dot"), {}, QStringLiteral("text/plain"), 1, 0));
+    const FileInfo dotFolder = DirectoryListingCore::mapEntry(
+        base, entry(QStringLiteral(".folder"), {}, QStringLiteral("inode/directory"), -1, 0));
+    verify(dotFile.isHidden && dotFolder.isHidden,
+           "dot file and dot directory map to hidden state");
+    auto backendHidden = entry(QStringLiteral("backend-hidden"), {},
+                               QStringLiteral("text/plain"), 1, 0);
+    backendHidden.fastInsert(KIO::UDSEntry::UDS_HIDDEN, 1);
+    verify(DirectoryListingCore::mapEntry(base, backendHidden).isHidden,
+           "backend UDS_HIDDEN marks a non-dot remote entry hidden");
+    auto backendVisibleDot = entry(QStringLiteral(".backend-visible"), {},
+                                   QStringLiteral("text/plain"), 1, 0);
+    backendVisibleDot.fastInsert(KIO::UDSEntry::UDS_HIDDEN, 0);
+    verify(!DirectoryListingCore::mapEntry(base, backendVisibleDot).isHidden,
+           "explicit UDS_HIDDEN zero overrides dot-name fallback");
 
     KIO::UDSEntryList entries = {
         entry(QStringLiteral("."), {}, QStringLiteral("inode/directory"), -1, 0),
@@ -95,6 +113,15 @@ int main(int argc, char **argv)
     DirectoryListingCore::appendEntries(filtered, base, entries, listingOptions);
     verify(filtered.size() == 2 && filtered.first().name == QStringLiteral(".hidden"),
            "hidden entries are retained when enabled while dot entries stay filtered");
+    verify(filtered.first().isHidden,
+           "Show hidden retains the hidden classification for rendering");
+
+    KIO::UDSEntryList backendEntries = {backendHidden, backendVisibleDot};
+    filtered.clear();
+    listingOptions.showHiddenFiles = false;
+    DirectoryListingCore::appendEntries(filtered, base, backendEntries, listingOptions);
+    verify(filtered.size() == 1 && filtered.first().name == QStringLiteral(".backend-visible"),
+           "filter honors backend-provided hidden override in both directions");
     const auto displayOnly = entry(QString(), QStringLiteral("display-only"),
                                    QStringLiteral("text/plain"), 0, 0);
     const FileInfo displayOnlyFile = DirectoryListingCore::mapEntry(base, displayOnly);
@@ -153,6 +180,39 @@ int main(int argc, char **argv)
             verify(ordered, "Type Date and Size groups have deterministic category order");
         }
     }
+    FileInfo classified = samples.at(2);
+    classified.isHidden = true;
+    core.setFiles({classified});
+    renderOptions = {};
+    renderOptions.groupMode = DirectoryViewSettings::GroupByType;
+    verify(core.prepare(renderOptions, mimeDatabase).files.first().file.isHidden,
+           "sorting grouping and render preparation preserve hidden classification");
+
+    verify(directory_view_detail::HiddenItemOpacity == 0.40
+               && directory_view_detail::itemOpacity(true, false, false, false) == 0.40,
+           "hidden neutral item uses the configured 0.40 opacity");
+    verify(directory_view_detail::itemOpacity(true, true, false, false) == 1.0,
+           "hidden selected item remains fully readable");
+    verify(directory_view_detail::itemOpacity(true, false, true, false) == 1.0
+               && directory_view_detail::itemOpacity(true, false, false, true) == 1.0,
+           "hidden hover and genuine keyboard-focused states remain fully readable");
+    verify(directory_view_detail::itemOpacity(true, false, false, false)
+               == directory_view_detail::HiddenItemOpacity,
+           "hidden current-but-unselected item returns to dim opacity");
+    verify(directory_view_detail::itemOpacity(false, false, false, false) == 1.0,
+           "ordinary items always retain full opacity");
+
+    DirectoryListWidget roleList;
+    DirectoryTreeWidget roleDetails;
+    roleDetails.setColumnCount(4);
+    addDirectoryFileItems(&roleList, &roleDetails, classified, QIcon(),
+                          QStringLiteral("Text"), QStringLiteral("1 B"),
+                          QStringLiteral("Now"));
+    verify(roleList.item(0).data(directory_view_detail::HiddenRole).toBool(),
+           "Icons List and Compact model role carries hidden state");
+    verify(roleDetails.topLevelItem(0)->data(
+               0, directory_view_detail::HiddenRole).toBool(),
+           "Details model role carries equivalent hidden state");
 
     core.setFiles(samples);
     renderOptions = {};
@@ -210,6 +270,11 @@ int main(int argc, char **argv)
     for (int row = 0; categoriesEqual && row < primaryOutput.files.size(); ++row)
         categoriesEqual = primaryOutput.files.at(row).categorySort == splitOutput.files.at(row).categorySort;
     verify(categoriesEqual, "Primary and Split adapters produce equivalent group metadata");
+    primaryAdapter.setFiles({classified});
+    splitAdapter.setFiles({classified});
+    verify(primaryAdapter.prepare({}, mimeDatabase).files.first().file.isHidden
+               && splitAdapter.prepare({}, mimeDatabase).files.first().file.isHidden,
+           "Primary and Split adapters preserve identical hidden state");
 
     bool canceledCallback = false;
     core.startListing(QUrl::fromLocalFile(temporary.path()), {}, {
