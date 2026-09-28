@@ -1317,6 +1317,153 @@ int main(int argc, char **argv)
         Q_UNUSED(paneName)
     }
 
+    {
+        QStackedWidget primaryStack;
+        QStackedWidget splitStack;
+        DirectoryListWidget primaryList;
+        DirectoryListWidget splitList;
+        DirectoryTreeWidget primaryDetails;
+        DirectoryTreeWidget splitDetails;
+        primaryStack.addWidget(&primaryList);
+        primaryStack.addWidget(&primaryDetails);
+        splitStack.addWidget(&splitList);
+        splitStack.addWidget(&splitDetails);
+        configureDirectoryViewWidgets(&primaryList, &primaryDetails);
+        configureDirectoryViewWidgets(&splitList, &splitDetails);
+        primaryList.resize(420, 300);
+        splitList.resize(420, 300);
+        primaryDetails.resize(420, 300);
+        splitDetails.resize(420, 300);
+
+        const FileInfo shortFile{QStringLiteral("short.txt"), QStringLiteral("text/plain"), {},
+            QUrl(QStringLiteral("sftp://example.test/share/short.txt")), false, 10, 0};
+        const FileInfo longFile{QStringLiteral("a very long file name used for primary split parity.txt"),
+            QStringLiteral("text/plain"), {},
+            QUrl(QStringLiteral("sftp://example.test/share/long.txt")), false, 20, 0};
+        QPixmap parityPixmap(16, 16);
+        parityPixmap.fill(Qt::green);
+        const QIcon parityIcon(parityPixmap);
+        for (DirectoryListWidget *view : {&primaryList, &splitList}) {
+            view->addFileItem(shortFile, parityIcon, {}, {}, {}, {});
+            view->addFileItem(longFile, parityIcon, {}, {}, {}, {});
+        }
+        for (DirectoryTreeWidget *view : {&primaryDetails, &splitDetails}) {
+            addDirectoryGroupHeader(view, QStringLiteral("Text"));
+            auto *item = new QTreeWidgetItem(
+                view, QStringList{shortFile.name, QStringLiteral("Text"),
+                                  QStringLiteral("10 B"), QStringLiteral("Now")});
+            item->setIcon(0, parityIcon);
+            item->setData(0, directory_view_detail::FileItemRole, true);
+        }
+
+        verify(primaryList.iconSize() == splitList.iconSize()
+                   && primaryList.spacing() == splitList.spacing()
+                   && primaryDetails.iconSize() == splitDetails.iconSize(),
+               "Primary and Split start with shared list and Details metrics");
+        // All five columns: col0=Stretch, col1=Interactive 220, col2=Interactive 90,
+        // col3=Interactive 150, col4=Interactive 320 (hidden). ResizeToContents is
+        // explicitly absent for cols 2/3 to guarantee parity across directories.
+
+        verify(primaryDetails.header()->height() == splitDetails.header()->height()
+                   && primaryDetails.columnWidth(1) == splitDetails.columnWidth(1)
+                   && primaryDetails.columnWidth(1) == 220
+                   && primaryDetails.columnWidth(2) == splitDetails.columnWidth(2)
+                   && primaryDetails.columnWidth(2) == 90
+                   && primaryDetails.columnWidth(3) == splitDetails.columnWidth(3)
+                   && primaryDetails.columnWidth(3) == 150
+                   && primaryDetails.isColumnHidden(4) && splitDetails.isColumnHidden(4),
+               "Details all five columns share identical deterministic defaults");
+        primaryDetails.setColumnHidden(4, false);
+        splitDetails.setColumnHidden(4, false);
+        verify(primaryDetails.columnWidth(4) == splitDetails.columnWidth(4)
+                   && primaryDetails.columnWidth(4) == 320,
+               "Details column 4 has width 320 when unhidden");
+        primaryDetails.setColumnHidden(4, true);
+        splitDetails.setColumnHidden(4, true);
+        verify(primaryDetails.header()->sectionResizeMode(0) == QHeaderView::Stretch
+                   && primaryDetails.header()->sectionResizeMode(1) == QHeaderView::Interactive
+                   && primaryDetails.header()->sectionResizeMode(2) == QHeaderView::Interactive
+                   && primaryDetails.header()->sectionResizeMode(3) == QHeaderView::Interactive
+                   && splitDetails.header()->sectionResizeMode(2) == QHeaderView::Interactive
+                   && splitDetails.header()->sectionResizeMode(3) == QHeaderView::Interactive,
+               "Size and Date columns are Interactive not ResizeToContents for layout determinism");
+
+        for (int step : {0, 4, 8}) {
+            applyDirectoryViewLayout(&primaryList, &primaryDetails, &primaryStack,
+                                     nullptr, 0, step);
+            applyDirectoryViewLayout(&splitList, &splitDetails, &splitStack,
+                                     nullptr, 0, step);
+            primaryStack.show();
+            splitStack.show();
+            app.processEvents();
+            verify(primaryList.iconSize() == splitList.iconSize()
+                       && primaryList.gridSize() == splitList.gridSize()
+                       && primaryList.spacing() == splitList.spacing(),
+                   "Icons 24/56/128 use identical extent, grid, and spacing");
+            for (int row : {0, 1}) {
+                const QModelIndex primaryIndex = primaryList.item(row);
+                const QModelIndex splitIndex = splitList.item(row);
+                verify(primaryList.visualRect(primaryIndex).size()
+                           == splitList.visualRect(splitIndex).size(),
+                       "short and long Icons labels keep equal Primary/Split cells");
+            }
+            auto *primaryDelegate = dynamic_cast<ExplorerNameDelegate *>(primaryList.itemDelegate());
+            auto *splitDelegate = dynamic_cast<ExplorerNameDelegate *>(splitList.itemDelegate());
+            QStyleOptionViewItem primaryOption;
+            QStyleOptionViewItem splitOption;
+            primaryOption.rect = primaryList.visualRect(primaryList.item(1));
+            splitOption.rect = splitList.visualRect(splitList.item(1));
+            primaryOption.widget = &primaryList;
+            splitOption.widget = &splitList;
+            verify(primaryDelegate && splitDelegate
+                       && primaryDelegate->nameEditorRect(primaryOption, primaryList.item(1)).size()
+                           == splitDelegate->nameEditorRect(splitOption, splitList.item(1)).size()
+                       && primaryDelegate->decorationRect(primaryOption, primaryList.item(1)).size()
+                           == splitDelegate->decorationRect(splitOption, splitList.item(1)).size(),
+                   "Icons label, icon, and inline rename rectangles are shared");
+        }
+
+        for (int mode : {1, 3}) {
+            applyDirectoryViewLayout(&primaryList, &primaryDetails, &primaryStack,
+                                     nullptr, mode);
+            applyDirectoryViewLayout(&splitList, &splitDetails, &splitStack,
+                                     nullptr, mode);
+            app.processEvents();
+            verify(primaryList.iconSize() == splitList.iconSize()
+                       && primaryList.spacing() == splitList.spacing()
+                       && primaryList.visualRect(primaryList.item(0)).size()
+                           == splitList.visualRect(splitList.item(0)).size(),
+                   mode == 1
+                       ? "List row icon text and padding metrics are shared"
+                       : "Compact row icon text and flow metrics are shared");
+        }
+
+        applyDirectoryViewLayout(&primaryList, &primaryDetails, &primaryStack, nullptr, 2);
+        applyDirectoryViewLayout(&splitList, &splitDetails, &splitStack, nullptr, 2);
+        app.processEvents();
+        verify(primaryDetails.sizeHintForRow(1) == splitDetails.sizeHintForRow(1)
+                   && primaryDetails.visualItemRect(primaryDetails.topLevelItem(1)).size()
+                       == splitDetails.visualItemRect(splitDetails.topLevelItem(1)).size(),
+               "Details row icon text selection and focus geometry are shared");
+        verify(primaryDetails.visualItemRect(primaryDetails.topLevelItem(0)).size()
+                   == splitDetails.visualItemRect(splitDetails.topLevelItem(0)).size(),
+               "grouping header metrics are shared");
+
+        primaryList.setProperty("active", true);
+        splitList.setProperty("active", false);
+        applyDirectoryViewLayout(&primaryList, &primaryDetails, &primaryStack, nullptr, 0, 4);
+        applyDirectoryViewLayout(&splitList, &splitDetails, &splitStack, nullptr, 0, 4);
+        app.processEvents();
+        verify(primaryList.visualRect(primaryList.item(0)).size()
+                   == splitList.visualRect(splitList.item(0)).size(),
+               "active and inactive pane cues do not alter content geometry");
+        splitList.resize(150, 220);
+        app.processEvents();
+        verify(splitList.gridSize().isValid()
+                   && splitList.visualRect(splitList.item(0)).isValid(),
+               "narrow Split keeps valid non-overlapping Icons geometry");
+    }
+
     qInfo("PASS: %d per-folder view settings assertions", checks);
     return 0;
 }

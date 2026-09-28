@@ -116,6 +116,13 @@ QString splitLocationText(const QUrl &url)
     return urlForDisplay(url);
 }
 
+QString contentHeaderText(const QUrl &url)
+{
+    if (sameLocation(url, kThisPcUrl)) return trLocal("Ten komputer", "This PC");
+    if (isSearchLocation(url)) return searchTitle(url, true);
+    return urlForDisplay(url);
+}
+
 QString iconName(const QUrl &url)
 {
     if (sameLocation(url, kThisPcUrl)) return QStringLiteral("computer");

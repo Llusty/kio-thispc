@@ -158,8 +158,12 @@ public:
 
         auto *breadcrumbLayout =
             new QHBoxLayout(m_breadcrumbFrame);
-        breadcrumbLayout->setContentsMargins(7, 2, 7, 2);
-        breadcrumbLayout->setSpacing(5);
+        // SegmentedPathButton already reserves two vertical margin pixels.
+        // Put the layout's two-pixel inset above it so the visible path row
+        // starts at the same Y as the primary BreadcrumbFrame without growing
+        // the pane header.
+        breadcrumbLayout->setContentsMargins(4, 2, 4, 0);
+        breadcrumbLayout->setSpacing(1);
 
         m_breadcrumbIcon =
             new QLabel(m_breadcrumbFrame);
@@ -228,8 +232,6 @@ public:
 
         m_addressEdit =
             new AddressLineEdit(m_locationStack);
-        m_addressEdit->setObjectName(
-            QStringLiteral("splitAddressEdit"));
         m_addressEdit->setClearButtonEnabled(true);
         m_addressEdit->setPlaceholderText(
             trLocal(
@@ -446,33 +448,13 @@ public:
         directoryLayout->setSpacing(0);
         m_contentStack->addWidget(m_directoryPage);
 
-        // --------------------------------------------------------------
-        // Same heading/count layout as the primary pane
-        // --------------------------------------------------------------
-        auto *contentHeader =
-            new QWidget(this);
-        auto *contentHeaderLayout =
-            new QVBoxLayout(contentHeader);
-        contentHeaderLayout->setContentsMargins(
-            16, 12, 16, 7);
-        contentHeaderLayout->setSpacing(3);
-
-        m_title = new ElidedPathLabel(contentHeader);
-        QFont titleFont = m_title->font();
-        titleFont.setPointSize(
-            titleFont.pointSize() + 2);
-        titleFont.setBold(true);
-        m_title->setFont(titleFont);
-        contentHeaderLayout->addWidget(m_title);
-
-        m_status = new ElidedPathLabel(contentHeader);
+        const DirectoryContentHeader contentHeader =
+            createDirectoryContentHeader(m_directoryPage);
+        m_title = contentHeader.title;
+        m_status = contentHeader.status;
         m_status->setObjectName(
             QStringLiteral("splitPaneStatus"));
-        m_status->setForegroundRole(
-            QPalette::PlaceholderText);
-        contentHeaderLayout->addWidget(m_status);
-
-        directoryLayout->addWidget(contentHeader);
+        directoryLayout->addWidget(contentHeader.widget);
         m_searchProgressFrame = new QFrame(m_directoryPage);
         m_searchProgressFrame->setObjectName(QStringLiteral("searchProgressFrame"));
         auto *progressLayout = new QHBoxLayout(m_searchProgressFrame);
@@ -512,56 +494,12 @@ public:
             new DirectoryListWidget(m_viewStack);
         m_list->setObjectName(
             QStringLiteral("splitDirectoryList"));
-        m_list->setResizeMode(QListView::Adjust);
-        m_list->setMovement(QListView::Static);
-        m_list->setSelectionMode(
-            QAbstractItemView::ExtendedSelection);
-        m_list->setContextMenuPolicy(
-            Qt::CustomContextMenu);
 
         m_details =
             new DirectoryTreeWidget(m_viewStack);
         m_details->setObjectName(
             QStringLiteral("splitDirectoryDetails"));
-        m_details->setColumnCount(5);
-        m_details->setHeaderLabels({
-            trLocal("Nazwa", "Name"),
-            trLocal("Typ", "Type"),
-            trLocal("Rozmiar", "Size"),
-            trLocal(
-                "Zmodyfikowano",
-                "Date modified"),
-            trLocal("Lokalizacja", "Location")
-        });
-        m_details->setRootIsDecorated(false);
-        m_details->setUniformRowHeights(true);
-        m_details->setAllColumnsShowFocus(true);
-        m_details->setSelectionMode(
-            QAbstractItemView::ExtendedSelection);
-        m_details->setContextMenuPolicy(
-            Qt::CustomContextMenu);
-        m_details->setIconSize(QSize(22, 22));
-
-        QHeaderView *detailsHeader =
-            m_details->header();
-        detailsHeader->setStretchLastSection(false);
-        detailsHeader->setSectionsMovable(true);
-        detailsHeader->setSectionResizeMode(
-            0,
-            QHeaderView::Stretch);
-        detailsHeader->setSectionResizeMode(
-            1,
-            QHeaderView::Interactive);
-        detailsHeader->setSectionResizeMode(
-            2,
-            QHeaderView::ResizeToContents);
-        detailsHeader->setSectionResizeMode(
-            3,
-            QHeaderView::ResizeToContents);
-        m_details->setColumnWidth(1, 190);
-        detailsHeader->setSectionResizeMode(4, QHeaderView::Interactive);
-        m_details->setColumnWidth(4, 320);
-        m_details->setColumnHidden(4, true);
+        configureDirectoryViewWidgets(m_list, m_details);
 
         m_viewStack->addWidget(m_list);
         m_viewStack->addWidget(m_details);
@@ -1006,12 +944,6 @@ private:
         return LocationPresentation::splitLocationText(url);
     }
 
-    QString friendlyTitle(
-        const QUrl &url) const
-    {
-        return LocationPresentation::splitTitle(url);
-    }
-
     QIcon locationIcon(
         const QUrl &url) const
     {
@@ -1064,9 +996,7 @@ private:
             bar->setValue(bar->maximum());
         });
 
-        m_title->setText(
-            friendlyTitle(
-                m_currentUrl));
+        m_title->setText(LocationPresentation::contentHeaderText(m_currentUrl));
     }
 
     QUrl parentUrl() const
@@ -1312,11 +1242,11 @@ private:
         if (isSearchLocation(m_currentUrl)) {
             m_status->setText(m_searchController->statusText(prepared.visibleCount, m_searchState.scope));
         } else if (m_searchState.text.trimmed().isEmpty()) {
-            m_status->setText((isPolish() ? QStringLiteral("%1 elementów") : QStringLiteral("%1 items"))
-                .arg(prepared.totalCount));
+            m_status->setText(directory_view_detail::itemCountText(
+                prepared.visibleCount, prepared.totalCount, false));
         } else {
-            m_status->setText((isPolish() ? QStringLiteral("%1 z %2 elementów") : QStringLiteral("%1 of %2 items"))
-                .arg(prepared.visibleCount).arg(prepared.totalCount));
+            m_status->setText(directory_view_detail::itemCountText(
+                prepared.visibleCount, prepared.totalCount, true));
         }
     }
 

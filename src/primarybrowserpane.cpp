@@ -2,6 +2,7 @@
 #include "appwidgets.h"
 #include "directoryview.h"
 #include "directoryviewsettings.h"
+#include "locationpresentation.h"
 #include "searchcontroller.h"
 #include <KIO/ListJob>
 #include <QLabel>
@@ -48,7 +49,7 @@ void PrimaryBrowserPane::loadDirectory(const QUrl &url, bool preserveStatusMessa
     m_currentUrl = url;
     m_directoryList->clear(); m_directoryDetails->clear();
     m_directoryList->setDropDirectory(url); m_directoryDetails->setDropDirectory(url);
-    m_directoryTitle->setText(urlForDisplay(url));
+    m_directoryTitle->setText(LocationPresentation::contentHeaderText(url));
     m_directoryStatus->setText(trLocal("Wczytywanie…", "Loading…"));
     Q_EMIT listingStarted(url);
     DirectoryListingCore::ListingOptions options;

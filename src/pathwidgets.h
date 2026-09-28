@@ -15,6 +15,7 @@
 #include <QStylePainter>
 #include <QToolButton>
 #include <QToolTip>
+#include <QVBoxLayout>
 
 class PathScrollArea : public QScrollArea
 {
@@ -299,3 +300,32 @@ protected:
         return QLabel::event(event);
     }
 };
+
+struct DirectoryContentHeader
+{
+    QWidget *widget = nullptr;
+    ElidedPathLabel *title = nullptr;
+    ElidedPathLabel *status = nullptr;
+};
+
+inline DirectoryContentHeader createDirectoryContentHeader(QWidget *parent)
+{
+    DirectoryContentHeader result;
+    result.widget = new QWidget(parent);
+    result.widget->setObjectName(QStringLiteral("directoryContentHeader"));
+    auto *layout = new QVBoxLayout(result.widget);
+    layout->setContentsMargins(16, 12, 16, 7);
+    layout->setSpacing(3);
+
+    result.title = new ElidedPathLabel(result.widget);
+    QFont titleFont = result.title->font();
+    titleFont.setPointSize(titleFont.pointSize() + 2);
+    titleFont.setBold(true);
+    result.title->setFont(titleFont);
+    layout->addWidget(result.title);
+
+    result.status = new ElidedPathLabel(result.widget);
+    result.status->setForegroundRole(QPalette::PlaceholderText);
+    layout->addWidget(result.status);
+    return result;
+}

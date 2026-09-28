@@ -2240,8 +2240,8 @@ private:
     {
         auto *page = new QWidget(m_contentStack);
         auto *layout = new QVBoxLayout(page);
-        layout->setContentsMargins(18, 14, 18, 18);
-        layout->setSpacing(8);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->setSpacing(0);
 
         m_adminBanner = new QFrame(page);
         m_adminBanner->setObjectName(
@@ -2302,19 +2302,12 @@ private:
         m_adminBanner->hide();
         layout->addWidget(m_adminBanner);
 
-        m_directoryTitle = new ElidedPathLabel(page);
-
-        QFont titleFont = m_directoryTitle->font();
-        titleFont.setPointSize(titleFont.pointSize() + 3);
-        titleFont.setBold(true);
-        m_directoryTitle->setFont(titleFont);
-
-        layout->addWidget(m_directoryTitle);
-
-        m_directoryStatus = new ElidedPathLabel(page);
-        m_directoryStatus->setForegroundRole(
-            QPalette::PlaceholderText);
-        layout->addWidget(m_directoryStatus);
+        const DirectoryContentHeader contentHeader =
+            createDirectoryContentHeader(page);
+        m_directoryTitle = contentHeader.title;
+        m_directoryStatus = contentHeader.status;
+        m_directoryStatus->setObjectName(QStringLiteral("primaryPaneStatus"));
+        layout->addWidget(contentHeader.widget);
 
         m_searchProgressFrame = new QFrame(page);
         m_searchProgressFrame->setObjectName(
@@ -2365,12 +2358,6 @@ private:
         m_directoryList = new DirectoryListWidget(m_directoryViewStack);
         m_directoryList->setObjectName(
             QStringLiteral("directoryList"));
-        m_directoryList->setResizeMode(QListView::Adjust);
-        m_directoryList->setMovement(QListView::Static);
-        m_directoryList->setSelectionMode(
-            QAbstractItemView::ExtendedSelection);
-        m_directoryList->setContextMenuPolicy(
-            Qt::CustomContextMenu);
         m_directoryList->setAlwaysShowFullNames(
             m_alwaysShowFullNames);
 
@@ -2378,46 +2365,7 @@ private:
             new DirectoryTreeWidget(m_directoryViewStack);
         m_directoryDetails->setObjectName(
             QStringLiteral("directoryDetails"));
-        m_directoryDetails->setColumnCount(5);
-        m_directoryDetails->setHeaderLabels(
-            {
-                trLocal("Nazwa", "Name"),
-                trLocal("Typ", "Type"),
-                trLocal("Rozmiar", "Size"),
-                trLocal("Zmodyfikowano", "Date modified"),
-                trLocal("Lokalizacja", "Location")
-            });
-        m_directoryDetails->setRootIsDecorated(false);
-        m_directoryDetails->setUniformRowHeights(true);
-        m_directoryDetails->setAllColumnsShowFocus(true);
-        m_directoryDetails->setSelectionMode(
-            QAbstractItemView::ExtendedSelection);
-        m_directoryDetails->setContextMenuPolicy(
-            Qt::CustomContextMenu);
-        m_directoryDetails->setIconSize(QSize(22, 22));
-
-        QHeaderView *header =
-            m_directoryDetails->header();
-        header->setStretchLastSection(false);
-        header->setSectionsMovable(true);
-        header->setSectionResizeMode(
-            0,
-            QHeaderView::Stretch);
-        header->setSectionResizeMode(
-            1,
-            QHeaderView::Interactive);
-        header->setSectionResizeMode(
-            2,
-            QHeaderView::ResizeToContents);
-        header->setSectionResizeMode(
-            3,
-            QHeaderView::ResizeToContents);
-        header->setSectionResizeMode(
-            4,
-            QHeaderView::Interactive);
-        m_directoryDetails->setColumnWidth(1, 220);
-        m_directoryDetails->setColumnWidth(4, 320);
-        m_directoryDetails->setColumnHidden(4, true);
+        configureDirectoryViewWidgets(m_directoryList, m_directoryDetails);
 
         m_directoryViewStack->addWidget(m_directoryList);
         m_directoryViewStack->addWidget(m_directoryDetails);
@@ -3728,13 +3676,11 @@ private:
                 m_searchVisibleCount = visibleCount;
                 updateSearchStatusLabel();
             } else if (m_primarySearch.text.trimmed().isEmpty()) {
-                m_directoryStatus->setText(isPolish()
-                    ? QStringLiteral("%1 elementów").arg(count)
-                    : QStringLiteral("%1 items").arg(count));
+                m_directoryStatus->setText(
+                    directory_view_detail::itemCountText(visibleCount, count, false));
             } else {
-                m_directoryStatus->setText(isPolish()
-                    ? QStringLiteral("%1 z %2 elementów").arg(visibleCount).arg(count)
-                    : QStringLiteral("%1 of %2 items").arg(visibleCount).arg(count));
+                m_directoryStatus->setText(
+                    directory_view_detail::itemCountText(visibleCount, count, true));
             }
         };
         m_primaryPane->renderDirectoryItems(options);
@@ -5104,6 +5050,20 @@ private Q_SLOTS:
         if (isSearchLocation(m_navigation.currentUrl())) {
             loadSearchLocation(m_navigation.currentUrl());
         } else {
+            const DirectoryViewProfile profile =
+                DirectoryViewSettings::resolveProfile(m_navigation.currentUrl());
+            m_directoryViewMode = profile.viewMode;
+            m_directoryIconSizeStep = profile.iconSizeStep;
+            m_sortKey = profile.sortKey;
+            m_sortAscending = profile.sortAscending;
+            m_groupMode = profile.groupMode;
+            if (m_sortButton) {
+                m_sortButton->setIcon(themedIcon(
+                    m_sortAscending ? QStringLiteral("view-sort-ascending")
+                                    : QStringLiteral("view-sort-descending")));
+            }
+            scheduleDateGroupingRefresh();
+            applyDirectoryViewMode(false);
             loadDirectory(m_navigation.currentUrl(), preserveStatusMessage);
         }
     }

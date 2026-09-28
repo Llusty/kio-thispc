@@ -62,6 +62,8 @@ int main(int argc, char **argv)
                && localSegments.at(2).text == QStringLiteral("hosts"),
            "local breadcrumb labels");
     verify(localSegments.at(2).url == local, "local breadcrumb cumulative URL");
+    verify(LocationPresentation::contentHeaderText(local) == urlForDisplay(local),
+           "local content header uses the full canonical path");
 
     verify(LocationPresentation::primaryTitle(driveRoot, drives) == QStringLiteral("Stage 2 Drive"),
            "simulated drive title");
@@ -80,6 +82,8 @@ int main(int argc, char **argv)
     verify(adminSegments.size() == 3 && adminSegments.first().url == QUrl(QStringLiteral("admin:/"))
                && adminSegments.last().url == admin,
            "admin breadcrumb data");
+    verify(LocationPresentation::contentHeaderText(admin) == urlForDisplay(admin),
+           "admin content header preserves remote URL semantics");
 
     verify(LocationPresentation::primaryTitle(search, drives) == LocationPresentation::splitTitle(search),
            "search title consistency");
@@ -90,6 +94,9 @@ int main(int argc, char **argv)
     verify(LocationPresentation::parentUrl(searchWithoutBase, drives, LocationPresentation::ParentProfile::Split)
                == thisPc,
            "search without base parent is This PC");
+    verify(LocationPresentation::contentHeaderText(search)
+               == LocationPresentation::primaryTitle(search, drives),
+           "search content header keeps its dedicated presentation");
 
     verify(LocationPresentation::primaryTitle(remote, drives) == QStringLiteral("folder"),
            "remote primary title");
@@ -97,6 +104,8 @@ int main(int argc, char **argv)
            "remote title consistency");
     verify(LocationPresentation::splitLocationText(remote) == urlForDisplay(remote),
            "remote friendly text");
+    verify(LocationPresentation::contentHeaderText(remote) == urlForDisplay(remote),
+           "remote content header never assumes a local filesystem path");
     verify(LocationPresentation::parentUrl(remote, drives, LocationPresentation::ParentProfile::Primary)
                == QUrl(QStringLiteral("sftp://example.test/share")),
            "remote parent");

@@ -420,9 +420,151 @@ int main(int argc, char **argv)
     verify(primaryHeader->width() == window.m_primaryPane->width()
                && splitHeader->width() == window.m_splitPane->width(),
            "address sections exactly match their pane widths");
+    verify(primaryHeader->height() == splitHeader->height(),
+           "Primary and Split address bar headers share identical runtime height");
+    verify(window.m_addressStack && window.m_splitPane->m_locationStack
+               && window.m_addressStack->height() == window.m_splitPane->m_locationStack->height(),
+           "Primary and Split address stacks share identical runtime height");
+
+    const auto globalTop = [](const QWidget *widget) {
+        return widget->mapToGlobal(QPoint(0, 0)).y();
+    };
+    const auto verifyVerticalParity = [&](int mode, ThisPcWindow::PaneId activePane) {
+        window.setActivePane(ThisPcWindow::PaneId::Primary);
+        window.setDirectoryViewMode(mode);
+        window.m_splitPane->setViewMode(mode);
+        window.setActivePane(activePane);
+        app.processEvents();
+
+        auto *primaryView = mode == 2
+            ? static_cast<QAbstractItemView *>(window.m_directoryDetails)
+            : static_cast<QAbstractItemView *>(window.m_directoryList);
+        auto *splitView = mode == 2
+            ? static_cast<QAbstractItemView *>(window.m_splitPane->m_details)
+            : static_cast<QAbstractItemView *>(window.m_splitPane->m_list);
+        auto *primaryContentHeader = window.m_directoryTitle->parentWidget();
+        auto *splitContentHeader = window.m_splitPane->m_title->parentWidget();
+        auto *primaryCrumb = window.m_breadcrumbLayout->count() > 0
+            ? window.m_breadcrumbLayout->itemAt(0)->widget() : nullptr;
+        auto *splitCrumb = window.m_splitPane->m_breadcrumbButton;
+
+        verify(globalTop(primaryHeader) == globalTop(splitHeader)
+                   && primaryHeader->height() == splitHeader->height()
+                   && primaryHeader->sizeHint().height() == splitHeader->sizeHint().height()
+                   && primaryHeader->minimumHeight() == splitHeader->minimumHeight()
+                   && primaryHeader->contentsRect().height() == splitHeader->contentsRect().height(),
+               "Primary/Split pane headers retain identical Y and height metrics");
+        verify(globalTop(window.m_breadcrumbFrame) == globalTop(window.m_splitPane->m_breadcrumbFrame)
+                   && window.m_breadcrumbFrame->height() == window.m_splitPane->m_breadcrumbFrame->height()
+                   && window.m_breadcrumbFrame->minimumHeight()
+                       == window.m_splitPane->m_breadcrumbFrame->minimumHeight()
+                   && window.m_breadcrumbFrame->contentsMargins()
+                       == window.m_splitPane->m_breadcrumbFrame->contentsMargins(),
+               "Primary/Split breadcrumb frames retain identical Y and height metrics");
+        verify(primaryCrumb && splitCrumb
+                   && globalTop(primaryCrumb) == globalTop(splitCrumb),
+               "Primary/Split rendered breadcrumb rows retain identical top Y");
+        verify(window.m_breadcrumbFrame->m_scroll
+                   && globalTop(window.m_breadcrumbFrame->m_scroll->viewport())
+                       == globalTop(window.m_splitPane->m_breadcrumbScroll->viewport()),
+               "Primary/Split breadcrumb viewports retain identical top Y");
+        verify(globalTop(primaryContentHeader) == globalTop(splitContentHeader),
+               "Primary/Split content headers retain identical top Y");
+        verify(globalTop(primaryView->viewport()) == globalTop(splitView->viewport()),
+               "Primary/Split listing viewports retain identical top Y");
+    };
+
+    for (int mode : {0, 1, 2, 3}) {
+        verifyVerticalParity(mode, ThisPcWindow::PaneId::Primary);
+        verifyVerticalParity(mode, ThisPcWindow::PaneId::Split);
+    }
+
+    window.m_addressStack->setCurrentWidget(window.m_addressEdit);
+    window.m_splitPane->m_locationStack->setCurrentWidget(window.m_splitPane->m_addressEdit);
+    app.processEvents();
+    verify(globalTop(window.m_addressEdit) == globalTop(window.m_splitPane->m_addressEdit)
+               && window.m_addressEdit->height() == window.m_splitPane->m_addressEdit->height(),
+           "Primary/Split active address editors retain identical Y and height");
+    window.m_addressStack->setCurrentWidget(window.m_breadcrumbFrame);
+    window.m_splitPane->m_locationStack->setCurrentWidget(window.m_splitPane->m_breadcrumbFrame);
+    app.processEvents();
     verify(primaryHeader->mapToGlobal(QPoint()).x() == window.m_primaryPane->mapToGlobal(QPoint()).x()
                && splitHeader->mapToGlobal(QPoint()).x() == window.m_splitPane->mapToGlobal(QPoint()).x(),
            "address sections align with their pane edges");
+    auto *primaryContentHeader = window.m_directoryTitle->parentWidget();
+    auto *splitContentHeader = window.m_splitPane->m_title->parentWidget();
+    auto *primaryContentLayout = qobject_cast<QVBoxLayout *>(primaryContentHeader->layout());
+    auto *splitContentLayout = qobject_cast<QVBoxLayout *>(splitContentHeader->layout());
+    verify(primaryContentLayout && splitContentLayout
+               && primaryContentLayout->contentsMargins() == splitContentLayout->contentsMargins()
+               && primaryContentLayout->spacing() == splitContentLayout->spacing()
+               && window.m_directoryTitle->font() == window.m_splitPane->m_title->font()
+               && window.m_directoryStatus->foregroundRole()
+                   == window.m_splitPane->m_status->foregroundRole(),
+           "Primary and Split content headers share margins typography spacing and color");
+    window.m_splitPane->setCurrentUrl(left, false);
+    window.m_splitPane->cancelListing();
+    app.processEvents();
+    verify(window.m_directoryTitle->text() == window.m_splitPane->m_title->text()
+               && window.m_directoryTitle->text() == LocationPresentation::contentHeaderText(left),
+           "same local URL has identical full-path content header presentation");
+
+    // Per-URL view settings symmetric persistence:
+    window.navigateTo(left, false);
+    window.m_splitPane->setCurrentUrl(left, false);
+    window.m_primaryPane->cancelListing();
+    window.m_splitPane->cancelListing();
+    app.processEvents();
+
+    window.setDirectoryViewMode(2);
+    window.setDirectoryIconSizeStep(6);
+    window.setSortKey(1);
+    window.setSortAscending(false);
+    window.setGroupMode(DirectoryViewSettings::GroupByType);
+    app.processEvents();
+
+    verify(window.m_splitPane->viewMode() != 2
+               || window.m_splitPane->iconSizeStep() != 6
+               || window.m_splitPane->sortKey() != 1
+               || window.m_splitPane->sortAscending()
+               || window.m_splitPane->groupMode() != DirectoryViewSettings::GroupByType,
+           "Split pane does not live-sync view profile before refresh");
+
+    window.m_splitPane->refresh();
+    window.m_splitPane->cancelListing();
+    app.processEvents();
+    verify(window.m_splitPane->viewMode() == 2
+               && window.m_splitPane->iconSizeStep() == 6
+               && window.m_splitPane->sortKey() == 1
+               && !window.m_splitPane->sortAscending()
+               && window.m_splitPane->groupMode() == DirectoryViewSettings::GroupByType,
+           "Primary view profile changes propagate to Split on refresh");
+
+    window.m_splitPane->setViewMode(1);
+    window.m_splitPane->setIconSizeStep(2);
+    window.m_splitPane->setSortState(2, true);
+    window.m_splitPane->setGroupMode(DirectoryViewSettings::GroupByDate);
+    app.processEvents();
+
+    verify(window.m_directoryViewMode != 1
+               || window.m_directoryIconSizeStep != 2
+               || window.m_sortKey != 2
+               || !window.m_sortAscending
+               || window.m_groupMode != DirectoryViewSettings::GroupByDate,
+           "Primary pane does not live-sync view profile before refresh");
+
+    window.refreshPane(ThisPcWindow::PaneId::Primary);
+    window.m_primaryPane->cancelListing();
+    app.processEvents();
+    verify(window.m_directoryViewMode == 1
+               && window.m_directoryIconSizeStep == 2
+               && window.m_sortKey == 2
+               && window.m_sortAscending
+               && window.m_groupMode == DirectoryViewSettings::GroupByDate,
+           "Split view profile changes propagate to Primary on refresh");
+
+    window.m_splitPane->setCurrentUrl(right, false);
+    window.m_splitPane->cancelListing();
     window.m_contentSplitter->setSizes({430, 670});
     app.processEvents();
     verify(primaryHeader->width() == window.m_primaryPane->width()

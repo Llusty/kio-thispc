@@ -26,6 +26,7 @@
 #include <QDropEvent>
 #include <QFileInfo>
 #include <QFontMetrics>
+#include <QHeaderView>
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QStandardItemModel>
@@ -300,6 +301,18 @@ inline QSize iconGridSize(int iconExtent, bool fullNames)
 {
     const int width = qMax(104, iconExtent + 72);
     return QSize(width, iconExtent + (fullNames ? 86 : 52));
+}
+
+inline QString itemCountText(int visibleCount, int totalCount, bool filtered)
+{
+    if (!filtered) {
+        return (isPolish() ? QStringLiteral("%1 elementów")
+                           : QStringLiteral("%1 items"))
+            .arg(totalCount);
+    }
+    return (isPolish() ? QStringLiteral("%1 z %2 elementów")
+                       : QStringLiteral("%1 of %2 items"))
+        .arg(visibleCount).arg(totalCount);
 }
 
 inline QColor blendedSelectionColor(
@@ -1872,6 +1885,49 @@ inline void applyDirectoryViewLayout(
     // QListView layout changes reset parts of the drag/drop configuration.
     configureDirectoryDragDrop(list);
     configureDirectoryDragDrop(details);
+}
+
+inline void configureDirectoryViewWidgets(
+    DirectoryListWidget *list,
+    DirectoryTreeWidget *details)
+{
+    if (!list || !details) return;
+    list->setResizeMode(QListView::Adjust);
+    list->setMovement(QListView::Static);
+    list->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    list->setContextMenuPolicy(Qt::CustomContextMenu);
+
+    details->setColumnCount(5);
+    details->setHeaderLabels({
+        trLocal("Nazwa", "Name"),
+        trLocal("Typ", "Type"),
+        trLocal("Rozmiar", "Size"),
+        trLocal("Zmodyfikowano", "Date modified"),
+        trLocal("Lokalizacja", "Location")});
+    details->setRootIsDecorated(false);
+    details->setUniformRowHeights(true);
+    details->setAllColumnsShowFocus(true);
+    details->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    details->setContextMenuPolicy(Qt::CustomContextMenu);
+    details->setIconSize(QSize(22, 22));
+
+    QHeaderView *header = details->header();
+    header->setStretchLastSection(false);
+    header->setSectionsMovable(true);
+    header->setSectionResizeMode(0, QHeaderView::Stretch);
+    header->setSectionResizeMode(1, QHeaderView::Interactive);
+    // Fixed widths for cols 2 and 3 keep the layout deterministic regardless
+    // of directory content — ResizeToContents produced different Name column
+    // widths in Primary and Split when they showed directories with different
+    // file sizes or modification timestamps.
+    header->setSectionResizeMode(2, QHeaderView::Interactive);
+    header->setSectionResizeMode(3, QHeaderView::Interactive);
+    header->setSectionResizeMode(4, QHeaderView::Interactive);
+    details->setColumnWidth(1, 220);
+    details->setColumnWidth(2, 90);
+    details->setColumnWidth(3, 150);
+    details->setColumnWidth(4, 320);
+    details->setColumnHidden(4, true);
 }
 
 

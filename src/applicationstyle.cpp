@@ -214,15 +214,15 @@ QToolButton#splitBreadcrumbButton {
     border: none;
     background: transparent;
     text-align: left;
-    padding: 3px 2px;
+    padding: 1px 6px;
+    min-height: 18px;
+    margin: 1px 0;
 }
 /* Hover highlighting is painted per segment by SegmentedPathButton. */
 QToolButton#splitBreadcrumbButton:hover {
     background: transparent;
 }
-QLineEdit#splitAddressEdit {
-    min-height: 25px;
-}
+
 QLabel#splitPaneStatus {
     color: palette(placeholder-text);
 }
@@ -243,14 +243,7 @@ QListWidget#splitDirectoryList::item:selected {
     background: palette(alternate-base);
     border: 1px solid palette(highlight);
 }
-QTreeWidget#splitDirectoryDetails {
-    border: none;
-    background: transparent;
-    outline: none;
-}
-QTreeWidget#splitDirectoryDetails::item:hover {
-    background: palette(alternate-base);
-}
+
 QTabBar#explorerTabs {
     background: transparent;
 }
@@ -283,23 +276,28 @@ QToolButton#newTabButton:hover {
     border-color: palette(mid);
 }
 
-QTreeWidget#directoryDetails {
+QTreeWidget#directoryDetails,
+QTreeWidget#splitDirectoryDetails {
     border: none;
     background: transparent;
     outline: none;
 }
-QTreeWidget#directoryDetails::item {
+QTreeWidget#directoryDetails::item,
+QTreeWidget#splitDirectoryDetails::item {
     min-height: 28px;
     border: 1px solid transparent;
 }
-QTreeWidget#directoryDetails::item:hover {
+QTreeWidget#directoryDetails::item:hover,
+QTreeWidget#splitDirectoryDetails::item:hover {
     background: palette(alternate-base);
 }
-QTreeWidget#directoryDetails::item:selected {
+QTreeWidget#directoryDetails::item:selected,
+QTreeWidget#splitDirectoryDetails::item:selected {
     background: palette(alternate-base);
     border: 1px solid palette(highlight);
 }
-QTreeWidget#directoryDetails QHeaderView::section {
+QTreeWidget#directoryDetails QHeaderView::section,
+QTreeWidget#splitDirectoryDetails QHeaderView::section {
     padding: 5px 7px;
 }
 

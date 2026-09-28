@@ -29,6 +29,7 @@ struct Segment
 QString primaryTitle(const QUrl &url, const QVector<DriveInfo> &drives);
 QString splitTitle(const QUrl &url);
 QString splitLocationText(const QUrl &url);
+QString contentHeaderText(const QUrl &url);
 QString iconName(const QUrl &url);
 
 QVector<Segment> localPathSegments(
