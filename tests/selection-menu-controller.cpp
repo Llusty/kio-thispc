@@ -133,7 +133,7 @@ int main(int argc, char **argv)
     bool ascending = false, hidden = false, thumbnails = true;
     QAction preview(QStringLiteral("Preview"), &parent), fullNames(QStringLiteral("Full names"), &parent);
     SelectionMenuController::ViewState state{PaneId::Split, 2, 1, 3, false,
-        DirectoryViewSettings::GroupByDate, false, true, &preview, &fullNames};
+        DirectoryViewSettings::GroupByDate, true, false, true, &preview, &fullNames};
     SelectionMenuController::ViewCallbacks callbacks{
         [&](int value) { viewMode = value; }, [&](int value) { iconSize = value; },
         [&](int value) { sortKey = value; }, [&](bool value) { ascending = value; },
@@ -145,7 +145,7 @@ int main(int argc, char **argv)
     verify(submenu(background, trLocal("Widok", "View")), "View submenu present");
     verify(submenu(background, trLocal("Sortuj", "Sort")), "Sort submenu present");
     action(background, trLocal("Ikony", "Icons"))->trigger();
-    action(background, trLocal("Małe", "Small"))->trigger();
+    action(background, trLocal("Większe", "Larger"))->trigger();
     QMenu *sortMenu = submenu(background, trLocal("Sortuj", "Sort"));
     action(*sortMenu, trLocal("Nazwa", "Name"))->trigger();
     action(*sortMenu, trLocal("Rosnąco", "Ascending"))->trigger();
@@ -153,10 +153,19 @@ int main(int argc, char **argv)
     action(*groupMenu, trLocal("Rozmiar", "Size"))->trigger();
     action(background, trLocal("Ukryte elementy", "Hidden items"))->trigger();
     action(background, trLocal("Miniatury obrazów", "Image thumbnails"))->trigger();
-    verify(viewMode == 0 && iconSize == 3, "View routes to active-pane callbacks");
+    verify(viewMode == 0 && iconSize == 2, "View routes to active-pane step callbacks");
     verify(sortKey == 0 && ascending, "Sort routes to active-pane callbacks");
     verify(groupMode == DirectoryViewSettings::GroupBySize, "Grouping routes to active-pane callback");
     verify(hidden && !thumbnails, "Show toggles route through callbacks");
+
+    state.viewMode = 1;
+    state.iconSizeEnabled = false;
+    QMenu nonIconsBackground(&parent);
+    controller.addViewSubmenu(nonIconsBackground, state, callbacks);
+    QMenu *disabledSizes = nonIconsBackground.findChild<QMenu *>(
+        QStringLiteral("viewIconSizeMenu"));
+    verify(disabledSizes && !disabledSizes->isEnabled(),
+           "icon-size step control is disabled for non-Icons and synthetic states");
 
     PaneMenuController paneMenus(&controller);
     PaneMenuController::BackgroundCallbacks backgroundCallbacks;

@@ -1331,12 +1331,7 @@ private:
                 0,
                 3);
 
-        m_directoryIconSizeMode = std::clamp(
-            settings.value(
-                QStringLiteral("directory/iconSizeMode"),
-                DirectoryViewSettings::DefaultIconSizeMode).toInt(),
-            0,
-            3);
+        m_directoryIconSizeStep = DirectoryViewSettings::globalDefault().iconSizeStep;
 
         m_sortKey =
             std::clamp(
@@ -1418,31 +1413,9 @@ private:
                 });
         }
 
-        QMenu *iconSizeMenu = viewMenu->addMenu(
-            themedIcon(QStringLiteral("transform-scale"), QStringLiteral("view-list-icons")),
-            trLocal("Rozmiar ikon", "Icon size"));
-        iconSizeMenu->setObjectName(QStringLiteral("viewIconSizeMenu"));
-        auto *iconSizeGroup = new QActionGroup(iconSizeMenu);
-        iconSizeGroup->setExclusive(true);
-        struct IconSizeDef { int mode; const char *pl; const char *en; };
-        const IconSizeDef iconSizes[] = {
-            {0, "Bardzo duże", "Very large"},
-            {1, "Duże", "Large"},
-            {2, "Średnie", "Medium"},
-            {3, "Małe", "Small"},
-        };
-        for (const IconSizeDef &def : iconSizes) {
-            QAction *action = iconSizeMenu->addAction(trLocal(def.pl, def.en));
-            action->setObjectName(QStringLiteral("iconSizeAction%1").arg(def.mode));
-            action->setCheckable(true);
-            action->setChecked(def.mode == m_directoryIconSizeMode);
-            action->setProperty("iconSizeMode", def.mode);
-            iconSizeGroup->addAction(action);
-            connect(action, &QAction::triggered, this, [this, mode = def.mode] {
-                if (paneContext().id == PaneId::Split) m_splitPane->setIconSizeMode(mode);
-                else setDirectoryIconSizeMode(mode);
-            });
-        }
+        m_selectionMenuController.addIconSizeStepControl(
+            *viewMenu, m_directoryIconSizeStep, m_directoryViewMode == 0,
+            [this](int delta) { adjustActiveIconSizeStep(delta); });
 
         viewMenu->addSeparator();
 
@@ -2594,6 +2567,9 @@ private:
         callbacks.up = [this] {
             if (m_activePane == PaneId::Split) m_splitPane->navigateUp(); else goUp();
         };
+        callbacks.adjustIconSizeStep = [this](int delta) {
+            adjustActiveIconSizeStep(delta);
+        };
         callbacks.homeCards = [this] {
             return homeCards(m_activePane);
         };
@@ -3652,7 +3628,7 @@ private:
         m_primaryPane->setCurrentUrl(url);
         const DirectoryViewProfile profile = DirectoryViewSettings::resolveProfile(url);
         m_directoryViewMode = profile.viewMode;
-        m_directoryIconSizeMode = profile.iconSizeMode;
+        m_directoryIconSizeStep = profile.iconSizeStep;
         m_sortKey = profile.sortKey;
         m_sortAscending = profile.sortAscending;
         m_groupMode = profile.groupMode;
@@ -4140,17 +4116,20 @@ private:
             const SelectionMenuController::ViewState viewState{
                 context.id,
                 split ? m_splitPane->viewMode() : m_directoryViewMode,
-                split ? m_splitPane->iconSizeMode() : m_directoryIconSizeMode,
+                split ? m_splitPane->iconSizeStep() : m_directoryIconSizeStep,
                 split ? m_splitPane->sortKey() : m_sortKey,
                 split ? m_splitPane->sortAscending() : m_sortAscending,
                 split ? m_splitPane->groupMode() : m_groupMode,
+                (split ? m_splitPane->viewMode() : m_directoryViewMode) == 0
+                    && context.directory.scheme() != QStringLiteral("thispcsearch")
+                    && !sameLocation(context.directory, kThisPcUrl),
                 m_showHiddenFiles,
                 m_thumbnailsEnabled,
                 m_previewAction,
                 m_fullNamesAction};
             const SelectionMenuController::ViewCallbacks viewCallbacks{
                 [this, split](int mode) { split ? m_splitPane->setViewMode(mode) : setDirectoryViewMode(mode); },
-                [this, split](int mode) { split ? m_splitPane->setIconSizeMode(mode) : setDirectoryIconSizeMode(mode); },
+                [this, split](int mode) { split ? m_splitPane->setIconSizeStep(mode) : setDirectoryIconSizeStep(mode); },
                 [this, split](int key) { split ? m_splitPane->setSortState(key, m_splitPane->sortAscending()) : setSortKey(key); },
                 [this, split](bool ascending) { split ? m_splitPane->setSortState(m_splitPane->sortKey(), ascending) : setSortAscending(ascending); },
                 [this, split](int mode) { split ? m_splitPane->setGroupMode(mode) : setGroupMode(mode); },
@@ -4306,9 +4285,9 @@ private:
         if (m_backAction && m_contentStack) updateNavigationActions();
         const bool split = paneContext().id == PaneId::Split;
         const int mode = split ? m_splitPane->viewMode() : m_directoryViewMode;
-        const int iconSizeMode = split
-            ? m_splitPane->iconSizeMode()
-            : m_directoryIconSizeMode;
+        const int iconSizeStep = split
+            ? m_splitPane->iconSizeStep()
+            : m_directoryIconSizeStep;
         const int sort = split ? m_splitPane->sortKey() : m_sortKey;
         const bool ascending = split
             ? m_splitPane->sortAscending()
@@ -4337,11 +4316,22 @@ private:
             }
             if (QMenu *iconSizeMenu = m_viewButton->menu()->findChild<QMenu *>(
                     QStringLiteral("viewIconSizeMenu"))) {
-                for (QAction *action : iconSizeMenu->actions()) {
-                    QSignalBlocker blocker(action);
-                    action->setChecked(
-                        action->property("iconSizeMode").toInt() == iconSizeMode);
-                }
+                const PaneContext context = paneContext();
+                const bool enabled = mode == 0
+                    && context.directory.scheme() != QStringLiteral("thispcsearch")
+                    && !sameLocation(context.directory, kThisPcUrl);
+                iconSizeMenu->setEnabled(enabled);
+                if (QAction *smaller = iconSizeMenu->findChild<QAction *>(
+                        QStringLiteral("iconSizeSmaller")))
+                    smaller->setEnabled(enabled && iconSizeStep > 0);
+                if (QAction *current = iconSizeMenu->findChild<QAction *>(
+                        QStringLiteral("iconSizeCurrent")))
+                    current->setText(trLocal("Bieżący: %1 px", "Current: %1 px")
+                        .arg(DirectoryViewSettings::iconExtentForStep(iconSizeStep)));
+                if (QAction *larger = iconSizeMenu->findChild<QAction *>(
+                        QStringLiteral("iconSizeLarger")))
+                    larger->setEnabled(enabled
+                        && iconSizeStep + 1 < DirectoryViewSettings::iconSizeStepCount());
             }
         }
         if (m_sortButton && m_sortButton->menu()) {
@@ -4763,11 +4753,32 @@ private:
         restoreDirectorySelection(m_directoryList, m_directoryDetails, selection);
     }
 
-    void setDirectoryIconSizeMode(int mode)
+    void setDirectoryIconSizeStep(int step)
     {
-        m_directoryIconSizeMode = std::clamp(mode, 0, 3);
+        m_directoryIconSizeStep = std::clamp(
+            step, 0, DirectoryViewSettings::iconSizeStepCount() - 1);
         savePrimaryDirectoryProfile();
         applyDirectoryViewMode(false);
+    }
+
+    void adjustActiveIconSizeStep(int delta)
+    {
+        const PaneContext context = paneContext();
+        const bool split = context.id == PaneId::Split;
+        const int mode = split ? m_splitPane->viewMode() : m_directoryViewMode;
+        if (mode != 0
+            || context.directory.scheme() == QStringLiteral("thispcsearch")
+            || sameLocation(context.directory, kThisPcUrl)) {
+            return;
+        }
+
+        const int current = split ? m_splitPane->iconSizeStep()
+                                  : m_directoryIconSizeStep;
+        const int next = std::clamp(
+            current + delta, 0, DirectoryViewSettings::iconSizeStepCount() - 1);
+        if (next == current) return;
+        if (split) m_splitPane->setIconSizeStep(next);
+        else setDirectoryIconSizeStep(next);
     }
 
     void setGroupMode(int mode)
@@ -4810,7 +4821,7 @@ private:
             m_directoryViewStack,
             m_viewButton,
             m_directoryViewMode,
-            m_directoryIconSizeMode);
+            m_directoryIconSizeStep);
 
         updateFileActionStates();
     }
@@ -4851,7 +4862,7 @@ private:
 
     DirectoryViewProfile primaryDirectoryProfile() const
     {
-        return {m_directoryViewMode, m_directoryIconSizeMode, m_sortKey,
+        return {m_directoryViewMode, m_directoryIconSizeStep, m_sortKey,
                 m_sortAscending, m_groupMode};
     }
 
@@ -5294,7 +5305,7 @@ private:
     QAction *m_fullNamesAction = nullptr;
     QAction *m_restoreSessionAction = nullptr;
     int m_directoryViewMode = 0;
-    int m_directoryIconSizeMode = DirectoryViewSettings::DefaultIconSizeMode;
+    int m_directoryIconSizeStep = DirectoryViewSettings::DefaultIconSizeStep;
     int m_sortKey = 0;
     bool m_sortAscending = true;
     int m_groupMode = DirectoryViewSettings::NoGrouping;

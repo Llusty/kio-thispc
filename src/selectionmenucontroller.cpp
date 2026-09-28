@@ -1,5 +1,7 @@
 #include "selectionmenucontroller.h"
 
+#include "directoryviewsettings.h"
+
 #include "browsercommon.h"
 #include "directoryviewsettings.h"
 
@@ -160,13 +162,38 @@ void SelectionMenuController::addViewSubmenu(QMenu &menu, const ViewState &state
     thumbs->setCheckable(true); thumbs->setChecked(state.thumbnails);
     QObject::connect(thumbs, &QAction::toggled, show, callbacks.setThumbnails);
     show->addAction(state.previewAction); show->addAction(state.fullNamesAction);
-    QMenu *sizes = view->addMenu(themedIcon(QStringLiteral("transform-scale"), QStringLiteral("view-list-icons")), trLocal("Rozmiar ikon", "Icon size"));
-    auto *sizeGroup = new QActionGroup(sizes); sizeGroup->setExclusive(true);
-    const QStringList labels = {trLocal("Bardzo duże", "Very large"), trLocal("Duże", "Large"), trLocal("Średnie", "Medium"), trLocal("Małe", "Small")};
-    for (int mode = 0; mode < labels.size(); ++mode) {
-        QAction *action = sizes->addAction(labels.at(mode)); action->setCheckable(true);
-        action->setChecked(mode == state.iconSizeMode); sizeGroup->addAction(action);
-        QObject::connect(action, &QAction::triggered, sizes, [=] { callbacks.setIconSizeMode(mode); });
+    addIconSizeStepControl(*view, state.iconSizeStep, state.iconSizeEnabled,
+                           [=](int delta) {
+                               callbacks.setIconSizeStep(state.iconSizeStep + delta);
+                           });
+}
+
+void SelectionMenuController::addIconSizeStepControl(
+    QMenu &menu, int rawStep, bool enabled,
+    const std::function<void(int)> &setStep) const
+{
+    const int step = std::clamp(rawStep, 0, DirectoryViewSettings::iconSizeStepCount() - 1);
+    QMenu *sizes = menu.addMenu(
+        themedIcon(QStringLiteral("transform-scale"), QStringLiteral("view-list-icons")),
+        trLocal("Rozmiar ikon", "Icon size"));
+    sizes->setObjectName(QStringLiteral("viewIconSizeMenu"));
+    sizes->setEnabled(enabled);
+    QAction *smaller = sizes->addAction(trLocal("Mniejsze", "Smaller"));
+    smaller->setObjectName(QStringLiteral("iconSizeSmaller"));
+    smaller->setEnabled(step > 0);
+    QAction *current = sizes->addAction(
+        trLocal("Bieżący: %1 px", "Current: %1 px")
+            .arg(DirectoryViewSettings::iconExtentForStep(step)));
+    current->setObjectName(QStringLiteral("iconSizeCurrent"));
+    current->setEnabled(false);
+    QAction *larger = sizes->addAction(trLocal("Większe", "Larger"));
+    larger->setObjectName(QStringLiteral("iconSizeLarger"));
+    larger->setEnabled(step + 1 < DirectoryViewSettings::iconSizeStepCount());
+    if (setStep) {
+        QObject::connect(smaller, &QAction::triggered, sizes,
+                         [=] { setStep(-1); });
+        QObject::connect(larger, &QAction::triggered, sizes,
+                         [=] { setStep(1); });
     }
 }
 

@@ -153,8 +153,11 @@ int main(int argc, char **argv)
            "View groups modes, display commands, session, and folder profile commands");
     verify(applyViewToSubfolders && !applyViewToSubfolders->isCheckable(),
            "top-level View Apply-to-subfolders is a one-shot command");
-    verify(iconSizeMenu && iconSizeMenu->actions().size() == 4,
-           "Icon size contains four real radio choices");
+    verify(iconSizeMenu && iconSizeMenu->actions().size() == 3
+               && iconSizeMenu->findChild<QAction *>(QStringLiteral("iconSizeSmaller"))
+               && iconSizeMenu->findChild<QAction *>(QStringLiteral("iconSizeCurrent"))
+               && iconSizeMenu->findChild<QAction *>(QStringLiteral("iconSizeLarger")),
+           "Icon size exposes one compact smaller/current/larger step control");
     const auto showActions = showMenu->actions();
     verify(showActions.size() == 4
                && showActions.at(0) == window.m_showHiddenAction
@@ -202,27 +205,111 @@ int main(int argc, char **argv)
                && window.m_splitPane->listView()->isWrapping(),
            "Compact routes to the active split pane and applies a real column layout");
 
-    QAction *veryLargeAction = iconSizeMenu->findChild<QAction *>(QStringLiteral("iconSizeAction0"));
-    QAction *smallAction = iconSizeMenu->findChild<QAction *>(QStringLiteral("iconSizeAction3"));
-    verify(veryLargeAction && smallAction,
-           "icon size actions remain addressable as one radio group");
+    QAction *smallerAction = iconSizeMenu->findChild<QAction *>(QStringLiteral("iconSizeSmaller"));
+    QAction *largerAction = iconSizeMenu->findChild<QAction *>(QStringLiteral("iconSizeLarger"));
+    verify(smallerAction && largerAction,
+           "icon size step actions remain addressable");
     window.setDirectoryViewMode(0);
     window.m_splitPane->setViewMode(0);
+    window.setDirectoryIconSizeStep(5);
+    window.m_splitPane->setIconSizeStep(3);
     window.setActivePane(ThisPcWindow::PaneId::Primary);
-    veryLargeAction->trigger();
-    verify(window.m_directoryIconSizeMode == 0
-               && window.m_directoryList->iconSize() == QSize(96, 96)
-               && window.m_splitPane->iconSizeMode() != 0,
+    largerAction->trigger();
+    verify(window.m_directoryIconSizeStep == 6
+               && window.m_directoryList->iconSize() == QSize(80, 80)
+               && window.m_splitPane->iconSizeStep() == 3,
            "icon size routes to active primary pane");
     window.setActivePane(ThisPcWindow::PaneId::Split);
-    smallAction->trigger();
-    verify(window.m_splitPane->iconSizeMode() == 3
-               && window.m_splitPane->listView()->iconSize() == QSize(32, 32)
-               && window.m_directoryIconSizeMode == 0,
+    smallerAction->trigger();
+    verify(window.m_splitPane->iconSizeStep() == 2
+               && window.m_splitPane->listView()->iconSize() == QSize(40, 40)
+               && window.m_directoryIconSizeStep == 6,
            "icon size routes to active split pane");
     window.updateFileActionStates();
-    verify(smallAction->isChecked() && !veryLargeAction->isChecked(),
-           "icon-size radio state follows the active pane");
+    verify(iconSizeMenu->isEnabled()
+               && iconSizeMenu->findChild<QAction *>(QStringLiteral("iconSizeCurrent"))
+                      ->text().contains(QStringLiteral("40")),
+           "icon-size current step follows the active pane");
+    window.m_splitPane->setViewMode(1);
+    window.updateFileActionStates();
+    verify(!iconSizeMenu->isEnabled(),
+           "icon-size control is disabled outside Icons mode");
+
+    window.setDirectoryViewMode(0);
+    window.setDirectoryIconSizeStep(4);
+    window.m_directoryList->setFocus();
+    QTest::keyClick(window.m_directoryList, Qt::Key_Plus, Qt::ControlModifier);
+    verify(window.m_directoryIconSizeStep == 5,
+           "Ctrl Plus advances the active primary pane icon-size step");
+    QTest::keyClick(window.m_directoryList, Qt::Key_Equal, Qt::ControlModifier);
+    verify(window.m_directoryIconSizeStep == 6,
+           "Ctrl Equal advances the active primary pane icon-size step");
+    QTest::keyClick(window.m_directoryList, Qt::Key_Minus, Qt::ControlModifier);
+    verify(window.m_directoryIconSizeStep == 5,
+           "Ctrl Minus reduces the active primary pane icon-size step");
+    verify(DirectoryViewSettings::resolveProfile(left).iconSizeStep == 5,
+           "primary icon-size shortcut persists the exact folder profile step");
+
+    window.m_splitPane->setViewMode(0);
+    window.m_splitPane->setIconSizeStep(3);
+    window.m_splitPane->listView()->setFocus();
+    QTest::keyClick(window.m_splitPane->listView(), Qt::Key_Equal,
+                    Qt::ControlModifier);
+    verify(window.m_splitPane->iconSizeStep() == 4
+               && window.m_directoryIconSizeStep == 5,
+           "icon-size shortcut routes to the focused split pane");
+    verify(DirectoryViewSettings::resolveProfile(right).iconSizeStep == 4,
+           "split icon-size shortcut persists the exact folder profile step");
+
+    window.m_splitPane->setIconSizeStep(0);
+    QTest::keyClick(window.m_splitPane->listView(), Qt::Key_Minus,
+                    Qt::ControlModifier);
+    verify(window.m_splitPane->iconSizeStep() == 0,
+           "icon-size shortcut minimum boundary is a no-op");
+    window.m_splitPane->setIconSizeStep(DirectoryViewSettings::iconSizeStepCount() - 1);
+    QTest::keyClick(window.m_splitPane->listView(), Qt::Key_Plus,
+                    Qt::ControlModifier);
+    verify(window.m_splitPane->iconSizeStep()
+               == DirectoryViewSettings::iconSizeStepCount() - 1,
+           "icon-size shortcut maximum boundary is a no-op");
+
+    window.m_splitPane->setViewMode(1);
+    const int listStep = window.m_splitPane->iconSizeStep();
+    QTest::keyClick(window.m_splitPane->listView(), Qt::Key_Minus,
+                    Qt::ControlModifier);
+    verify(window.m_splitPane->iconSizeStep() == listStep,
+           "icon-size shortcut is disabled outside Icons mode");
+    window.m_splitPane->setViewMode(0);
+    const int plainStep = window.m_splitPane->iconSizeStep();
+    QTest::keyClick(window.m_splitPane->listView(), Qt::Key_Plus);
+    QTest::keyClick(window.m_splitPane->listView(), Qt::Key_Minus);
+    QTest::keyClick(window.m_splitPane->listView(), Qt::Key_Equal);
+    verify(window.m_splitPane->iconSizeStep() == plainStep,
+           "plain Plus, Minus, and Equal do not change icon size");
+
+    window.m_searchEdit->setFocus();
+    QTest::keyClick(window.m_searchEdit, Qt::Key_Plus, Qt::ControlModifier);
+    verify(window.m_splitPane->iconSizeStep() == plainStep,
+           "Search editor focus blocks icon-size shortcuts");
+    window.m_addressStack->setCurrentWidget(window.m_addressEdit);
+    window.m_addressEdit->setFocus();
+    QTest::keyClick(window.m_addressEdit, Qt::Key_Minus, Qt::ControlModifier);
+    verify(window.m_splitPane->iconSizeStep() == plainStep,
+           "address editor focus blocks icon-size shortcuts");
+    window.m_addressStack->setCurrentWidget(window.m_breadcrumbFrame);
+
+    window.m_splitPane->setCurrentUrl(kThisPcUrl, false);
+    const int virtualStep = window.m_splitPane->iconSizeStep();
+    window.adjustActiveIconSizeStep(1);
+    verify(window.m_splitPane->iconSizeStep() == virtualStep,
+           "This PC virtual root rejects icon-size step changes");
+    window.m_splitPane->setCurrentUrl(QUrl(QStringLiteral("thispcsearch:/query")), false);
+    const int searchStep = window.m_splitPane->iconSizeStep();
+    window.adjustActiveIconSizeStep(-1);
+    verify(window.m_splitPane->iconSizeStep() == searchStep,
+           "This PC search results reject icon-size step changes");
+    window.m_splitPane->setCurrentUrl(right, false);
+    window.m_splitPane->cancelListing();
 
     window.setDirectoryViewMode(0);
     window.m_splitPane->setViewMode(0);

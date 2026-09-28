@@ -19,10 +19,11 @@ public:
     struct ViewState {
         PaneId pane = PaneId::Primary;
         int viewMode = 0;
-        int iconSizeMode = 2;
+        int iconSizeStep = 2;
         int sortKey = 0;
         bool sortAscending = true;
         int groupMode = 0;
+        bool iconSizeEnabled = true;
         bool showHidden = false;
         bool thumbnails = true;
         QAction *previewAction = nullptr;
@@ -31,7 +32,7 @@ public:
 
     struct ViewCallbacks {
         std::function<void(int)> setViewMode;
-        std::function<void(int)> setIconSizeMode;
+        std::function<void(int)> setIconSizeStep;
         std::function<void(int)> setSortKey;
         std::function<void(bool)> setSortAscending;
         std::function<void(int)> setGroupMode;
@@ -53,6 +54,8 @@ public:
                           const SendToCallbacks &callbacks) const;
     void addViewSubmenu(QMenu &menu, const ViewState &state,
                         const ViewCallbacks &callbacks) const;
+    void addIconSizeStepControl(QMenu &menu, int step, bool enabled,
+                                const std::function<void(int)> &setStep) const;
     void addSortSubmenu(QMenu &menu, const ViewState &state,
                         const ViewCallbacks &callbacks) const;
 

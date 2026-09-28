@@ -30,7 +30,7 @@ int main(int argc, char **argv)
     layout->addWidget(&d, 1, 0); layout->addWidget(&e, 1, 1);
     scope.resize(600, 240); scope.show(); app.processEvents();
 
-    int activated = 0, back = 0, forward = 0, up = 0;
+    int activated = 0, back = 0, forward = 0, up = 0, iconSizeDelta = 0;
     KeyboardNavigationRouter::Context context = KeyboardNavigationRouter::Context::FileView;
     QString currentHomeId = QStringLiteral("test:/a");
     QList<QWidget *> activeCards{&a, &b, &c, &d, &e};
@@ -43,6 +43,7 @@ int main(int argc, char **argv)
     callbacks.back = [&] { ++back; };
     callbacks.forward = [&] { ++forward; };
     callbacks.up = [&] { ++up; };
+    callbacks.adjustIconSizeStep = [&](int delta) { iconSizeDelta += delta; };
     callbacks.homeCards = [&] { return activeCards; };
     callbacks.currentHomeCard = [&] {
         for (QWidget *card : activeCards) {
@@ -65,14 +66,28 @@ int main(int argc, char **argv)
     QTest::keyClick(&a, Qt::Key_Up, Qt::AltModifier);
     verify(back == 1 && forward == 1 && up == 2,
            "Alt Left Right Up route through pane callbacks");
+    QTest::keyClick(&a, Qt::Key_Plus, Qt::ControlModifier);
+    QTest::keyClick(&a, Qt::Key_Plus, Qt::ControlModifier | Qt::ShiftModifier);
+    QTest::keyClick(&a, Qt::Key_Equal, Qt::ControlModifier);
+    QTest::keyClick(&a, Qt::Key_Minus, Qt::ControlModifier);
+    verify(iconSizeDelta == 2,
+           "Ctrl Plus, shifted Ctrl Plus, Ctrl Equal, and Ctrl Minus route icon-size steps");
+    QTest::keyClick(&a, Qt::Key_Plus);
+    QTest::keyClick(&a, Qt::Key_Equal);
+    QTest::keyClick(&a, Qt::Key_Minus);
+    verify(iconSizeDelta == 2, "plain Plus, Equal, and Minus are not intercepted");
 
     QLineEdit line(&scope); line.show(); line.setText("abc"); line.setFocus();
     QTest::keyClick(&line, Qt::Key_Backspace);
     verify(line.text() == "ab" && up == 2, "QLineEdit owns Backspace");
+    QTest::keyClick(&line, Qt::Key_Plus, Qt::ControlModifier);
+    verify(iconSizeDelta == 2, "QLineEdit owns Ctrl Plus");
     directory_view_detail::IconNameEditor rename(&scope);
     rename.setFileName("rename.txt"); rename.show(); rename.setFocus();
     QTest::keyClick(&rename, Qt::Key_Backspace);
     verify(up == 2, "IconNameEditor owns Backspace");
+    QTest::keyClick(&rename, Qt::Key_Minus, Qt::ControlModifier);
+    verify(iconSizeDelta == 2, "IconNameEditor owns Ctrl Minus");
     QComboBox combo(&scope); combo.setEditable(true); combo.show(); combo.setFocus();
     QTest::keyClick(&combo, Qt::Key_Left, Qt::AltModifier);
     verify(back == 1, "editable combo owns Alt navigation");
@@ -129,11 +144,15 @@ int main(int argc, char **argv)
     QDialog modal(&scope); modal.setWindowModality(Qt::ApplicationModal); modal.show();
     app.processEvents(); a.setFocus(); QTest::keyClick(&a, Qt::Key_Backspace);
     verify(up == 2, "active modal dialog blocks routing");
+    QTest::keyClick(&a, Qt::Key_Plus, Qt::ControlModifier);
+    verify(iconSizeDelta == 2, "active modal dialog blocks icon-size shortcuts");
     modal.hide(); app.processEvents();
 
     QMenu popup(&scope); popup.addAction("item"); popup.popup(scope.mapToGlobal(QPoint(10, 10)));
     app.processEvents(); QTest::keyClick(&popup, Qt::Key_Left, Qt::AltModifier);
     verify(back == 1, "active popup blocks routing");
+    QTest::keyClick(&popup, Qt::Key_Minus, Qt::ControlModifier);
+    verify(iconSizeDelta == 2, "active popup and menu block icon-size shortcuts");
     popup.close();
 
     context = KeyboardNavigationRouter::Context::None;

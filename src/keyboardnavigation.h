@@ -22,6 +22,7 @@ public:
         std::function<void()> back;
         std::function<void()> forward;
         std::function<void()> up;
+        std::function<void(int)> adjustIconSizeStep;
         std::function<QList<QWidget *>()> homeCards;
         std::function<QWidget *()> currentHomeCard;
         std::function<void(QWidget *)> setCurrentHomeCard;

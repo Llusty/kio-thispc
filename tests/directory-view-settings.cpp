@@ -26,7 +26,8 @@ int main(int argc, char **argv)
     const QUrl profileParent = QUrl::fromLocalFile(files.filePath("profile-parent"));
     const QUrl profileChild = QUrl::fromLocalFile(files.filePath("profile-parent/child"));
     const QUrl profileDeep = QUrl::fromLocalFile(files.filePath("profile-parent/child/deeper"));
-    const DirectoryViewProfile defaults{0, 1, 0, true, DirectoryViewSettings::NoGrouping};
+    const DirectoryViewProfile defaults{0, DirectoryViewSettings::DefaultIconSizeStep, 0, true,
+                                        DirectoryViewSettings::NoGrouping};
     verify(DirectoryViewSettings::resolveProfile(profileChild) == defaults,
            "missing profile resolves to stable global default");
     const DirectoryViewProfile parentSnapshot{0, 2, 3, false, DirectoryViewSettings::GroupByType};
@@ -163,12 +164,37 @@ int main(int argc, char **argv)
     settings.setValue(DirectoryViewSettings::keyForUrl(legacyChild), DirectoryViewSettings::GroupByDate);
     settings.endGroup();
     const DirectoryViewProfile legacy = DirectoryViewSettings::resolveProfile(legacyChild);
-    verify(legacy.viewMode == 2 && legacy.iconSizeMode == 3
+    verify(legacy.viewMode == 2 && legacy.iconSizeStep == 1
                && legacy.groupMode == DirectoryViewSettings::GroupByDate
                && legacy.sortKey == 0 && legacy.sortAscending,
            "legacy exact fields migrate lazily while sort uses stable default");
     verify(DirectoryViewSettings::resolveProfile(legacyGrandchild) == defaults,
            "legacy exact entries never become ancestor rules");
+
+    const QUrl versionOneUrl(QStringLiteral("sftp://legacy-profile.test/folder"));
+    settings.beginGroup(QStringLiteral("directory/profiles/%1")
+                            .arg(DirectoryViewSettings::keyForUrl(versionOneUrl)));
+    settings.setValue(QStringLiteral("url"), versionOneUrl.toString(QUrl::FullyEncoded));
+    settings.setValue(QStringLiteral("version"), 1);
+    settings.setValue(QStringLiteral("explicit/viewMode"), 0);
+    settings.setValue(QStringLiteral("explicit/iconSizeMode"), 0);
+    settings.setValue(QStringLiteral("explicit/sortKey"), 0);
+    settings.setValue(QStringLiteral("explicit/sortAscending"), true);
+    settings.setValue(QStringLiteral("explicit/groupMode"), DirectoryViewSettings::NoGrouping);
+    settings.endGroup();
+    verify(DirectoryViewSettings::resolveProfile(versionOneUrl).iconSizeStep == 7,
+           "version-one profile migrates 96 px to the matching new step");
+
+    const QUrl invalidStepUrl(QStringLiteral("sftp://invalid-profile.test/folder"));
+    settings.beginGroup(QStringLiteral("directory/profiles/%1")
+                            .arg(DirectoryViewSettings::keyForUrl(invalidStepUrl)));
+    settings.setValue(QStringLiteral("url"), invalidStepUrl.toString(QUrl::FullyEncoded));
+    settings.setValue(QStringLiteral("version"), DirectoryViewSettings::ProfileVersion);
+    settings.setValue(QStringLiteral("explicit/viewMode"), 0);
+    settings.setValue(QStringLiteral("explicit/iconSizeStep"), 999);
+    settings.endGroup();
+    verify(DirectoryViewSettings::resolveProfile(invalidStepUrl).iconSizeStep == 8,
+           "out-of-range version-two step clamps safely to the maximum");
 
     DirectoryListWidget categorized;
     DirectoryTreeWidget categorizedDetails;
@@ -433,8 +459,13 @@ int main(int argc, char **argv)
                && autumnDelay < 26 * 60 * 60 * 1000,
            "midnight refresh follows 23-hour and 25-hour DST calendar days");
 
-    for (int mode = 0; mode < 4; ++mode) {
-        const int extent = directory_view_detail::iconExtentForMode(mode);
+    verify(DirectoryViewSettings::iconSizeStepCount() == 9,
+           "icon sizing exposes nine stable steps");
+    int previousExtent = 0;
+    for (int step = 0; step < DirectoryViewSettings::iconSizeStepCount(); ++step) {
+        const int extent = directory_view_detail::iconExtentForStep(step);
+        verify(extent > previousExtent, "icon extents increase monotonically");
+        previousExtent = extent;
         const QSize grid = directory_view_detail::iconGridSize(extent, false);
         const QRect itemRect(120, 40, grid.width(), grid.height());
         const QRect viewportRect(0, 0, 800, 600);
@@ -464,6 +495,18 @@ int main(int argc, char **argv)
                    && outline.contains(QPointF(callout.center().x(), callout.bottom() - 1)),
                "expanded selection is one connected shape without an internal bottom edge");
     }
+    verify(DirectoryViewSettings::iconExtentForStep(-10) == 24
+               && DirectoryViewSettings::iconExtentForStep(99) == 128,
+           "icon extent lookup clamps to minimum and maximum steps");
+    verify(DirectoryViewSettings::legacyModeToStep(0) == 7
+               && DirectoryViewSettings::legacyModeToStep(1) == 5
+               && DirectoryViewSettings::legacyModeToStep(2) == 3
+               && DirectoryViewSettings::legacyModeToStep(3) == 1
+               && DirectoryViewSettings::iconExtentForStep(7) == 96
+               && DirectoryViewSettings::iconExtentForStep(5) == 64
+               && DirectoryViewSettings::iconExtentForStep(3) == 48
+               && DirectoryViewSettings::iconExtentForStep(1) == 32,
+           "legacy modes map deterministically without visual size changes");
 
     const QList<QRect> edgeCells = {
         QRect(-2, 10, 104, 84),
@@ -667,24 +710,24 @@ int main(int argc, char **argv)
                "consumed recovery success never clobbers a newer message");
         verify(window.m_directoryViewMode == 1,
                "window startup applies the initial folder preference");
-        verify(window.m_directoryIconSizeMode == 0
+        verify(window.m_directoryIconSizeStep == 7
                    && window.m_directoryList->iconSize() == QSize(24, 24),
-               "window startup restores Very large preference without changing List geometry");
+               "window startup migrates legacy 96 px preference without changing List geometry");
         verify(window.m_groupMode == DirectoryViewSettings::GroupByType,
                "window startup restores type grouping for the initial folder");
         const DirectoryViewProfile globalBeforeChange = DirectoryViewSettings::globalDefault();
         window.setDirectoryViewMode(2);
-        window.setDirectoryIconSizeMode(2);
+        window.setDirectoryIconSizeStep(2);
         window.setSortKey(3);
         window.setSortAscending(false);
         verify(DirectoryViewSettings::globalDefault() == globalBeforeChange,
                "ordinary folder view changes do not mutate stable global default");
         const DirectoryViewProfile savedLocalA = DirectoryViewSettings::resolveProfile(localA);
-        verify(savedLocalA.viewMode == 2 && savedLocalA.iconSizeMode == 2
+        verify(savedLocalA.viewMode == 2 && savedLocalA.iconSizeStep == 2
                    && savedLocalA.sortKey == 3 && !savedLocalA.sortAscending,
                "view icon size and sort order persist together in the current explicit profile");
         window.setDirectoryViewMode(1);
-        window.setDirectoryIconSizeMode(0);
+        window.setDirectoryIconSizeStep(0);
         window.setSortKey(0);
         window.setSortAscending(true);
         FileInfo datedToday{QStringLiteral("today.txt"), QStringLiteral("text/plain"), QString(),
@@ -753,7 +796,7 @@ int main(int argc, char **argv)
         verify(window.m_directoryViewMode == 3
                    && window.m_directoryList->compactMode(),
                "new tab applies its Compact folder preference");
-        verify(window.m_directoryIconSizeMode == 3,
+        verify(window.m_directoryIconSizeStep == 1,
                "new tab applies its folder icon size");
         verify(window.m_groupMode == DirectoryViewSettings::NoGrouping,
                "new tab applies its independent grouping preference");
@@ -767,8 +810,8 @@ int main(int argc, char **argv)
         verify(window.m_splitPane->viewMode() == 3
                    && window.m_splitPane->listView()->compactMode(),
                "split pane applies its Compact folder preference before session save");
-        verify(window.m_splitPane->iconSizeMode() == 3,
-               "split pane applies Small preference before session save");
+        verify(window.m_splitPane->iconSizeStep() == 1,
+               "split pane applies migrated 32 px preference before session save");
         verify(window.m_splitPane->groupMode() == DirectoryViewSettings::NoGrouping,
                "split pane applies its independent grouping preference");
         window.m_splitPane->setFiles({datedUnknown, datedToday});
@@ -779,13 +822,13 @@ int main(int argc, char **argv)
                "split Date action routes independently and schedules its own boundary refresh");
         window.m_splitPane->setGroupMode(DirectoryViewSettings::NoGrouping);
         window.m_splitPane->setViewMode(2);
-        window.m_splitPane->setIconSizeMode(2);
+        window.m_splitPane->setIconSizeStep(2);
         window.m_splitPane->setSortState(3, false);
         const QUrl splitInheritedChild = QUrl::fromLocalFile(
             localB.toLocalFile() + QStringLiteral("/inherited"));
         window.applyViewToSubfolders(PaneId::Split, localB);
         const DirectoryViewProfile splitRule = DirectoryViewSettings::resolveProfile(splitInheritedChild);
-        verify(splitRule.viewMode == 2 && splitRule.iconSizeMode == 2
+        verify(splitRule.viewMode == 2 && splitRule.iconSizeStep == 2
                    && splitRule.sortKey == 3 && !splitRule.sortAscending,
                "Apply-to-subfolders captures the initiating Split pane profile");
         window.m_splitPane->setViewMode(1);
@@ -798,7 +841,7 @@ int main(int argc, char **argv)
         verify(DirectoryViewSettings::hasExplicitProfile(localB),
                "Remove-view command preserves the parent exact profile");
         window.m_splitPane->setViewMode(3);
-        window.m_splitPane->setIconSizeMode(3);
+        window.m_splitPane->setIconSizeStep(3);
         window.m_splitPane->setSortState(0, true);
         window.m_splitPane->setFiles({sizedLarge, sizedSmall});
         window.m_splitPane->setGroupMode(DirectoryViewSettings::GroupBySize);
@@ -815,7 +858,7 @@ int main(int argc, char **argv)
         ThisPcWindow restored(kThisPcUrl, true);
         verify(restored.m_directoryViewMode == 1,
                "session restore reapplies the active folder preference");
-        verify(restored.m_directoryIconSizeMode == 0,
+        verify(restored.m_directoryIconSizeStep == 0,
                "session restore reapplies the active folder icon size");
         verify(restored.m_groupMode == DirectoryViewSettings::GroupByType,
                "session restore reapplies the active folder grouping");
@@ -824,7 +867,7 @@ int main(int argc, char **argv)
         verify(restored.m_splitPane->viewMode() == 3
                    && restored.m_splitPane->listView()->compactMode(),
                "session restore reapplies the split Compact folder preference");
-        verify(restored.m_splitPane->iconSizeMode() == 3,
+        verify(restored.m_splitPane->iconSizeStep() == 3,
                    "session restore reapplies the split folder icon size");
     }
 

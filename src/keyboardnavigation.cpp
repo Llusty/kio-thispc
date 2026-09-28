@@ -90,6 +90,20 @@ bool KeyboardNavigationRouter::routeKey(QWidget *focus, QKeyEvent *event)
     if (context == Context::None) return false;
 
     const Qt::KeyboardModifiers modifiers = event->modifiers();
+    const bool controlOnly = modifiers == Qt::ControlModifier;
+    const bool shiftedControl = modifiers
+        == (Qt::ControlModifier | Qt::ShiftModifier);
+    if (context == Context::FileView && (controlOnly || shiftedControl)) {
+        if ((event->key() == Qt::Key_Plus && (controlOnly || shiftedControl))
+            || (event->key() == Qt::Key_Equal && controlOnly)) {
+            if (m_callbacks.adjustIconSizeStep) m_callbacks.adjustIconSizeStep(1);
+            return true;
+        }
+        if (event->key() == Qt::Key_Minus && controlOnly) {
+            if (m_callbacks.adjustIconSizeStep) m_callbacks.adjustIconSizeStep(-1);
+            return true;
+        }
+    }
     if (context == Context::FileView && modifiers == Qt::NoModifier
         && (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)) {
         if (m_callbacks.activateCurrent) m_callbacks.activateCurrent();

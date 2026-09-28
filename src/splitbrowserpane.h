@@ -828,9 +828,9 @@ public:
         return m_viewMode;
     }
 
-    int iconSizeMode() const
+    int iconSizeStep() const
     {
-        return m_iconSizeMode;
+        return m_iconSizeStep;
     }
 
     int sortKey() const
@@ -850,7 +850,7 @@ public:
 
     DirectoryViewProfile currentProfile() const
     {
-        return {m_viewMode, m_iconSizeMode, m_sortKey, m_sortAscending, m_groupMode};
+        return {m_viewMode, m_iconSizeStep, m_sortKey, m_sortAscending, m_groupMode};
     }
 
     void saveCurrentProfile()
@@ -884,9 +884,10 @@ public:
         Q_EMIT stateChanged();
     }
 
-    void setIconSizeMode(int mode, bool rememberForLocation = true)
+    void setIconSizeStep(int step, bool rememberForLocation = true)
     {
-        m_iconSizeMode = std::clamp(mode, 0, 3);
+        m_iconSizeStep = std::clamp(
+            step, 0, DirectoryViewSettings::iconSizeStepCount() - 1);
         if (rememberForLocation) {
             saveCurrentProfile();
         }
@@ -1190,7 +1191,7 @@ private:
         m_currentUrl = url;
         const DirectoryViewProfile profile = DirectoryViewSettings::resolveProfile(url);
         m_viewMode = profile.viewMode;
-        m_iconSizeMode = profile.iconSizeMode;
+        m_iconSizeStep = profile.iconSizeStep;
         m_groupMode = profile.groupMode;
         setSortState(profile.sortKey, profile.sortAscending, false);
         scheduleDateGroupingRefresh();
@@ -1345,7 +1346,7 @@ private:
             m_viewStack,
             m_viewButton,
             m_viewMode,
-            m_iconSizeMode);
+            m_iconSizeStep);
 
         if (m_viewButton
             && m_viewButton->menu()) {
@@ -1479,7 +1480,7 @@ private:
     int m_historyIndex = -1;
 
     int m_viewMode = 0;
-    int m_iconSizeMode = DirectoryViewSettings::DefaultIconSizeMode;
+    int m_iconSizeStep = DirectoryViewSettings::DefaultIconSizeStep;
     int m_sortKey = 0;
     bool m_sortAscending = true;
     int m_groupMode = DirectoryViewSettings::NoGrouping;

@@ -9,6 +9,7 @@
 #pragma once
 
 #include "browsercommon.h"
+#include "directoryviewsettings.h"
 
 #include <KCategorizedSortFilterProxyModel>
 #include <KCategorizedView>
@@ -290,10 +291,9 @@ protected:
     }
 };
 
-inline int iconExtentForMode(int mode)
+inline int iconExtentForStep(int step)
 {
-    static constexpr int extents[] = {96, 64, 48, 32};
-    return extents[std::clamp(mode, 0, 3)];
+    return DirectoryViewSettings::iconExtentForStep(step);
 }
 
 inline QSize iconGridSize(int iconExtent, bool fullNames)
@@ -1808,7 +1808,7 @@ inline void applyDirectoryViewLayout(
     QStackedWidget *stack,
     QToolButton *viewButton,
     int viewMode,
-    int iconSizeMode = 1)
+    int iconSizeStep = DirectoryViewSettings::DefaultIconSizeStep)
 {
     if (!list || !details || !stack) {
         return;
@@ -1819,7 +1819,7 @@ inline void applyDirectoryViewLayout(
         list->setViewMode(QListView::IconMode);
         list->setFlow(QListView::LeftToRight);
         list->setWrapping(true);
-        const int extent = directory_view_detail::iconExtentForMode(iconSizeMode);
+        const int extent = directory_view_detail::iconExtentForStep(iconSizeStep);
         list->setIconSize(QSize(extent, extent));
         list->setSpacing(3);
         list->updateGridGeometry();

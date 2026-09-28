@@ -17,7 +17,7 @@
 struct DirectoryViewProfile
 {
     int viewMode = 0;
-    int iconSizeMode = 1;
+    int iconSizeStep = 5;
     int sortKey = 0;
     bool sortAscending = true;
     int groupMode = 0;
@@ -28,8 +28,9 @@ struct DirectoryViewProfile
 class DirectoryViewSettings final
 {
 public:
-    static constexpr int ProfileVersion = 1;
+    static constexpr int ProfileVersion = 2;
     static constexpr int DefaultIconSizeMode = 1;
+    static constexpr int DefaultIconSizeStep = 5;
     static constexpr int NoGrouping = 0;
     static constexpr int GroupByType = 1;
     static constexpr int GroupByDate = 2;
@@ -39,10 +40,34 @@ public:
     {
         QSettings settings;
         return sanitized({settings.value(QStringLiteral("directory/viewMode"), 0).toInt(),
-                          settings.value(QStringLiteral("directory/iconSizeMode"), DefaultIconSizeMode).toInt(),
+                          legacyModeToStep(settings.value(QStringLiteral("directory/iconSizeMode"), DefaultIconSizeMode).toInt()),
                           settings.value(QStringLiteral("directory/sortKey"), 0).toInt(),
                           settings.value(QStringLiteral("directory/sortAscending"), true).toBool(),
                           NoGrouping});
+    }
+
+    static constexpr int iconSizeStepCount() { return 9; }
+
+    static constexpr int iconExtentForStep(int step)
+    {
+        constexpr int extents[] = {24, 32, 40, 48, 56, 64, 80, 96, 128};
+        return extents[std::clamp(step, 0, iconSizeStepCount() - 1)];
+    }
+
+    static int stepForIconExtent(int extent)
+    {
+        int best = 0;
+        for (int step = 1; step < iconSizeStepCount(); ++step) {
+            if (std::abs(iconExtentForStep(step) - extent)
+                < std::abs(iconExtentForStep(best) - extent)) best = step;
+        }
+        return best;
+    }
+
+    static constexpr int legacyModeToStep(int mode)
+    {
+        constexpr int steps[] = {7, 5, 3, 1};
+        return steps[std::clamp(mode, 0, 3)];
     }
 
     static DirectoryViewProfile resolveProfile(const QUrl &rawUrl)
@@ -200,7 +225,7 @@ private:
     static DirectoryViewProfile sanitized(DirectoryViewProfile profile)
     {
         profile.viewMode = std::clamp(profile.viewMode, 0, 3);
-        profile.iconSizeMode = std::clamp(profile.iconSizeMode, 0, 3);
+        profile.iconSizeStep = std::clamp(profile.iconSizeStep, 0, iconSizeStepCount() - 1);
         profile.sortKey = std::clamp(profile.sortKey, 0, 3);
         profile.groupMode = std::clamp(profile.groupMode, NoGrouping, GroupBySize);
         return profile;
@@ -236,7 +261,7 @@ private:
                              const DirectoryViewProfile &profile)
     {
         settings.setValue(prefix + QStringLiteral("/viewMode"), profile.viewMode);
-        settings.setValue(prefix + QStringLiteral("/iconSizeMode"), profile.iconSizeMode);
+        settings.setValue(prefix + QStringLiteral("/iconSizeStep"), profile.iconSizeStep);
         settings.setValue(prefix + QStringLiteral("/sortKey"), profile.sortKey);
         settings.setValue(prefix + QStringLiteral("/sortAscending"), profile.sortAscending);
         settings.setValue(prefix + QStringLiteral("/groupMode"), profile.groupMode);
@@ -246,8 +271,12 @@ private:
                             DirectoryViewProfile *profile)
     {
         if (!settings.contains(prefix + QStringLiteral("/viewMode"))) return false;
+        const int version = settings.value(QStringLiteral("version"), 1).toInt();
+        const int iconStep = version >= ProfileVersion
+            ? settings.value(prefix + QStringLiteral("/iconSizeStep"), DefaultIconSizeStep).toInt()
+            : legacyModeToStep(settings.value(prefix + QStringLiteral("/iconSizeMode"), DefaultIconSizeMode).toInt());
         *profile = sanitized({settings.value(prefix + QStringLiteral("/viewMode")).toInt(),
-                              settings.value(prefix + QStringLiteral("/iconSizeMode"), DefaultIconSizeMode).toInt(),
+                              iconStep,
                               settings.value(prefix + QStringLiteral("/sortKey"), 0).toInt(),
                               settings.value(prefix + QStringLiteral("/sortAscending"), true).toBool(),
                               settings.value(prefix + QStringLiteral("/groupMode"), NoGrouping).toInt()});
@@ -302,7 +331,7 @@ private:
             profile->viewMode = value; found = true;
         }
         if (readLegacyValue(QStringLiteral("directory/perLocationIconSize"), url, 0, 3, &value)) {
-            profile->iconSizeMode = value; found = true;
+            profile->iconSizeStep = legacyModeToStep(value); found = true;
         }
         if (readLegacyValue(QStringLiteral("directory/perLocationGrouping"), url,
                             NoGrouping, GroupBySize, &value)) {
