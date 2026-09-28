@@ -8,12 +8,27 @@
 
 #include <QFrame>
 #include <QLineEdit>
+#include <QWidget>
 
 class QFocusEvent;
 class QContextMenuEvent;
 class QKeyEvent;
 class QLayout;
 class QMouseEvent;
+
+class HomePageWidget : public QWidget
+{
+    Q_OBJECT
+
+public:
+    explicit HomePageWidget(QWidget *parent = nullptr);
+
+Q_SIGNALS:
+    void backgroundClicked();
+
+protected:
+    void mousePressEvent(QMouseEvent *event) override;
+};
 
 class AddressBarFrame : public QFrame
 {
@@ -76,8 +91,10 @@ public:
 
 Q_SIGNALS:
     void activated(const QUrl &url);
+    void focused(const QUrl &url, Qt::FocusReason reason);
 
 protected:
+    void focusInEvent(QFocusEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
     void mouseDoubleClickEvent(QMouseEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;

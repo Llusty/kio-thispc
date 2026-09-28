@@ -82,6 +82,28 @@ void populateDriveContextMenu(QMenu &menu, const DriveInfo &drive)
 
 } // namespace
 
+HomePageWidget::HomePageWidget(QWidget *parent)
+    : QWidget(parent)
+{
+    setFocusPolicy(Qt::StrongFocus);
+}
+
+void HomePageWidget::mousePressEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton) {
+        for (QWidget *hit = childAt(event->position().toPoint());
+             hit && hit != this; hit = hit->parentWidget()) {
+            if (qobject_cast<ClickableFrame *>(hit)) {
+                QWidget::mousePressEvent(event);
+                return;
+            }
+        }
+        setFocus(Qt::MouseFocusReason);
+        Q_EMIT backgroundClicked();
+    }
+    QWidget::mousePressEvent(event);
+}
+
 AddressLineEdit::AddressLineEdit(QWidget *parent)
     : QLineEdit(parent)
 {
@@ -194,14 +216,23 @@ ClickableFrame::ClickableFrame(const QUrl &url, QWidget *parent)
     setCursor(Qt::PointingHandCursor);
     setFocusPolicy(Qt::StrongFocus);
     setAttribute(Qt::WA_Hover, true);
+    setProperty("navigationUrl", m_url.toString(QUrl::FullyEncoded));
 }
 
 void ClickableFrame::mousePressEvent(QMouseEvent *event)
 {
     if (event->button() == Qt::LeftButton) {
         setFocus(Qt::MouseFocusReason);
+        event->accept();
+        return;
     }
     QFrame::mousePressEvent(event);
+}
+
+void ClickableFrame::focusInEvent(QFocusEvent *event)
+{
+    QFrame::focusInEvent(event);
+    Q_EMIT focused(m_url, event->reason());
 }
 
 void ClickableFrame::mouseDoubleClickEvent(QMouseEvent *event)

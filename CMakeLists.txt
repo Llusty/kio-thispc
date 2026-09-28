@@ -71,6 +71,8 @@ add_executable(thispc-view
     src/drivehomecoordinator.h
     src/locationpresentation.cpp
     src/locationpresentation.h
+    src/keyboardnavigation.cpp
+    src/keyboardnavigation.h
     src/navigationhistory.cpp
     src/navigationhistory.h
     src/paneadapter.cpp
@@ -140,6 +142,8 @@ add_executable(thispc-view-stage3c1-test EXCLUDE_FROM_ALL
     src/directorylistingcore.h
     src/drivehomecoordinator.cpp
     src/drivehomecoordinator.h
+    src/keyboardnavigation.cpp
+    src/keyboardnavigation.h
     src/locationpresentation.cpp
     src/locationpresentation.h
     src/navigationhistory.cpp

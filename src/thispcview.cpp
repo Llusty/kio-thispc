@@ -14,6 +14,7 @@
 #include "appwidgets.h"
 #include "drivehomecoordinator.h"
 #include "locationpresentation.h"
+#include "keyboardnavigation.h"
 #include "navigationhistory.h"
 #include "paneadapter.h"
 #include "panemenucontroller.h"
@@ -531,6 +532,7 @@ public:
 
         buildToolbar();
         buildCentralUi();
+        buildKeyboardNavigation();
 
         m_searchUiController = std::make_unique<SearchUiController>(
             SearchUiController::Widgets{m_searchEdit, m_stopSearchAction,
@@ -664,13 +666,11 @@ private:
         m_backAction = toolbar->addAction(
             themedIcon(QStringLiteral("go-previous")),
             trLocal("Wstecz", "Back"));
-        m_backAction->setShortcut(QKeySequence::Back);
         connect(m_backAction, &QAction::triggered, this, [this] { if (paneContext().id == PaneId::Split) m_splitPane->navigateBack(); else goBack(); });
 
         m_forwardAction = toolbar->addAction(
             themedIcon(QStringLiteral("go-next")),
             trLocal("Dalej", "Forward"));
-        m_forwardAction->setShortcut(QKeySequence::Forward);
         connect(
             m_forwardAction,
             &QAction::triggered,
@@ -680,7 +680,6 @@ private:
         m_upAction = toolbar->addAction(
             themedIcon(QStringLiteral("go-up")),
             trLocal("W górę", "Up"));
-        m_upAction->setShortcut(QKeySequence(Qt::ALT | Qt::Key_Up));
         connect(m_upAction, &QAction::triggered, this, [this] { if (paneContext().id == PaneId::Split) m_splitPane->navigateUp(); else goUp(); });
 
         m_refreshAction = toolbar->addAction(
@@ -2112,8 +2111,12 @@ private:
         scroll->setFrameShape(QFrame::NoFrame);
         scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 
-        auto *page = new QWidget(scroll);
+        auto *page = new HomePageWidget(scroll);
         scroll->setWidget(page);
+        connect(page, &HomePageWidget::backgroundClicked, this, [this, pane] {
+            clearCurrentHomeCard(pane);
+            setActivePane(pane);
+        });
 
         auto *mainLayout = new QVBoxLayout(page);
         mainLayout->setContentsMargins(20, 18, 20, 22);
@@ -2188,6 +2191,7 @@ private:
                     setActivePane(pane);
                     navigatePane(pane, url);
                 });
+            connectHomeCard(card, pane);
 
             foldersGrid->addWidget(
                 card,
@@ -2536,6 +2540,122 @@ private:
                         [this] { showSelectedProperties(); });
     }
 
+    void buildKeyboardNavigation()
+    {
+        KeyboardNavigationRouter::Callbacks callbacks;
+        callbacks.contextForFocus = [this](QWidget *focus) {
+            if (!focus) return KeyboardNavigationRouter::Context::None;
+            const PaneContext context = paneContext();
+            if (context.view && (focus == context.view || context.view->isAncestorOf(focus)))
+                return KeyboardNavigationRouter::Context::FileView;
+            QWidget *home = m_activePane == PaneId::Split ? m_splitHomePage : m_homePage;
+            if (home && home->isVisible() && (focus == home || home->isAncestorOf(focus)))
+                return KeyboardNavigationRouter::Context::Home;
+            return KeyboardNavigationRouter::Context::None;
+        };
+        callbacks.activateCurrent = [this] { activateCurrentKeyboardItem(); };
+        callbacks.back = [this] {
+            if (m_activePane == PaneId::Split) m_splitPane->navigateBack(); else goBack();
+        };
+        callbacks.forward = [this] {
+            if (m_activePane == PaneId::Split) m_splitPane->navigateForward(); else goForward();
+        };
+        callbacks.up = [this] {
+            if (m_activePane == PaneId::Split) m_splitPane->navigateUp(); else goUp();
+        };
+        callbacks.homeCards = [this] {
+            return homeCards(m_activePane);
+        };
+        callbacks.currentHomeCard = [this] { return currentHomeCard(m_activePane); };
+        callbacks.setCurrentHomeCard = [this](QWidget *card) {
+            setCurrentHomeCard(m_activePane, card);
+        };
+        m_keyboardNavigation = new KeyboardNavigationRouter(std::move(callbacks), this);
+        qApp->installEventFilter(m_keyboardNavigation);
+    }
+
+    QWidget *homePage(PaneId pane) const
+    {
+        return pane == PaneId::Split ? m_splitHomePage : m_homePage;
+    }
+
+    QString &currentHomeId(PaneId pane)
+    {
+        return pane == PaneId::Split ? m_splitHomeCurrentId : m_primaryHomeCurrentId;
+    }
+
+    QList<QWidget *> homeCards(PaneId pane) const
+    {
+        QList<QWidget *> cards;
+        QWidget *home = homePage(pane);
+        if (!home) return cards;
+        const auto frames = home->findChildren<ClickableFrame *>();
+        for (ClickableFrame *frame : frames) {
+            if (frame && frame->property("homeCardLive").toBool()
+                && !frame->property("navigationUrl").toString().isEmpty())
+                cards.push_back(frame);
+        }
+        return cards;
+    }
+
+    QWidget *currentHomeCard(PaneId pane) const
+    {
+        const QString id = pane == PaneId::Split
+            ? m_splitHomeCurrentId : m_primaryHomeCurrentId;
+        const QList<QWidget *> cards = homeCards(pane);
+        for (QWidget *card : cards) {
+            if (card->property("navigationUrl").toString() == id) return card;
+        }
+        return nullptr;
+    }
+
+    void clearCurrentHomeCard(PaneId pane)
+    {
+        if (QWidget *card = currentHomeCard(pane)) card->clearFocus();
+        currentHomeId(pane).clear();
+    }
+
+    void setCurrentHomeCard(PaneId pane, QWidget *card)
+    {
+        if (!card) return;
+        const QString id = card->property("navigationUrl").toString();
+        if (!id.isEmpty()) currentHomeId(pane) = id;
+    }
+
+    void connectHomeCard(ClickableFrame *card, PaneId pane)
+    {
+        card->setProperty("homeCardLive", true);
+        connect(card, &ClickableFrame::focused, this,
+                [this, card, pane](const QUrl &, Qt::FocusReason reason) {
+                    setCurrentHomeCard(pane, card);
+                    if (reason == Qt::MouseFocusReason || reason == Qt::TabFocusReason
+                        || reason == Qt::BacktabFocusReason) {
+                        setActivePane(pane);
+                    }
+                });
+    }
+
+    void activateCurrentKeyboardItem()
+    {
+        if (m_activePane == PaneId::Split) {
+            if (m_splitPane) m_splitPane->activateCurrentItem();
+            return;
+        }
+        const PaneContext context = paneContext();
+        if (context.view == m_directoryDetails) {
+            QTreeWidgetItem *item = m_directoryDetails->currentItem();
+            if (!item && m_directoryDetails->selectedItems().size() == 1)
+                item = m_directoryDetails->selectedItems().first();
+            activateDetailsItem(item);
+            return;
+        }
+        QModelIndex item = m_directoryList ? m_directoryList->currentIndex() : QModelIndex();
+        const QModelIndexList selected = m_directoryList && m_directoryList->selectionModel()
+            ? m_directoryList->selectionModel()->selectedIndexes() : QModelIndexList{};
+        if (!item.isValid() && selected.size() == 1) item = selected.first();
+        activateDirectoryItem(item);
+    }
+
     bool canQuickAccessLocation(const QUrl &url) const
     {
         return m_sidebar
@@ -2871,7 +2991,9 @@ private:
     void focusPrimaryPane()
     {
         if (m_contentStack->currentWidget() == m_homePage) {
-            m_homePage->setFocus(Qt::ShortcutFocusReason);
+            const auto cards = m_homePage->findChildren<ClickableFrame *>();
+            if (!cards.isEmpty()) cards.first()->setFocus(Qt::ShortcutFocusReason);
+            else m_homePage->setFocus(Qt::ShortcutFocusReason);
             return;
         }
 
@@ -5008,6 +5130,27 @@ private:
 
     void rebuildDriveGrid(PaneId pane, QWidget *homePage, QLabel *homeStatus, QGridLayout *drivesGrid)
     {
+        QString focusedUrl = currentHomeId(pane);
+        const bool hadCurrent = !focusedUrl.isEmpty();
+        QWidget *focused = QApplication::focusWidget();
+        const bool restoreFocus = focused && homePage
+            && (focused == homePage || homePage->isAncestorOf(focused));
+        const QList<QWidget *> previousCards = homeCards(pane);
+        int previousIndex = 0;
+        for (int i = 0; i < previousCards.size(); ++i) {
+            if (previousCards.at(i)->property("navigationUrl").toString() == focusedUrl) {
+                previousIndex = i;
+                break;
+            }
+        }
+        if (focusedUrl.isEmpty() && restoreFocus)
+            focusedUrl = focused->property("navigationUrl").toString();
+        for (int i = 0; i < drivesGrid->count(); ++i) {
+            if (QWidget *oldCard = drivesGrid->itemAt(i)->widget()) {
+                oldCard->setProperty("homeCardLive", false);
+                oldCard->hide();
+            }
+        }
         clearLayout(drivesGrid);
 
         const QList<DriveInfo> &drives = m_driveHomeCoordinator.drives();
@@ -5016,10 +5159,9 @@ private:
                 trLocal(
                     "Nie znaleziono dysków.",
                     "No drives found."));
-            return;
+        } else {
+            homeStatus->clear();
         }
-
-        homeStatus->clear();
 
         for (int i = 0;
              i < drives.size();
@@ -5037,11 +5179,29 @@ private:
                     setActivePane(pane);
                     navigatePane(pane, url);
                 });
+            connectHomeCard(card, pane);
 
             drivesGrid->addWidget(
                 card,
                 i / 2,
                 i % 2);
+        }
+
+        const QList<QWidget *> rebuiltCards = homeCards(pane);
+        QWidget *restored = nullptr;
+        for (QWidget *card : rebuiltCards) {
+            if (card->property("navigationUrl").toString() == focusedUrl) {
+                restored = card;
+                break;
+            }
+        }
+        if (hadCurrent && !restored && !rebuiltCards.isEmpty())
+            restored = rebuiltCards.at(qBound(0, previousIndex, rebuiltCards.size() - 1));
+        if (restored) {
+            setCurrentHomeCard(pane, restored);
+            if (restoreFocus) restored->setFocus(Qt::OtherFocusReason);
+        } else {
+            currentHomeId(pane).clear();
         }
     }
 
@@ -5173,6 +5333,9 @@ private:
     PaneMenuController m_paneMenuController{&m_selectionMenuController};
     SearchController *m_searchController = nullptr;
     std::unique_ptr<SearchUiController> m_searchUiController;
+    KeyboardNavigationRouter *m_keyboardNavigation = nullptr;
+    QString m_primaryHomeCurrentId;
+    QString m_splitHomeCurrentId;
     int m_searchVisibleCount = 0;
 };
 

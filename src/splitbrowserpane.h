@@ -778,6 +778,23 @@ public:
     void navigateForward() { goForward(); }
     void navigateUp() { goUp(); }
 
+    void activateCurrentItem()
+    {
+        if (m_contentStack && m_contentStack->currentWidget() == m_homePage) return;
+        if (m_viewMode == 2) {
+            QTreeWidgetItem *item = m_details ? m_details->currentItem() : nullptr;
+            if (!item && m_details && m_details->selectedItems().size() == 1)
+                item = m_details->selectedItems().first();
+            activateDetailsItem(item);
+            return;
+        }
+        QModelIndex item = m_list ? m_list->currentIndex() : QModelIndex();
+        const QModelIndexList selected = m_list && m_list->selectionModel()
+            ? m_list->selectionModel()->selectedIndexes() : QModelIndexList{};
+        if (!item.isValid() && selected.size() == 1) item = selected.first();
+        activateListItem(item);
+    }
+
     void beginAddressEdit()
     {
         Q_EMIT activated();
