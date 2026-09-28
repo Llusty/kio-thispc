@@ -1,3 +1,40 @@
+# Aktualizacja do 0.34.0
+
+Wydanie kończy Explorer UX / View & Navigation Polish: ujednolica obsługę widoków i nawigacji między Primary i Split, zachowując dotychczasową semantykę KIO.
+
+```bash
+cd ~/Pobrane
+tar -xzf kio-thispc-0.34.0.tar.gz
+cd kio-thispc-0.34.0
+chmod +x install.sh
+./install.sh
+```
+
+## Zakres 0.34.0
+
+- stabilne CLI `--version`, Split address parity i spacing kart dysków;
+- wizualne przygaszenie ukrytych elementów;
+- wspólny inline rename;
+- nawigacja klawiaturą i stabilny current/focus w `thispc:/`;
+- profile widoku per-folder z Apply/Remove to subfolders;
+- dziewięć stopni rozmiaru ikon i skróty klawiaturowe;
+- finalny visual parity polish Primary/Split.
+- Drobny follow-up 1 px/accent line nie blokuje wydania. Pendrive/removable
+  pozostaje w 0.35, a double-click separatora do 50/50 jest przyszłym pomysłem.
+
+## Weryfikacja 0.34.0
+
+- ręczny odbiór etapów funkcjonalnych oraz finalnego visual parity polish: PASS;
+- finalny build: PASS;
+- pełna regresja: 32 zestawy / 8317 asercji PASS;
+- CLI `thispc-view 0.34.0`, kod wyjścia 0: PASS;
+- izolowany install smoke: PASS; instalacja systemowa oczekuje na ręczne podanie
+  hasła `sudo`;
+- finalny manual release smoke: PASS; dwa znane cosmetic follow-upy (1 px/accent
+  line oraz kursor kart `thispc:/`) są świadomie nieblokujące.
+
+---
+
 # Aktualizacja do 0.33.0
 
 Wydanie kontynuuje porządkowanie architektury bez dodawania nowych funkcji użytkowych. Zachowanie 0.32.0 pozostaje zachowane, wraz z poprawkami regresji wykrytymi podczas ekstrakcji.

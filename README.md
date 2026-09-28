@@ -1,14 +1,17 @@
-# kio-thispc 0.33.0
+# kio-thispc 0.34.0
 
-## 0.33.0 — Architecture Cleanup Continuation
+## 0.34.0 — Explorer UX / View & Navigation Polish
 
-- Behavior-preserving kontynuacja modularizacji bez nowych funkcji użytkowych.
-- Wydzielono `LocationPresentation`, `NavigationHistory`, `PreviewCoordinator`, `ActionStateController`, `DirectoryListingCore`, `PaneMenuController` i `DriveHomeCoordinator`.
-- Primary i Split korzystają ze wspólnego rdzenia listowania, zachowując dotychczasowe zachowanie KIO, widoków i sesji.
-- Poprawiono crash cyklu życia menu sidebara podczas odświeżania dysków.
-- Poprawiono aktywację inline rename bez zmiany zachowania szybkiego double-click.
-- Wspólny `BrowserPane` i odłożone elementy UX pozostają poza zakresem wydania.
-- Finalny baseline po poprawce inline rename: 31 zestawów / 7852 asercje PASS.
+- Stage 2: stabilne `thispc-view --version`, parity adresu/breadcrumbs w Split View oraz ograniczone odstępy kart dysków.
+- Stage 3: czytelne, przygaszone wizualizacje ukrytych plików i folderów.
+- Stage 4: wspólny inline rename dla F2, menu kontekstowego i wolnego drugiego kliknięcia.
+- Stage 5: pełna nawigacja klawiaturą oraz stabilny current/focus w `thispc:/`.
+- Stage 6: profile widoku per-folder oraz snapshotowe reguły Apply/Remove to subfolders bez rekurencyjnego skanowania KIO.
+- Stage 7: dziewięć stopni rozmiaru ikon, kontrolki menu i skróty `Ctrl++`, `Ctrl+=`, `Ctrl+-`.
+- Finalny polish ujednolica semantykę nagłówków, geometrię Icons/List/Details/Compact, kolumny Details, profile per-URL i runtime geometry paska adresu między Primary i Split.
+- Znany, nieblokujący detal kosmetyczny pozostaje odłożony: około 1 px różnicy pionowego wyrównania nagłówka/paska i położenia niebieskiej linii aktywnego panelu względem szarej ramki.
+- Wykrywanie pendrive/removable pozostaje w 0.35 Drives & Devices, a double-click separatora Split do 50/50 jest przyszłym pomysłem polishowym.
+- Finalna automatyczna regresja: 32 zestawy / 8317 asercji PASS; build, CLI version i izolowany install smoke PASS.
 
 ## 0.31.0 — Split View Synchronization
 
@@ -244,8 +247,8 @@ Funkcje z 0.15.4 — kompaktowy popup operacji, dynamiczna wysokość, anulowani
 
 ```bash
 cd ~/Pobrane
-tar -xzf kio-thispc-0.33.0.tar.gz
-cd kio-thispc-0.33.0
+tar -xzf kio-thispc-0.34.0.tar.gz
+cd kio-thispc-0.34.0
 chmod +x install.sh
 ./install.sh
 ```

@@ -15,23 +15,24 @@ The goal is not to replace KDE with Windows UI. The goal is a familiar Explorer-
 - Undo/Redo;
 - rich transfer UI, native local transfer engine, previews, search, device/network integration, etc.
 
-## Current release candidate — 0.33.0
-**0.33.0 — Architecture Cleanup Continuation** is release-ready pending final
-manual smoke. It is a behavior-preserving refactor with regression fixes, not a
-user-feature release.
+## Current release candidate — 0.34.0
+**0.34.0 — Explorer UX / View & Navigation Polish** is feature-complete and in
+release prep. Stages 2–7 and the final Split View visual parity polish have
+passed manual acceptance; final manual release smoke is confirmed PASS.
 
-Accepted 0.33.0 scope:
-- extracted `LocationPresentation`, `NavigationHistory`, `PreviewCoordinator`
-  and `ActionStateController`;
-- shared `DirectoryListingCore` used by Primary and Split;
-- extracted `PaneMenuController` and `DriveHomeCoordinator`;
-- drive-sidebar context-menu lifetime crash fix;
-- inline rename activation fix;
-- common `BrowserPane` and deferred UX work remain outside this release.
+Accepted 0.34.0 scope:
+- stable CLI version reporting, Split address parity and drive-card spacing;
+- hidden-item visuals and unified inline rename;
+- keyboard navigation with stable `thispc:/` current/focus;
+- per-folder profiles with snapshot Apply/Remove to subfolders rules;
+- nine icon-size steps with menu and keyboard controls;
+- shared Primary/Split header, view and per-URL profile semantics.
 
-All extraction stages and the inline-rename fix have passed manual acceptance.
-The automated baseline is 31 test suites / 7852 assertions PASS. No new user
-feature is part of 0.33.0.
+Two details remain non-blocking cosmetic follow-ups: approximately 1 px/sub-pixel
+header/accent-line alignment, and replacing `PointingHandCursor` on `thispc:/` /
+Split Home folder and drive cards with the standard `ArrowCursor` used by normal
+listings. Removable-media discovery remains in 0.35 and Split-divider
+double-click to 50/50 remains a future polish idea.
 
 User-confirmed working behavior includes:
 - navigation and address/breadcrumb controls;
@@ -132,7 +133,7 @@ thispc-view
 For Codex, prefer working directly in a Git checkout and running `./scripts/build.sh` after edits instead of repeatedly creating ZIPs.
 
 
-## Current state — 0.33.0
+## Current state — 0.34.0
 
 0.18.0 conflict handling is user-confirmed. 0.19.x adds persistent session restore
 and the stable full-name/IconMode layout. 0.20.0 adds persistent Quick Access /
@@ -191,4 +192,7 @@ primary browser pane owns its listing/rendering state. Stage 9/common
 PASS. 0.33.0 continues the cleanup with seven extracted modules, shared Primary/
 Split listing logic, and focused drive-menu lifetime and inline-rename activation
 fixes. Common `BrowserPane` remains deferred. Baseline: 31 suites / 7852 assertions
-PASS. The release adds no new user-facing features.
+PASS. The release adds no new user-facing features. 0.34.0 then completes the
+Explorer UX / View & Navigation stages described above; final manual release
+smoke is confirmed PASS. Final automated release-prep verification passed with
+32 suites / 8317 assertions, final CLI version output and isolated install.

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.34.0 — Explorer UX / View & Navigation Polish
+
+- Stage 2: `--version` działa przed inicjalizacją GUI i kończy się kodem 0; Split ma parity przełączania adres/breadcrumb, a karty dysków zachowują kontrolowane odstępy.
+- Stage 3: ukryte pliki i foldery są wizualnie przygaszone bez utraty czytelności selection, hover i focus.
+- Stage 4: F2, Rename z menu kontekstowego i wolny drugi click korzystają ze wspólnego inline rename; Batch Rename pozostaje osobną ścieżką.
+- Stage 5: dodano routing nawigacji klawiaturą oraz stabilny current/focus dla kart `thispc:/`.
+- Stage 6: profile view mode, icon size, sort i grouping są zapisywane per URL; Apply/Remove to subfolders używa snapshotowych reguł przodka bez skanowania drzewa.
+- Stage 7: Icons oferuje dziewięć stopni rozmiaru, kontrolki menu oraz `Ctrl++`, `Ctrl+=` i `Ctrl+-` w aktywnym panelu.
+- Finalny Split View visual parity polish współdzieli semantykę nagłówków i metryki widoków, utrzymuje deterministyczne kolumny Details, symetryczne profile per-URL i praktycznie identyczną runtime geometry paska adresu.
+- Nieblokujący follow-up: dopracować około 1 px/sub-pixel pionowego wyrównania nagłówka/paska oraz położenie active-pane accent line względem szarej ramki.
+- Nieblokujący future polish: zmienić `PointingHandCursor` kart folderów i dysków `thispc:/`/Split Home na standardowy `ArrowCursor`, spójny ze zwykłymi listingami.
+- Wykrywanie pendrive/removable pozostaje odłożone do 0.35 Drives & Devices. Double-click separatora Split przywracający 50/50 pozostaje przyszłym pomysłem polishowym.
+- Finalna automatyczna regresja: 32 zestawy / 8317 asercji PASS; build, finalne CLI `thispc-view 0.34.0` i izolowany install smoke PASS.
+
 ## 0.33.0 — Architecture Cleanup Continuation
 
 - Kontynuowano behavior-preserving modularizację bez dodawania nowych funkcji użytkowych.

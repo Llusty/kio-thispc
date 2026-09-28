@@ -13,7 +13,7 @@ cmake = (root / "CMakeLists.txt").read_text()
 match = re.search(r"^project\(kio-thispc VERSION ([^ ]+)", cmake, re.MULTILINE)
 if not match:
     raise RuntimeError("PROJECT_VERSION not found")
-expected = f"thispc-view {match.group(1)}-dev\n"
+expected = f"thispc-view {match.group(1)}\n"
 
 environment = dict(os.environ)
 for name in ("DISPLAY", "WAYLAND_DISPLAY", "QT_QPA_PLATFORM"):

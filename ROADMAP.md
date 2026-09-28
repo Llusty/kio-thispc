@@ -318,32 +318,31 @@ zainstalowana i ręcznie potwierdzona przez użytkownika. Pełna regresja wydani
   obowiązkowym przyszłym etapem; temat może wrócić wyłącznie wtedy, gdy konkretna
   nowa duplikacja uzasadni koszt i ryzyko kolejnego scalenia powłok UI.
 
-### 0.34.0 — Explorer UX / View & Navigation Polish
-- poprawić geometrię i pozycjonowanie inline rename, szczególnie w trybie Icons;
-- F2 oraz PPM → Rename dla jednego elementu mają uruchamiać ten sam inline
-  editor zamiast osobnego dialogu; Batch Rename i multi-select pozostają osobną
-  ścieżką;
-- w kartach dysków `thispc:/` utrzymać stały lub ograniczony odstęp ikony od
-  nazwy, informacji o pojemności i paska zajętości również w szerokim oknie;
-- zapewnić parity paska adresu prawego panelu Split View: kliknięcie w dowolnym
-  miejscu obszaru breadcrumb/address przełącza w ręczną edycję jak w Primary;
-- dodać profile widoku per-folder i „Apply this view to subfolders” przez leniwie
-  rozwiązywaną regułę/profil przodka, bez rekurencyjnego skanowania KIO;
-  jawny override katalogu potomnego ma pierwszeństwo, a profil obejmuje co
-  najmniej view mode, icon size, sort key/order i grouping. Zwykła zmiana widoku
-  dotyczy tylko bieżącego folderu; Primary i Split muszą mieć tę samą semantykę;
-- dodać dla Icons suwak rozmiaru ikon z około 8–10 stopniami, zapamiętywany
-  per-folder i routowany do aktywnego panelu; opcjonalnie obsłużyć Ctrl+wheel.
-  Suwak nie przełącza do List, Details ani Compact;
-- zapewnić pełną nawigację klawiaturą również w `thispc:/`: strzałki, Enter,
-  Backspace, Alt+Left/Alt+Right i Alt+Up, z prawidłowym routingiem active pane;
-  Search, edycja adresu, inline rename i dialogi zachowują własne zdarzenia;
-- wizualnie przygasić ukryte pliki i foldery, gdy `Show hidden` jest włączone,
-  zachowując czytelną selection, hover i focus;
-- naprawić CLI: `--version` nie może kończyć się kodem 134 i ma czysto zwracać
-  wersję 0.33/0.34 odpowiednią dla danego buildu;
-- candidate, nie blocker wydania: dopracować status bar o liczbę elementów i
-  zaznaczonych, sumę rozmiaru zaznaczenia oraz wolne miejsce.
+### 0.34.0 — Explorer UX / View & Navigation Polish ✅ feature-complete, release prep
+- Stage 2 ukończony: stabilne CLI `--version`, Split address/breadcrumb parity i
+  ograniczone odstępy kart dysków;
+- Stage 3 ukończony: czytelne wizualizacje ukrytych elementów;
+- Stage 4 ukończony: wspólny inline rename dla F2, PPM → Rename i wolnego
+  drugiego kliknięcia; Batch Rename i multi-select pozostają osobną ścieżką;
+- Stage 5 ukończony: nawigacja klawiaturą oraz stabilny current/focus w
+  `thispc:/`, z routingiem do aktywnego panelu;
+- Stage 6 ukończony: profile widoku per-folder oraz snapshotowe Apply/Remove to
+  subfolders, bez rekurencyjnego skanowania KIO i z pierwszeństwem jawnego
+  override katalogu potomnego;
+- Stage 7 ukończony: dziewięć stopni rozmiaru ikon, kontrolki menu oraz skróty
+  `Ctrl++`, `Ctrl+=` i `Ctrl+-` routowane do aktywnego panelu;
+- finalny Split View visual parity polish ukończony: wspólne nagłówki i metryki
+  Icons/List/Details/Compact, deterministyczne kolumny Details, symetryczne
+  profile per-URL oraz praktycznie identyczna runtime geometry adresu;
+- nieblokujący cosmetic follow-up: około 1 px/sub-pixel różnicy pionowego
+  wyrównania nagłówka/paska i położenia niebieskiej active-pane accent line
+  względem szarej ramki; świadomie odłożone poza 0.34.0;
+- nieblokujący future polish: ujednolicić kursor kart folderów i dysków
+  `thispc:/`/Split Home z `PointingHandCursor` do standardowego `ArrowCursor`;
+  świadomie odłożone poza 0.34.0;
+- wykrywanie pendrive/removable pozostaje w 0.35 Drives & Devices;
+- double-click separatora Split przywracający 50/50 pozostaje przyszłym pomysłem
+  polishowym, nie zakresem 0.34.0.
 
 ### 0.35.0 — Drives & Devices
 - mount/unmount/eject;

@@ -72,6 +72,19 @@ Only test on disposable files.
 - [ ] `TMPDIR=/tmp python3 tests/run-pane-actions.py --suites split_layout panes search` przechodzi regresję szerokości paneli.
 - [x] `git diff --check` is clean
 
+## Final release verification — 0.34.0 (2026-09-28)
+
+- [x] `./scripts/build.sh` — PASS (`thispc` and `thispc-view`).
+- [x] Focused pane/view/location/keyboard smoke plus Split layout — PASS.
+- [x] `TMPDIR=/tmp python3 tests/run-pane-actions.py --all` — 32 suites / 8317 assertions PASS.
+- [x] `tests/version-cli.py` — 6/6 assertions PASS.
+- [x] Built and isolated-installed `thispc-view --version` prints `thispc-view 0.34.0` and exits 0.
+- [x] Isolated `DESTDIR` install smoke — PASS.
+- [x] `git diff --check` — PASS.
+- [x] Stages 2–7 and final Split View visual parity polish manually accepted.
+- [ ] Standard system install requires the user's interactive `sudo` password.
+- [x] Final manual release smoke accepted; dwa znane cosmetic follow-upy są nieblokujące.
+
 ## Final release verification — 0.33.0 (2026-09-27)
 
 - [x] `./scripts/build.sh` — PASS (`thispc` and `thispc-view`).

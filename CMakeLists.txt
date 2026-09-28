@@ -126,7 +126,7 @@ add_executable(thispc-view
 )
 
 target_compile_definitions(thispc-view PRIVATE
-    THISPC_VERSION="${PROJECT_VERSION}-dev"
+    THISPC_VERSION="${PROJECT_VERSION}"
 )
 
 # Black-box startup/recovery integration binary. It is built from the exact
@@ -199,7 +199,7 @@ add_executable(thispc-view-stage3c1-test EXCLUDE_FROM_ALL
 )
 target_compile_definitions(thispc-view-stage3c1-test PRIVATE
     THISPC_BATCH_RENAME_TEST_HOOKS=1
-    THISPC_VERSION="${PROJECT_VERSION}-dev"
+    THISPC_VERSION="${PROJECT_VERSION}"
 )
 
 # Exiv2 reports malformed metadata through C++ exceptions. Keep exception
