@@ -133,7 +133,11 @@ int main(int argc, char **argv)
     QMenu *iconSizeMenu = viewMenu
         ? viewMenu->findChild<QMenu *>(QStringLiteral("viewIconSizeMenu"))
         : nullptr;
-    verify(viewActions.size() == 9
+    QAction *applyViewToSubfolders = viewMenu->findChild<QAction *>(
+        QStringLiteral("pane.applyViewToSubfolders"));
+    QAction *removeViewFromSubfolders = viewMenu->findChild<QAction *>(
+        QStringLiteral("pane.removeViewFromSubfolders"));
+    verify(viewActions.size() == 12
                && viewActions.at(0)->objectName() == QStringLiteral("viewModeAction0")
                && viewActions.at(1)->objectName() == QStringLiteral("viewModeAction1")
                && viewActions.at(2)->objectName() == QStringLiteral("viewModeAction2")
@@ -142,8 +146,13 @@ int main(int argc, char **argv)
                && viewActions.at(5)->isSeparator()
                && viewActions.at(6)->menu() == showMenu
                && viewActions.at(7)->isSeparator()
-               && viewActions.at(8) == window.m_restoreSessionAction,
-           "View groups modes, icon sizes, Show, and session preference");
+               && viewActions.at(8) == window.m_restoreSessionAction
+               && viewActions.at(9)->isSeparator()
+               && viewActions.at(10) == applyViewToSubfolders
+               && viewActions.at(11) == removeViewFromSubfolders,
+           "View groups modes, display commands, session, and folder profile commands");
+    verify(applyViewToSubfolders && !applyViewToSubfolders->isCheckable(),
+           "top-level View Apply-to-subfolders is a one-shot command");
     verify(iconSizeMenu && iconSizeMenu->actions().size() == 4,
            "Icon size contains four real radio choices");
     const auto showActions = showMenu->actions();
@@ -167,6 +176,19 @@ int main(int argc, char **argv)
     verify(window.m_directoryViewMode == 1 && window.m_splitPane->viewMode() == 0,
            "View mode routes to the active primary pane");
     window.setActivePane(ThisPcWindow::PaneId::Split);
+    viewMenu->aboutToShow();
+    verify(applyViewToSubfolders->isEnabled() && !removeViewFromSubfolders->isVisible(),
+           "top-level View profile commands reflect the active Split location");
+    applyViewToSubfolders->trigger();
+    verify(DirectoryViewSettings::hasInheritedRule(right),
+           "top-level View Apply routes to the active Split pane");
+    viewMenu->aboutToShow();
+    verify(removeViewFromSubfolders->isVisible() && removeViewFromSubfolders->isEnabled(),
+           "top-level View reveals Remove after Apply creates a rule");
+    removeViewFromSubfolders->trigger();
+    verify(!DirectoryViewSettings::hasInheritedRule(right)
+               && DirectoryViewSettings::hasExplicitProfile(right),
+           "top-level View Remove deletes only the Split ancestor rule");
     detailsModeAction->trigger();
     verify(window.m_directoryViewMode == 1 && window.m_splitPane->viewMode() == 2,
            "View mode routes to the active split pane");

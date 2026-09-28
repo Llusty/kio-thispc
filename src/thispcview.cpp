@@ -1523,6 +1523,37 @@ private:
                 SessionManager::setRestorePreviousSessionEnabled(enabled);
             });
 
+        PaneMenuController::BackgroundCallbacks profileCallbacks;
+        profileCallbacks.applyInheritedRule = [this] {
+            const PaneContext context = paneContext();
+            applyViewToSubfolders(context.id, context.directory);
+        };
+        profileCallbacks.removeInheritedRule = [this] {
+            const PaneContext context = paneContext();
+            removeViewFromSubfolders(context.directory);
+        };
+        m_paneMenuController.addViewProfileActions(
+            *viewMenu,
+            {m_navigation.currentUrl(), ActionAvailability{}, {}, false, false,
+             false, false, false},
+            profileCallbacks);
+        connect(viewMenu, &QMenu::aboutToShow, this, [this, viewMenu] {
+            const PaneContext context = paneContext();
+            const bool profileLocation = context.directory.isValid()
+                && context.directory.scheme() != QStringLiteral("thispcsearch")
+                && !sameLocation(context.directory, kThisPcUrl);
+            QAction *apply = viewMenu->findChild<QAction *>(
+                QStringLiteral("pane.applyViewToSubfolders"));
+            QAction *remove = viewMenu->findChild<QAction *>(
+                QStringLiteral("pane.removeViewFromSubfolders"));
+            const bool enabled = m_viewButton->isEnabled() && profileLocation;
+            apply->setEnabled(enabled);
+            remove->setEnabled(enabled
+                && DirectoryViewSettings::hasInheritedRule(context.directory));
+            remove->setVisible(profileLocation
+                && DirectoryViewSettings::hasInheritedRule(context.directory));
+        });
+
         m_viewButton->setMenu(viewMenu);
         toolbar->addWidget(m_viewButton);
 
@@ -2909,7 +2940,8 @@ private:
             m_splitPane->setViewMode(splitViewMode, false);
             m_splitPane->setSortState(
                 splitSortKey,
-                splitSortAscending);
+                splitSortAscending,
+                false);
             m_splitPane->setCurrentUrl(target, true);
 
             if (wasHidden) m_contentSplitter->restoreState(m_splitterState);
@@ -3367,7 +3399,8 @@ private:
                 false);
             m_splitPane->setSortState(
                 state.splitSortKey,
-                state.splitSortAscending);
+                state.splitSortAscending,
+                false);
             m_splitPane->setCurrentUrl(
                 state.splitUrl.isValid()
                     ? state.splitUrl
@@ -3617,15 +3650,15 @@ private:
 
         m_navigation.updateCurrent(url);
         m_primaryPane->setCurrentUrl(url);
-        m_directoryViewMode = DirectoryViewSettings::viewMode(
-            url,
-            m_directoryViewMode);
-        m_directoryIconSizeMode = DirectoryViewSettings::iconSizeMode(
-            url,
-            m_directoryIconSizeMode);
-        m_groupMode = DirectoryViewSettings::groupMode(
-            url,
-            m_groupMode);
+        const DirectoryViewProfile profile = DirectoryViewSettings::resolveProfile(url);
+        m_directoryViewMode = profile.viewMode;
+        m_directoryIconSizeMode = profile.iconSizeMode;
+        m_sortKey = profile.sortKey;
+        m_sortAscending = profile.sortAscending;
+        m_groupMode = profile.groupMode;
+        if (m_sortButton) m_sortButton->setIcon(themedIcon(
+            m_sortAscending ? QStringLiteral("view-sort-ascending")
+                            : QStringLiteral("view-sort-descending")));
         scheduleDateGroupingRefresh();
         applyDirectoryViewMode(false);
 
@@ -4127,7 +4160,8 @@ private:
             m_paneMenuController.buildBackgroundMenu(backgroundMenu,
                 {context.directory, availability, viewState, quickAccess,
                  quickAccess && isQuickAccessPinned(context.directory),
-                 context.directory.isLocalFile(), context.directory.isLocalFile()},
+                 context.directory.isLocalFile(), context.directory.isLocalFile(),
+                 DirectoryViewSettings::hasInheritedRule(context.directory)},
                 {viewCallbacks,
                  [this, pane = context.id] { refreshPane(pane); },
                  [this] { selectAllDirectoryItems(); },
@@ -4142,7 +4176,13 @@ private:
                  },
                  [this, directory = context.directory] { toggleQuickAccessLocation(directory); },
                  [this, directory = context.directory] { openTerminalAt(directory); },
-                 [this, directory = context.directory] { openAsAdministrator(directory, true); }});
+                 [this, directory = context.directory] { openAsAdministrator(directory, true); },
+                 [this, pane = context.id, directory = context.directory] {
+                     applyViewToSubfolders(pane, directory);
+                 },
+                 [this, directory = context.directory] {
+                     removeViewFromSubfolders(directory);
+                 }});
             backgroundMenu.exec(globalPosition);
             return;
         }
@@ -4717,13 +4757,7 @@ private:
         m_directoryViewMode =
             std::clamp(mode, 0, 3);
 
-        QSettings settings;
-        settings.setValue(
-            QStringLiteral("directory/viewMode"),
-            m_directoryViewMode);
-        DirectoryViewSettings::setViewMode(
-            m_navigation.currentUrl(),
-            m_directoryViewMode);
+        savePrimaryDirectoryProfile();
 
         applyDirectoryViewMode(false);
         restoreDirectorySelection(m_directoryList, m_directoryDetails, selection);
@@ -4732,13 +4766,7 @@ private:
     void setDirectoryIconSizeMode(int mode)
     {
         m_directoryIconSizeMode = std::clamp(mode, 0, 3);
-        QSettings settings;
-        settings.setValue(
-            QStringLiteral("directory/iconSizeMode"),
-            m_directoryIconSizeMode);
-        DirectoryViewSettings::setIconSizeMode(
-            m_navigation.currentUrl(),
-            m_directoryIconSizeMode);
+        savePrimaryDirectoryProfile();
         applyDirectoryViewMode(false);
     }
 
@@ -4746,7 +4774,7 @@ private:
     {
         m_groupMode = std::clamp(
             mode, DirectoryViewSettings::NoGrouping, DirectoryViewSettings::GroupBySize);
-        DirectoryViewSettings::setGroupMode(m_navigation.currentUrl(), m_groupMode);
+        savePrimaryDirectoryProfile();
         if (m_contentStack && m_contentStack->currentWidget() == m_directoryPage) {
             renderDirectoryItems();
         }
@@ -4791,10 +4819,7 @@ private:
     {
         m_sortKey = std::clamp(key, 0, 3);
 
-        QSettings settings;
-        settings.setValue(
-            QStringLiteral("directory/sortKey"),
-            m_sortKey);
+        savePrimaryDirectoryProfile();
 
         if (m_contentStack
             && m_contentStack->currentWidget()
@@ -4807,10 +4832,7 @@ private:
     {
         m_sortAscending = ascending;
 
-        QSettings settings;
-        settings.setValue(
-            QStringLiteral("directory/sortAscending"),
-            m_sortAscending);
+        savePrimaryDirectoryProfile();
 
         if (m_sortButton) {
             m_sortButton->setIcon(
@@ -4825,6 +4847,32 @@ private:
                 == m_directoryPage) {
             renderDirectoryItems();
         }
+    }
+
+    DirectoryViewProfile primaryDirectoryProfile() const
+    {
+        return {m_directoryViewMode, m_directoryIconSizeMode, m_sortKey,
+                m_sortAscending, m_groupMode};
+    }
+
+    void savePrimaryDirectoryProfile()
+    {
+        DirectoryViewSettings::saveExplicitProfile(
+            m_navigation.currentUrl(), primaryDirectoryProfile());
+    }
+
+    void applyViewToSubfolders(PaneId pane, const QUrl &directory)
+    {
+        const DirectoryViewProfile profile = pane == PaneId::Split
+            ? m_splitPane->currentProfile() : primaryDirectoryProfile();
+        DirectoryViewSettings::saveExplicitProfile(directory, profile);
+        DirectoryViewSettings::setInheritedRule(directory, profile, true);
+    }
+
+    void removeViewFromSubfolders(const QUrl &directory)
+    {
+        DirectoryViewSettings::setInheritedRule(
+            directory, DirectoryViewProfile{}, false);
     }
 
     QString displayNameForLocation(const QUrl &url) const

@@ -340,6 +340,7 @@ public:
                 this,
                 [this, key = def.key] {
                     m_sortKey = key;
+                    saveCurrentProfile();
                     renderItems();
                     updateSortIcon();
                     Q_EMIT stateChanged();
@@ -366,6 +367,7 @@ public:
             this,
             [this](bool checked) {
                 m_sortAscending = checked;
+                saveCurrentProfile();
                 renderItems();
                 updateSortIcon();
                 Q_EMIT stateChanged();
@@ -846,12 +848,22 @@ public:
         return m_groupMode;
     }
 
+    DirectoryViewProfile currentProfile() const
+    {
+        return {m_viewMode, m_iconSizeMode, m_sortKey, m_sortAscending, m_groupMode};
+    }
+
+    void saveCurrentProfile()
+    {
+        DirectoryViewSettings::saveExplicitProfile(m_currentUrl, currentProfile());
+    }
+
     void setGroupMode(int mode, bool rememberForLocation = true)
     {
         m_groupMode = std::clamp(
             mode, DirectoryViewSettings::NoGrouping, DirectoryViewSettings::GroupBySize);
         if (rememberForLocation) {
-            DirectoryViewSettings::setGroupMode(m_currentUrl, m_groupMode);
+            saveCurrentProfile();
         }
         renderItems();
         scheduleDateGroupingRefresh();
@@ -865,13 +877,7 @@ public:
         m_viewMode =
             std::clamp(mode, 0, 3);
         if (rememberForLocation) {
-            QSettings settings;
-            settings.setValue(
-                QStringLiteral("directory/viewMode"),
-                m_viewMode);
-            DirectoryViewSettings::setViewMode(
-                m_currentUrl,
-                m_viewMode);
+            saveCurrentProfile();
         }
         applyViewMode();
         restoreDirectorySelection(m_list, m_details, selection);
@@ -882,9 +888,7 @@ public:
     {
         m_iconSizeMode = std::clamp(mode, 0, 3);
         if (rememberForLocation) {
-            QSettings settings;
-            settings.setValue(QStringLiteral("directory/iconSizeMode"), m_iconSizeMode);
-            DirectoryViewSettings::setIconSizeMode(m_currentUrl, m_iconSizeMode);
+            saveCurrentProfile();
         }
         applyViewMode();
         Q_EMIT stateChanged();
@@ -892,11 +896,13 @@ public:
 
     void setSortState(
         int key,
-        bool ascending)
+        bool ascending,
+        bool rememberForLocation = true)
     {
         m_sortKey =
             std::clamp(key, 0, 3);
         m_sortAscending = ascending;
+        if (rememberForLocation) saveCurrentProfile();
 
         if (m_sortAscendingAction) {
             QSignalBlocker blocker(
@@ -1182,15 +1188,11 @@ private:
         m_list->clear();
         m_details->clear();
         m_currentUrl = url;
-        m_viewMode = DirectoryViewSettings::viewMode(
-            url,
-            m_viewMode);
-        m_iconSizeMode = DirectoryViewSettings::iconSizeMode(
-            url,
-            m_iconSizeMode);
-        m_groupMode = DirectoryViewSettings::groupMode(
-            url,
-            m_groupMode);
+        const DirectoryViewProfile profile = DirectoryViewSettings::resolveProfile(url);
+        m_viewMode = profile.viewMode;
+        m_iconSizeMode = profile.iconSizeMode;
+        m_groupMode = profile.groupMode;
+        setSortState(profile.sortKey, profile.sortAscending, false);
         scheduleDateGroupingRefresh();
         applyViewMode();
         const bool search = isSearchLocation(url);

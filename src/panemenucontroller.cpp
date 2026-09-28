@@ -43,6 +43,7 @@ void PaneMenuController::buildBackgroundMenu(
     QAction *viewAction = menu.actions().constLast();
     viewAction->setObjectName(QStringLiteral("pane.view"));
     viewAction->setEnabled(state.availability.viewControlsEnabled);
+    addViewProfileActions(*viewAction->menu(), state, callbacks);
     m_selectionMenus->addSortSubmenu(menu, state.view, callbacks.view);
     QAction *sortAction = menu.actions().constLast();
     sortAction->setObjectName(QStringLiteral("pane.sort"));
@@ -115,6 +116,30 @@ void PaneMenuController::buildBackgroundMenu(
                           "Open this folder as administrator"),
                   true, callbacks.openAdmin);
     }
+}
+
+void PaneMenuController::addViewProfileActions(
+    QMenu &menu, const BackgroundState &state,
+    const BackgroundCallbacks &callbacks) const
+{
+    menu.addSeparator();
+    const bool profileLocation = state.directory.isValid()
+        && state.directory.scheme() != QStringLiteral("thispcsearch")
+        && !sameLocation(state.directory, kThisPcUrl);
+    QAction *apply = addAction(
+        menu, QStringLiteral("pane.applyViewToSubfolders"),
+        trLocal("Zastosuj ten widok do podfolderów", "Apply this view to subfolders"),
+        state.availability.viewControlsEnabled && profileLocation,
+        callbacks.applyInheritedRule);
+    apply->setCheckable(false);
+    QAction *remove = addAction(
+        menu, QStringLiteral("pane.removeViewFromSubfolders"),
+        trLocal("Usuń widok zastosowany do podfolderów",
+                "Remove view applied to subfolders"),
+        state.availability.viewControlsEnabled && profileLocation
+            && state.inheritedRuleEnabled,
+        callbacks.removeInheritedRule);
+    remove->setVisible(profileLocation && state.inheritedRuleEnabled);
 }
 
 void PaneMenuController::buildItemMenu(

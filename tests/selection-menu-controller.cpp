@@ -166,6 +166,9 @@ int main(int argc, char **argv)
     backgroundCallbacks.openNewTab = [&] { backgroundRoute = 2; };
     backgroundCallbacks.emptyTrash = [&] { backgroundRoute = 3; };
     backgroundCallbacks.openAdmin = [&] { backgroundRoute = 4; };
+    bool inheritedRule = false;
+    backgroundCallbacks.applyInheritedRule = [&] { inheritedRule = true; };
+    backgroundCallbacks.removeInheritedRule = [&] { inheritedRule = false; };
 
     const QUrl localDirectory = QUrl::fromLocalFile(folderPath);
     PaneMenuController::BackgroundState localBackground{
@@ -182,6 +185,29 @@ int main(int argc, char **argv)
            "local background exposes Quick Access");
     verify(actionById(localBackgroundMenu, QStringLiteral("pane.openAdmin")),
            "local background exposes administrator action");
+    QAction *applyToSubfolders = actionById(
+        localBackgroundMenu, QStringLiteral("pane.applyViewToSubfolders"));
+    QAction *removeFromSubfolders = actionById(
+        localBackgroundMenu, QStringLiteral("pane.removeViewFromSubfolders"));
+    verify(applyToSubfolders && !applyToSubfolders->isCheckable()
+               && applyToSubfolders->isEnabled(),
+           "background View exposes enabled one-shot Apply view to subfolders action");
+    verify(removeFromSubfolders && !removeFromSubfolders->isVisible()
+               && !removeFromSubfolders->isEnabled(),
+           "background View hides Remove view when no rule exists");
+    applyToSubfolders->trigger();
+    verify(inheritedRule, "Apply view to subfolders routes its one-shot command");
+    auto ruledBackground = localBackground;
+    ruledBackground.inheritedRuleEnabled = true;
+    QMenu ruledBackgroundMenu(&parent);
+    paneMenus.buildBackgroundMenu(ruledBackgroundMenu, ruledBackground,
+                                  backgroundCallbacks);
+    QAction *visibleRemove = actionById(
+        ruledBackgroundMenu, QStringLiteral("pane.removeViewFromSubfolders"));
+    verify(visibleRemove && visibleRemove->isVisible() && visibleRemove->isEnabled(),
+           "background View exposes Remove view only when a rule exists");
+    visibleRemove->trigger();
+    verify(!inheritedRule, "Remove view routes its one-shot command");
     verify(actionIdCount(localBackgroundMenu, QStringLiteral("pane.openNewTab")) == 1,
            "background navigation action is not duplicated");
     actionById(localBackgroundMenu, QStringLiteral("pane.refresh"))->trigger();
@@ -195,6 +221,7 @@ int main(int argc, char **argv)
     searchBackground.quickAccessVisible = false;
     searchBackground.terminalEnabled = false;
     searchBackground.adminVisible = false;
+    searchBackground.inheritedRuleEnabled = true;
     paneMenus.buildBackgroundMenu(searchBackgroundMenu, searchBackground,
                                   backgroundCallbacks);
     verify(!actionById(searchBackgroundMenu, QStringLiteral("pane.newFolder"))->isEnabled()
@@ -203,6 +230,9 @@ int main(int argc, char **argv)
     verify(!actionById(searchBackgroundMenu, QStringLiteral("pane.openNewTab"))->isEnabled()
                && !actionById(searchBackgroundMenu, QStringLiteral("pane.openNewWindow"))->isEnabled(),
            "Search background blocks tab and window navigation");
+    verify(!actionById(searchBackgroundMenu, QStringLiteral("pane.applyViewToSubfolders"))->isEnabled()
+               && !actionById(searchBackgroundMenu, QStringLiteral("pane.removeViewFromSubfolders"))->isVisible(),
+           "Search hides Remove and disables Apply view commands");
 
     const QUrl trashDirectory(QStringLiteral("trash:/"));
     QMenu trashBackgroundMenu(&parent);
@@ -233,6 +263,9 @@ int main(int argc, char **argv)
            "thispc background blocks creation");
     verify(actionById(thisPcBackgroundMenu, QStringLiteral("pane.view"))->isEnabled(),
            "thispc directory context preserves view controls");
+    verify(!actionById(thisPcBackgroundMenu, QStringLiteral("pane.applyViewToSubfolders"))->isEnabled()
+               && !actionById(thisPcBackgroundMenu, QStringLiteral("pane.removeViewFromSubfolders"))->isVisible(),
+           "thispc View disables Apply and hides Remove profile commands");
 
     const QUrl remoteDirectory(QStringLiteral("sftp://example.test/folder"));
     QMenu remoteBackgroundMenu(&parent);

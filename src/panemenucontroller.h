@@ -21,6 +21,7 @@ public:
         bool quickAccessPinned = false;
         bool terminalEnabled = false;
         bool adminVisible = false;
+        bool inheritedRuleEnabled = false;
     };
 
     struct BackgroundCallbacks {
@@ -37,6 +38,8 @@ public:
         std::function<void()> toggleQuickAccess;
         std::function<void()> openTerminal;
         std::function<void()> openAdmin;
+        std::function<void()> applyInheritedRule;
+        std::function<void()> removeInheritedRule;
     };
 
     struct ItemState {
@@ -85,6 +88,8 @@ public:
 
     void buildBackgroundMenu(QMenu &menu, const BackgroundState &state,
                              const BackgroundCallbacks &callbacks) const;
+    void addViewProfileActions(QMenu &menu, const BackgroundState &state,
+                               const BackgroundCallbacks &callbacks) const;
     void buildItemMenu(QMenu &menu, const ItemState &state,
                        const ItemCallbacks &callbacks) const;
 

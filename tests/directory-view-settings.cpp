@@ -23,6 +23,64 @@ int main(int argc, char **argv)
     const QUrl remoteA(QStringLiteral("sftp://example.test/home/user/Documents"));
     const QUrl remoteB(QStringLiteral("sftp://example.test/home/user/Pictures"));
 
+    const QUrl profileParent = QUrl::fromLocalFile(files.filePath("profile-parent"));
+    const QUrl profileChild = QUrl::fromLocalFile(files.filePath("profile-parent/child"));
+    const QUrl profileDeep = QUrl::fromLocalFile(files.filePath("profile-parent/child/deeper"));
+    const DirectoryViewProfile defaults{0, 1, 0, true, DirectoryViewSettings::NoGrouping};
+    verify(DirectoryViewSettings::resolveProfile(profileChild) == defaults,
+           "missing profile resolves to stable global default");
+    const DirectoryViewProfile parentSnapshot{0, 2, 3, false, DirectoryViewSettings::GroupByType};
+    DirectoryViewSettings::saveExplicitProfile(profileParent, parentSnapshot);
+    DirectoryViewSettings::setInheritedRule(profileParent, parentSnapshot, true);
+    verify(DirectoryViewSettings::hasExplicitProfile(profileParent)
+               && DirectoryViewSettings::hasInheritedRule(profileParent),
+           "parent stores separate explicit profile and inherited rule");
+    verify(DirectoryViewSettings::resolveProfile(profileChild) == parentSnapshot
+               && DirectoryViewSettings::resolveProfile(profileDeep) == parentSnapshot,
+           "children lazily inherit the nearest ancestor snapshot");
+    const DirectoryViewProfile childExplicit{2, 3, 1, true, DirectoryViewSettings::GroupBySize};
+    DirectoryViewSettings::saveExplicitProfile(profileChild, childExplicit);
+    verify(DirectoryViewSettings::resolveProfile(profileChild) == childExplicit,
+           "exact child profile wins over ancestor rule");
+    const DirectoryViewProfile changedParent{1, 0, 2, true, DirectoryViewSettings::GroupByDate};
+    DirectoryViewSettings::saveExplicitProfile(profileParent, changedParent);
+    verify(DirectoryViewSettings::resolveProfile(profileDeep) == parentSnapshot,
+           "changing parent explicit profile does not mutate snapshot rule");
+    DirectoryViewSettings::setInheritedRule(profileChild, childExplicit, true);
+    verify(DirectoryViewSettings::resolveProfile(profileDeep) == childExplicit,
+           "nearest ancestor rule wins over farther ancestor");
+    DirectoryViewSettings::setInheritedRule(profileChild, childExplicit, false);
+    verify(DirectoryViewSettings::resolveProfile(profileDeep) == parentSnapshot,
+           "disabling nearest rule falls back to the next ancestor");
+    DirectoryViewSettings::setInheritedRule(profileParent, parentSnapshot, false);
+    const QUrl sibling = QUrl::fromLocalFile(files.filePath("profile-parent/sibling"));
+    verify(DirectoryViewSettings::resolveProfile(sibling) == defaults,
+           "disabling the last rule returns an unprofiled child to default");
+
+    const QUrl remoteParent(QStringLiteral("sftp://example.test/home/user"));
+    const QUrl remoteChild(QStringLiteral("sftp://example.test/home/user/docs/report"));
+    DirectoryViewSettings::setInheritedRule(remoteParent, parentSnapshot, true);
+    verify(DirectoryViewSettings::resolveProfile(remoteChild) == parentSnapshot,
+           "remote KIO URL inheritance uses URL parents without listing");
+    const QUrl adminParent(QStringLiteral("admin:///etc"));
+    DirectoryViewSettings::setInheritedRule(adminParent, childExplicit, true);
+    verify(DirectoryViewSettings::resolveProfile(QUrl(QStringLiteral("admin:///etc/systemd")))
+               == childExplicit,
+           "admin URL inheritance follows the same profile resolver");
+    QUrl remoteTrailing(QStringLiteral("sftp://example.test/home/user/"));
+    verify(DirectoryViewSettings::hasInheritedRule(remoteTrailing),
+           "trailing slash normalization preserves the same stored rule");
+    const QUrl queriedChild(QStringLiteral("sftp://example.test/home/user/docs?revision=1"));
+    DirectoryViewSettings::saveExplicitProfile(queriedChild, childExplicit);
+    verify(DirectoryViewSettings::resolveProfile(queriedChild) == childExplicit
+               && DirectoryViewSettings::resolveProfile(
+                      QUrl(QStringLiteral("sftp://example.test/home/user/docs?revision=2")))
+                      == parentSnapshot,
+           "query-bearing exact profiles stay distinct while ancestor lookup follows URL parents");
+    QSettings().sync();
+    verify(DirectoryViewSettings::resolveProfile(remoteChild) == parentSnapshot,
+           "profile and rule survive a settings sync/reload boundary");
+
     verify(DirectoryViewSettings::viewMode(localA, 2) == 2,
            "missing local preference uses fallback");
     DirectoryViewSettings::setViewMode(localA, 1);
@@ -92,6 +150,25 @@ int main(int argc, char **argv)
     verify(DirectoryViewSettings::groupMode(remoteB, DirectoryViewSettings::NoGrouping)
                == DirectoryViewSettings::NoGrouping,
            "invalid persisted grouping fails safely to None");
+
+    const QUrl legacyChild(QStringLiteral("sftp://legacy.test/root/child"));
+    const QUrl legacyGrandchild(QStringLiteral("sftp://legacy.test/root/child/deeper"));
+    settings.beginGroup(QStringLiteral("directory/perLocationViewMode"));
+    settings.setValue(DirectoryViewSettings::keyForUrl(legacyChild), 2);
+    settings.endGroup();
+    settings.beginGroup(QStringLiteral("directory/perLocationIconSize"));
+    settings.setValue(DirectoryViewSettings::keyForUrl(legacyChild), 3);
+    settings.endGroup();
+    settings.beginGroup(QStringLiteral("directory/perLocationGrouping"));
+    settings.setValue(DirectoryViewSettings::keyForUrl(legacyChild), DirectoryViewSettings::GroupByDate);
+    settings.endGroup();
+    const DirectoryViewProfile legacy = DirectoryViewSettings::resolveProfile(legacyChild);
+    verify(legacy.viewMode == 2 && legacy.iconSizeMode == 3
+               && legacy.groupMode == DirectoryViewSettings::GroupByDate
+               && legacy.sortKey == 0 && legacy.sortAscending,
+           "legacy exact fields migrate lazily while sort uses stable default");
+    verify(DirectoryViewSettings::resolveProfile(legacyGrandchild) == defaults,
+           "legacy exact entries never become ancestor rules");
 
     DirectoryListWidget categorized;
     DirectoryTreeWidget categorizedDetails;
@@ -595,6 +672,21 @@ int main(int argc, char **argv)
                "window startup restores Very large preference without changing List geometry");
         verify(window.m_groupMode == DirectoryViewSettings::GroupByType,
                "window startup restores type grouping for the initial folder");
+        const DirectoryViewProfile globalBeforeChange = DirectoryViewSettings::globalDefault();
+        window.setDirectoryViewMode(2);
+        window.setDirectoryIconSizeMode(2);
+        window.setSortKey(3);
+        window.setSortAscending(false);
+        verify(DirectoryViewSettings::globalDefault() == globalBeforeChange,
+               "ordinary folder view changes do not mutate stable global default");
+        const DirectoryViewProfile savedLocalA = DirectoryViewSettings::resolveProfile(localA);
+        verify(savedLocalA.viewMode == 2 && savedLocalA.iconSizeMode == 2
+                   && savedLocalA.sortKey == 3 && !savedLocalA.sortAscending,
+               "view icon size and sort order persist together in the current explicit profile");
+        window.setDirectoryViewMode(1);
+        window.setDirectoryIconSizeMode(0);
+        window.setSortKey(0);
+        window.setSortAscending(true);
         FileInfo datedToday{QStringLiteral("today.txt"), QStringLiteral("text/plain"), QString(),
                             childUrlWithName(localA, QStringLiteral("today.txt")), false, 1,
                             QDateTime::currentSecsSinceEpoch()};
@@ -686,6 +778,28 @@ int main(int argc, char **argv)
                    && window.m_splitPane->m_dateGroupingTimer.isActive(),
                "split Date action routes independently and schedules its own boundary refresh");
         window.m_splitPane->setGroupMode(DirectoryViewSettings::NoGrouping);
+        window.m_splitPane->setViewMode(2);
+        window.m_splitPane->setIconSizeMode(2);
+        window.m_splitPane->setSortState(3, false);
+        const QUrl splitInheritedChild = QUrl::fromLocalFile(
+            localB.toLocalFile() + QStringLiteral("/inherited"));
+        window.applyViewToSubfolders(PaneId::Split, localB);
+        const DirectoryViewProfile splitRule = DirectoryViewSettings::resolveProfile(splitInheritedChild);
+        verify(splitRule.viewMode == 2 && splitRule.iconSizeMode == 2
+                   && splitRule.sortKey == 3 && !splitRule.sortAscending,
+               "Apply-to-subfolders captures the initiating Split pane profile");
+        window.m_splitPane->setViewMode(1);
+        window.applyViewToSubfolders(PaneId::Split, localB);
+        verify(DirectoryViewSettings::resolveProfile(splitInheritedChild).viewMode == 1,
+               "reapplying overwrites the Split ancestor rule with a fresh snapshot");
+        window.removeViewFromSubfolders(localB);
+        verify(!DirectoryViewSettings::hasInheritedRule(localB),
+               "Remove-view command disables the Split ancestor rule");
+        verify(DirectoryViewSettings::hasExplicitProfile(localB),
+               "Remove-view command preserves the parent exact profile");
+        window.m_splitPane->setViewMode(3);
+        window.m_splitPane->setIconSizeMode(3);
+        window.m_splitPane->setSortState(0, true);
         window.m_splitPane->setFiles({sizedLarge, sizedSmall});
         window.m_splitPane->setGroupMode(DirectoryViewSettings::GroupBySize);
         verify(window.m_splitPane->listView()->isCategorized()
