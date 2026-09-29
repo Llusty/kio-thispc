@@ -13,6 +13,7 @@
 #include "applicationstyle.h"
 #include "appwidgets.h"
 #include "drivehomecoordinator.h"
+#include "soliddevicemonitor.h"
 #include "locationpresentation.h"
 #include "keyboardnavigation.h"
 #include "navigationhistory.h"
@@ -574,6 +575,11 @@ public:
             this,
             &ThisPcWindow::reloadDrives);
         m_refreshTimer.start();
+
+        // React to Solid hotplug events (device added/removed, mount/unmount)
+        // without waiting for the 15-second polling timer.
+        connect(&m_solidMonitor, &SolidDeviceMonitor::devicesChanged,
+                this, &ThisPcWindow::reloadDrives);
 
         reloadDrives();
 
@@ -5346,6 +5352,7 @@ private:
 
     QTimer m_refreshTimer;
     DriveHomeCoordinator m_driveHomeCoordinator{this};
+    SolidDeviceMonitor m_solidMonitor{this};
 
     FileActions *m_fileActions = nullptr;
     SelectionMenuController m_selectionMenuController{this};

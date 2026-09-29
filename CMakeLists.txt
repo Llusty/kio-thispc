@@ -69,6 +69,8 @@ add_executable(thispc-view
     src/directorylistingcore.h
     src/drivehomecoordinator.cpp
     src/drivehomecoordinator.h
+    src/soliddevicemonitor.cpp
+    src/soliddevicemonitor.h
     src/locationpresentation.cpp
     src/locationpresentation.h
     src/keyboardnavigation.cpp
@@ -142,6 +144,8 @@ add_executable(thispc-view-stage3c1-test EXCLUDE_FROM_ALL
     src/directorylistingcore.h
     src/drivehomecoordinator.cpp
     src/drivehomecoordinator.h
+    src/soliddevicemonitor.cpp
+    src/soliddevicemonitor.h
     src/keyboardnavigation.cpp
     src/keyboardnavigation.h
     src/locationpresentation.cpp
@@ -222,6 +226,7 @@ target_link_libraries(thispc-view PRIVATE
     KF6::KIOCore
     KF6::KIOWidgets
     KF6::ItemViews
+    KF6::Solid
 )
 
 kde_target_enable_exceptions(thispc-view-stage3c1-test PRIVATE)
@@ -229,7 +234,7 @@ target_include_directories(thispc-view-stage3c1-test PRIVATE ${LibArchive_INCLUD
 target_link_libraries(thispc-view-stage3c1-test PRIVATE
     ${LibArchive_LIBRARIES} ZLIB::ZLIB TagLib::TagLib Exiv2::exiv2lib
     Qt6::Core Qt6::Concurrent Qt6::Gui Qt6::Widgets Qt6::PrintSupport Qt6::Pdf
-    KF6::KIOCore KF6::KIOWidgets KF6::ItemViews)
+    KF6::KIOCore KF6::KIOWidgets KF6::ItemViews KF6::Solid)
 
 install(TARGETS thispc-view DESTINATION ${KDE_INSTALL_BINDIR})
 
