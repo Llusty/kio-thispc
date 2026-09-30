@@ -1,272 +1,261 @@
-# kio-thispc 0.35.0
+[English](README.md) | [Polski](README.pl.md)
+
+# kio-thispc (This PC) 0.35.0
+
+ThisPC is a native KDE/Qt file manager focused on a Windows Explorer-like workflow, dual-pane operation, KIO integration, safe local file operations, and native KDE/Linux device handling.
+
+- **Platform:** Linux / KDE Plasma 6
+- **Frameworks:** Qt 6 / KDE Frameworks 6
+- **License:** MIT License
+
+---
 
 ## 0.35.0 — Drives & Devices
 
-- Stage 1: dynamiczne wykrywanie dysków i urządzeń pamięci masowej przez KDE Solid; sterowany zdarzeniami `SolidDeviceMonitor` z debouncingiem 250 ms eliminuje okresowy polling i miganie „Odświeżanie…”.
-- Stage 2: wykrywanie i prezentacja odmontowanych woluminów wymiennych na `thispc:/` jako „Niezamontowany”; montowanie na żądanie (`DeviceMountController`) po kliknięciu lub Enter z natychmiastowym wejściem do katalogu; sidebar prezentuje wyłącznie zamontowane woluminy.
-- Stage 3: pełna asynchroniczna obsługa cyklu życia urządzeń (`DeviceRemovalController`):
-  - akcja „Odmontuj” wykonuje czyste odmontowanie systemu plików wyłącznie przez natywny QtDBus `org.freedesktop.UDisks2.Filesystem.Unmount` (brak wyłączania zasilania);
-  - akcja „Bezpiecznie usuń” koordynuje odmontowanie wszystkich zamontowanych partycji dysku i asynchroniczny `org.freedesktop.UDisks2.Drive.PowerOff`;
-  - obsługa bezpiecznego usuwania dla woluminów już odmontowanych;
-  - obsługa wysuwania nośników optycznych („Wysuń”) na urządzeniach ze zdolnością `canEject`;
-  - bezpieczne przekierowanie paneli Primary i Split z odmontowanego punktu montowania z powrotem do `thispc:/`.
-- Finalna automatyczna regresja: 35 zestawów / 8562 asercje PASS; build, CLI version i manual acceptance PASS.
+- **Stage 1:** Dynamic drive and storage device discovery backed by KDE Solid; event-driven `SolidDeviceMonitor` with 250 ms debouncing reacts to hotplug and mount changes without periodic polling or flickering "Refreshing…" status.
+- **Stage 2:** Detection and presentation of unmounted removable volumes on the `thispc:/` home view with a dedicated `drive-removable-media` icon and "Unmounted" status label; `DeviceMountController` enables on-demand mounting (click or Enter) with immediate navigation into the mounted folder; the sidebar displays mounted volumes only.
+- **Stage 3:** Full asynchronous lifecycle management for removable devices via `DeviceRemovalController`:
+  - **Unmount:** Performs a clean filesystem-only unmount using native asynchronous QtDBus `org.freedesktop.UDisks2.Filesystem.Unmount`, keeping device power on and retaining volume visibility;
+  - **Safely Remove:** Coordinates unmounting of all mounted partitions on the physical drive, followed by asynchronous `org.freedesktop.UDisks2.Drive.PowerOff`;
+  - **Safely Remove for unmounted drives:** Works reliably for volumes that are already unmounted;
+  - **Eject:** Ejects optical media ("Eject") on hardware with `canEject` capability;
+  - **Pane Redirection:** Safely redirects Primary and Split panes away from unmounted or detached mountpoints back to `thispc:/`, without disturbing unaffected panes.
+- **Final Automated Regression:** 35 test suites / 8562 assertions PASS; build, CLI `thispc-view 0.35.0`, and manual acceptance PASS.
+
+---
 
 ## 0.31.0 — Split View Synchronization
 
-- Wprowadzono bezpieczne, nieinwazyjne porównywanie i synchronizację folderów w trybie podziału okna (Split View).
-- **Stage 1 (Porównanie paneli):** asynchroniczne porównywanie bezpośrednich elementów lewego i prawego panelu z klasyfikacją (Takie same, Tylko po lewej, Tylko po prawej, Zmienione) na podstawie metadanych KIO (rozmiar, mtime, typ wpisu), z dopasowaniem nazw Unicode i wielkości liter. Wirtualne ścieżki (`thispc:/`, `thispcsearch:/`) są bezpiecznie blokowane.
-- **Stage 2 (Podgląd planu):** deterministyczny generator planu synchronizacji dla kierunków Lewy → Prawy oraz Prawy → Lewy z klasyfikacją akcji (Bez zmian, Kopiuj, Zaktualizuj, Konflikt, Nieobsługiwane).
-- **Stage 3 (Bezpieczne wykonanie):** asynchroniczne kopiowanie i aktualizacja plików (`LocalFileCopyJob`) z zerem operacji usuwania (brak Delete/Mirror), pomijaniem rekurencji katalogów oraz ochroną konfliktów i nieobsługiwanych wpisów.
-- **Bezpieczeństwo operacji dyskowych:** atomowy preflight bezpośrednio przed mutacją każdego pliku (walidacja ścieżek, uprawnień, odrzucanie `.` i `..`).
-- **Deterministyczny cykl życia Anulowania (Cancel):** eliminacja wyścigu liczników (brak błędu off-by-one), oczekiwanie na sygnał terminalny aktywnego wątku roboczego i 100% zgodność raportu UI z fizycznym stanem systemu plików (potwierdzona audytem na 20 000 plików).
-- **Automatyczne odświeżanie:** natychmiastowe ponowne porównanie paneli po zakończeniu synchronizacji.
+- Safe, non-invasive folder comparison and synchronization in Split View mode (`Ctrl+Alt+C`, Tools / View menu).
+- **Stage 1 (Compare Panes):** Asynchronous comparison of direct child items in left and right panes with classification (Same, Only Left, Only Right, Changed) using KIO metadata (size, mtime, entry type) with case-preserving Unicode name matching. Virtual paths (`thispc:/`, `thispcsearch:/`) are safely blocked.
+- **Stage 2 (Plan Preview):** Deterministic sync plan generator for Left → Right and Right → Left directions with action classes: No Action, Copy, Update, Conflict, Unsupported.
+- **Stage 3 (Safe Execution):** Asynchronous file copying and updating (`LocalFileCopyJob`) with zero deletion operations (no Delete/Mirror), directory recursion skipping, and protection of conflict and unsupported entries.
+- **File Operation Safety:** Atomic preflight immediately before mutating each file (path validation, permissions, rejecting `.` and `..`).
+- **Deterministic Cancel Lifecycle:** Race-condition-free accounting (no off-by-one errors), waiting for terminal signals from active worker threads, and 100% UI report agreement with physical filesystem state (verified via 20,000-file audit).
+- **Automatic Re-comparison:** Immediate re-comparison of panes once synchronization finishes.
 
-## 0.30.0 — Grouping and per-folder view settings
+---
 
-- Tryb Icons/List/Details/Compact jest zapamiętywany osobno dla każdego folderu i
-  odtwarzany w panelu głównym, Split View, kartach i przywróconej sesji.
-- Preferencje obejmują lokalne oraz zdalne URL-e KIO i nie wymagają skanowania
-  folderu ani dodatkowych metadanych.
-- Menu **Widok** grupuje Icons/List/Details/Compact, a podmenu **Pokaż** zawiera tylko
-  działające przełączniki: ukryte elementy, miniatury, panel podglądu i pełne nazwy.
-- Podmenu **Rozmiar ikon** udostępnia działające poziomy Bardzo duże (96 px),
-  Duże (64 px), Średnie (48 px) i Małe (32 px), zapamiętywane per folder.
-- Widok kompaktowy używa gęstych wierszy 20 px i kolumn wypełnianych od góry do
-  dołu, z elidowaniem nazw, natywną nawigacją kierunkową Qt i obsługą obu paneli.
-- Grupowanie według typu, daty modyfikacji i rozmiaru działa w Icons, List,
-  Details i Compact, w obu panelach, kartach oraz wynikach Search/KIO.
-- Nagłówki grup są prezentacyjne: nie uczestniczą w zaznaczeniu, akcjach plikowych,
-  schowku, DnD, Preview ani Quick Look. Sortowanie wewnątrz grup zachowuje bieżący
-  klucz i kierunek.
-- Grupowanie dat używa lokalnego kalendarza (m.in. Today/Yesterday/This week), a
-  grupowanie rozmiaru korzysta wyłącznie z rozmiaru już dostarczonego przez KIO;
-  foldery i brakujące rozmiary mają oddzielne deterministyczne grupy.
-- Ręczny odbiór Stage 1/2 zakończył się PASS. Poprawiono również obrys zaznaczenia
-  oraz zalegający stan hover w widoku pogrupowanym, który wizualnie przypominał
-  drugie zaznaczenie.
+## 0.30.0 — Grouping and Per-Folder View Settings
 
-## 0.29.0 — Inteligentne nazwy nowych elementów
+- View mode (Icons/List/Details/Compact) is remembered per normalized folder URL and restored across Primary pane, Split View, tabs, and session restore.
+- Settings cover local and remote KIO URLs without scanning folder contents or relying on extra metadata.
+- **View Menu:** Groups Icons/List/Details/Compact; the **Show** submenu provides working toggles for hidden items, thumbnails, preview pane, and full names.
+- **Icon Size Submenu:** Provides working levels: Extra Large (96 px), Large (64 px), Medium (48 px), and Small (32 px), saved per folder.
+- **Compact View:** Dense 20 px rows in top-to-bottom filled columns, name eliding, native Qt directional navigation, and dual-pane support.
+- **Grouping by Type, Date, and Size:** Works in Icons, List, Details, and Compact across both panes, tabs, and Search/KIO results.
+- **Presentation Headers:** Group headers do not participate in selection, file actions, clipboard, DnD, Preview, or Quick Look. Sorting inside groups preserves active key and direction.
+- **Calendar & Size Rules:** Date grouping uses local calendar boundaries (Today, Yesterday, This week, etc.); size grouping uses existing KIO size metadata without recursive scans; directories and missing sizes form distinct deterministic groups.
+- Visual selection outline and stale hover fixes in grouped view.
 
-- Nowy plik, folder i element z szablonu otrzymuje przed otwarciem edytowalnego
-  dialogu pierwszą wolną nazwę, z uzupełnianiem luk numeracji.
-- Numer jest wstawiany przed pełnym rozszerzeniem; zachowane są nazwy ukryte,
-  wiele kropek, Unicode, ręczna edycja i właściwy panel Split View.
-- Po zatwierdzeniu nazwa jest sprawdzana ponownie. Operacje tworzenia nie żądają
-  `Overwrite` ani `Resume`, a obsługiwane operacje zachowują Undo/Redo.
-- Dla zdalnego KIO oba listingi są asynchroniczne i fail-closed. Nie jest to
-  atomowa rezerwacja: ostateczna ochrona zależy od no-overwrite gwarantowanego
-  przez konkretny worker i protokół. Listing niewiarygodny lub nieobsługiwany,
-  błędy uwierzytelnienia i niejednoznaczne błędy nie są traktowane jako wolna
-  nazwa. Szczegóły: `RELEASE_NOTES_0.29.0.md`.
-- Podstawowy ręczny odbiór Stage 1 i jednorazowej lokalizacji zdalnej Stage 2
-  został potwierdzony. Nie testowano wszystkich protokołów ani awarii połączenia.
+---
+
+## 0.29.0 — Intelligent New Item Naming
+
+- New files, folders, and items created from templates suggest the first available name before displaying an editable dialog, automatically filling numbering gaps.
+- Numbers are inserted before full extensions; handles hidden files, multiple dots, Unicode, manual editing, and active Split View pane.
+- Second preflight check after the dialog prevents collisions. Creation operations never request `Overwrite` or `Resume`, preserving Undo/Redo registration.
+- For remote KIO, listings are asynchronous and fail-closed. Not an atomic reservation: ultimate protection relies on worker/protocol no-overwrite guarantees. Details in `RELEASE_NOTES_0.29.0.md`.
+
+---
 
 ## 0.28.0 — Batch Rename
 
-- Podgląd przed wykonaniem: prefix/suffix, numerowanie, zamiana tekstu, zmiana
-  wielkości liter i rozszerzeń oraz wyrażenia regularne.
-- Bezpieczny preflight kolizji i zmiany inode, obsługa aktywnego panelu Split
-  View oraz wspólne Undo/Redo dla kwalifikujących się lokalnych partii.
-- Produkcyjne auto-recovery v2 obejmuje wyłącznie kwalifikujące się lokalne,
-  liniowe Execute/Undo/Redo i po restarcie dokańcza zapisany kierunek.
-- Swapy i cykle mają działające wykonanie oraz sesyjne Undo/Redo, ale ich
-  generator v2 i automatyczne recovery po awarii pozostają wyłączone.
-- KIO fallback (w tym zdalne URL-e) nie ma gwarancji local-linear. Brak
-  gwarancji odporności na zanik zasilania; SIGKILL testuje tylko awarię procesu.
-- Procesy zewnętrzne, które nie respektują blokady, oraz nieredukowalne okna
-  TOCTOU pozostają możliwe. Pełny kontrakt i wyniki: `RELEASE_NOTES_0.28.0.md`.
+- Pre-execution preview: prefix/suffix, numbering, text replacement, case/extension changes, and regular expressions.
+- Safe collision preflight and inode-tracking, active Split View pane support, and unified Undo/Redo for qualifying local linear batches.
+- Production auto-recovery v2 handles qualifying local linear Execute/Undo/Redo, resuming recorded direction after process crashes.
+- Swaps and cycles execute correctly with session Undo/Redo; automatic crash recovery for cycles remains disabled.
+- KIO fallback does not carry local-linear guarantees; details in `RELEASE_NOTES_0.28.0.md`.
+
+---
 
 ## 0.27.0 — Quick Look on Space
 
-- Duży, tymczasowy podgląd otwierany spacją w aktywnym widoku plików.
-- Space lub Esc zamyka Quick Look; fokus pozostaje w widoku, więc strzałki nadal zmieniają zaznaczenie.
-- Podgląd podąża za aktywnym panelem Split View i aktualnym pojedynczym zaznaczeniem.
-- Search, Ctrl+L, zmiana nazwy, popupy i dialogi zachowują normalne działanie spacji.
-- Quick Look współdzieli formaty, limity i asynchroniczną ochronę Preview Pane; Alt+P nadal działa niezależnie.
-- Pełna regresja: 22 zestawy / 3598 asercji PASS; wszystkie 9 przypadków ręcznych KDE/CachyOS potwierdzone.
+- Large, temporary preview opened with Space in the active file view without launching associated applications.
+- Space or Esc closes Quick Look; focus stays in the file view, allowing arrow keys to change selection.
+- Preview tracks the active Split View pane and current single selection.
+- Search, address bar, inline rename, popups, and dialogs retain standard Space key behavior.
+- Shares Preview Pane backend, formats, limits, and asynchronous stale-result protection; `Alt+P` toggles independently.
+- Full regression: 22 test suites / 3598 assertions PASS; all 9 manual KDE/CachyOS acceptance cases confirmed.
+
+---
 
 ## 0.26.0 — Preview Pane
 
-- Panel podglądu włączany skrótem Alt+P.
-- Obrazy, tekst, Markdown, JSON i XML.
-- Asynchroniczny podgląd pierwszej strony PDF przez QtPdf.
-- Metadane audio/wideo przez TagLib.
-- Metadane zdjęć EXIF przez Exiv2.
-- Bezpieczny podgląd zawartości ZIP, 7z, tar i tar.gz bez rozpakowywania.
-- Podsumowania folderów.
-- Poprawione breadcrumbs w Split View.
-- Zabezpieczenie przed spóźnionymi wynikami podglądu.
-- Pełna regresja: 20 zestawów PASS, Preview Pane 106 asercji PASS.
-- Ręczna akceptacja KDE/CachyOS zakończona pomyślnie.
+- Preview panel toggled via `Alt+P`.
+- Images with proportional scaling to available space.
+- Plain text, Markdown, JSON, and XML.
+- Asynchronous first-page PDF preview using QtPdf with opaque white background compositing.
+- Audio and video metadata via TagLib.
+- Image EXIF metadata via Exiv2 without replacing the image.
+- Safe archive manifest preview for ZIP, 7z, tar, and tar.gz via libarchive without extracting.
+- Directory summaries and Split View breadcrumb fixes.
+- Full regression: 20 test suites PASS, Preview Pane 106 assertions PASS.
 
-## 0.25.0 — Archiwa i rozbudowane menu Nowy
+---
 
-- Menu Nowy: Markdown i szablony użytkownika; opróżnianie Kosza z potwierdzeniem.
-- Rozpakowywanie ZIP, 7z, tar i tar.gz: Wypakuj tutaj / Wypakuj do; walidacja zawartości, izolacja procesu i publikacja bez nadpisywania.
-- Tworzenie ZIP, 7z i tar.gz: obsługa wielu zaznaczonych elementów, postępu, błędów i anulowania.
-- Długie ścieżki w Split View nie zmieniają ręcznie ustawionych proporcji paneli.
-- Testy automatyczne Stage 3: 20 zestawów, 3470 asercji PASS; ręczna akceptacja zgłoszona przez użytkownika.
-- Wypakowywanie wymaga Ark, Landlock ABI 3+, /proc i systemu plików obsługującego atomową publikację bez nadpisywania; szczegóły w `docs/ARCHIVE_STAGE2.md`.
-- Szczegóły tworzenia archiwów: `docs/ARCHIVE_STAGE3.md`.
+## 0.25.0 — Archives & Richer New Menu
+
+- **New Menu:** Markdown and user templates; Empty Trash with confirmation.
+- **Archive Extraction:** Extract Here / Extract To for ZIP, 7z, tar, and tar.gz; content validation, process isolation (Landlock ABI 3+), and publication without overwriting.
+- **Archive Creation:** Create ZIP, 7z, and tar.gz with multi-item selection, progress reporting, error handling, and cancellation.
+- Split View width protection for long paths.
+- Automated regression: 20 test suites, 3470 assertions PASS; Stage 3 manually accepted.
+- Details in `docs/ARCHIVE_STAGE2.md` and `docs/ARCHIVE_STAGE3.md`.
+
+---
 
 ## 0.24.0 — Sidebar & Split View UX
 
-- Split View ma dwa równorzędne panele z osobnymi breadcrumbs i wspólnym toolbar/sidebarem działającym na aktywnym panelu.
-- Sidebar obsługuje Drag & Drop do Places, urządzeń i Szybkiego dostępu bez omijania istniejącego FileActions.
-- Sidebar jest pionowo przewijalny i regulowany w zakresie 205–480 px, a ustawiona szerokość jest zapisywana między uruchomieniami.
-- Długie etykiety są elidowane po prawej stronie i pokazują pełną nazwę w tooltipie bez poziomego scrollbara.
-- Search ma niezależny stan dla obu paneli: zapytania, filtry, wyniki, postęp i URL z parametrami pozostają przypisane do właściwego panelu.
-- Oba panele pokazują pełny widok `Ten komputer`/`thispc:/`, a wspólne akcje nawigacyjne działają na aktywnym panelu.
-- Pełna regresja przechodzi **1022/1022 asercje**, a Stage 1–4 zostały ręcznie zaakceptowane na KDE/CachyOS.
-- Brak migracji ustawień użytkownika.
+- Symmetrical Split View panes with independent breadcrumbs and shared toolbar/sidebar routed to the active pane.
+- Sidebar Drag & Drop into Places, devices, and Quick Access destinations via `FileActions`.
+- Vertically scrollable, resizable sidebar (205–480 px) with persistent width and right-aligned text ellipsis with tooltips.
+- Independent Search state, queries, filters, progress, and jobs per pane.
+- Full This PC (`thispc:/`) cards presentation in both panes.
+- Full regression: 1022/1022 assertions PASS; manual KDE/CachyOS acceptance PASS.
 
-## 0.23.0 — natywny lokalny silnik transferów
+---
 
-- Obsługiwane lokalne kopie i przenoszenia korzystają z natywnego silnika z rzeczywistym Pause/Resume na znanym offsecie; KIO pozostaje backendem dla zdalnych i niewspieranych przypadków.
-- Bezpieczna publikacja przez pliki `.thispc-part`, cleanup po anulowaniu oraz kontrolowana obsługa błędów zapisu, braku miejsca i utraty urządzenia.
-- Natywna obsługa konfliktów pojedynczych plików: **Nadpisz / Zmień nazwę / Pomiń**.
-- Natywne wykonywanie katalogów, wielu źródeł i symlinków z sumarycznym postępem i bieżącym plikiem.
-- Zachowanie uprawnień, timestampów i literalnych celów linków symbolicznych.
-- Cross-filesystem Move, bezpieczne Undo/Redo dla plików i drzew katalogów oraz wspólna kolejność historii z operacjami KIO.
-- Okno operacji obsługuje prawdziwe Pause/Resume, pionową skalę prędkości na wykresie oraz pozostawia zatrzymane zadania widoczne.
-- Tooltip pliku pokazuje również jego rozmiar.
-- Pełny zestaw automatyczny przechodzi **842/842 asercji**, a pełna akceptacja manualna na KDE/CachyOS została zakończona pomyślnie.
+## 0.23.0 — Native Local Transfer Engine
 
-## 0.22.0 — zaawansowane okno transferów
+- Chunked local copy/move engine with exact Pause/Resume at known byte offsets; KIO remains the backend for remote and unsupported cases.
+- Safe publication via `.thispc-part` files, clean cancellation cleanup, and controlled handling of write errors, disk-full conditions, and device disconnection.
+- Native conflict resolution for single files: **Overwrite / Rename / Skip**.
+- Directory trees, multi-source operations, and symlinks with total and per-file progress reporting.
+- Preserves permissions, nanosecond timestamps, and literal symlink targets.
+- Verified cross-filesystem moves, safe Undo/Redo for files and directory trees, and unified command ordering with KIO history.
+- Operation window supports Pause/Resume, vertical speed graph scaling, and persistent stopped-job visibility.
+- Full regression: 842/842 assertions PASS; manual KDE/CachyOS acceptance confirmed.
 
-- Aktywne operacje automatycznie otwierają wspólne, niewielkie okno szczegółów.
-- Okno pokazuje bieżący plik, postęp, ilość danych, prędkość bieżącą i średnią, ETA oraz wykres prędkości.
-- Wysokość dopasowuje się do liczby równoległych operacji, a po zakończeniu ostatniej okno zamyka się automatycznie.
-- Szczegóły można zwijać i rozwijać, a każdą obsługiwaną operację można anulować.
-- Kompaktowy panel na pasku narzędzi pozostaje miejscem podglądu historii.
-- Prawdziwa pauza została przeniesiona do planowanego lokalnego silnika transferów 0.23.0; `KIO::CopyJob::suspend()` nie zatrzymuje niezawodnie bieżącego transferu lokalnego.
+---
 
+## 0.22.0 — Advanced Transfer Window
 
-## 0.21.0 — refaktor architektury i stabilizacja
+- Active operations automatically open a non-blocking detail window.
+- Displays current file, source/destination summary, processed/total size, large progress percentage, current/average speed, ETA, and speed graph (120 samples).
+- Multiple simultaneous operations merge into a single dynamically resizing window.
+- Expandable/collapsible details with per-operation cancellation.
+- Operation history is preserved in the compact toolbar popup.
 
-- Rozbito monolityczny `src/thispcview.cpp` na mniejsze, odpowiedzialne moduły bez zmiany zachowania użytkowego.
-- Wydzielono: `DirectoryView`, `SplitBrowserPane`, `Sidebar`, `SessionManager`, `OperationManager`, `UndoController`, `PropertiesDialog`, `SearchController` i `FileActions`.
-- Wspólne typy i helpery przeniesiono do `browsercommon.h`, ograniczając duplikację między panelem głównym i Split View.
-- `src/thispcview.cpp` zmniejszył się z około 14 178 do około 7 250 linii.
-- Dodano testy dla `PropertiesDialog`, wyszukiwania i operacji plikowych oraz rozszerzono testy paneli i Drag & Drop kart.
-- Finalny zestaw automatyczny przechodzi 577 asercji, w tym realne operacje KIO, konflikty, Trash i Undo/Redo.
-- Pełny test manualny na KDE/CachyOS został zakończony bez regresji.
-- Zachowano wszystkie funkcje 0.20.0 oraz stabilny układ nazw z 0.19.0.4.
+---
 
-## 0.20.0 — Szybki dostęp / Ulubione / Ostatnie
+## 0.21.0 — Architecture Refactor & Stabilization
 
-- Dodano sekcję **Szybki dostęp** w lewym panelu.
-- Foldery można przypinać i odpinać z menu kontekstowego.
-- Przypięte foldery można porządkować metodą Drag & Drop.
-- Kolejność i lista przypiętych folderów są zapisywane w `QSettings` i przywracane po ponownym uruchomieniu.
-- Dodano sekcję **Ostatnie** z ostatnio odwiedzanymi lokalizacjami.
-- Historia ostatnich lokalizacji jest zapisywana między uruchomieniami i aktualizowana przez normalną nawigację aplikacji.
-- Funkcje 0.19.0.4, w tym stały układ nazw w widoku ikon i pełna nazwa zaznaczonego elementu bez przesuwania rzędów, pozostają bez zmian.
+- Deconstructed monolithic `src/thispcview.cpp` into modular components without changing user behavior.
+- Extracted: `DirectoryView`, `SplitBrowserPane`, `Sidebar`, `SessionManager`, `OperationManager`, `UndoController`, `PropertiesDialog`, `SearchController`, and `FileActions`.
+- Shared types and helpers relocated to `browsercommon.h`, reducing duplication between panes.
+- Reduced `src/thispcview.cpp` from ~14,178 to ~7,250 lines.
+- Full regression: 577 automated assertions PASS; full manual KDE/CachyOS acceptance without regressions.
 
-## 0.19.0.4 — poprawka układu nazw w widoku ikon
+---
 
-- Sztywna, jednolita siatka kafelków w IconMode: zaznaczenie elementu nigdy nie przesuwa sąsiednich rzędów.
-- Własny layout tekstu przez `QTextLayout` z `WrapAtWordBoundaryOrAnywhere` — nazwy bez spacji (np. `VID_20260122.mp4`, `kio-thispc-0.19.0.4.zip`) zawijają się poprawnie bez obcinania z boku.
-- W trybie normalnym: maksymalnie 2 linie tekstu, ostatnia elidowana `…`.
-- W trybie **Pełne nazwy**: jednakowa, stała wysokość wszystkich kafelków z maksymalnie 4 liniami.
-- Pełna nazwa zaznaczonego elementu pokazywana jako callout rysowany bezpośrednio na viewporcie po bazowym `paintEvent` — bez osobnego widgetu QLabel.
-- Callout trzyma się granic viewportu (prawy i dolny margines), nie przechwytuje myszy.
-- Usunięto `QLabel#selectedNameOverlay` i całą poprzednią logikę nakładki.
-- Tryby **Lista** i **Szczegóły** bez zmian.
+## 0.20.0 — Quick Access / Favorites / Recent
 
+- **Quick Access** section in the sidebar.
+- Pin and unpin folders via context menus.
+- Drag & Drop reordering of pinned items with persistent order stored in `QSettings`.
+- **Recent** section tracking visited locations across sessions.
 
-## 0.19.0.3 — sesja i pełne nazwy
+---
 
-- Aplikacja zapisuje i przywraca otwarte karty, aktywną kartę oraz historię Wstecz/Dalej.
-- Stan Split View jest przechowywany per karta: lokalizacja, tryb widoku, sortowanie i włączenie panelu.
-- Szerokości paneli są odtwarzane z zapisanego stanu splittera.
-- Zaznaczony element w widoku ikon pokazuje pełną, zawijaną nazwę.
-- Przełącznik **Pełne nazwy** na pasku czynności wymusza pełne nazwy dla wszystkich elementów i zapamiętuje ustawienie.
-- Menu **Widok** zawiera przełącznik **Przywracaj poprzednią sesję**.
-- Jawne uruchomienie z argumentem ścieżki/URL otwiera wskazaną lokalizację zamiast poprzedniej sesji.
+## 0.19.0.4 — Icon View Filename Layout Fix
 
+- Rigid, uniform tile grid in IconMode (`setGridSize` + `setUniformItemSizes(true)`) — selecting an item never shifts neighboring rows.
+- Custom text layout via `QTextLayout` with `WrapAtWordBoundaryOrAnywhere` — long filenames without whitespace wrap properly without clipping.
+- Normal mode: maximum 2 lines of text with ellipsis `…` on the second line.
+- **Full Names** mode: uniform tile height with up to 4 lines of text.
+- Selected item full name callout rendered directly at viewport level in `paintEvent` without separate `QLabel` widgets.
+- Callouts respect viewport boundaries and do not intercept mouse events.
 
-## 0.18.0 — inteligentna obsługa konfliktów
+---
 
-Operacje kopiowania/przenoszenia korzystają z interaktywnego handlera konfliktów KIOWidgets. Dzięki temu istniejący plik lub katalog nie kończy całej operacji błędem. Dostępne decyzje zależą od rodzaju konfliktu i liczby elementów, ale obejmują m.in. zastąpienie, pominięcie, zmianę lub zasugerowanie nowej nazwy oraz warianty stosowane do wszystkich. KIO przekazuje dialogowi rozmiar i czasy źródła/celu, a konflikty zagnieżdżone w kopiowanych katalogach są wykrywane przez sam `CopyJob`.
+## 0.19.0.3 — Session Restore & Full Names
 
-Mechanizm jest wspólny dla wklejania ze schowka, Drag & Drop, akcji „Wyślij do” oraz zmiany nazwy. Operation manager i Undo/Redo pozostają aktywne. Anulowanie konfliktu jest traktowane jak normalne anulowanie zadania.
+- Remembers and restores open tabs, active tab, and Back/Forward history.
+- Split View state preserved per tab: location, view mode, sort settings, and pane enablement.
+- Splitter proportions restored from saved geometry.
+- Full Names toggle button on the action bar.
+- View menu option: **Restore Previous Session**.
 
+---
 
-## 0.17.0.5 — test pełnego Drag & Drop
+## 0.18.0 — Intelligent Conflict Handling
 
-Ta wersja jest kontynuacją działających etapów 0.17 rozwijanych na bazie stabilnego 0.16.0.1.
+- Interactive KIOWidgets conflict handling for copy and move operations.
+- Avoids aborting entire operations on existing files or directories.
+- Options: Overwrite, Skip, Rename / Suggest Name, and "Apply to All".
+- Source and destination sizes and timestamps displayed in dialogs.
+- Unified across clipboard paste, Drag & Drop, Send To, and inline rename.
 
-Najważniejsze zmiany:
+---
 
-- poprawione Drag & Drop na tło katalogu i na foldery w widokach Ikony/Lista/Szczegóły;
-- Drag & Drop między głównym panelem i Split View;
-- pełniejsze skróty, toolbar i menu PPM dla aktywnego panelu Split View;
-- Drag & Drop na zakładki z aktywacją po ok. 650 ms hover;
-- `Ctrl+drag` wymusza kopiowanie;
-- `Shift+drag` wymusza przenoszenie;
-- bez modifiera kursor sugeruje Move na tym samym storage i Copy między różnymi storage, a po Drop pozostaje menu `Kopiuj tutaj / Przenieś tutaj`;
-- blokada kopiowania/przenoszenia folderu do niego samego lub jego potomka;
-- operacje nadal korzystają z KIO, menedżera operacji i `KIO::FileUndoManager`.
+## 0.17.0.5 — Full Drag & Drop
 
-To wydanie jest przeznaczone do testu na rzeczywistym KDE Plasma przed zamknięciem finalnego 0.17.0.
+This version continues functional 0.17 milestones developed on top of stable 0.16.0.1, intended for KDE Plasma testing before final 0.17.0.
 
-0.16.0.1 dodaje natywne **Cofnij / Ponów** dla operacji plikowych, oparte na `KIO::FileUndoManager` z KDE Frameworks.
+- Drag & Drop to directory background and folders across Icons, List, and Details views.
+- Drag & Drop between Primary and Split panes.
+- Tab drop support with ~650 ms hover activation.
+- `Ctrl+drag` forces Copy; `Shift+drag` forces Move.
+- Default drag without modifiers suggests Move on the same filesystem and Copy between different storage devices.
+- Prevents copying/moving folders into themselves or descendants.
+- Registered with `KIO::FileUndoManager`.
 
-## Cofnij / Ponów
+---
 
-Obsługiwane są operacje wykonywane przez `thispc-view`:
+## Undo / Redo
 
-- kopiowanie;
-- przenoszenie;
-- zmiana nazwy;
-- przenoszenie do Kosza i przywracanie przy cofnięciu;
-- tworzenie folderu;
-- tworzenie nowego pliku.
+File operations executed through `thispc-view` support native Undo/Redo backed by `KIO::FileUndoManager`:
+- Copying and moving;
+- Renaming;
+- Moving to Trash and restoring on Undo;
+- Folder and file creation.
 
-Historia jest przechowywana w bieżącej sesji aplikacji. KIO sam zapisuje dane potrzebne do bezpiecznego odwrócenia operacji. Przy cofaniu kopiowania potrafi również ostrzec, gdy skopiowany plik został później zmodyfikowany.
+History is preserved during the active session. When undoing copies, KIO warns if files were modified after the operation.
 
-## Sterowanie
+### Controls
+- **Undo:** `Ctrl+Z`
+- **Redo:** `Ctrl+Y` or `Ctrl+Shift+Z`
 
-Na górnym pasku poleceń znajdują się dwie nowe ikony:
+Toolbar buttons activate dynamically based on operation availability, displaying descriptions in tooltips. Directory panes refresh automatically after Undo/Redo.
 
-- **Cofnij** — `Ctrl+Z`;
-- **Ponów** — `Ctrl+Y` lub `Ctrl+Shift+Z`.
+Features from 0.15.4 — compact operations popup, dynamic height, task cancellation, version number display, and NTFS/fuseblk fixes — remain active.
 
-Przyciski aktywują się tylko wtedy, gdy dana operacja jest dostępna, a ich podpowiedzi pokazują aktualną akcję KIO do cofnięcia lub ponowienia. Po zakończeniu cofania/ponawiania oba panele katalogów są automatycznie odświeżane.
+---
 
-Funkcje z 0.15.4 — kompaktowy popup operacji, dynamiczna wysokość, anulowanie zadań, numer wersji oraz poprawki NTFS/fuseblk — pozostają bez zmian.
+## Requirements
 
-## Wymagania
+- Linux with KDE Plasma 6
+- Qt 6 (6.5+)
+- KDE Frameworks 6 (6.17+ required for native `FileUndoManager::redo()`)
+- CMake and Extra CMake Modules (ECM)
+- LibArchive, ZLIB, TagLib, Exiv2
 
-0.16.0.1 wymaga **KDE Frameworks 6.17 lub nowszego**, ponieważ obsługa `redo()` w `KIO::FileUndoManager` jest dostępna od KF 6.17. Na testowanej konfiguracji KF 6.29 warunek jest spełniony.
+---
 
-## Instalacja
+## Installation
 
 ```bash
-cd ~/Pobrane
+cd ~/Downloads
 tar -xzf kio-thispc-0.35.0.tar.gz
 cd kio-thispc-0.35.0
 chmod +x install.sh
 ./install.sh
 ```
 
-Uruchom:
-
+Run:
 ```bash
 thispc-view
 ```
 
+---
 
-## Hotfix 0.16.0.1
+## Hotfix History
 
-Naprawiono cofanie zmiany nazwy. Operacja rename jest rejestrowana jako `KIO::moveAs()` przez `FileUndoManager::recordCopyJob()`, dzięki czemu Undo odtwarza poprzednią nazwę zamiast przechodzić do wcześniejszej operacji.
+- **0.16.0.1:** Fixed rename Undo by registering `KIO::moveAs()` through `FileUndoManager::recordCopyJob()`, allowing Undo to restore the previous name accurately.
+- **0.19.0.4:** Fixed icon view filename layout (rigid grid, `QTextLayout`, viewport callout).
 
-
-## 0.19.0.4
-
-Poprawiono układ nazw plików w widoku ikon: sztywna siatka, `QTextLayout`, viewport-level callout. Opis zmian — patrz sekcja na górze.
+---
 
 ## License
 

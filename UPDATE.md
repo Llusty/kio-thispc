@@ -1,257 +1,238 @@
-# Aktualizacja do 0.35.0
+[English](UPDATE.md) | [Polski](UPDATE.pl.md)
 
-Wydanie wprowadza obsługę dysków i urządzeń wymiennych (Drives & Devices): dynamiczne wykrywanie urządzeń przez KDE Solid, prezentację odmontowanych woluminów, montowanie na żądanie, czyste odmontowywanie (filesystem-only), bezpieczne usuwanie (Safely Remove) z wyłączeniem zasilania oraz wysuwanie nośników (Eject).
+# Updating to 0.35.0
+
+This release introduces complete removable storage and drive management (Drives & Devices): dynamic device detection via KDE Solid, unmounted volume presentation on `thispc:/`, on-demand mounting, clean filesystem-only unmounting, safe physical removal (Safely Remove) with drive power-off, and optical disc media ejection (Eject).
 
 ```bash
-cd ~/Pobrane
+cd ~/Downloads
 tar -xzf kio-thispc-0.35.0.tar.gz
 cd kio-thispc-0.35.0
 chmod +x install.sh
 ./install.sh
 ```
 
-## Zakres 0.35.0
+## Scope of 0.35.0
 
-- dynamiczne wykrywanie dysków i urządzeń wymiennych przez Solid;
-- eliminacja okresowego timera i migania „Odświeżanie…” (sterowany zdarzeniami `SolidDeviceMonitor` z debouncingiem 250 ms);
-- prezentacja odmontowanych woluminów wymiennych na widoku domowym `thispc:/` jako „Niezamontowany”;
-- montowanie na żądanie (`DeviceMountController`) po kliknięciu lub Enter z natychmiastowym wejściem do katalogu;
-- pasek boczny prezentujący wyłącznie zamontowane woluminy;
-- akcja „Odmontuj” wykonująca czyste odmontowanie systemu plików przez natywny asynchroniczny QtDBus `org.freedesktop.UDisks2.Filesystem.Unmount` (brak wyłączania zasilania nośnika);
-- akcja „Bezpiecznie usuń” koordynująca odmontowanie wszystkich zamontowanych partycji dysku i asynchroniczny `org.freedesktop.UDisks2.Drive.PowerOff`;
-- bezpieczne usuwanie działające również na już odmontowanych woluminach;
-- akcja „Wysuń” dla napędów optycznych (`canEject`);
-- automatyczne przekierowanie paneli Primary i Split z odmontowanego punktu montowania z powrotem do `thispc:/`.
+- Dynamic drive and removable device discovery through KDE Solid;
+- Elimination of periodic polling timers and "Refreshing…" status flicker (event-driven `SolidDeviceMonitor` with 250 ms debouncing);
+- Discovery and presentation of unmounted removable volumes on `thispc:/` labeled as "Unmounted";
+- On-demand mounting (`DeviceMountController`) upon click or Enter with immediate directory navigation;
+- Sidebar displays mounted volumes only;
+- "Unmount" action executes clean filesystem-only unmounting via native asynchronous QtDBus `org.freedesktop.UDisks2.Filesystem.Unmount` without cutting device power;
+- "Safely Remove" action coordinates unmounting across all mounted partitions of the physical drive, followed by asynchronous `org.freedesktop.UDisks2.Drive.PowerOff`;
+- Safely Remove operates seamlessly on already-unmounted volumes;
+- "Eject" action for optical drives (`canEject`);
+- Automatic redirection of Primary and Split panes away from unmounted or detached mountpoints back to `thispc:/`.
 
-## Weryfikacja 0.35.0
+## Verification of 0.35.0
 
-- ręczny odbiór etapów Stage 1, Stage 2 i Stage 3 na rzeczywistym sprzęcie USB: PASS;
-- build: PASS;
-- pełna regresja: 35 zestawów / 8562 asercje PASS;
-- CLI `thispc-view 0.35.0`, kod wyjścia 0: PASS;
-- brak periodic pollingu i brak blokowania wątku głównego.
+- Manual hardware acceptance for Stages 1, 2, and 3 on real USB storage: PASS;
+- Clean build: PASS;
+- Full automated regression: 35 test suites / 8562 assertions PASS;
+- CLI `thispc-view 0.35.0`, exit code 0: PASS;
+- Zero periodic polling and zero UI thread blocking.
 
 ---
 
-# Aktualizacja do 0.34.0
+# Updating to 0.34.0
 
-Wydanie kończy Explorer UX / View & Navigation Polish: ujednolica obsługę widoków i nawigacji między Primary i Split, zachowując dotychczasową semantykę KIO.
+This release completes Explorer UX / View & Navigation Polish: unifies view and navigation behaviors between Primary and Split View panes while preserving existing KIO semantics.
 
 ```bash
-cd ~/Pobrane
+cd ~/Downloads
 tar -xzf kio-thispc-0.34.0.tar.gz
 cd kio-thispc-0.34.0
 chmod +x install.sh
 ./install.sh
 ```
 
-## Zakres 0.34.0
+## Scope of 0.34.0
 
-- stabilne CLI `--version`, Split address parity i spacing kart dysków;
-- wizualne przygaszenie ukrytych elementów;
-- wspólny inline rename;
-- nawigacja klawiaturą i stabilny current/focus w `thispc:/`;
-- profile widoku per-folder z Apply/Remove to subfolders;
-- dziewięć stopni rozmiaru ikon i skróty klawiaturowe;
-- finalny visual parity polish Primary/Split.
-- Drobny follow-up 1 px/accent line nie blokuje wydania. Pendrive/removable
-  pozostaje w 0.35, a double-click separatora do 50/50 jest przyszłym pomysłem.
+- Stable CLI `--version` flag, Split address/breadcrumb parity, and drive card spacing;
+- Visual dimming for hidden files and directories;
+- Unified inline rename;
+- Keyboard navigation routing and stable current/focus handling in `thispc:/`;
+- Per-folder view profiles with snapshot Apply/Remove to subfolders;
+- Nine icon size steps with keyboard shortcuts;
+- Final visual parity polish across Primary and Split panes.
+- Minor 1 px / accent line follow-up does not block the release. Removable drive detection remains in 0.35, and double-click 50/50 splitter reset is a future idea.
 
-## Weryfikacja 0.34.0
+## Verification of 0.34.0
 
-- ręczny odbiór etapów funkcjonalnych oraz finalnego visual parity polish: PASS;
-- finalny build: PASS;
-- pełna regresja: 32 zestawy / 8317 asercji PASS;
-- CLI `thispc-view 0.34.0`, kod wyjścia 0: PASS;
-- izolowany install smoke: PASS; instalacja systemowa oczekuje na ręczne podanie
-  hasła `sudo`;
-- finalny manual release smoke: PASS; dwa znane cosmetic follow-upy (1 px/accent
-  line oraz kursor kart `thispc:/`) są świadomie nieblokujące.
+- Manual acceptance of functional stages and visual parity polish: PASS;
+- Clean build: PASS;
+- Full automated regression: 32 test suites / 8317 assertions PASS;
+- CLI `thispc-view 0.34.0`, exit code 0: PASS.
 
 ---
 
-# Aktualizacja do 0.33.0
+# Updating to 0.33.0
 
-Wydanie kontynuuje porządkowanie architektury bez dodawania nowych funkcji użytkowych. Zachowanie 0.32.0 pozostaje zachowane, wraz z poprawkami regresji wykrytymi podczas ekstrakcji.
+This release continues architectural cleanup without adding new user-facing features. Preserves 0.32.0 behavior alongside regression fixes identified during extraction.
 
 ```bash
-cd ~/Pobrane
+cd ~/Downloads
 tar -xzf kio-thispc-0.33.0.tar.gz
 cd kio-thispc-0.33.0
 chmod +x install.sh
 ./install.sh
 ```
 
-## Zakres 0.33.0
+## Scope of 0.33.0
 
-- `LocationPresentation` i `NavigationHistory`;
-- `PreviewCoordinator` i `ActionStateController`;
-- wspólny dla Primary/Split `DirectoryListingCore`;
-- `PaneMenuController` i `DriveHomeCoordinator`;
-- poprawka crashu menu kontekstowego sidebara podczas odświeżania dysków;
-- poprawka aktywacji inline rename;
-- wspólny `BrowserPane` i odłożony UX pozostają poza zakresem wydania.
+- `LocationPresentation` and `NavigationHistory`;
+- `PreviewCoordinator` and `ActionStateController`;
+- Shared `DirectoryListingCore` across Primary and Split panes;
+- `PaneMenuController` and `DriveHomeCoordinator`;
+- Sidebar context-menu lifetime crash fix during drive refresh;
+- Inline rename activation fix.
 
-## Weryfikacja 0.33.0
+## Verification of 0.33.0
 
-- ręczny odbiór Stage 1–8 i poprawki inline rename: PASS;
-- baseline po poprawce inline rename: 31 zestawów / 7852 asercje PASS;
-- finalny build: PASS;
-- pełna regresja: 31 zestawów / 7852 asercje PASS;
-- izolowany install/launch smoke: PASS;
-- `git diff --check`: PASS.
+- Manual acceptance of Stages 1–8 and inline rename fix: PASS;
+- Full automated regression: 31 test suites / 7852 assertions PASS;
+- Clean build: PASS.
 
 ---
 
-# Aktualizacja do 0.32.0
+# Updating to 0.32.0
 
-Wydanie kończy porządkowanie architektury bez dodawania nowych funkcji użytkowych. Zachowanie 0.31.0 pozostaje zachowane, wraz z poprawkami regresji wykrytymi podczas refaktoru.
+This release concludes architectural reorganization without introducing new user-facing features. Preserves 0.31.0 behavior alongside regression fixes identified during refactoring.
 
 ```bash
-cd ~/Pobrane
+cd ~/Downloads
 tar -xzf kio-thispc-0.32.0.tar.gz
 cd kio-thispc-0.32.0
 chmod +x install.sh
 ./install.sh
 ```
 
-## Zakres 0.32.0
+## Scope of 0.32.0
 
-- acykliczne moduły Split Sync;
-- wydzielone widgety i styl aplikacji oraz utwardzony test harness;
+- Acyclic Split Sync modules;
+- Decoupled application widgets, stylesheet styling, and hardened test harness;
 - `PaneContext` / `PaneAdapter`;
-- `TabController`, `SearchUiController` i `SelectionMenuController`;
-- `PrimaryBrowserPane` z własnym stanem, listingiem KIO, renderowaniem i cache miniatur;
-- Stage 9 / wspólny `BrowserPane` przeniesiony do 0.33.
+- `TabController`, `SearchUiController`, and `SelectionMenuController`;
+- `PrimaryBrowserPane` with standalone state, KIO directory listing, item rendering, and thumbnail caching;
+- Stage 9 / shared `BrowserPane` deferred to 0.33.
 
-## Weryfikacja 0.32.0
+## Verification of 0.32.0
 
-- ręczny odbiór wszystkich etapów 0.32: PASS;
-- baseline po Stage 8: 26 zestawów / 6662 asercje PASS;
-- końcowy build: PASS;
-- focused regression: 10 zestawów / 1738 asercji PASS;
-- pełna regresja: 26 zestawów / 6662 asercje PASS;
+- Manual acceptance for all 0.32 stages: PASS;
+- Baseline after Stage 8: 26 test suites / 6662 assertions PASS;
+- Final build: PASS;
+- Focused regression: 10 test suites / 1738 assertions PASS;
+- Full automated regression: 26 test suites / 6662 assertions PASS;
 - `git diff --check`: PASS.
 
 ---
 
-# Aktualizacja do 0.31.0
+# Updating to 0.31.0
 
-Wydanie wprowadza bezpieczne, nieinwazyjne porównywanie oraz synchronizację folderów w trybie podziału okna (Split View).
+This release introduces safe, non-destructive folder comparison and synchronization in Split View mode.
 
-Poniższe polecenia instalują wydanie z nowego katalogu, bez usuwania istniejącego repozytorium:
+The following commands install the release from a new directory without removing existing repository checkouts:
 
 ```bash
-cd ~/Pobrane
+cd ~/Downloads
 tar -xzf kio-thispc-0.31.0.tar.gz
 cd kio-thispc-0.31.0
 chmod +x install.sh
 ./install.sh
 ```
 
-## Nowości
+## What's New
 
-- Porównywanie i synchronizacja paneli Split View (skrót `Ctrl+Alt+C`).
-- **Stage 1 (Porównanie paneli):** asynchroniczne porównywanie bezpośrednich elementów lewego i prawego panelu z klasyfikacją (Takie same, Tylko po lewej, Tylko po prawej, Zmienione) na podstawie metadanych KIO (rozmiar, mtime, typ wpisu), z dopasowaniem nazw Unicode i wielkości liter.
-- **Stage 2 (Podgląd planu):** deterministyczny generator planu synchronizacji dla kierunków Lewy → Prawy oraz Prawy → Lewy z klasyfikacją akcji (Bez zmian, Kopiuj, Zaktualizuj, Konflikt, Nieobsługiwane).
-- **Stage 3 (Bezpieczne wykonanie):** asynchroniczne kopiowanie i aktualizacja plików (`LocalFileCopyJob`) z zerem operacji usuwania (brak Delete/Mirror), pomijaniem rekurencji katalogów oraz ochroną konfliktów i nieobsługiwanych wpisów.
-- **Bezpieczeństwo operacji dyskowych:** atomowy preflight bezpośrednio przed mutacją każdego pliku (walidacja ścieżek, uprawnień, odrzucanie `.` i `..`).
-- **Deterministyczny cykl życia Anulowania (Cancel):** eliminacja wyścigu liczników (brak błędu off-by-one), oczekiwanie na sygnał terminalny aktywnego wątku roboczego i 100% zgodność raportu UI z fizycznym stanem systemu plików (potwierdzona audytem na 20 000 plików).
-- **Automatyczne odświeżanie:** natychmiastowe ponowne porównanie paneli po zakończeniu synchronizacji.
+- Split View pane comparison and synchronization (`Ctrl+Alt+C` shortcut).
+- **Stage 1 (Pane Comparison):** Asynchronous direct item comparison between Left and Right panes with classification (Identical, Left Only, Right Only, Modified) based on KIO metadata (size, mtime, entry type), matching Unicode names and case sensitivity.
+- **Stage 2 (Plan Preview):** Deterministic sync plan generator for Left → Right and Right → Left directions with action classification (Unchanged, Copy, Update, Conflict, Unsupported).
+- **Stage 3 (Safe Execution):** Asynchronous file copying and updating (`LocalFileCopyJob`) with zero deletion operations (no Delete/Mirror), directory recursion skipping, and protection for conflicts and unsupported entries.
+- **Filesystem Safety:** Atomic preflight immediately prior to mutating each file (path validation, permissions, rejection of `.` and `..`).
+- **Deterministic Cancel Lifecycle:** Race condition elimination (no off-by-one errors), waiting for active worker thread terminal signal, and 100% UI report consistency with physical filesystem state (verified via 20,000-file cancellation audit).
+- **Automatic Refresh:** Immediate pane re-comparison upon synchronization completion.
 
-## Weryfikacja przed wydaniem
+## Pre-Release Verification
 
-- Ręczny odbiór Stage 1, Stage 2 oraz Stage 3: PASS.
-- Test anulowania na 20 000 plików: 100% spójność UI ze stanem dysku (3330 skopiowano / 16670 anulowano / 0 błędów, brak częściowych plików) — PASS.
-- Końcowy build, focused tests, pełna regresja 25 zestawów / 6569 asercji PASS, `git diff --check` (korekta arytmetyczna po wydaniu: 6278 + 291; tag bez zmian).
+- Manual acceptance for Stage 1, Stage 2, and Stage 3: PASS.
+- 20,000-file cancellation stress test: 100% UI consistency with filesystem state (3330 copied / 16670 cancelled / 0 errors, no partial files) — PASS.
+- Final build, focused tests, full automated regression: 25 test suites / 6569 assertions PASS, `git diff --check` (post-release arithmetic correction: 6278 + 291; tag unchanged).
 
 ---
 
-# Aktualizacja do 0.30.0
+# Updating to 0.30.0
 
-Wydanie dodaje zapamiętywane ustawienia widoku per folder oraz grupowanie
-Explorer-like według typu, daty modyfikacji i rozmiaru.
+This release introduces persistent per-folder view settings and Explorer-like grouping by file type, modification date, and size.
 
-Poniższe polecenia instalują wydanie z nowego katalogu, bez usuwania istniejącego repozytorium:
+The following commands install the release from a new directory without removing existing repository checkouts:
 
 ```bash
-cd ~/Pobrane
+cd ~/Downloads
 tar -xzf kio-thispc-0.30.0.tar.gz
 cd kio-thispc-0.30.0
 chmod +x install.sh
 ./install.sh
 ```
 
-## Nowości
+## What's New
 
-- Icons/List/Details/Compact są zapamiętywane według znormalizowanego URL folderu
-  i współdzielone przez panel główny, Split View, karty i przywracanie sesji.
-- Menu Widok zawiera uporządkowane tryby widoku, podmenu Pokaż i cztery rozmiary
-  ikon: 96/64/48/32 px, również zapamiętywane per folder.
-- Compact używa gęstego układu wielokolumnowego z pionowym wypełnianiem.
-- Grupowanie: Brak / Typ / Data modyfikacji / Rozmiar. Bieżące sortowanie jest
-  zachowane wewnątrz każdej grupy.
-- Data używa lokalnego kalendarza i osobnych grup Future/Today/Yesterday/This week/
-  Last week oraz dalszych zakresów; brakująca data trafia do Unknown date.
-- Rozmiar używa wyłącznie metadanych KIO, bez rekurencyjnego skanowania lub
-  synchronicznych statów; foldery i nieznane rozmiary mają osobne grupy.
-- Nagłówki grup nie są plikami i nie trafiają do zaznaczenia, menu pliku, DnD,
-  schowka, Preview ani Quick Look.
-- Naprawiono obrys zaznaczenia nazw oraz zalegający hover w widoku pogrupowanym,
-  który mógł wyglądać jak drugie zaznaczenie mimo pojedynczej selekcji modelu.
+- Icons/List/Details/Compact modes are persisted per normalized folder URL and shared across Primary pane, Split View, tabs, and session restore.
+- View menu includes structured view modes, Show submenu, and four icon sizes: 96/64/48/32 px, also persisted per folder.
+- Compact view uses a dense multi-column layout with vertical flow filling.
+- Grouping: None / Type / Date Modified / Size. Current sort order is preserved within each group.
+- Date grouping uses the local calendar with distinct groups for Future/Today/Yesterday/This week/Last week and earlier ranges; missing date maps to Unknown date.
+- Size grouping relies strictly on KIO metadata without recursive scanning or blocking synchronous stat calls; folders and unknown sizes have dedicated groups.
+- Group headers are non-selectable items excluded from selections, file menus, Drag & Drop, clipboard, Preview Pane, and Quick Look.
+- Fixed filename selection outline and lingering hover state in grouped views that previously could appear as duplicate selection despite single model selection.
 
-## Weryfikacja przed wydaniem
+## Pre-Release Verification
 
-- Ręczny odbiór Stage 1 oraz grupowania Typ/Data/Rozmiar: PASS.
-- Icons/List/Details/Compact, Split View, Search, trwałość per-folder, sortowanie,
-  Ctrl/Shift multi-select, nagłówki grup i obrys zaznaczenia: PASS ręczny.
-- Końcowy build, focused tests, pełna regresja, `git diff --check` oraz archiwum
-  z SHA-256 są wykonywane ponownie na finalnym kandydacie 0.30.0 przed commit/tag/install.
+- Manual acceptance for Stage 1 and Type/Date/Size grouping: PASS.
+- Icons/List/Details/Compact, Split View, Search, per-folder persistence, sorting, Ctrl/Shift multi-select, group headers, and selection outlines: PASS (manual).
+- Final build, focused tests, full automated regression, `git diff --check`, and SHA-256 archive generation re-run on final 0.30.0 candidate before commit/tag/install.
 
 ---
 
+# Updating to 0.26.0
 
-# Aktualizacja do 0.26.0
+This release introduces the Preview Pane with the `Alt+P` toggle shortcut.
 
-Wydanie wprowadza Preview Pane z przełącznikiem Alt+P.
-
-Poniższe polecenia instalują wydanie z nowego katalogu, bez usuwania istniejącego repozytorium:
+The following commands install the release from a new directory without removing existing repository checkouts:
 
 ```bash
-cd ~/Pobrane
+cd ~/Downloads
 unzip kio-thispc-0.26.0.zip
 cd kio-thispc-0.26.0
 chmod +x install.sh
 ./install.sh
 ```
 
-## Nowości
+## What's New
 
-- Podgląd obrazów, tekstu, Markdown, JSON i XML.
-- Asynchroniczny podgląd pierwszej strony PDF.
-- Metadane audio/wideo oraz EXIF.
-- Podgląd zawartości ZIP, 7z, tar i tar.gz.
-- Podsumowania folderów.
-- Poprawione breadcrumbs w Split View.
-- Naprawione białe tło renderowanych PDF.
+- Previews for images, plain text, Markdown, JSON, and XML.
+- Asynchronous first-page PDF preview rendering.
+- Audio/video metadata and EXIF inspection.
+- Archive content preview for ZIP, 7z, tar, and tar.gz.
+- Directory summaries.
+- Fixed breadcrumbs in Split View.
+- Fixed white background rendering for PDF previews.
 
-## Weryfikacja
+## Verification
 
-- Kompilacja: PASS.
-- Pełna regresja: 20 zestawów PASS.
-- Preview Pane: 106 asercji PASS.
-- Split Layout: 99 asercji PASS.
-- Ręczna akceptacja KDE/CachyOS: potwierdzona.
+- Compilation: PASS.
+- Full automated regression: 20 test suites PASS.
+- Preview Pane: 106 assertions PASS.
+- Split Layout: 99 assertions PASS.
+- Manual KDE/CachyOS acceptance: Confirmed.
 
 ---
 
+# Updating to 0.25.0
 
-# Aktualizacja do 0.25.0
-
-Poniższe polecenia instalują z nowego katalogu, bez usuwania istniejącego repozytorium:
+The following commands install from a new directory without removing existing repository checkouts:
 
 ```bash
-cd ~/Pobrane
+cd ~/Downloads
 mkdir -p kio-thispc-0.25.0
 unzip kio-thispc-0.25.0.zip -d kio-thispc-0.25.0
 cd kio-thispc-0.25.0
@@ -259,20 +240,20 @@ chmod +x install.sh
 ./install.sh
 ```
 
-## 0.25.0 — archiwa i menu Nowy
+## 0.25.0 — Archives & New Menu
 
-- Markdown i szablony użytkownika w menu Nowy oraz opróżnianie Kosza z potwierdzeniem.
-- Bezpieczne rozpakowywanie ZIP, 7z, tar i tar.gz; tworzenie ZIP, 7z i tar.gz.
-- Stabilne proporcje Split View przy długich ścieżkach.
-- Automatyczna regresja: 20 zestawów, 3470 asercji PASS; Stage 3 zaakceptowany ręcznie.
-- Wypakowywanie wymaga Ark, Linux Landlock ABI 3+ i wsparcia publikacji bez nadpisywania. Patrz `docs/ARCHIVE_STAGE2.md` i `docs/ARCHIVE_STAGE3.md`.
+- Markdown and user templates in the New menu, and Empty Trash with confirmation.
+- Secure extraction of ZIP, 7z, tar, and tar.gz; archive creation for ZIP, 7z, and tar.gz.
+- Stable Split View pane proportions with long path breadcrumbs.
+- Automated regression: 20 test suites, 3470 assertions PASS; Stage 3 manually accepted.
+- Archive extraction requires Ark, Linux Landlock ABI 3+, and non-overwriting publication support. See `docs/ARCHIVE_STAGE2.md` and `docs/ARCHIVE_STAGE3.md`.
 
 ---
 
-# Aktualizacja do 0.24.0
+# Updating to 0.24.0
 
 ```bash
-cd ~/Pobrane
+cd ~/Downloads
 rm -rf kio-thispc
 unzip kio-thispc-0.24.0.zip
 cd kio-thispc
@@ -282,70 +263,70 @@ chmod +x install.sh
 
 ## 0.24.0 — Sidebar & Split View UX
 
-- równorzędne panele Split View z breadcrumbs dopasowanymi do szerokości paneli;
-- wspólny toolbar i sidebar działają na aktualnie aktywnym panelu;
-- Drag & Drop plików i folderów do obsługiwanych miejsc w sidebarze;
-- pionowo przewijalny i regulowany sidebar z trwałym zapisem preferowanej szerokości;
-- długie etykiety sidebara z prawostronnym `…` i pełną nazwą w tooltipie;
-- niezależny Search w obu panelach, w tym filtry, zakres, wyniki, postęp i Stop;
-- pełny widok `Ten komputer` dostępny również w prawym panelu;
-- pełna regresja: **1022/1022 asercje**;
-- pełna ręczna akceptacja Stage 1–4 na KDE/CachyOS;
-- brak migracji ustawień użytkownika.
+- Symmetrical Split View panes with breadcrumbs dynamically fitted to pane widths;
+- Unified toolbar and sidebar interact with the currently active pane;
+- Drag & Drop files and directories into supported sidebar locations;
+- Vertically scrollable and resizable sidebar with persistent preferred width;
+- Long sidebar item labels elided with right-side `…` and full name shown in tooltip;
+- Independent Search in both panes, including filters, scope, live results, progress, and Stop action;
+- Full `This PC` view available in the right Split pane;
+- Full automated regression: **1022/1022 assertions**;
+- Full manual acceptance across Stages 1–4 on KDE/CachyOS;
+- No user configuration migration needed.
 
-## 0.23.0 — natywny lokalny silnik transferów
+## 0.23.0 — Native Local Transfer Engine
 
-- rzeczywiste Pause/Resume dla obsługiwanych lokalnych transferów;
-- bezpieczne pliki częściowe `.thispc-part` i kontrolowany cleanup;
-- natywne konflikty Nadpisz / Zmień nazwę / Pomiń;
-- katalogi, wiele źródeł i symlinki z agregowanym postępem;
-- zachowanie permissions, timestampów i celów symlinków;
-- cross-filesystem Move oraz natywne Undo/Redo plików i drzew;
-- KIO pozostaje backendem dla zdalnych i niewspieranych przypadków;
-- obsługa disk-full, device-loss i błędów I/O bez crasha;
-- pionowa skala prędkości histogramu i rozmiar pliku w tooltipie;
-- pełna walidacja automatyczna: **842/842 asercji**;
-- pełna walidacja manualna KDE/CachyOS zakończona pomyślnie;
-- brak migracji ustawień użytkownika.
+- Real Pause/Resume support for local file transfers;
+- Safe `.thispc-part` partial files and controlled cleanup;
+- Native Overwrite / Rename / Skip conflict handling;
+- Directories, multi-source operations, and symlinks with aggregated progress tracking;
+- Preserves permissions, timestamps, and symlink targets;
+- Cross-filesystem Move and native Undo/Redo for files and directory trees;
+- KIO remains the backend for remote and unsupported protocols;
+- Graceful handling of disk-full, device-loss, and I/O errors without crashing;
+- Vertical histogram speed scale and file size tooltip display;
+- Full automated regression: **842/842 assertions**;
+- Full manual KDE/CachyOS validation completed successfully;
+- No user configuration migration needed.
 
-## 0.22.0 — zaawansowane okno transferów
+## 0.22.0 — Advanced Transfer Window
 
-- automatyczne, osobne okno szczegółów dla aktywnych operacji;
-- wspólna prezentacja wielu równoległych zadań i wysokość dopasowana do ich liczby;
-- bieżący plik, źródło/cel w podsumowaniu, rozmiar, czytelny procent, prędkość bieżąca i średnia oraz ETA;
-- wykres prędkości z ograniczoną historią próbek;
-- zwijanie szczegółów i anulowanie pojedynczych operacji;
-- automatyczne zamknięcie po zakończeniu ostatniego zadania;
-- dotychczasowy kompaktowy panel nadal przechowuje historię operacji;
-- brak migracji ustawień użytkownika.
+- Automatic dedicated details window for active file operations;
+- Consolidated overview of multiple concurrent tasks with dynamically adjusted window height;
+- Current file, source/destination summary, total size, progress percentage, current and average speed, and ETA;
+- Speed graph with bounded sample history;
+- Collapsible transfer details and individual task cancellation;
+- Automatic window close upon completion of all active tasks;
+- Compact in-window transfer panel continues to log operation history;
+- No user configuration migration needed.
 
-## 0.21.0 — refaktor architektury i stabilizacja
+## 0.21.0 — Architecture Refactoring & Stabilization
 
-- wydzielono główne komponenty z `src/thispcview.cpp` do osobnych modułów;
-- ograniczono duplikację pomiędzy panelem głównym i Split View;
-- zachowano kompatybilność ustawień i przywracania sesji;
-- dodano/rozszerzono testy paneli, Drag & Drop kart, `PropertiesDialog`, wyszukiwania i `FileActions`;
-- finalny zestaw automatyczny: 577 zaliczonych asercji;
-- pełny test manualny KDE/CachyOS zakończony bez regresji;
-- brak zmian wymagających migracji ustawień użytkownika.
+- Core components decoupled from `src/thispcview.cpp` into modular units;
+- Reduced code duplication between Primary pane and Split View;
+- Preserved settings compatibility and session restore integrity;
+- Added and expanded tests for panes, tab Drag & Drop, `PropertiesDialog`, search, and `FileActions`;
+- Final automated regression suite: 577 assertions passing;
+- Comprehensive manual KDE/CachyOS test completed without regressions;
+- No user configuration migration required.
 
-## 0.20.0 — Szybki dostęp / Ulubione / Ostatnie
+## 0.20.0 — Quick Access / Favorites / Recent
 
-- nowa sekcja `Szybki dostęp` w lewym panelu;
-- przypinanie i odpinanie folderów z menu kontekstowego;
-- zmiana kolejności przypiętych folderów przez Drag & Drop;
-- trwały zapis przypiętych folderów i ich kolejności przez `QSettings`;
-- nowa sekcja `Ostatnie` z ostatnio odwiedzanymi lokalizacjami;
-- trwały zapis historii ostatnich lokalizacji między uruchomieniami;
-- zachowany stabilny układ nazw plików z 0.19.0.4.
+- New `Quick Access` section in the left sidebar;
+- Pin and unpin directories via context menu;
+- Reorder pinned folders using Drag & Drop;
+- Persistent storage of pinned folders and custom order via `QSettings`;
+- New `Recent` section displaying recently visited locations;
+- Persistent recent locations history across application sessions;
+- Preserved stable filename layout introduced in 0.19.0.4.
 
-## 0.19.0.4 — stabilny układ nazw w widoku ikon
+## 0.19.0.4 — Stable Filename Layout in Icon View
 
-- stała, sztywna geometria siatki w IconMode (`gridSize` + `uniformItemSizes`);
-- zaznaczenie elementu nigdy nie zmienia `sizeHint()` ani nie przesuwa rzędów poniżej;
-- formatowanie tekstu przez `QTextLayout` z obsługą `WrapAtWordBoundaryOrAnywhere`;
-- maksymalnie 2 linie w trybie standardowym (ostatnia linia poprawnie elidowana);
-- maksymalnie 4 linie w trybie „Pełne nazwy” z zachowaniem jednolitej wysokości kafelków;
-- pełna, nieobcięta nazwa zaznaczonego elementu rysowana jako callout na poziomie viewportu po bazowym `paintEvent`;
-- całkowite usunięcie starej nakładki QLabel;
-- brak zmian w trybach ListMode oraz DetailsMode.
+- Fixed, rigid grid geometry in IconMode (`gridSize` + `uniformItemSizes`);
+- Selecting an item never alters `sizeHint()` or displaces rows beneath;
+- Text layout rendered via `QTextLayout` with `WrapAtWordBoundaryOrAnywhere`;
+- Maximum 2 lines in standard mode (last line elided cleanly);
+- Maximum 4 lines in "Full Names" mode while preserving uniform tile heights;
+- Full unclipped filename of selected item rendered as a viewport callout after base `paintEvent`;
+- Completely removed legacy QLabel overlay;
+- No alterations to ListMode or DetailsMode.
