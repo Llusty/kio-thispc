@@ -1,5 +1,6 @@
 /*
  * Safe, read-only Split View pane synchronization plan model.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 

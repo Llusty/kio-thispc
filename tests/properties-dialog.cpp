@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
+ * SPDX-License-Identifier: MIT
+ */
+
 // Real KIO operations are restricted to this suite's QTemporaryDir.
 static int checks = 0;
 static void verify(bool value, const char *description)

@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
+ * SPDX-License-Identifier: MIT
+ */
+
 // Exercises the real window/layouts, including deferred Qt layout requests.
 static int checks = 0;
 static void verify(bool value, const char *description)

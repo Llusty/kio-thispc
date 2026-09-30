@@ -1,5 +1,6 @@
 /*
  * Asynchronous immutable planning for the 0.23 local transfer engine.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 

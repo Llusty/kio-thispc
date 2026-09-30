@@ -1,4 +1,8 @@
-/* Read-only Batch Rename crash audit and process-wide mutation fence. */
+/*
+ * Read-only Batch Rename crash audit and process-wide mutation fence.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
+ * SPDX-License-Identifier: MIT
+ */
 #pragma once
 
 #include "batchrename.h"

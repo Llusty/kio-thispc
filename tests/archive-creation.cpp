@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
+ * SPDX-License-Identifier: MIT
+ */
+
 // Real archive creation tests. All sources and output are disposable.
 static int checks = 0;
 static void verify(bool condition, const char *message)

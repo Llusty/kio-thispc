@@ -3,6 +3,7 @@
  * via KDE Solid.
  *
  * Stage 2 of 0.35.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 

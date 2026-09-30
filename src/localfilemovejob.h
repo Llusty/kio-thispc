@@ -1,5 +1,6 @@
 /*
  * Safe local-file move and completed-operation history for 0.23.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 

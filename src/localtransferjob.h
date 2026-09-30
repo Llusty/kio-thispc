@@ -1,4 +1,5 @@
 /* Executes immutable local transfer plans without blocking directory scans.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 #pragma once

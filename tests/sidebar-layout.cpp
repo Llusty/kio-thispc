@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
+ * SPDX-License-Identifier: MIT
+ */
+
 // Appended to the instrumented application by run-pane-actions.py --sidebar-layout.
 static int checks = 0;
 static void verify(bool value, const char *description)

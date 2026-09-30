@@ -1,4 +1,5 @@
 // Width-independent presentation for path text in both browser panes.
+// SPDX-FileCopyrightText: 2026 Sebastian Harasim
 // SPDX-License-Identifier: MIT
 #pragma once
 

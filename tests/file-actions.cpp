@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
+ * SPDX-License-Identifier: MIT
+ */
+
 // Every real operation is restricted to this suite's disposable directory.
 static int checks = 0;
 static void verify(bool value, const char *description)

@@ -1,6 +1,7 @@
 /*
  * Conservative journaled execution and Undo/Redo for local acyclic Batch Rename.
  * One user-visible action is NOT an atomic filesystem transaction.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 #pragma once

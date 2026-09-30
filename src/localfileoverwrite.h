@@ -1,4 +1,5 @@
 /* Safe publication helpers for native single-file overwrites.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 #pragma once

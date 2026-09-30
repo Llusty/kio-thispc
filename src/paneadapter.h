@@ -1,5 +1,6 @@
 /*
  * Adapter for reading and routing the two concrete browser panes.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 

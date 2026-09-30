@@ -1,6 +1,7 @@
 /*
  * Asynchronous KIO filename search, filtering and result batching.
  * Extracted during the 0.21.0 architecture refactor.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 #pragma once

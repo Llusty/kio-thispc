@@ -267,3 +267,9 @@ Naprawiono cofanie zmiany nazwy. Operacja rename jest rejestrowana jako `KIO::mo
 ## 0.19.0.4
 
 Poprawiono układ nazw plików w widoku ikon: sztywna siatka, `QTextLayout`, viewport-level callout. Opis zmian — patrz sekcja na górze.
+
+## License
+
+ThisPC is licensed under the MIT License.
+Copyright (c) 2026 Sebastian Harasim.
+See `LICENSE` for details.

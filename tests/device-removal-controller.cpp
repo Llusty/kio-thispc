@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
+ * SPDX-License-Identifier: MIT
+ */
+
 // Tests for 0.35 Stage 3: Unmount / Eject / Safely Remove
 // Covers:
 //   - unmount success / failure / duplicate / exactly-once

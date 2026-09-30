@@ -1,5 +1,6 @@
 /*
  * Chunked local-file copy primitive for the 0.23 transfer engine.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 

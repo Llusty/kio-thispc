@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
+ * SPDX-License-Identifier: MIT
+ */
+
 // Appended to a temporary, instrumented copy by run-pane-actions.py.
 static int checks = 0;
 static void verify(bool value, const char *description)

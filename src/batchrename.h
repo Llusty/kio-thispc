@@ -1,5 +1,6 @@
 /*
  * Safe, local batch-rename planning and preview dialog.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 #pragma once

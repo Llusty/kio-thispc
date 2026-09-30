@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
+ * SPDX-License-Identifier: MIT
+ */
+
 #include "navigationhistory.h"
 #include "browsercommon.h"
 #include "searchcontroller.h"

@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
+ * SPDX-License-Identifier: MIT
+ */
+
 // Tests for 0.35 Stage 2: unmounted removable volumes, exactly-once mount controller, and pane routing.
 static int checks = 0;
 static void verify(bool value, const char *description)

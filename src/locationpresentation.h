@@ -1,5 +1,6 @@
 /*
  * Stateless presentation and basic navigation semantics for browser locations.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 

@@ -1,5 +1,6 @@
 /* Verified Ark batch extraction into private staging, followed by one atomic,
  * no-replace publication. Linux/KDE implementation; never extracts over user data.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 #pragma once

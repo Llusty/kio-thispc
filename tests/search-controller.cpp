@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
+ * SPDX-License-Identifier: MIT
+ */
+
 // Real filename-search workers only scan this suite's temporary directories.
 static int checks = 0;
 static void verify(bool value, const char *description)

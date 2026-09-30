@@ -1,5 +1,6 @@
 /*
  * Coordinates the Preview pane and Quick Look presentation.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 

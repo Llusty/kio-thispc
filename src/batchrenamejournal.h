@@ -1,6 +1,7 @@
 /*
  * Conservative crash-inspection journal for a local Batch Rename exchange cycle.
  * This is NOT automatic recovery, a filesystem transaction, or an Undo command.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 #pragma once

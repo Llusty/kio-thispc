@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Sebastian Harasim
+# SPDX-License-Identifier: MIT
+
 set -euo pipefail
 cmake_ver=$(sed -nE 's/^project\(kio-thispc VERSION ([^ ]+) .*/\1/p' CMakeLists.txt)
 printf 'CMake version: %s\n' "$cmake_ver"

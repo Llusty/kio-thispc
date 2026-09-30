@@ -4,6 +4,7 @@
  * with strictly exactly-once completion semantics.
  *
  * Stage 3 of 0.35.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 

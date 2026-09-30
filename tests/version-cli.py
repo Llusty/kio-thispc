@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Sebastian Harasim
+# SPDX-License-Identifier: MIT
+
 """Verify version flags complete before any GUI platform initialization."""
 
 import os

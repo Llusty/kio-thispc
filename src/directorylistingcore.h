@@ -1,5 +1,6 @@
 /*
  * Neutral directory listing and render-data core shared by both browser panes.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 #pragma once

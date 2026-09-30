@@ -1,5 +1,6 @@
 /*
  * File-operation dialogs and KIO dispatch, independent of the active pane.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 #pragma once

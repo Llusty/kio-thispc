@@ -4,6 +4,7 @@
  * Extracted during the 0.21.0 architecture refactor. The dialog keeps the
  * existing KIO/admin:// behavior while the main window only supplies the
  * window-level callbacks it owns.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 

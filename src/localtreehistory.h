@@ -1,4 +1,5 @@
 /* Completed tree transfers share the application's ordered Undo/Redo history.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 #pragma once

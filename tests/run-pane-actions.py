@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Sebastian Harasim
+# SPDX-License-Identifier: MIT
+
 """Build a temporary instrumented window and exercise real Qt actions offscreen.
 
 Builds a temporary CMake project with the extracted headers and fresh Qt MOC

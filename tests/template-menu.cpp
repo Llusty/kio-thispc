@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
+ * SPDX-License-Identifier: MIT
+ */
+
 // Discovery uses an isolated XDG configuration and disposable files only.
 static int checks = 0;
 static void verify(bool value, const char *description)

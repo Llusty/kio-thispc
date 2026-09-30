@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
+ * SPDX-License-Identifier: MIT
+ */
+
 #include "keyboardnavigation.h"
 #include "directoryview.h"
 #include <QApplication>

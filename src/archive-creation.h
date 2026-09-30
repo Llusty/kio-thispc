@@ -1,6 +1,7 @@
 /* Safe, asynchronous local archive creation with libarchive.
  * Produces a private output and publishes it only with RENAME_NOREPLACE.
  * Linux implementation; never writes to any selected source.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 #pragma once

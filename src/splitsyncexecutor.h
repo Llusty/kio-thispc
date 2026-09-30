@@ -1,5 +1,6 @@
 /*
  * Safe Split View pane synchronization executor and preflight validator.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 

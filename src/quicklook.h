@@ -1,5 +1,6 @@
 /*
  * Large temporary preview presentation backed by PreviewPane.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 

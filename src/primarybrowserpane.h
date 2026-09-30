@@ -1,4 +1,8 @@
-/* Primary browser pane extracted from ThisPcWindow during 0.32 Stage 8. */
+/*
+ * Primary browser pane extracted from ThisPcWindow during 0.32 Stage 8.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
+ * SPDX-License-Identifier: MIT
+ */
 #pragma once
 
 #include "browsercommon.h"

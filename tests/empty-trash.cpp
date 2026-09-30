@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
+ * SPDX-License-Identifier: MIT
+ */
+
 // The runner substitutes only KIO::emptyTrash() with a controllable KJob.
 // Confirmation, dispatch, the operation manager and completion UI stay real.
 static int checks = 0;

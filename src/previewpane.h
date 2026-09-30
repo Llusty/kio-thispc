@@ -1,5 +1,6 @@
 /*
  * Safe, asynchronous Stage 1 file preview panel.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 

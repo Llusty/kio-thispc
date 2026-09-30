@@ -1,5 +1,6 @@
 /*
  * Per-location directory view preferences shared by both browser panes.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 

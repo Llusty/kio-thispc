@@ -1,5 +1,6 @@
 /*
  * Static application widgets and card factories.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 #pragma once

@@ -4,6 +4,7 @@
  * Extracted during the 0.21.0 architecture refactor. The sidebar owns its
  * presentation and persistence while the main window remains responsible for
  * navigation, tabs, windows and split-pane actions.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 

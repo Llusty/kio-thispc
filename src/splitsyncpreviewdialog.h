@@ -1,5 +1,6 @@
 /*
  * Split View synchronization plan preview dialog.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 

@@ -3,6 +3,7 @@
  *
  * Extracted during the 0.21.0 architecture refactor. Keep behavior changes
  * separate from structural moves so regressions are easy to isolate.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 

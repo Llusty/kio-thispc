@@ -3,6 +3,7 @@
  * "This PC" home page, backed by KIO.
  *
  * Version 0.35.0
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 

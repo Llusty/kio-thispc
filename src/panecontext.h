@@ -1,5 +1,6 @@
 /*
  * Neutral pane state shared by the primary and Split View adapters.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 

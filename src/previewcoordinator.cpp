@@ -1,4 +1,7 @@
-/* SPDX-License-Identifier: MIT */
+/*
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
+ * SPDX-License-Identifier: MIT
+ */
 
 #include "previewcoordinator.h"
 

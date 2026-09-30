@@ -1,4 +1,8 @@
-/* Widget-free primary navigation history. SPDX-License-Identifier: MIT */
+/*
+ * Widget-free primary navigation history.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
+ * SPDX-License-Identifier: MIT
+ */
 #pragma once
 #include <QList>
 #include <QUrl>

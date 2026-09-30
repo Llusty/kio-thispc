@@ -3,6 +3,7 @@
  *
  * This is a structural extraction from thispcview.cpp for 0.21.0. Behavior
  * intentionally remains unchanged.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 

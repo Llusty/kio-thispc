@@ -1,5 +1,6 @@
 /*
  * Split View pane comparison dialog.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 

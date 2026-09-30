@@ -1,5 +1,6 @@
 /*
  * Pure file-action availability computation.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 

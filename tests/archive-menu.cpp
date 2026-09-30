@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
+ * SPDX-License-Identifier: MIT
+ */
+
 // Menus and destination dialog are real; only the final job dispatch is captured.
 static int checks = 0;
 static void verify(bool value, const char *description)

@@ -1,5 +1,6 @@
 /*
  * User template discovery for the existing New menu.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 #pragma once

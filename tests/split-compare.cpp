@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
+ * SPDX-License-Identifier: MIT
+ */
+
 // Exercises Split View pane comparison logic, metadata rules, search handling,
 // dialog population, cancellation, and safety.
 static int checks = 0;

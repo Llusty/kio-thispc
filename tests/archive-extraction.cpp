@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
+ * SPDX-License-Identifier: MIT
+ */
+
 // All inputs, sentinels and output directories belong to this test's QTemporaryDir.
 static int checks = 0;
 static void verify(bool value, const char *description)

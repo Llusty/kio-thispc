@@ -1,5 +1,6 @@
 /*
  * Shared keyboard routing for directory panes and the This PC home grid.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 #pragma once

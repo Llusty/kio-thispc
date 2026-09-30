@@ -4,6 +4,7 @@
  * Extracted during the 0.21.0 architecture refactor. OperationManager owns
  * KJob tracking/state, while OperationPopup owns the compact popup widgets.
  * Keep behavior changes separate from structural moves.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 

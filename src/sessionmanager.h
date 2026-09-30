@@ -3,6 +3,7 @@
  *
  * Extracted during the 0.21.0 architecture refactor. Keep this module focused
  * on serializing/restoring session data; UI presentation stays in ThisPcWindow.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 

@@ -1,4 +1,5 @@
 /* Archive menu eligibility. Full validation runs asynchronously before extraction.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 #pragma once

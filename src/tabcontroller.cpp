@@ -1,5 +1,6 @@
 /*
  * Tab state and closed-tab history for thispc-view.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 

@@ -3,6 +3,7 @@
  *
  * Extracted during the 0.21.0 architecture refactor so ThisPcWindow no
  * longer owns KIO::FileUndoManager state or signal handling.
+ * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
 
