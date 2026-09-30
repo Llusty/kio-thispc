@@ -344,15 +344,15 @@ zainstalowana i ręcznie potwierdzona przez użytkownika. Pełna regresja wydani
 - double-click separatora Split przywracający 50/50 pozostaje przyszłym pomysłem
   polishowym, nie zakresem 0.34.0.
 
-### 0.35.0 — Drives & Devices
-- mount/unmount/eject;
-- removable media;
-- MTP;
-- ISO mount/unmount;
-- filesystem/mount details;
-- sensible SMART integration where available;
-- czytelny stan mounted/unmounted/read-only oraz typ filesystemu i mount point;
-- bezpieczny i jednoznaczny UX dla remove/eject;
+### 0.35.0 — Drives & Devices ✅ feature-complete, release prep
+- Stage 1 ukończony: dynamiczne wykrywanie dysków i urządzeń przez KDE Solid; sterowany zdarzeniami `SolidDeviceMonitor` z debouncingiem 250 ms eliminuje okresowy polling i miganie „Odświeżanie…”;
+- Stage 2 ukończony: wykrywanie i prezentacja odmontowanych woluminów wymiennych na `thispc:/` jako „Niezamontowany”; montowanie na żądanie (`DeviceMountController`) po kliknięciu lub Enter z natychmiastowym wejściem do katalogu; sidebar prezentuje wyłącznie zamontowane woluminy;
+- Stage 3 ukończony: pełna asynchroniczna obsługa cyklu życia urządzeń (`DeviceRemovalController`):
+  - akcja „Odmontuj” wykonuje czyste odmontowanie systemu plików wyłącznie przez natywny QtDBus `org.freedesktop.UDisks2.Filesystem.Unmount` (brak wyłączania zasilania);
+  - akcja „Bezpiecznie usuń” koordynuje odmontowanie wszystkich zamontowanych partycji dysku i asynchroniczny `org.freedesktop.UDisks2.Drive.PowerOff`;
+  - obsługa bezpiecznego usuwania dla woluminów już odmontowanych;
+  - obsługa wysuwania nośników optycznych („Wysuń”) na urządzeniach ze zdolnością `canEject`;
+  - bezpieczne przekierowanie paneli Primary i Split z odmontowanego punktu montowania z powrotem do `thispc:/`.
 - dla NTFS utrzymywać verified behavior zamiast blanket assumptions.
 
 ### 0.36.0 — Network & Remote Locations

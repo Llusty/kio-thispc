@@ -117,7 +117,33 @@ struct DriveInfo
     QUrl targetUrl;
     QString iconName;
     int usedPercent = 0;
+    QString id;
+    QString udi;
+    bool isMounted = true;
+    bool isRemovable = false;
 };
+
+inline bool operator==(const DriveInfo &a, const DriveInfo &b)
+{
+    return a.id == b.id
+        && a.name == b.name
+        && a.freeText == b.freeText
+        && a.capacityText == b.capacityText
+        && a.usedText == b.usedText
+        && a.fileSystem == b.fileSystem
+        && a.mountPoint == b.mountPoint
+        && a.targetUrl == b.targetUrl
+        && a.iconName == b.iconName
+        && a.usedPercent == b.usedPercent
+        && a.udi == b.udi
+        && a.isMounted == b.isMounted
+        && a.isRemovable == b.isRemovable;
+}
+
+inline bool operator!=(const DriveInfo &a, const DriveInfo &b)
+{
+    return !(a == b);
+}
 
 
 inline bool isPolish()

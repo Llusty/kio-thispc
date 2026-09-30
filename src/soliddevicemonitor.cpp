@@ -56,6 +56,11 @@ void SolidDeviceMonitor::onDeviceAdded(const QString &udi)
     // refresh so future mount/unmount transitions on this device are tracked.
     if (m_solidActive) {
         connectAccessSignal(udi);
+        const auto devices =
+            Solid::Device::listFromType(Solid::DeviceInterface::StorageAccess);
+        for (const Solid::Device &device : devices) {
+            connectAccessSignal(device.udi());
+        }
     }
     scheduleRefresh();
 }
@@ -76,16 +81,13 @@ void SolidDeviceMonitor::connectAccessSignal(const QString &udi)
     }
 
     Solid::Device device(udi);
-    const auto *access = device.as<Solid::StorageAccess>();
+    auto *access = device.as<Solid::StorageAccess>();
     if (!access) {
         return;
     }
 
-    // QObject::connect requires a non-const pointer; Solid returns const
-    // interfaces, but the underlying QObject* is accessible via device.
-    connect(device.asDeviceInterface(Solid::DeviceInterface::StorageAccess),
-            SIGNAL(accessibilityChanged(bool, QString)),
-            this, SLOT(scheduleRefresh()));
+    connect(access, &Solid::StorageAccess::accessibilityChanged,
+            this, &SolidDeviceMonitor::scheduleRefresh);
 
     m_connectedUdis.insert(udi);
 }
@@ -97,14 +99,10 @@ void SolidDeviceMonitor::disconnectAccessSignal(const QString &udi)
     }
 
     Solid::Device device(udi);
-    // The device may already be gone; disconnect is safe even if the object
-    // has been destroyed (Solid keeps the QObject alive until after
-    // deviceRemoved is emitted).
-    const QObject *iface =
-        device.asDeviceInterface(Solid::DeviceInterface::StorageAccess);
-    if (iface) {
-        disconnect(iface, SIGNAL(accessibilityChanged(bool, QString)),
-                   this, SLOT(scheduleRefresh()));
+    auto *access = device.as<Solid::StorageAccess>();
+    if (access) {
+        disconnect(access, &Solid::StorageAccess::accessibilityChanged,
+                   this, &SolidDeviceMonitor::scheduleRefresh);
     }
 }
 

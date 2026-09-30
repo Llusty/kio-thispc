@@ -2,7 +2,7 @@
  * thispc-view - a lightweight KDE/Qt file browser with a Windows-like
  * "This PC" home page, backed by KIO.
  *
- * Version 0.34.0
+ * Version 0.35.0
  * SPDX-License-Identifier: MIT
  */
 
@@ -12,6 +12,8 @@
 #include "actionstatecontroller.h"
 #include "applicationstyle.h"
 #include "appwidgets.h"
+#include "devicemountcontroller.h"
+#include "deviceremovalcontroller.h"
 #include "drivehomecoordinator.h"
 #include "soliddevicemonitor.h"
 #include "locationpresentation.h"
@@ -553,19 +555,29 @@ public:
             &ThisPcWindow::updateFileActionStates);
 
         connect(&m_driveHomeCoordinator, &DriveHomeCoordinator::loadingStarted, this, [this] {
-            m_homeStatus->setText(trLocal("Odświeżanie…", "Refreshing…"));
-            m_splitHomeStatus->setText(m_homeStatus->text());
+            if (m_driveHomeCoordinator.drives().isEmpty()) {
+                m_homeStatus->setText(trLocal("Wczytywanie…", "Loading…"));
+                m_splitHomeStatus->setText(m_homeStatus->text());
+            }
         });
         connect(&m_driveHomeCoordinator, &DriveHomeCoordinator::drivesChanged, this,
             [this](const QList<DriveInfo> &) {
                 rebuildDriveGrid();
-                if (m_sidebar) m_sidebar->setDrives(m_driveHomeCoordinator.drives());
+                if (m_sidebar) {
+                    QList<DriveInfo> mountedDrives;
+                    for (const DriveInfo &d : m_driveHomeCoordinator.drives()) {
+                        if (d.isMounted) mountedDrives.push_back(d);
+                    }
+                    m_sidebar->setDrives(mountedDrives);
+                }
                 rebuildBreadcrumbs();
                 updateSidebarCurrent();
             });
         connect(&m_driveHomeCoordinator, &DriveHomeCoordinator::error, this, [this](const QString &) {
-            m_homeStatus->setText(trLocal("Nie udało się odczytać thispc:/.", "Could not read thispc:/."));
-            m_splitHomeStatus->setText(m_homeStatus->text());
+            if (m_driveHomeCoordinator.drives().isEmpty()) {
+                m_homeStatus->setText(trLocal("Nie udało się odczytać thispc:/.", "Could not read thispc:/."));
+                m_splitHomeStatus->setText(m_homeStatus->text());
+            }
         });
 
         m_refreshTimer.setInterval(15000);
@@ -574,7 +586,8 @@ public:
             &QTimer::timeout,
             this,
             &ThisPcWindow::reloadDrives);
-        m_refreshTimer.start();
+        // m_refreshTimer is kept stopped by default; SolidDeviceMonitor provides
+        // hotplug and mount/unmount event-driven updates without idle polling.
 
         // React to Solid hotplug events (device added/removed, mount/unmount)
         // without waiting for the 15-second polling timer.
@@ -2092,14 +2105,14 @@ private:
         statusBar()->setSizeGripEnabled(true);
 
         m_versionLabel = new QLabel(
-            QStringLiteral("v0.34.0"),
+            QStringLiteral("v0.35.0"),
             this);
         m_versionLabel->setObjectName(
             QStringLiteral("versionLabel"));
         m_versionLabel->setToolTip(
             trLocal(
-                "Wersja thispc-view 0.34.0",
-                "thispc-view version 0.34.0"));
+                "Wersja thispc-view 0.35.0",
+                "thispc-view version 0.35.0"));
         statusBar()->addPermanentWidget(m_versionLabel);
     }
 
@@ -2697,7 +2710,11 @@ private:
     QList<QUrl> searchDriveRoots() const
     {
         QList<QUrl> roots;
-        for (const DriveInfo &drive : m_driveHomeCoordinator.drives()) roots.push_back(drive.targetUrl);
+        for (const DriveInfo &drive : m_driveHomeCoordinator.drives()) {
+            if (drive.isMounted && drive.targetUrl.isValid()) {
+                roots.push_back(drive.targetUrl);
+            }
+        }
         return roots;
     }
 
@@ -3610,6 +3627,7 @@ private:
             }
             statusBar()->showMessage(
                 trLocal("Ten komputer", "This PC"));
+            reloadDrives();
         } else {
             m_contentStack->setCurrentWidget(m_directoryPage);
 
@@ -5081,6 +5099,8 @@ private Q_SLOTS:
 
 #ifdef THISPC_TEST_HARNESS
 public:
+    DeviceMountController &mountControllerForTesting() { return m_mountController; }
+    DeviceRemovalController &removalControllerForTesting() { return m_removalController; }
 #else
 private:
 #endif
@@ -5191,18 +5211,44 @@ private:
         for (int i = 0;
              i < drives.size();
              ++i) {
+            const DriveInfo &d = drives.at(i);
+            const bool canSafelyRemove = m_removalController.canSafelyRemove(d.udi);
+            const bool canEject = m_removalController.canEject(d.udi);
             DriveFrame *card =
                 makeDriveCard(
-                    drives.at(i),
+                    d,
+                    canSafelyRemove,
+                    canEject,
                     homePage);
 
             connect(
                 card,
                 &ClickableFrame::activated,
                 this,
-                [this, pane](const QUrl &url) {
+                [this, pane, card](const QUrl &) {
                     setActivePane(pane);
-                    navigatePane(pane, url);
+                    handleDriveActivation(pane, card->drive());
+                });
+            connect(
+                card,
+                &DriveFrame::unmountRequested,
+                this,
+                [this, pane](const DriveInfo &drive) {
+                    handleDeviceUnmount(pane, drive);
+                });
+            connect(
+                card,
+                &DriveFrame::safelyRemoveRequested,
+                this,
+                [this, pane](const DriveInfo &drive) {
+                    handleDeviceSafelyRemove(pane, drive);
+                });
+            connect(
+                card,
+                &DriveFrame::ejectRequested,
+                this,
+                [this, pane](const DriveInfo &drive) {
+                    handleDeviceEject(pane, drive);
                 });
             connectHomeCard(card, pane);
 
@@ -5215,7 +5261,9 @@ private:
         const QList<QWidget *> rebuiltCards = homeCards(pane);
         QWidget *restored = nullptr;
         for (QWidget *card : rebuiltCards) {
-            if (card->property("navigationUrl").toString() == focusedUrl) {
+            const QString navUrl = card->property("navigationUrl").toString();
+            const QString driveId = card->property("driveId").toString();
+            if (navUrl == focusedUrl || (!driveId.isEmpty() && driveId == focusedUrl)) {
                 restored = card;
                 break;
             }
@@ -5227,6 +5275,167 @@ private:
             if (restoreFocus) restored->setFocus(Qt::OtherFocusReason);
         } else {
             currentHomeId(pane).clear();
+        }
+    }
+
+    void handleDriveActivation(PaneId pane, const DriveInfo &drive)
+    {
+        if (drive.isMounted) {
+            navigatePane(pane, drive.targetUrl);
+            return;
+        }
+
+        mountAndOpenDrive(pane, drive);
+    }
+
+    void mountAndOpenDrive(PaneId pane, const DriveInfo &drive)
+    {
+        statusBar()->showMessage(
+            trLocal("Montowanie woluminu…", "Mounting volume…"), 3000);
+
+        m_mountController.mountDevice(
+            drive.udi,
+            [this, pane](bool success, const QString &mountPoint, const QString &errorMessage) {
+                if (!success) {
+                    const QString msg = !errorMessage.isEmpty()
+                        ? errorMessage
+                        : trLocal("Operacja montowania nie powiodła się.", "Mount operation failed.");
+                    statusBar()->showMessage(
+                        trLocal("Błąd montowania: ", "Mount failed: ") + msg, 6000);
+                    return;
+                }
+
+                if (mountPoint.isEmpty()) {
+                    statusBar()->showMessage(
+                        trLocal("Błąd montowania: brak punktu montowania.",
+                                "Mount failed: missing mount point."), 6000);
+                    return;
+                }
+
+                m_driveHomeCoordinator.refresh();
+                navigatePane(pane, QUrl::fromLocalFile(mountPoint));
+                statusBar()->showMessage(
+                    trLocal("Wolumin zamontowany.", "Volume mounted."), 3000);
+            });
+    }
+
+    void handleDeviceUnmount(PaneId pane, const DriveInfo &drive)
+    {
+        Q_UNUSED(pane);
+        if (m_removalController.isOperationPending(drive.udi)) {
+            statusBar()->showMessage(
+                trLocal("Operacja dla tego urządzenia jest już w toku…",
+                        "Operation for this device is already in progress…"), 3000);
+            return;
+        }
+
+        statusBar()->showMessage(
+            trLocal("Odmontowywanie woluminu…", "Unmounting volume…"), 3000);
+
+        const QString mountPoint = drive.mountPoint;
+
+        m_removalController.unmountDevice(drive.udi, [this, mountPoint](bool success, const QString &errorMessage) {
+            if (!success) {
+                const QString msg = !errorMessage.isEmpty()
+                    ? errorMessage
+                    : trLocal("Operacja odmontowywania nie powiodła się.", "Unmount operation failed.");
+                statusBar()->showMessage(
+                    trLocal("Błąd odmontowywania: ", "Unmount failed: ") + msg, 6000);
+                return;
+            }
+
+            statusBar()->showMessage(
+                trLocal("Wolumin został odmontowany.", "Volume unmounted."), 3000);
+
+            handlePostRemovalNavigation(mountPoint);
+            m_driveHomeCoordinator.refresh();
+        });
+    }
+
+    void handleDeviceSafelyRemove(PaneId pane, const DriveInfo &drive)
+    {
+        Q_UNUSED(pane);
+        if (m_removalController.isOperationPending(drive.udi)) {
+            statusBar()->showMessage(
+                trLocal("Operacja dla tego urządzenia jest już w toku…",
+                        "Operation for this device is already in progress…"), 3000);
+            return;
+        }
+
+        statusBar()->showMessage(
+            trLocal("Bezpieczne usuwanie urządzenia…", "Safely removing device…"), 3000);
+
+        const QString mountPoint = drive.mountPoint;
+
+        m_removalController.safelyRemoveDevice(drive.udi, [this, mountPoint](bool success, const QString &errorMessage) {
+            if (!success) {
+                const QString msg = !errorMessage.isEmpty()
+                    ? errorMessage
+                    : trLocal("Operacja bezpiecznego usuwania nie powiodła się.", "Safely remove failed.");
+                statusBar()->showMessage(
+                    trLocal("Błąd bezpiecznego usuwania: ", "Safely remove failed: ") + msg, 6000);
+                return;
+            }
+
+            statusBar()->showMessage(
+                trLocal("Urządzenie może być teraz bezpiecznie odłączone.",
+                        "Device can now be safely removed."), 4000);
+
+            handlePostRemovalNavigation(mountPoint);
+            m_driveHomeCoordinator.refresh();
+        });
+    }
+
+    void handleDeviceEject(PaneId pane, const DriveInfo &drive)
+    {
+        Q_UNUSED(pane);
+        if (m_removalController.isOperationPending(drive.udi)) {
+            statusBar()->showMessage(
+                trLocal("Operacja dla tego urządzenia jest już w toku…",
+                        "Operation for this device is already in progress…"), 3000);
+            return;
+        }
+
+        statusBar()->showMessage(
+            trLocal("Wysuwanie nośnika…", "Ejecting medium…"), 3000);
+
+        const QString mountPoint = drive.mountPoint;
+
+        m_removalController.ejectDevice(drive.udi, [this, mountPoint](bool success, const QString &errorMessage) {
+            if (!success) {
+                const QString msg = !errorMessage.isEmpty()
+                    ? errorMessage
+                    : trLocal("Operacja wysuwania nośnika nie powiodła się.", "Eject operation failed.");
+                statusBar()->showMessage(
+                    trLocal("Błąd wysuwania: ", "Eject failed: ") + msg, 6000);
+                return;
+            }
+
+            statusBar()->showMessage(
+                trLocal("Nośnik został wysunięty.", "Medium ejected."), 3000);
+
+            handlePostRemovalNavigation(mountPoint);
+            m_driveHomeCoordinator.refresh();
+        });
+    }
+
+    void handlePostRemovalNavigation(const QString &mountPoint)
+    {
+        if (mountPoint.isEmpty()) {
+            return;
+        }
+
+        auto isInsideMountPoint = [&mountPoint](const QUrl &url) -> bool {
+            if (!url.isLocalFile()) return false;
+            const QString path = url.toLocalFile();
+            return path == mountPoint || path.startsWith(mountPoint + QLatin1Char('/'));
+        };
+
+        if (m_primaryPane && isInsideMountPoint(m_primaryPane->currentUrl())) {
+            navigatePane(PaneId::Primary, kThisPcUrl);
+        }
+        if (m_splitPane && isInsideMountPoint(m_splitPane->currentUrl())) {
+            navigatePane(PaneId::Split, kThisPcUrl);
         }
     }
 
@@ -5353,6 +5562,8 @@ private:
     QTimer m_refreshTimer;
     DriveHomeCoordinator m_driveHomeCoordinator{this};
     SolidDeviceMonitor m_solidMonitor{this};
+    DeviceMountController m_mountController{this};
+    DeviceRemovalController m_removalController{this};
 
     FileActions *m_fileActions = nullptr;
     SelectionMenuController m_selectionMenuController{this};

@@ -118,6 +118,7 @@ void DriveHomeCoordinator::cancel()
 void DriveHomeCoordinator::setSnapshotForTesting(QList<DriveInfo> drives)
 {
     cancel();
+    m_hasLoaded = true;
     m_drives = std::move(drives);
     Q_EMIT drivesChanged(m_drives);
 }
@@ -130,18 +131,59 @@ void DriveHomeCoordinator::receiveEntries(
 
     for (const KIO::UDSEntry &entry : entries) {
         const QString name = entry.stringValue(KIO::UDSEntry::UDS_DISPLAY_NAME);
+        const QString id = entry.stringValue(KIO::UDSEntry::UDS_NAME);
         const QString target = entry.stringValue(KIO::UDSEntry::UDS_TARGET_URL);
-        const QUrl targetUrl(target);
-        if (name.isEmpty() || name == QStringLiteral(".")
-            || target.isEmpty() || !targetUrl.isValid()) {
+        const QString mountPoint = entry.stringValue(KIO::UDSEntry::UDS_EXTRA + 4);
+        const QString mountedFlag = entry.stringValue(KIO::UDSEntry::UDS_EXTRA + 5);
+        const QString udi = entry.stringValue(KIO::UDSEntry::UDS_EXTRA + 6);
+        QString removableFlag = entry.stringValue(KIO::UDSEntry::UDS_EXTRA + 8);
+        if (removableFlag.isEmpty()) {
+            removableFlag = entry.stringValue(KIO::UDSEntry::UDS_EXTRA + 7);
+        }
+
+        if (id == QStringLiteral(".") || id == QStringLiteral("..")
+            || name.isEmpty() || name == QStringLiteral(".")) {
             continue;
         }
 
-        const QString identity = targetIdentity(targetUrl);
+        bool isMounted = true;
+        if (!mountedFlag.isEmpty()) {
+            isMounted = (mountedFlag == QStringLiteral("1"));
+        } else {
+            isMounted = !target.isEmpty() && !mountPoint.isEmpty();
+        }
+
+        QUrl targetUrl;
+        if (isMounted) {
+            targetUrl = QUrl(target);
+            if (target.isEmpty() || !targetUrl.isValid()) {
+                continue;
+            }
+        } else {
+            // For unmounted volumes, targetUrl remains empty/invalid per Stage 2 requirements.
+            // An unmounted volume requires a valid Solid UDI for device operations.
+            if (udi.isEmpty()) {
+                continue;
+            }
+        }
+
+        QString identity;
+        if (!id.isEmpty()) {
+            identity = id;
+        } else if (!udi.isEmpty()) {
+            identity = udi;
+        } else if (targetUrl.isValid()) {
+            identity = targetIdentity(targetUrl);
+        }
+
         if (identity.isEmpty() || m_pendingTargets.contains(identity)) continue;
         m_pendingTargets.insert(identity);
 
         DriveInfo drive;
+        drive.id = id;
+        drive.udi = udi;
+        drive.isMounted = isMounted;
+        drive.isRemovable = (removableFlag == QStringLiteral("1"));
         drive.name = name;
         drive.targetUrl = targetUrl;
         drive.iconName = entry.stringValue(KIO::UDSEntry::UDS_ICON_NAME);
@@ -149,7 +191,7 @@ void DriveHomeCoordinator::receiveEntries(
         drive.capacityText = entry.stringValue(KIO::UDSEntry::UDS_EXTRA + 1);
         drive.usedText = entry.stringValue(KIO::UDSEntry::UDS_EXTRA + 2);
         drive.fileSystem = entry.stringValue(KIO::UDSEntry::UDS_EXTRA + 3);
-        drive.mountPoint = entry.stringValue(KIO::UDSEntry::UDS_EXTRA + 4);
+        drive.mountPoint = mountPoint;
 
         QString percentText = drive.usedText;
         percentText.remove(QLatin1Char('%'));
@@ -174,8 +216,12 @@ void DriveHomeCoordinator::finish(
         return;
     }
 
+    const bool changed = !m_hasLoaded || (m_drives != m_pendingDrives);
+    m_hasLoaded = true;
     m_drives = std::move(m_pendingDrives);
     m_pendingTargets.clear();
-    Q_EMIT drivesChanged(m_drives);
+    if (changed) {
+        Q_EMIT drivesChanged(m_drives);
+    }
     Q_EMIT loadingFinished(true);
 }

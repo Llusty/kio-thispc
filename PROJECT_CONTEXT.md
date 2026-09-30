@@ -15,24 +15,21 @@ The goal is not to replace KDE with Windows UI. The goal is a familiar Explorer-
 - Undo/Redo;
 - rich transfer UI, native local transfer engine, previews, search, device/network integration, etc.
 
-## Current release candidate — 0.34.0
-**0.34.0 — Explorer UX / View & Navigation Polish** is feature-complete and in
-release prep. Stages 2–7 and the final Split View visual parity polish have
-passed manual acceptance; final manual release smoke is confirmed PASS.
+## Current release candidate — 0.35.0
+**0.35.0 — Drives & Devices** is feature-complete and in release prep. Stages 1–3
+have passed automated regression and manual hardware acceptance.
 
-Accepted 0.34.0 scope:
-- stable CLI version reporting, Split address parity and drive-card spacing;
-- hidden-item visuals and unified inline rename;
-- keyboard navigation with stable `thispc:/` current/focus;
-- per-folder profiles with snapshot Apply/Remove to subfolders rules;
-- nine icon-size steps with menu and keyboard controls;
-- shared Primary/Split header, view and per-URL profile semantics.
-
-Two details remain non-blocking cosmetic follow-ups: approximately 1 px/sub-pixel
-header/accent-line alignment, and replacing `PointingHandCursor` on `thispc:/` /
-Split Home folder and drive cards with the standard `ArrowCursor` used by normal
-listings. Removable-media discovery remains in 0.35 and Split-divider
-double-click to 50/50 remains a future polish idea.
+Accepted 0.35.0 scope:
+- dynamic drive and device discovery through KDE Solid;
+- event-driven SolidDeviceMonitor with 250 ms debouncing, eliminating periodic polling and flicker;
+- unmounted removable volume discovery and presentation on `thispc:/` with "Niezamontowany" status;
+- on-demand mounting via DeviceMountController on click/Enter with auto-navigation into the mounted folder;
+- sidebar displays mounted volumes only;
+- clean filesystem-only Unmount via native async QtDBus `org.freedesktop.UDisks2.Filesystem.Unmount` without turning off device power;
+- safe physical removal (Safely Remove) coordinating unmount across all member volumes followed by `org.freedesktop.UDisks2.Drive.PowerOff`;
+- safely remove works seamlessly for already-unmounted volumes;
+- media ejection capability ("Wysuń") for optical drives (`canEject`);
+- safe redirection of Primary and Split panes away from unmounted/removed mountpoints back to `thispc:/`.
 
 User-confirmed working behavior includes:
 - navigation and address/breadcrumb controls;

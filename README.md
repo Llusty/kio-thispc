@@ -1,17 +1,16 @@
-# kio-thispc 0.34.0
+# kio-thispc 0.35.0
 
-## 0.34.0 — Explorer UX / View & Navigation Polish
+## 0.35.0 — Drives & Devices
 
-- Stage 2: stabilne `thispc-view --version`, parity adresu/breadcrumbs w Split View oraz ograniczone odstępy kart dysków.
-- Stage 3: czytelne, przygaszone wizualizacje ukrytych plików i folderów.
-- Stage 4: wspólny inline rename dla F2, menu kontekstowego i wolnego drugiego kliknięcia.
-- Stage 5: pełna nawigacja klawiaturą oraz stabilny current/focus w `thispc:/`.
-- Stage 6: profile widoku per-folder oraz snapshotowe reguły Apply/Remove to subfolders bez rekurencyjnego skanowania KIO.
-- Stage 7: dziewięć stopni rozmiaru ikon, kontrolki menu i skróty `Ctrl++`, `Ctrl+=`, `Ctrl+-`.
-- Finalny polish ujednolica semantykę nagłówków, geometrię Icons/List/Details/Compact, kolumny Details, profile per-URL i runtime geometry paska adresu między Primary i Split.
-- Znany, nieblokujący detal kosmetyczny pozostaje odłożony: około 1 px różnicy pionowego wyrównania nagłówka/paska i położenia niebieskiej linii aktywnego panelu względem szarej ramki.
-- Wykrywanie pendrive/removable pozostaje w 0.35 Drives & Devices, a double-click separatora Split do 50/50 jest przyszłym pomysłem polishowym.
-- Finalna automatyczna regresja: 32 zestawy / 8317 asercji PASS; build, CLI version i izolowany install smoke PASS.
+- Stage 1: dynamiczne wykrywanie dysków i urządzeń pamięci masowej przez KDE Solid; sterowany zdarzeniami `SolidDeviceMonitor` z debouncingiem 250 ms eliminuje okresowy polling i miganie „Odświeżanie…”.
+- Stage 2: wykrywanie i prezentacja odmontowanych woluminów wymiennych na `thispc:/` jako „Niezamontowany”; montowanie na żądanie (`DeviceMountController`) po kliknięciu lub Enter z natychmiastowym wejściem do katalogu; sidebar prezentuje wyłącznie zamontowane woluminy.
+- Stage 3: pełna asynchroniczna obsługa cyklu życia urządzeń (`DeviceRemovalController`):
+  - akcja „Odmontuj” wykonuje czyste odmontowanie systemu plików wyłącznie przez natywny QtDBus `org.freedesktop.UDisks2.Filesystem.Unmount` (brak wyłączania zasilania);
+  - akcja „Bezpiecznie usuń” koordynuje odmontowanie wszystkich zamontowanych partycji dysku i asynchroniczny `org.freedesktop.UDisks2.Drive.PowerOff`;
+  - obsługa bezpiecznego usuwania dla woluminów już odmontowanych;
+  - obsługa wysuwania nośników optycznych („Wysuń”) na urządzeniach ze zdolnością `canEject`;
+  - bezpieczne przekierowanie paneli Primary i Split z odmontowanego punktu montowania z powrotem do `thispc:/`.
+- Finalna automatyczna regresja: 35 zestawów / 8562 asercje PASS; build, CLI version i manual acceptance PASS.
 
 ## 0.31.0 — Split View Synchronization
 
@@ -247,8 +246,8 @@ Funkcje z 0.15.4 — kompaktowy popup operacji, dynamiczna wysokość, anulowani
 
 ```bash
 cd ~/Pobrane
-tar -xzf kio-thispc-0.34.0.tar.gz
-cd kio-thispc-0.34.0
+tar -xzf kio-thispc-0.35.0.tar.gz
+cd kio-thispc-0.35.0
 chmod +x install.sh
 ./install.sh
 ```

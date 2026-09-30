@@ -59,4 +59,5 @@ private:
     QList<DriveInfo> m_pendingDrives;
     QSet<QString> m_pendingTargets;
     quint64 m_generation = 0;
+    bool m_hasLoaded = false;
 };

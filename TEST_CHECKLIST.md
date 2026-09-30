@@ -72,6 +72,26 @@ Only test on disposable files.
 - [ ] `TMPDIR=/tmp python3 tests/run-pane-actions.py --suites split_layout panes search` przechodzi regresję szerokości paneli.
 - [x] `git diff --check` is clean
 
+## Final release verification — 0.35.0 (2026-09-30)
+
+- [x] `./scripts/build.sh` — PASS (`thispc` and `thispc-view`).
+- [x] Focused `drive_home`, `solid_monitor`, `device_mount`, `device_removal` — 259 assertions PASS.
+- [x] `TMPDIR=/tmp python3 tests/run-pane-actions.py --all` — 35 suites / 8562 assertions PASS.
+- [x] `tests/version-cli.py` — 6/6 assertions PASS.
+- [x] Built `thispc-view --version` prints `thispc-view 0.35.0` and exits 0.
+- [x] `git diff --check` — PASS.
+- [x] Stages 1–3 manually verified on real USB hardware:
+  - dynamic hotplug detection without restart/F5,
+  - unmounted removable volume discovery on `thispc:/`,
+  - mount on click/Enter with auto-navigation into directory,
+  - sidebar displays mounted-only volumes,
+  - filesystem-only Unmount preserves device power and block device,
+  - Safely Remove unmounts all member partitions then powers off physical drive,
+  - Safely Remove works for already-unmounted volumes,
+  - Primary and Split panes cleanly exit dead mountpoints back to `thispc:/`,
+  - no periodic polling and no "Odświeżanie…" flicker.
+- [ ] Standard system install requires the user's interactive `sudo` password.
+
 ## Final release verification — 0.34.0 (2026-09-28)
 
 - [x] `./scripts/build.sh` — PASS (`thispc` and `thispc-view`).

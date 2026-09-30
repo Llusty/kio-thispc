@@ -109,18 +109,51 @@ class DriveFrame : public ClickableFrame
     Q_OBJECT
 
 public:
-    explicit DriveFrame(const DriveInfo &drive, QWidget *parent = nullptr);
+    explicit DriveFrame(const DriveInfo &drive,
+                        bool canSafelyRemove = false,
+                        bool canEject = false,
+                        QWidget *parent = nullptr);
+    const DriveInfo &drive() const { return m_drive; }
+    bool canSafelyRemove() const { return m_canSafelyRemove; }
+    bool canEject() const { return m_canEject; }
+
+    void setCapabilities(bool canSafelyRemove, bool canEject)
+    {
+        m_canSafelyRemove = canSafelyRemove;
+        m_canEject = canEject;
+    }
+
+Q_SIGNALS:
+    void unmountRequested(const DriveInfo &drive);
+    void safelyRemoveRequested(const DriveInfo &drive);
+    void ejectRequested(const DriveInfo &drive);
 
 protected:
     void contextMenuEvent(QContextMenuEvent *event) override;
 
 private:
     DriveInfo m_drive;
+    bool m_canSafelyRemove = false;
+    bool m_canEject = false;
 };
+
+void populateDriveContextMenu(QMenu &menu,
+                              const DriveInfo &drive,
+                              bool canSafelyRemove = false,
+                              bool canEject = false,
+                              QAction **outUnmountAction = nullptr,
+                              QAction **outSafelyRemoveAction = nullptr,
+                              QAction **outEjectAction = nullptr,
+                              QAction **outOpenAction = nullptr,
+                              QAction **outCopyPathAction = nullptr);
 
 ClickableFrame *makeFolderCard(const QString &name,
                                const QString &path,
                                const QString &iconName,
                                QWidget *parent);
+DriveFrame *makeDriveCard(const DriveInfo &drive,
+                          bool canSafelyRemove,
+                          bool canEject,
+                          QWidget *parent);
 DriveFrame *makeDriveCard(const DriveInfo &drive, QWidget *parent);
 void clearLayout(QLayout *layout);

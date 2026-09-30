@@ -1,3 +1,38 @@
+# Aktualizacja do 0.35.0
+
+Wydanie wprowadza obsługę dysków i urządzeń wymiennych (Drives & Devices): dynamiczne wykrywanie urządzeń przez KDE Solid, prezentację odmontowanych woluminów, montowanie na żądanie, czyste odmontowywanie (filesystem-only), bezpieczne usuwanie (Safely Remove) z wyłączeniem zasilania oraz wysuwanie nośników (Eject).
+
+```bash
+cd ~/Pobrane
+tar -xzf kio-thispc-0.35.0.tar.gz
+cd kio-thispc-0.35.0
+chmod +x install.sh
+./install.sh
+```
+
+## Zakres 0.35.0
+
+- dynamiczne wykrywanie dysków i urządzeń wymiennych przez Solid;
+- eliminacja okresowego timera i migania „Odświeżanie…” (sterowany zdarzeniami `SolidDeviceMonitor` z debouncingiem 250 ms);
+- prezentacja odmontowanych woluminów wymiennych na widoku domowym `thispc:/` jako „Niezamontowany”;
+- montowanie na żądanie (`DeviceMountController`) po kliknięciu lub Enter z natychmiastowym wejściem do katalogu;
+- pasek boczny prezentujący wyłącznie zamontowane woluminy;
+- akcja „Odmontuj” wykonująca czyste odmontowanie systemu plików przez natywny asynchroniczny QtDBus `org.freedesktop.UDisks2.Filesystem.Unmount` (brak wyłączania zasilania nośnika);
+- akcja „Bezpiecznie usuń” koordynująca odmontowanie wszystkich zamontowanych partycji dysku i asynchroniczny `org.freedesktop.UDisks2.Drive.PowerOff`;
+- bezpieczne usuwanie działające również na już odmontowanych woluminach;
+- akcja „Wysuń” dla napędów optycznych (`canEject`);
+- automatyczne przekierowanie paneli Primary i Split z odmontowanego punktu montowania z powrotem do `thispc:/`.
+
+## Weryfikacja 0.35.0
+
+- ręczny odbiór etapów Stage 1, Stage 2 i Stage 3 na rzeczywistym sprzęcie USB: PASS;
+- build: PASS;
+- pełna regresja: 35 zestawów / 8562 asercje PASS;
+- CLI `thispc-view 0.35.0`, kod wyjścia 0: PASS;
+- brak periodic pollingu i brak blokowania wątku głównego.
+
+---
+
 # Aktualizacja do 0.34.0
 
 Wydanie kończy Explorer UX / View & Navigation Polish: ujednolica obsługę widoków i nawigacji między Primary i Split, zachowując dotychczasową semantykę KIO.

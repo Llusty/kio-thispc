@@ -48,6 +48,17 @@ void makePassive(QWidget *widget)
 
 QString driveTooltip(const DriveInfo &drive)
 {
+    if (!drive.isMounted) {
+        QString tip = drive.name + QStringLiteral("\n") + trLocal("Niezamontowany", "Unmounted");
+        if (!drive.capacityText.isEmpty() && drive.capacityText != QStringLiteral("—")) {
+            tip += QStringLiteral(" • ") + drive.capacityText;
+        }
+        if (!drive.fileSystem.isEmpty()) {
+            tip += QStringLiteral("\n") + trLocal("System plików: ", "Filesystem: ") + drive.fileSystem;
+        }
+        return tip;
+    }
+
     return drive.name
         + QStringLiteral("\n")
         + drive.freeText
@@ -61,26 +72,61 @@ QString driveTooltip(const DriveInfo &drive)
         + drive.mountPoint;
 }
 
-void populateDriveContextMenu(QMenu &menu, const DriveInfo &drive)
-{
-    QAction *openAction = menu.addAction(
-        themedIcon(QStringLiteral("system-file-manager")),
-        trLocal("Otwórz w Dolphinie", "Open in Dolphin"));
-
-    QAction *copyPathAction = menu.addAction(
-        themedIcon(QStringLiteral("edit-copy")),
-        trLocal("Kopiuj punkt montowania", "Copy mount point"));
-
-    QAction *chosen = menu.exec(QCursor::pos());
-
-    if (chosen == openAction) {
-        openInDolphin(drive.targetUrl);
-    } else if (chosen == copyPathAction) {
-        QGuiApplication::clipboard()->setText(drive.mountPoint);
-    }
-}
-
 } // namespace
+
+void populateDriveContextMenu(QMenu &menu,
+                              const DriveInfo &drive,
+                              bool canSafelyRemove,
+                              bool canEject,
+                              QAction **outUnmountAction,
+                              QAction **outSafelyRemoveAction,
+                              QAction **outEjectAction,
+                              QAction **outOpenAction,
+                              QAction **outCopyPathAction)
+{
+    QAction *openAction = nullptr;
+    QAction *copyPathAction = nullptr;
+    QAction *unmountAction = nullptr;
+    QAction *safelyRemoveAction = nullptr;
+    QAction *ejectAction = nullptr;
+
+    if (drive.isMounted) {
+        openAction = menu.addAction(
+            themedIcon(QStringLiteral("system-file-manager")),
+            trLocal("Otwórz w Dolphinie", "Open in Dolphin"));
+
+        copyPathAction = menu.addAction(
+            themedIcon(QStringLiteral("edit-copy")),
+            trLocal("Kopiuj punkt montowania", "Copy mount point"));
+    }
+
+    if (drive.isRemovable) {
+        if (drive.isMounted) {
+            menu.addSeparator();
+            unmountAction = menu.addAction(
+                themedIcon(QStringLiteral("media-eject")),
+                trLocal("Odmontuj", "Unmount"));
+        }
+
+        if (canSafelyRemove) {
+            safelyRemoveAction = menu.addAction(
+                themedIcon(QStringLiteral("drive-removable-media")),
+                trLocal("Bezpiecznie usuń", "Safely remove"));
+        }
+
+        if (canEject) {
+            ejectAction = menu.addAction(
+                themedIcon(QStringLiteral("media-eject")),
+                trLocal("Wysuń", "Eject"));
+        }
+    }
+
+    if (outOpenAction) *outOpenAction = openAction;
+    if (outCopyPathAction) *outCopyPathAction = copyPathAction;
+    if (outUnmountAction) *outUnmountAction = unmountAction;
+    if (outSafelyRemoveAction) *outSafelyRemoveAction = safelyRemoveAction;
+    if (outEjectAction) *outEjectAction = ejectAction;
+}
 
 HomePageWidget::HomePageWidget(QWidget *parent)
     : QWidget(parent)
@@ -261,16 +307,53 @@ QUrl ClickableFrame::targetUrl() const
     return m_url;
 }
 
-DriveFrame::DriveFrame(const DriveInfo &drive, QWidget *parent)
+DriveFrame::DriveFrame(const DriveInfo &drive,
+                       bool canSafelyRemove,
+                       bool canEject,
+                       QWidget *parent)
     : ClickableFrame(drive.targetUrl, parent)
     , m_drive(drive)
+    , m_canSafelyRemove(canSafelyRemove)
+    , m_canEject(canEject)
 {
+    setProperty("driveId", drive.id);
+    if (!drive.isMounted) {
+        setProperty("navigationUrl", drive.id);
+    }
 }
 
 void DriveFrame::contextMenuEvent(QContextMenuEvent *event)
 {
     QMenu menu(this);
-    populateDriveContextMenu(menu, m_drive);
+    QAction *unmountAction = nullptr;
+    QAction *safelyRemoveAction = nullptr;
+    QAction *ejectAction = nullptr;
+    QAction *openAction = nullptr;
+    QAction *copyPathAction = nullptr;
+
+    populateDriveContextMenu(menu, m_drive, m_canSafelyRemove, m_canEject,
+                             &unmountAction, &safelyRemoveAction, &ejectAction,
+                             &openAction, &copyPathAction);
+
+    if (menu.actions().isEmpty()) {
+        event->accept();
+        return;
+    }
+
+    QAction *chosen = menu.exec(event->globalPos());
+    if (chosen) {
+        if (chosen == unmountAction) {
+            Q_EMIT unmountRequested(m_drive);
+        } else if (chosen == safelyRemoveAction) {
+            Q_EMIT safelyRemoveRequested(m_drive);
+        } else if (chosen == ejectAction) {
+            Q_EMIT ejectRequested(m_drive);
+        } else if (chosen == openAction) {
+            openInDolphin(m_drive.targetUrl);
+        } else if (chosen == copyPathAction) {
+            QGuiApplication::clipboard()->setText(m_drive.mountPoint);
+        }
+    }
     event->accept();
 }
 
@@ -322,9 +405,12 @@ ClickableFrame *makeFolderCard(const QString &name,
     return card;
 }
 
-DriveFrame *makeDriveCard(const DriveInfo &drive, QWidget *parent)
+DriveFrame *makeDriveCard(const DriveInfo &drive,
+                          bool canSafelyRemove,
+                          bool canEject,
+                          QWidget *parent)
 {
-    auto *card = new DriveFrame(drive, parent);
+    auto *card = new DriveFrame(drive, canSafelyRemove, canEject, parent);
     card->setMinimumHeight(88);
     card->setMaximumHeight(94);
     card->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
@@ -339,7 +425,7 @@ DriveFrame *makeDriveCard(const DriveInfo &drive, QWidget *parent)
     icon->setObjectName(QStringLiteral("driveCardIcon"));
 
     QString themeIcon = QStringLiteral("drive-harddisk");
-    if (drive.iconName.contains(QStringLiteral("removable"))) {
+    if (!drive.isMounted || drive.iconName.contains(QStringLiteral("removable"))) {
         themeIcon = QStringLiteral("drive-removable-media");
     }
 
@@ -373,10 +459,19 @@ DriveFrame *makeDriveCard(const DriveInfo &drive, QWidget *parent)
     progress->setMaximumWidth(335);
     makePassive(progress);
 
-    const QString capacity =
-        drive.freeText
-        + trLocal(" wolne z ", " free of ")
-        + drive.capacityText;
+    QString capacity;
+    if (drive.isMounted) {
+        capacity = drive.freeText
+            + trLocal(" wolne z ", " free of ")
+            + drive.capacityText;
+    } else {
+        progress->setVisible(false);
+        if (!drive.capacityText.isEmpty() && drive.capacityText != QStringLiteral("—")) {
+            capacity = trLocal("Niezamontowany • ", "Unmounted • ") + drive.capacityText;
+        } else {
+            capacity = trLocal("Niezamontowany", "Unmounted");
+        }
+    }
 
     auto *subtitle = new QLabel(capacity, card);
     subtitle->setForegroundRole(QPalette::PlaceholderText);
@@ -391,6 +486,11 @@ DriveFrame *makeDriveCard(const DriveInfo &drive, QWidget *parent)
     outer->addStretch(1);
 
     return card;
+}
+
+DriveFrame *makeDriveCard(const DriveInfo &drive, QWidget *parent)
+{
+    return makeDriveCard(drive, false, false, parent);
 }
 
 void clearLayout(QLayout *layout)

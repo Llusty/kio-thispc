@@ -654,6 +654,7 @@ public:
         restoreVerticalScrollPosition(scrollPosition);
     }
 
+    const QList<DriveInfo> &drives() const { return m_drives; }
     void setDrives(const QList<DriveInfo> &drives)
     {
         const int scrollPosition = verticalScrollPosition();
@@ -1216,6 +1217,9 @@ private:
         m_driveSidebarButtons.clear();
 
         for (const DriveInfo &drive : std::as_const(m_drives)) {
+            if (!drive.isMounted || !drive.targetUrl.isValid()) {
+                continue;
+            }
             auto *button = new SidebarDriveButton(drive, this);
 
             connect(button, &SidebarDriveButton::activated,
@@ -1335,7 +1339,7 @@ private:
     QString displayNameForLocation(const QUrl &url) const
     {
         for (const DriveInfo &drive : m_drives) {
-            if (sameLocation(drive.targetUrl, url)) {
+            if (drive.isMounted && drive.targetUrl.isValid() && sameLocation(drive.targetUrl, url)) {
                 return drive.name;
             }
         }

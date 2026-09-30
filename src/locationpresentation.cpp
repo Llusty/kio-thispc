@@ -30,7 +30,7 @@ bool matchingDrive(
     DriveInfo *match = nullptr)
 {
     for (const DriveInfo &drive : drives) {
-        if (sameLocation(drive.targetUrl, url)) {
+        if (drive.isMounted && drive.targetUrl.isValid() && sameLocation(drive.targetUrl, url)) {
             if (match) *match = drive;
             return true;
         }

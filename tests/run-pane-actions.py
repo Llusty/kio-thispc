@@ -32,7 +32,7 @@ group.add_argument('--all', action='store_true', help='run every regression suit
 group.add_argument('--suites', nargs='+', choices=[
     'panes', 'tabs', 'properties', 'search', 'actions', 'action_state', 'operations',
     'local_transfer', 'transfer_plan', 'local_move', 'local_tree', 'tree_history',
-    'sidebar_dnd', 'sidebar_layout', 'split_layout', 'templates', 'trash', 'archive', 'archive_jobs', 'archive_menu', 'archive_creation', 'preview', 'quick_look', 'batch_rename', 'view_settings', 'listing_core', 'drive_home', 'solid_monitor', 'split_compare', 'selection_menu', 'location_presentation', 'navigation_history', 'keyboard_navigation'],
+    'sidebar_dnd', 'sidebar_layout', 'split_layout', 'templates', 'trash', 'archive', 'archive_jobs', 'archive_menu', 'archive_creation', 'preview', 'quick_look', 'batch_rename', 'view_settings', 'listing_core', 'drive_home', 'solid_monitor', 'device_mount', 'device_removal', 'split_compare', 'selection_menu', 'location_presentation', 'navigation_history', 'keyboard_navigation'],
     help='build once and run only the selected regression suites')
 options = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
@@ -146,7 +146,7 @@ with tempfile.TemporaryDirectory(prefix='thispc-pane-tests-', delete=not options
         if header.name in legacy_exposed_headers:
             contents = expose_legacy_header(contents)
         (tmp / 'src' / header.name).write_text(contents)
-    for implementation in ('actionstatecontroller.cpp', 'appwidgets.cpp', 'applicationstyle.cpp', 'directorylistingcore.cpp', 'drivehomecoordinator.cpp', 'soliddevicemonitor.cpp', 'keyboardnavigation.cpp', 'locationpresentation.cpp', 'navigationhistory.cpp', 'paneadapter.cpp', 'panemenucontroller.cpp', 'primarybrowserpane.cpp', 'previewcoordinator.cpp', 'tabcontroller.cpp', 'searchuicontroller.cpp', 'selectionmenucontroller.cpp'):
+    for implementation in ('actionstatecontroller.cpp', 'appwidgets.cpp', 'applicationstyle.cpp', 'directorylistingcore.cpp', 'drivehomecoordinator.cpp', 'soliddevicemonitor.cpp', 'devicemountcontroller.cpp', 'deviceremovalcontroller.cpp', 'keyboardnavigation.cpp', 'locationpresentation.cpp', 'navigationhistory.cpp', 'paneadapter.cpp', 'panemenucontroller.cpp', 'primarybrowserpane.cpp', 'previewcoordinator.cpp', 'tabcontroller.cpp', 'searchuicontroller.cpp', 'selectionmenucontroller.cpp'):
         (tmp / 'src' / implementation).write_text((root / 'src' / implementation).read_text())
     suites = {'trash': 'empty-trash.cpp', 'panes': 'pane-actions.cpp', 'templates': 'template-menu.cpp', 'tabs': 'tab-drag-drop.cpp', 'sidebar_dnd': 'sidebar-drag-drop.cpp', 'sidebar_layout': 'sidebar-layout.cpp', 'properties': 'properties-dialog.cpp', 'search': 'search-controller.cpp', 'actions': 'file-actions.cpp', 'action_state': 'action-state-controller.cpp', 'operations': 'operation-manager.cpp', 'local_transfer': 'local-file-copy-job.cpp', 'transfer_plan': 'local-transfer-plan.cpp', 'local_move': 'local-file-move-job.cpp', 'local_tree': 'local-transfer-job.cpp', 'tree_history': 'local-tree-history.cpp', 'archive': 'archive-detection.cpp', 'archive_jobs': 'archive-extraction.cpp', 'archive_menu': 'archive-menu.cpp', 'archive_creation': 'archive-creation.cpp'}
     suites['split_layout'] = 'split-layout.cpp'
@@ -157,6 +157,8 @@ with tempfile.TemporaryDirectory(prefix='thispc-pane-tests-', delete=not options
     suites['listing_core'] = 'directory-listing-core.cpp'
     suites['drive_home'] = 'drive-home-coordinator.cpp'
     suites['solid_monitor'] = 'solid-device-monitor.cpp'
+    suites['device_mount'] = 'device-mount-controller.cpp'
+    suites['device_removal'] = 'device-removal-controller.cpp'
     suites['split_compare'] = 'split-compare.cpp'
     suites['selection_menu'] = 'selection-menu-controller.cpp'
     suites['location_presentation'] = 'location-presentation.cpp'
@@ -188,7 +190,7 @@ with tempfile.TemporaryDirectory(prefix='thispc-pane-tests-', delete=not options
 project(thispc-regressions LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_AUTOMOC ON)
-find_package(Qt6 REQUIRED COMPONENTS Core Concurrent Gui Widgets PrintSupport Pdf Test)
+find_package(Qt6 REQUIRED COMPONENTS Core Concurrent Gui Widgets PrintSupport Pdf DBus Test)
 find_package(KF6KIO REQUIRED)
 find_package(KF6ItemViews REQUIRED)
 find_package(KF6Solid REQUIRED)
@@ -197,10 +199,10 @@ find_package(ZLIB REQUIRED)
 find_package(TagLib REQUIRED)
 find_package(exiv2 REQUIRED CONFIG)
 file(GLOB TEST_HEADERS CONFIGURE_DEPENDS src/*.h)
-add_executable(pane-test src/thispcview.cpp src/actionstatecontroller.cpp src/appwidgets.cpp src/applicationstyle.cpp src/directorylistingcore.cpp src/drivehomecoordinator.cpp src/soliddevicemonitor.cpp src/keyboardnavigation.cpp src/locationpresentation.cpp src/navigationhistory.cpp src/paneadapter.cpp src/panemenucontroller.cpp src/primarybrowserpane.cpp src/previewcoordinator.cpp src/tabcontroller.cpp src/searchuicontroller.cpp src/selectionmenucontroller.cpp ${TEST_HEADERS})
+add_executable(pane-test src/thispcview.cpp src/actionstatecontroller.cpp src/appwidgets.cpp src/applicationstyle.cpp src/directorylistingcore.cpp src/drivehomecoordinator.cpp src/soliddevicemonitor.cpp src/devicemountcontroller.cpp src/deviceremovalcontroller.cpp src/keyboardnavigation.cpp src/locationpresentation.cpp src/navigationhistory.cpp src/paneadapter.cpp src/panemenucontroller.cpp src/primarybrowserpane.cpp src/previewcoordinator.cpp src/tabcontroller.cpp src/searchuicontroller.cpp src/selectionmenucontroller.cpp ${TEST_HEADERS})
 target_compile_options(pane-test PRIVATE -g3 -O0 -fno-omit-frame-pointer -Wno-unused-function -Wno-unused-variable)
 target_include_directories(pane-test PRIVATE ${LibArchive_INCLUDE_DIRS})
-target_link_libraries(pane-test PRIVATE Qt6::Core Qt6::Concurrent Qt6::Gui Qt6::Widgets Qt6::PrintSupport Qt6::Pdf Qt6::Test KF6::KIOCore KF6::KIOWidgets KF6::ItemViews KF6::Solid ${LibArchive_LIBRARIES} ZLIB::ZLIB TagLib::TagLib Exiv2::exiv2lib)
+target_link_libraries(pane-test PRIVATE Qt6::Core Qt6::Concurrent Qt6::Gui Qt6::Widgets Qt6::PrintSupport Qt6::Pdf Qt6::DBus Qt6::Test KF6::KIOCore KF6::KIOWidgets KF6::ItemViews KF6::Solid ${LibArchive_LIBRARIES} ZLIB::ZLIB TagLib::TagLib Exiv2::exiv2lib)
 target_compile_definitions(pane-test PRIVATE THISPC_BATCH_RENAME_TEST_HOOKS=1 THISPC_TEST_HARNESS=1)
 '''
     (tmp / 'CMakeLists.txt').write_text(cmake)

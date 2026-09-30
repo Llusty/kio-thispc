@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.35.0 — Drives & Devices
+
+- Stage 1: dynamiczne wykrywanie dysków i urządzeń pamięci masowej w oparciu o KDE Solid; sterowany zdarzeniami `SolidDeviceMonitor` z debouncingiem (250 ms) reaguje na hotplug oraz zmiany zamontowania bez okresowego pollingu i bez migania statusu „Odświeżanie…”.
+- Stage 2: wykrywanie i prezentacja odmontowanych woluminów wymiennych na widoku domowym `thispc:/` z dedykowaną ikoną `drive-removable-media` i etykietą „Niezamontowany”; kontroler `DeviceMountController` umożliwia montowanie na żądanie (kliknięcie lub enter) z automatycznym przejściem do zamontowanego katalogu; pasek boczny wyświetla wyłącznie zamontowane woluminy.
+- Stage 3: pełna asynchroniczna obsługa cyklu życia urządzeń wymiennych (`DeviceRemovalController`):
+  - akcja „Odmontuj” wykonuje czyste odmontowanie systemu plików wyłącznie poprzez natywne asynchroniczne wywołanie QtDBus `org.freedesktop.UDisks2.Filesystem.Unmount`, nie wyłączając zasilania nośnika i zachowując widoczność woluminu;
+  - akcja „Bezpiecznie usuń” koordynuje odmontowanie wszystkich zamontowanych partycji danego dysku fizycznego, a po ich pomyślnym odmontowaniu asynchronicznie wywołuje `org.freedesktop.UDisks2.Drive.PowerOff`;
+  - obsługa bezpiecznego usuwania działa również dla woluminów już odmontowanych;
+  - obsługa wysuwania nośników optycznych („Wysuń”) na urządzeniach ze zdolnością `canEject`;
+  - bezpieczne przekierowanie paneli Primary i Split z odmontowanego lub odłączonego punktu montowania z powrotem do `thispc:/`, bez naruszania stanu panelu niepowiązanego.
+- Finalna automatyczna regresja: 35 zestawów / 8562 asercje PASS; build, CLI `thispc-view 0.35.0` i manual acceptance PASS.
+
 ## 0.34.0 — Explorer UX / View & Navigation Polish
 
 - Stage 2: `--version` działa przed inicjalizacją GUI i kończy się kodem 0; Split ma parity przełączania adres/breadcrumb, a karty dysków zachowują kontrolowane odstępy.

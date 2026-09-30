@@ -1,7 +1,7 @@
 /*
  * kio-thispc - KF6 KIO worker providing thispc:/
  *
- * Version 0.34.0
+ * Version 0.35.0
  * SPDX-License-Identifier: MIT
  */
 
@@ -10,6 +10,7 @@
 
 #include <Solid/Device>
 #include <Solid/DeviceInterface>
+#include <Solid/DeviceNotifier>
 #include <Solid/StorageAccess>
 #include <Solid/StorageDrive>
 #include <Solid/StorageVolume>
@@ -44,12 +45,14 @@ constexpr qint64 kMinInternalVolumeBytes =
 struct VolumeInfo
 {
     QString id;
+    QString udi;
     QString name;
     QString mountPoint;
     QString fileSystem;
     qint64 totalBytes = 0;
     qint64 availableBytes = 0;
     bool removable = false;
+    bool isMounted = true;
 };
 
 bool isPolish()
@@ -231,8 +234,38 @@ std::optional<VolumeInfo> volumeFromSolid(const Solid::Device &device)
         return std::nullopt;
     }
 
-    if (!access->isAccessible()) {
-        return std::nullopt;
+    const bool removable = isRemovableDrive(device);
+    const bool accessible = access->isAccessible();
+
+    if (!accessible) {
+        if (!removable) {
+            return std::nullopt;
+        }
+
+        VolumeInfo info;
+        const QString key =
+            !volume->uuid().isEmpty() ? volume->uuid() : device.udi();
+
+        info.id = stableId(key);
+        info.udi = device.udi();
+        info.mountPoint.clear();
+        info.fileSystem = volume->fsType();
+        info.totalBytes = volume->size() > 0 ? static_cast<qint64>(volume->size()) : -1;
+        info.availableBytes = -1;
+        info.removable = true;
+        info.isMounted = false;
+
+        if (!volume->label().trimmed().isEmpty()) {
+            info.name = volume->label().trimmed();
+        } else if (!device.displayName().trimmed().isEmpty()) {
+            info.name = device.displayName().trimmed();
+        } else {
+            info.name = isPolish()
+                ? QStringLiteral("Wolumin wymienny")
+                : QStringLiteral("Removable Volume");
+        }
+
+        return info;
     }
 
     const QString mountPoint = access->filePath();
@@ -257,6 +290,7 @@ std::optional<VolumeInfo> volumeFromSolid(const Solid::Device &device)
         !volume->uuid().isEmpty() ? volume->uuid() : device.udi();
 
     info.id = stableId(key);
+    info.udi = device.udi();
     info.mountPoint = mountPoint;
     info.fileSystem =
         !volume->fsType().isEmpty()
@@ -265,7 +299,8 @@ std::optional<VolumeInfo> volumeFromSolid(const Solid::Device &device)
 
     info.totalBytes = storage.bytesTotal();
     info.availableBytes = storage.bytesAvailable();
-    info.removable = isRemovableDrive(device);
+    info.removable = removable;
+    info.isMounted = true;
 
     if (mountPoint == QStringLiteral("/")) {
         info.name = QStringLiteral("System");
@@ -296,14 +331,20 @@ VolumeInfo rootFallback()
     info.totalBytes = storage.bytesTotal();
     info.availableBytes = storage.bytesAvailable();
     info.removable = false;
+    info.isMounted = true;
 
     return info;
 }
 
-QList<VolumeInfo> mountedVolumes()
+QList<VolumeInfo> discoveredVolumes()
 {
+    // Process pending DBus messages from UDisks2 so Solid's device tree and
+    // mount accessibility states are up-to-date in this worker process.
+    QCoreApplication::processEvents();
+
     QList<VolumeInfo> result;
     QSet<QString> seenMountPoints;
+    QSet<QString> seenIds;
 
     const auto devices =
         Solid::Device::listFromType(
@@ -316,19 +357,27 @@ QList<VolumeInfo> mountedVolumes()
             continue;
         }
 
-        const QString canonicalPath =
-            QFileInfo(info->mountPoint).canonicalFilePath();
-
-        const QString canonical =
-            canonicalPath.isEmpty()
-                ? info->mountPoint
-                : canonicalPath;
-
-        if (seenMountPoints.contains(canonical)) {
+        if (seenIds.contains(info->id)) {
             continue;
         }
 
-        seenMountPoints.insert(canonical);
+        if (info->isMounted) {
+            const QString canonicalPath =
+                QFileInfo(info->mountPoint).canonicalFilePath();
+
+            const QString canonical =
+                canonicalPath.isEmpty()
+                    ? info->mountPoint
+                    : canonicalPath;
+
+            if (seenMountPoints.contains(canonical)) {
+                continue;
+            }
+
+            seenMountPoints.insert(canonical);
+        }
+
+        seenIds.insert(info->id);
         result.push_back(*info);
     }
 
@@ -337,7 +386,8 @@ QList<VolumeInfo> mountedVolumes()
     if (!seenMountPoints.contains(QStringLiteral("/"))) {
         const VolumeInfo root = rootFallback();
 
-        if (root.totalBytes > 0) {
+        if (root.totalBytes > 0 && !seenIds.contains(root.id)) {
+            seenIds.insert(root.id);
             result.push_back(root);
         }
     }
@@ -355,6 +405,9 @@ QList<VolumeInfo> mountedVolumes()
             if (a.removable != b.removable) {
                 return !a.removable;
             }
+            if (a.isMounted != b.isMounted) {
+                return a.isMounted;
+            }
             return a.name.localeAwareCompare(b.name) < 0;
         });
 
@@ -363,7 +416,7 @@ QList<VolumeInfo> mountedVolumes()
 
 std::optional<VolumeInfo> findVolume(const QString &id)
 {
-    const auto volumes = mountedVolumes();
+    const auto volumes = discoveredVolumes();
 
     for (const auto &volume : volumes) {
         if (volume.id == id) {
@@ -415,8 +468,6 @@ KIO::UDSEntry volumeEntry(const VolumeInfo &volume)
 {
     KIO::UDSEntry entry;
 
-    const int percent = usedPercent(volume);
-
     entry.fastInsert(
         KIO::UDSEntry::UDS_NAME,
         volume.id);
@@ -432,53 +483,126 @@ KIO::UDSEntry volumeEntry(const VolumeInfo &volume)
         KIO::UDSEntry::UDS_MIME_TYPE,
         QStringLiteral("inode/directory"));
 
-    entry.fastInsert(
-        KIO::UDSEntry::UDS_ICON_NAME,
-        progressIconName(volume));
+    if (volume.isMounted) {
+        const int percent = usedPercent(volume);
 
-    entry.fastInsert(
-        KIO::UDSEntry::UDS_DISPLAY_TYPE,
-        isPolish()
-            ? QStringLiteral("Dysk • %1").arg(formatBytes(volume.totalBytes))
-            : QStringLiteral("Drive • %1").arg(formatBytes(volume.totalBytes)));
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_ICON_NAME,
+            progressIconName(volume));
 
-    entry.fastInsert(
-        KIO::UDSEntry::UDS_TARGET_URL,
-        QUrl::fromLocalFile(volume.mountPoint).toString());
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_DISPLAY_TYPE,
+            isPolish()
+                ? QStringLiteral("Dysk • %1").arg(formatBytes(volume.totalBytes))
+                : QStringLiteral("Drive • %1").arg(formatBytes(volume.totalBytes)));
 
-    // Do NOT set UDS_LOCAL_PATH here. With a local path Dolphin can decide to
-    // generate a folder thumbnail/preview and replace the drive icon. The
-    // TARGET_URL is sufficient for opening the real mount point.
-    entry.fastInsert(
-        KIO::UDSEntry::UDS_COMMENT,
-        QStringLiteral("%1 • %2")
-            .arg(shortFreeSummary(volume), detailedSummary(volume)));
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_TARGET_URL,
+            QUrl::fromLocalFile(volume.mountPoint).toString());
 
-    // The regular Size column represents total capacity.
-    entry.fastInsert(
-        KIO::UDSEntry::UDS_SIZE,
-        volume.totalBytes);
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_COMMENT,
+            QStringLiteral("%1 • %2")
+                .arg(shortFreeSummary(volume), detailedSummary(volume)));
 
-    // Extra columns declared in thispc.json.
-    entry.fastInsert(
-        KIO::UDSEntry::UDS_EXTRA + 0,
-        formatBytes(volume.availableBytes));
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_SIZE,
+            volume.totalBytes);
 
-    entry.fastInsert(
-        KIO::UDSEntry::UDS_EXTRA + 1,
-        formatBytes(volume.totalBytes));
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_EXTRA + 0,
+            formatBytes(volume.availableBytes));
 
-    entry.fastInsert(
-        KIO::UDSEntry::UDS_EXTRA + 2,
-        QStringLiteral("%1%").arg(percent));
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_EXTRA + 1,
+            formatBytes(volume.totalBytes));
 
-    entry.fastInsert(
-        KIO::UDSEntry::UDS_EXTRA + 3,
-        volume.fileSystem);
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_EXTRA + 2,
+            QStringLiteral("%1%").arg(percent));
 
-    entry.fastInsert(
-        KIO::UDSEntry::UDS_EXTRA + 4,
-        volume.mountPoint);
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_EXTRA + 3,
+            volume.fileSystem);
+
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_EXTRA + 4,
+            volume.mountPoint);
+
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_EXTRA + 5,
+            QStringLiteral("1"));
+
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_EXTRA + 6,
+            volume.udi);
+
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_EXTRA + 7,
+            volume.removable ? QStringLiteral("1") : QStringLiteral("0"));
+
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_EXTRA + 8,
+            volume.removable ? QStringLiteral("1") : QStringLiteral("0"));
+    } else {
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_ICON_NAME,
+            QStringLiteral("drive-removable-media"));
+
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_DISPLAY_TYPE,
+            isPolish()
+                ? QStringLiteral("Dysk (niezamontowany)")
+                : QStringLiteral("Drive (unmounted)"));
+
+        // Deliberately do NOT insert UDS_TARGET_URL for unmounted volumes.
+
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_COMMENT,
+            isPolish()
+                ? QStringLiteral("Niezamontowany")
+                : QStringLiteral("Unmounted"));
+
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_SIZE,
+            volume.totalBytes > 0 ? volume.totalBytes : -1);
+
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_EXTRA + 0,
+            QStringLiteral("—"));
+
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_EXTRA + 1,
+            volume.totalBytes > 0 ? formatBytes(volume.totalBytes) : QStringLiteral("—"));
+
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_EXTRA + 2,
+            QStringLiteral("—"));
+
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_EXTRA + 3,
+            volume.fileSystem);
+
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_EXTRA + 4,
+            QString());
+
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_EXTRA + 5,
+            QStringLiteral("0"));
+
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_EXTRA + 6,
+            volume.udi);
+
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_EXTRA + 7,
+            volume.removable ? QStringLiteral("1") : QStringLiteral("0"));
+
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_EXTRA + 8,
+            volume.removable ? QStringLiteral("1") : QStringLiteral("0"));
+    }
 
 #ifndef Q_OS_WIN
     entry.fastInsert(
@@ -529,6 +653,8 @@ public:
         const QByteArray &app)
         : KIO::WorkerBase("thispc", pool, app)
     {
+        // Ensure Solid initializes its DBus notifier backend for live hotplug and mount updates
+        Solid::DeviceNotifier::instance();
     }
 
     KIO::WorkerResult listDir(
@@ -540,7 +666,7 @@ public:
             KIO::UDSEntryList entries;
             entries << rootEntry();
 
-            const auto volumes = mountedVolumes();
+            const auto volumes = discoveredVolumes();
 
             for (const auto &volume : volumes) {
                 entries << volumeEntry(volume);
@@ -555,6 +681,12 @@ public:
         if (!volume) {
             return KIO::WorkerResult::fail(
                 KIO::ERR_DOES_NOT_EXIST,
+                url.toDisplayString());
+        }
+
+        if (!volume->isMounted) {
+            return KIO::WorkerResult::fail(
+                KIO::ERR_CANNOT_ENTER_DIRECTORY,
                 url.toDisplayString());
         }
 
@@ -587,6 +719,12 @@ public:
             return KIO::WorkerResult::pass();
         }
 
+        if (!volume->isMounted) {
+            return KIO::WorkerResult::fail(
+                KIO::ERR_CANNOT_ENTER_DIRECTORY,
+                url.toDisplayString());
+        }
+
         redirection(
             redirectedLocalUrl(*volume, parts));
 
@@ -614,6 +752,12 @@ public:
         if (parts.size() == 1) {
             mimeType(QStringLiteral("inode/directory"));
             return KIO::WorkerResult::pass();
+        }
+
+        if (!volume->isMounted) {
+            return KIO::WorkerResult::fail(
+                KIO::ERR_CANNOT_ENTER_DIRECTORY,
+                url.toDisplayString());
         }
 
         redirection(

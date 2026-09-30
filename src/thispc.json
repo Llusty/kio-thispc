@@ -7,16 +7,25 @@
                 "Capacity",
                 "Used",
                 "Filesystem",
-                "Mount point"
+                "Mount point",
+                "Mounted",
+                "Solid UDI",
+                "Removable"
             ],
             "ExtraNames[pl]": [
                 "Wolne",
                 "Pojemność",
                 "Zajęte",
                 "System plików",
-                "Punkt montowania"
+                "Punkt montowania",
+                "Zamontowany",
+                "Solid UDI",
+                "Wymienny"
             ],
             "ExtraTypes": [
+                "QString",
+                "QString",
+                "QString",
                 "QString",
                 "QString",
                 "QString",
@@ -37,7 +46,10 @@
                 "Extra2",
                 "Extra3",
                 "Extra4",
-                "Extra5"
+                "Extra5",
+                "Extra6",
+                "Extra7",
+                "Extra8"
             ],
             "makedir": false,
             "maxInstances": 1,
