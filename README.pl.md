@@ -1,6 +1,14 @@
 [English](README.md) | [Polski](README.pl.md)
 
-# kio-thispc 0.35.0
+# kio-thispc 0.36.0
+
+## 0.36.0 — Network & Remote Locations
+
+- Ręczne połączenia SMB, SFTP, FTP, WebDAV i WebDAVS przez natywne KIO oraz Saved Remote Locations i potwierdzane sukcesem Recent/Reconnect.
+- Transakcyjne odtwarzanie zdalnej sesji i historii, w tym niezależnej historii Split.
+- Opcjonalne natywne discovery `remote:/` i `smb:/`; ręczne połączenia nie zależą od discovery.
+- ThisPC nie zapisuje haseł w QSettings; poświadczenia pozostają w KIO/KWallet.
+- Finalna regresja: 39 zestawów / 9075 asercji PASS; build, CLI `thispc-view 0.36.0` i ręczny odbiór Stage 1–5 PASS. Ścieżka z rzeczywistym wykrytym serwerem SMB: NOT TESTED (brak wykrywalnych usług LAN).
 
 ## 0.35.0 — Drives & Devices
 
@@ -252,8 +260,8 @@ Funkcje z 0.15.4 — kompaktowy popup operacji, dynamiczna wysokość, anulowani
 
 ```bash
 cd ~/Pobrane
-tar -xzf kio-thispc-0.35.0.tar.gz
-cd kio-thispc-0.35.0
+tar -xzf kio-thispc-0.36.0.tar.gz
+cd kio-thispc-0.36.0
 chmod +x install.sh
 ./install.sh
 ```

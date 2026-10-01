@@ -2,7 +2,7 @@
  * thispc-view - a lightweight KDE/Qt file browser with a Windows-like
  * "This PC" home page, backed by KIO.
  *
- * Version 0.35.0
+ * Version 0.36.0
  * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
@@ -23,6 +23,8 @@
 #include "paneadapter.h"
 #include "panemenucontroller.h"
 #include "primarybrowserpane.h"
+#include "remoteurlhelper.h"
+#include "remotereconnectbar.h"
 #include "previewcoordinator.h"
 #include "selectionmenucontroller.h"
 #include "tabcontroller.h"
@@ -1892,6 +1894,21 @@ private:
 
         m_contentStack = m_primaryPane->contentStack();
         primaryLayout->addWidget(m_contentStack, 1);
+        m_primaryReconnect = new RemoteReconnectBar(m_primaryPane,
+            [this](const QUrl &url) { navigateTo(url, true); });
+        primaryLayout->addWidget(m_primaryReconnect);
+        connect(m_primaryPane, &PrimaryBrowserPane::listingFinished, this,
+            [this](const QUrl &url, bool success) {
+                if (success) recordRecentLocation(url);
+            });
+        connect(m_primaryPane, &PrimaryBrowserPane::listingCanceled, this, [this] {
+            if (!m_pendingRemoteUrl.isValid()) return;
+            const QUrl target = m_pendingRemoteUrl;
+            m_pendingRemoteUrl.clear();
+            const QString message = trLocal("Połączenie anulowane.", "Connection canceled.");
+            m_primaryPane->setStatusText(message);
+            m_primaryReconnect->showFailure(target, message);
+        });
         m_contentSplitter->addWidget(m_primaryPane);
 
         m_splitPane = new SplitBrowserPane(m_contentSplitter);
@@ -1985,12 +2002,10 @@ private:
             &ThisPcWindow::openInNewWindow);
         connect(
             m_splitPane,
-            &SplitBrowserPane::locationChanged,
+            &SplitBrowserPane::listingSucceeded,
             this,
             [this](const QUrl &url) {
-                if (!m_tabRestoreInProgress) {
-                    recordRecentLocation(url);
-                }
+                recordRecentLocation(url);
             });
         connect(
             m_splitPane,
@@ -2011,6 +2026,14 @@ private:
                     updateSearchControls();
                 }
                 updateFileActionStates();
+            });
+
+        connect(
+            m_splitPane,
+            &SplitBrowserPane::statusMessageRequested,
+            this,
+            [this](const QString &message, int timeoutMs) {
+                statusBar()->showMessage(message, timeoutMs);
             });
 
         connect(m_splitPane, &SplitBrowserPane::selectionChanged,
@@ -2106,14 +2129,14 @@ private:
         statusBar()->setSizeGripEnabled(true);
 
         m_versionLabel = new QLabel(
-            QStringLiteral("v0.35.0"),
+            QStringLiteral("v0.36.0"),
             this);
         m_versionLabel->setObjectName(
             QStringLiteral("versionLabel"));
         m_versionLabel->setToolTip(
             trLocal(
-                "Wersja thispc-view 0.35.0",
-                "thispc-view version 0.35.0"));
+                "Wersja thispc-view 0.36.0",
+                "thispc-view version 0.36.0"));
         statusBar()->addPermanentWidget(m_versionLabel);
     }
 
@@ -2890,13 +2913,20 @@ private:
                 splitSortKey,
                 splitSortAscending,
                 false);
-            m_splitPane->setCurrentUrl(target, true);
+            if (wasHidden && m_activeTab >= 0 && m_activeTab < m_tabs.size()) {
+                const TabState &state = m_tabs.at(m_activeTab);
+                m_splitPane->restoreNavigation({target, state.splitHistory, state.splitHistoryIndex});
+            } else {
+                m_splitPane->setCurrentUrl(target, true);
+            }
 
             if (wasHidden) m_contentSplitter->restoreState(m_splitterState);
         } else {
             // Hiding a splitter child gives it zero visible width. Preserve
             // the user's two-pane allocation before that layout takes place.
             if (!m_splitPane->isHidden()) m_splitterState = m_contentSplitter->saveState();
+            syncActiveTabState();
+            m_splitPane->cancelListing();
             m_splitPane->cancelSearch(false);
             m_splitPane->hide();
             setActivePane(PaneId::Primary);
@@ -3057,16 +3087,16 @@ private:
             return;
         }
 
-        TabState state;
+        TabState state = m_tabs.at(m_activeTab);
         const auto navigation = m_navigation.snapshot();
         state.currentUrl = navigation.currentUrl;
         state.history = navigation.history;
         state.historyIndex = navigation.historyIndex;
         state.splitEnabled =
             m_splitPane
-            && m_splitPane->isVisible();
+            && !m_splitPane->isHidden();
 
-        if (m_splitPane) {
+        if (m_splitPane && !m_splitPane->isHidden()) {
             if (m_splitPane->currentUrl().isValid()) {
                 state.splitUrl =
                     m_splitPane->currentUrl();
@@ -3074,6 +3104,9 @@ private:
 
             state.splitViewMode =
                 m_splitPane->viewMode();
+            const auto splitNavigation = m_splitPane->navigationSnapshot();
+            state.splitHistory = splitNavigation.history;
+            state.splitHistoryIndex = splitNavigation.historyIndex;
             state.splitSortKey =
                 m_splitPane->sortKey();
             state.splitSortAscending =
@@ -3131,6 +3164,11 @@ private:
                 : PaneId::Primary);
 
         refreshRestoredSessionGeometry();
+        // Availability of the active pane is resolved again after the window
+        // is shown; during construction isVisible() is false for both panes.
+        if (snapshot.splitPaneActive) QTimer::singleShot(0, this, [this] {
+            if (m_splitPane && !m_splitPane->isHidden()) setActivePane(PaneId::Split);
+        });
         return true;
     }
 
@@ -3317,7 +3355,10 @@ private:
         m_tabController.switchTo(index);
         const TabState state = m_tabs.at(index);
         const QUrl previousPrimaryUrl = m_navigation.currentUrl();
-        m_navigation.restore({state.currentUrl, state.history, state.historyIndex});
+        const NavigationHistory::Snapshot restoredNavigation{
+            state.currentUrl, state.history, state.historyIndex};
+        m_navigation.restore(RemoteUrlHelper::isRemoteUrl(state.currentUrl)
+            ? NavigationHistory::safeRestoreBaseline(restoredNavigation) : restoredNavigation);
 
         m_tabChangeInProgress = true;
         if (m_tabBar->currentIndex() != index) {
@@ -3349,17 +3390,22 @@ private:
                 state.splitSortKey,
                 state.splitSortAscending,
                 false);
-            m_splitPane->setCurrentUrl(
-                state.splitUrl.isValid()
-                    ? state.splitUrl
-                    : state.currentUrl,
-                true);
+            m_splitPane->restoreNavigation({
+                state.splitUrl.isValid() ? state.splitUrl : state.currentUrl,
+                state.splitHistory, state.splitHistoryIndex});
         } else {
+            m_splitPane->cancelListing();
             m_splitPane->cancelSearch(false);
             m_splitPane->hide();
             setActivePane(PaneId::Primary);
         }
-        loadLocation(state.currentUrl, !sameLocation(previousPrimaryUrl, state.currentUrl));
+        loadLocation(m_navigation.currentUrl(),
+                     !sameLocation(previousPrimaryUrl, m_navigation.currentUrl()));
+        if (RemoteUrlHelper::isRemoteUrl(state.currentUrl)) {
+            navigateTo(state.currentUrl, false);
+            m_remoteHistoryOnSuccess = restoredNavigation;
+            m_hasRemoteHistoryOnSuccess = true;
+        }
         m_tabRestoreInProgress = false;
         syncActiveTabState();
     }
@@ -3576,19 +3622,105 @@ private:
 
     void navigateTo(const QUrl &rawUrl, bool addHistory)
     {
-        const QUrl previousUrl = m_navigation.currentUrl();
         if (!rawUrl.isValid()) {
             return;
         }
 
+        if (RemoteUrlHelper::isRemoteUrl(rawUrl)) {
+            const QUrl targetUrl = RemoteUrlHelper::sanitizeUrl(rawUrl);
+            if (!RemoteUrlHelper::isValidRemoteUrl(targetUrl) && !RemoteUrlHelper::isRemoteDiscoveryUrl(targetUrl)) {
+                return;
+            }
+
+            if (m_searchController->isRunning()) {
+                cancelSearch(PaneId::Primary, false);
+            }
+
+            m_primaryPane->cancelListing();
+            if (!sameLocation(m_primaryReconnect->targetUrl(), targetUrl))
+                m_hasRemoteHistoryOnSuccess = false;
+            m_primaryReconnect->hide();
+            m_pendingRemoteUrl = targetUrl;
+            m_pendingRemoteAddHistory = addHistory;
+
+            const QString hostOrLabel = targetUrl.host().isEmpty()
+                ? trLocal("Katalogi współdzielone (SMB)", "Shared Folders (SMB)")
+                : targetUrl.host();
+            statusBar()->showMessage(
+                trLocal("Łączenie z %1…", "Connecting to %1…").arg(hostOrLabel), 4000);
+
+            m_primaryPane->loadRemoteDirectory(
+                targetUrl,
+                m_showHiddenFiles,
+                m_directoryViewMode == 2,
+                [this, targetUrl](bool preserve) {
+                    if (m_pendingRemoteUrl != targetUrl) return;
+                    const bool addHist = m_pendingRemoteAddHistory;
+                    m_pendingRemoteUrl.clear();
+
+                    if (m_hasRemoteHistoryOnSuccess) {
+                        m_navigation.restore(m_remoteHistoryOnSuccess);
+                        m_hasRemoteHistoryOnSuccess = false;
+                    } else {
+                        m_navigation.navigate(targetUrl, addHist);
+                    }
+                    m_primaryPane->setCurrentUrl(targetUrl);
+                    m_primarySearch.loadLocation(targetUrl);
+
+                    const DirectoryViewProfile profile = DirectoryViewSettings::resolveProfile(targetUrl);
+                    m_directoryViewMode = profile.viewMode;
+                    m_directoryIconSizeStep = profile.iconSizeStep;
+                    m_sortKey = profile.sortKey;
+                    m_sortAscending = profile.sortAscending;
+                    m_groupMode = profile.groupMode;
+                    if (m_sortButton) m_sortButton->setIcon(themedIcon(
+                        m_sortAscending ? QStringLiteral("view-sort-ascending")
+                                        : QStringLiteral("view-sort-descending")));
+                    scheduleDateGroupingRefresh();
+                    applyDirectoryViewMode(false);
+
+                    if (m_adminBanner) m_adminBanner->setVisible(false);
+
+                    m_contentStack->setCurrentWidget(m_directoryPage);
+                    if (m_directoryDetails) m_directoryDetails->setColumnHidden(4, true);
+
+                    renderDirectoryItems(preserve);
+
+                    updateSearchControls();
+                    rebuildBreadcrumbs();
+                    updateNavigationActions();
+                    updateSidebarCurrent();
+                    updateFileActionStates();
+                    syncActiveTabState();
+                    updateActiveTabPresentation();
+                },
+                [this, targetUrl](const QString &error) {
+                    if (m_pendingRemoteUrl != targetUrl) return;
+                    m_pendingRemoteUrl.clear();
+                    const QString sanitized = RemoteUrlHelper::sanitizeErrorMessage(error, targetUrl);
+                    m_primaryReconnect->showFailure(targetUrl, sanitized);
+                    if (m_directoryStatus) {
+                        m_directoryStatus->setText(sanitized);
+                    }
+                    statusBar()->showMessage(sanitized, 6000);
+                    updateNavigationActions();
+                });
+            return;
+        }
+
+        m_pendingRemoteUrl.clear();
+        m_hasRemoteHistoryOnSuccess = false;
+        m_primaryReconnect->hide();
+        const QUrl previousUrl = m_navigation.currentUrl();
         if (!m_navigation.navigate(rawUrl, addHistory)) return;
         const QUrl url = m_navigation.currentUrl();
-        recordRecentLocation(url);
         loadLocation(url, !sameLocation(previousUrl, url));
     }
 
     void loadLocation(const QUrl &url, bool locationChangedBeforeModel = false)
     {
+        m_hasRemoteHistoryOnSuccess = false;
+        m_primaryReconnect->hide();
         const bool changedLocation =
             locationChangedBeforeModel || !sameLocation(m_navigation.currentUrl(), url);
 
@@ -3617,6 +3749,7 @@ private:
 
         m_primarySearch.loadLocation(url);
 
+        m_pendingRemoteUrl.clear();
         m_primaryPane->cancelListing();
 
         if (sameLocation(url, kThisPcUrl)) {
@@ -3653,6 +3786,10 @@ private:
 
     void loadDirectory(const QUrl &url, bool preserveStatusMessage = false)
     {
+        if (RemoteUrlHelper::isRemoteUrl(url)) {
+            navigateTo(url, false);
+            return;
+        }
         m_primaryPane->loadDirectory(
             url, preserveStatusMessage, m_showHiddenFiles,
             m_directoryViewMode == 2,
@@ -3729,7 +3866,11 @@ private:
         const bool isDir =
             item.data(directory_view_detail::DirectoryRole).toBool();
 
-        if (isDir) {
+        const bool isNavigable = isDir
+            || url.scheme() == QStringLiteral("remote")
+            || RemoteUrlHelper::isRemoteUrl(url);
+
+        if (isNavigable) {
             navigateTo(url, true);
         } else {
             QDesktopServices::openUrl(url);
@@ -3752,7 +3893,11 @@ private:
                 0,
                 Qt::UserRole + 1).toBool();
 
-        if (isDir) {
+        const bool isNavigable = isDir
+            || url.scheme() == QStringLiteral("remote")
+            || RemoteUrlHelper::isRemoteUrl(url);
+
+        if (isNavigable) {
             navigateTo(url, true);
         } else {
             QDesktopServices::openUrl(url);
@@ -4107,11 +4252,13 @@ private:
                 [this](bool value) { setShowHiddenFiles(value); },
                 [this](bool value) { setThumbnailsEnabled(value); }};
             const bool quickAccess = canQuickAccessLocation(context.directory);
+            const bool saveRemote = RemoteUrlHelper::isValidRemoteUrl(context.directory);
             m_paneMenuController.buildBackgroundMenu(backgroundMenu,
                 {context.directory, availability, viewState, quickAccess,
                  quickAccess && isQuickAccessPinned(context.directory),
                  context.directory.isLocalFile(), context.directory.isLocalFile(),
-                 DirectoryViewSettings::hasInheritedRule(context.directory)},
+                 DirectoryViewSettings::hasInheritedRule(context.directory),
+                 saveRemote},
                 {viewCallbacks,
                  [this, pane = context.id] { refreshPane(pane); },
                  [this] { selectAllDirectoryItems(); },
@@ -4132,6 +4279,9 @@ private:
                  },
                  [this, directory = context.directory] {
                      removeViewFromSubfolders(directory);
+                 },
+                 [this, directory = context.directory] {
+                     if (m_sidebar) m_sidebar->promptAddRemoteLocation(directory);
                  }});
             backgroundMenu.exec(globalPosition);
             return;
@@ -4143,6 +4293,7 @@ private:
         const bool single = selected.size() == 1;
         QMenu menu(this);
         const bool quickAccess = single && isDir && canQuickAccessLocation(url);
+        const bool saveRemote = single && isDir && RemoteUrlHelper::isValidRemoteUrl(url);
         const QMimeData *mime = QApplication::clipboard()->mimeData();
         m_paneMenuController.buildItemMenu(menu,
             {url, selected, availability, isDir, isSearchLocation(context.directory),
@@ -4152,7 +4303,8 @@ private:
              m_selectionMenuController.isLocalImageUrl(url, isDir),
              m_selectionMenuController.canSetWallpaper(url, isDir),
              isDir && mime && mime->hasUrls(), isDir && url.isLocalFile(),
-             single && url.isLocalFile()},
+             single && url.isLocalFile(),
+             saveRemote},
             {[this, pane = context.id, url, isDir] {
                  if (isDir)
                      navigatePane(pane, url);
@@ -4190,6 +4342,9 @@ private:
              [this, clicked] {
                  showPropertiesDialog(clicked.name, clicked.url, clicked.isDir,
                                       clicked.type, clicked.size, clicked.modified);
+             },
+             [this, url] {
+                 if (m_sidebar) m_sidebar->promptAddRemoteLocation(url);
              }});
         menu.exec(globalPosition);
         updateFileActionStates();
@@ -4934,6 +5089,19 @@ private:
                         : themedIcon(segment.iconName),
                     segment.url);
             }
+        } else if (RemoteUrlHelper::isRemoteUrl(m_navigation.currentUrl())) {
+            const auto segments = LocationPresentation::remotePathSegments(
+                m_navigation.currentUrl());
+            for (qsizetype index = 0; index < segments.size(); ++index) {
+                if (index > 0) addSeparator();
+                const auto &segment = segments.at(index);
+                addCrumb(
+                    segment.text,
+                    segment.iconName.isEmpty()
+                        ? QIcon()
+                        : themedIcon(segment.iconName),
+                    segment.url);
+            }
         } else {
             QString rootLabel =
                 m_navigation.currentUrl().scheme();
@@ -4968,7 +5136,7 @@ private:
 
             addCrumb(
                 rootLabel,
-                themedIcon(QStringLiteral("folder")),
+                themedIcon(LocationPresentation::iconName(rootUrl)),
                 rootUrl);
 
             QString cumulativePath;
@@ -5035,36 +5203,56 @@ private:
 private Q_SLOTS:
     void goBack()
     {
+        if (m_navigation.canGoBack() && RemoteUrlHelper::isRemoteUrl(
+                m_navigation.history().at(m_navigation.historyIndex() - 1))) {
+            NavigationHistory next;
+            next.restore(m_navigation.snapshot());
+            const QUrl target = next.back();
+            navigateTo(target, false);
+            m_remoteHistoryOnSuccess = next.snapshot();
+            m_hasRemoteHistoryOnSuccess = true;
+            return;
+        }
         const QUrl previousUrl = m_navigation.currentUrl();
         const QUrl url = m_navigation.back();
         if (!url.isValid()) return;
-        recordRecentLocation(url);
         loadLocation(url, !sameLocation(previousUrl, url));
     }
 
     void goForward()
     {
+        if (m_navigation.canGoForward() && RemoteUrlHelper::isRemoteUrl(
+                m_navigation.history().at(m_navigation.historyIndex() + 1))) {
+            NavigationHistory next;
+            next.restore(m_navigation.snapshot());
+            const QUrl target = next.forward();
+            navigateTo(target, false);
+            m_remoteHistoryOnSuccess = next.snapshot();
+            m_hasRemoteHistoryOnSuccess = true;
+            return;
+        }
         const QUrl previousUrl = m_navigation.currentUrl();
         const QUrl url = m_navigation.forward();
         if (!url.isValid()) return;
-        recordRecentLocation(url);
         loadLocation(url, !sameLocation(previousUrl, url));
     }
 
     void goUp()
     {
-        const QUrl previousUrl = m_navigation.currentUrl();
-        const QUrl parent = m_navigation.up(m_driveHomeCoordinator.drives());
+        const QUrl parent = m_navigation.parentUrl(m_driveHomeCoordinator.drives());
 
         if (parent.isValid()) {
-            recordRecentLocation(parent);
-            loadLocation(parent, !sameLocation(previousUrl, parent));
+            navigateTo(parent, true);
         }
     }
 
     void refreshCurrent(bool preserveStatusMessage = false)
     {
         reloadDrives();
+        if (RemoteUrlHelper::isRemoteUrl(m_navigation.currentUrl())) {
+            navigateTo(m_navigation.currentUrl(), false);
+            return;
+        }
 
         if (sameLocation(
                 m_navigation.currentUrl(),
@@ -5559,6 +5747,11 @@ private:
 
     QSet<QString> m_runningArchivePaths;
     NavigationHistory m_navigation;
+    QUrl m_pendingRemoteUrl;
+    bool m_pendingRemoteAddHistory = false;
+    RemoteReconnectBar *m_primaryReconnect = nullptr;
+    NavigationHistory::Snapshot m_remoteHistoryOnSuccess;
+    bool m_hasRemoteHistoryOnSuccess = false;
 
     QTimer m_refreshTimer;
     DriveHomeCoordinator m_driveHomeCoordinator{this};

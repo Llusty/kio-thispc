@@ -1,5 +1,35 @@
 [English](UPDATE.md) | [Polski](UPDATE.pl.md)
 
+# Aktualizacja do 0.36.0
+
+Wydanie dodaje Network & Remote Locations przez natywne KIO: ręczne połączenia SMB, SFTP, FTP, WebDAV i WebDAVS, Saved Remote Locations, Recent/Reconnect, transakcyjne odtwarzanie sesji/historii oraz opcjonalne natywne discovery.
+
+```bash
+cd ~/Pobrane
+tar -xzf kio-thispc-0.36.0.tar.gz
+cd kio-thispc-0.36.0
+chmod +x install.sh
+./install.sh
+```
+
+## Zakres 0.36.0
+
+- ręczne połączenia zdalne przez KIO i natywne uwierzytelnianie KIO/KWallet;
+- Saved Remote Locations oraz potwierdzane sukcesem Recent/Reconnect;
+- transakcyjne odtwarzanie zdalnej sesji oraz historii Primary/Split;
+- opcjonalne discovery `remote:/` i `smb:/` bez własnego skanera;
+- brak zapisu haseł przez ThisPC/QSettings.
+
+## Weryfikacja 0.36.0
+
+- ręczny odbiór Stage 1–5: PASS;
+- build: PASS;
+- pełna regresja: 39 zestawów / 9075 asercji PASS;
+- CLI `thispc-view 0.36.0`, kod wyjścia 0: PASS;
+- ścieżka z rzeczywistym wykrytym serwerem SMB: NOT TESTED — brak wykrywalnych usług LAN.
+
+---
+
 # Aktualizacja do 0.35.0
 
 Wydanie wprowadza obsługę dysków i urządzeń wymiennych (Drives & Devices): dynamiczne wykrywanie urządzeń przez KDE Solid, prezentację odmontowanych woluminów, montowanie na żądanie, czyste odmontowywanie (filesystem-only), bezpieczne usuwanie (Safely Remove) z wyłączeniem zasilania oraz wysuwanie nośników (Eject).

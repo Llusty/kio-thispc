@@ -358,13 +358,16 @@ zainstalowana i ręcznie potwierdzona przez użytkownika. Pełna regresja wydani
 
 ## Planowane wydania
 
-### 0.36.0 — Network & Remote Locations
+### 0.36.0 — Network & Remote Locations ✅ ukończone, wydane (v0.36.0)
 - SMB, SFTP, FTP, WebDAV via KIO where appropriate;
 - saved remote locations;
 - recent locations i reconnect tam, gdzie są użyteczne;
 - KWallet integration dla poświadczeń tam, gdzie jest właściwa;
 - discovery tylko tam, gdzie jest niezawodne; nigdy nie jest wymagane do
   ręcznego połączenia.
+- poświadczenia obsługuje natywne KIO/KWallet; ThisPC nie zapisuje haseł;
+- ręczny odbiór Stage 1–5: PASS; ścieżka z rzeczywistym wykrytym serwerem SMB: NOT TESTED z powodu braku wykrywalnych usług LAN;
+- pełna regresja: 39 zestawów / 9075 asercji PASS; CLI `thispc-view 0.36.0`, kod wyjścia 0: PASS.
 
 ### 0.37.0 — Storage Tools
 - biggest directories/files;

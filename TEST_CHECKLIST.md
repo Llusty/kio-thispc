@@ -72,6 +72,16 @@ Only test on disposable files.
 - [ ] `TMPDIR=/tmp python3 tests/run-pane-actions.py --suites split_layout panes search` przechodzi regresję szerokości paneli.
 - [x] `git diff --check` is clean
 
+## Final release verification — 0.36.0 (2026-10-01)
+
+- [x] `./scripts/build.sh` — PASS (`thispc` and `thispc-view`).
+- [x] `TMPDIR=/tmp python3 tests/run-pane-actions.py --all` — 39 suites / 9075 assertions PASS.
+- [x] `tests/version-cli.py` — 6/6 assertions PASS.
+- [x] Built `thispc-view --version` prints `thispc-view 0.36.0` and exits 0.
+- [x] `git diff --check` — PASS.
+- [x] Stages 1–5 manually accepted.
+- [ ] Live discovered SMB server path — NOT TESTED; no discoverable LAN services available.
+
 ## Final release verification — 0.35.0 (2026-09-30)
 
 - [x] `./scripts/build.sh` — PASS (`thispc` and `thispc-view`).

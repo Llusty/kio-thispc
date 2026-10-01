@@ -18,11 +18,13 @@
 
 #include <functional>
 
+class KJob;
 namespace KIO { class ListJob; }
 class QMimeDatabase;
 
 class DirectoryListingCore final : public QObject
 {
+    Q_OBJECT
 public:
     enum class EmptyNamePolicy {
         DisplayName,
@@ -63,11 +65,15 @@ public:
 
     void startListing(const QUrl &, const ListingOptions &, const ListingCallbacks &);
     void cancelListing();
+    void cancel() { cancelListing(); }
+    bool isLoading() const { return m_loading; }
     KIO::ListJob *listingJob() const;
 
     const QList<FileInfo> &files() const { return m_files; }
     QList<FileInfo> &mutableFiles() { return m_files; }
     void setFiles(const QList<FileInfo> &files) { m_files = files; }
+
+    const QList<FileInfo> &stagedFiles() const { return m_stagedFiles; }
 
     PreparedListing prepare(const RenderOptions &, QMimeDatabase &);
     QIcon iconForFile(const FileInfo &, QMimeDatabase &, bool thumbnailsEnabled,
@@ -84,8 +90,21 @@ public:
     static QList<int> rowsForSelection(const QList<RenderedFile> &,
                                        const QSet<QString> &selectedUrls);
 
+Q_SIGNALS:
+    void listingStarted(const QUrl &url);
+    void listingFinished();
+    void listingFailed(const QString &errorMessage);
+    void listingCanceled();
+
+public Q_SLOTS:
+    void slotJobFinished(KJob *job);
+
 private:
+    bool m_loading = false;
+    QUrl m_currentUrl;
     QList<FileInfo> m_files;
+    QList<FileInfo> m_stagedFiles;
     QHash<QString, QIcon> m_thumbnailCache;
     QPointer<KIO::ListJob> m_job;
+    ListingCallbacks m_callbacks;
 };

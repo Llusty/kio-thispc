@@ -2,6 +2,16 @@
 
 # Changelog
 
+## 0.36.0 — Network & Remote Locations
+
+- Added manual remote connections over SMB, SFTP, FTP, WebDAV, and secure WebDAV through native KIO jobs and authentication.
+- Added Saved Remote Locations with add, rename, remove, and active-pane navigation support.
+- Credentials remain under native KIO/KPasswdServer/KWallet control; ThisPC never persists passwords in QSettings, saved locations, recent locations, or session history.
+- Added success-confirmed Recent Locations and reconnect actions, including transactional remote navigation and session/history restore that preserves independent Split history across tabs and restarts.
+- Added optional native discovery through `remote:/` and `smb:/`, without a custom network scanner and without making discovery a prerequisite for manual connections.
+- Manual acceptance: Stages 1–5 PASS. Opening an empty `smb:/` can pause while the native backend completes discovery timeouts but remains non-blocking. A live discovered SMB server path was **NOT TESTED — no discoverable LAN services available**.
+- Final automated regression: 39 suites / 9075 assertions PASS; build and CLI `thispc-view 0.36.0` PASS.
+
 ## 0.35.0 — Drives & Devices
 
 - **Stage 1:** Dynamic drive and storage device discovery backed by KDE Solid; event-driven `SolidDeviceMonitor` with 250 ms debouncing reacts to hotplug and mount transitions without periodic polling or flickering "Refreshing…" status.

@@ -58,6 +58,7 @@ QString primaryTitle(const QUrl &url, const QVector<DriveInfo> &drives)
     }
     if (url.scheme() == QStringLiteral("trash")) return trLocal("Kosz", "Trash");
     if (url.scheme() == QStringLiteral("remote")) return trLocal("Sieć", "Network");
+    if (RemoteUrlHelper::isRemoteDiscoveryUrl(url)) return trLocal("Katalogi współdzielone (SMB)", "Shared Folders (SMB)");
 
     const QString last = QFileInfo(url.path()).fileName();
     return last.isEmpty() ? url.toDisplayString() : last;
@@ -67,6 +68,8 @@ QString splitTitle(const QUrl &url)
 {
     if (sameLocation(url, kThisPcUrl)) return trLocal("Ten komputer", "This PC");
     if (isSearchLocation(url)) return searchTitle(url, false);
+    if (url.scheme() == QStringLiteral("remote")) return trLocal("Sieć", "Network");
+    if (RemoteUrlHelper::isRemoteDiscoveryUrl(url)) return trLocal("Katalogi współdzielone (SMB)", "Shared Folders (SMB)");
 
     if (url.isLocalFile()) {
         const QString path = QDir::cleanPath(url.toLocalFile());
@@ -116,6 +119,10 @@ QString splitLocationText(const QUrl &url)
         }
         return result;
     }
+    if (url.scheme() == QStringLiteral("remote")) return trLocal("Sieć", "Network");
+    if (RemoteUrlHelper::isRemoteDiscoveryUrl(url)) {
+        return trLocal("Sieć", "Network") + QStringLiteral("  ›  ") + trLocal("Katalogi współdzielone (SMB)", "Shared Folders (SMB)");
+    }
     return urlForDisplay(url);
 }
 
@@ -123,6 +130,8 @@ QString contentHeaderText(const QUrl &url)
 {
     if (sameLocation(url, kThisPcUrl)) return trLocal("Ten komputer", "This PC");
     if (isSearchLocation(url)) return searchTitle(url, true);
+    if (url.scheme() == QStringLiteral("remote")) return trLocal("Sieć", "Network");
+    if (RemoteUrlHelper::isRemoteDiscoveryUrl(url)) return trLocal("Katalogi współdzielone (SMB)", "Shared Folders (SMB)");
     return urlForDisplay(url);
 }
 
@@ -131,11 +140,20 @@ QString iconName(const QUrl &url)
     if (sameLocation(url, kThisPcUrl)) return QStringLiteral("computer");
     if (isSearchLocation(url)) return QStringLiteral("system-search");
     if (isAdminUrl(url)) return QStringLiteral("security-high");
+    if (url.scheme() == QStringLiteral("remote")) return QStringLiteral("network-workgroup");
+    if (RemoteUrlHelper::isRemoteDiscoveryUrl(url)) return QStringLiteral("network-workgroup");
     if (url.isLocalFile()) {
         const QString path = QDir::cleanPath(url.toLocalFile());
         if (QDir::cleanPath(QStorageInfo(path).rootPath()) == path) {
             return QStringLiteral("drive-harddisk");
         }
+    }
+    if (RemoteUrlHelper::isRemoteUrl(url)) {
+        const QString path = url.path();
+        if (path.isEmpty() || path == QStringLiteral("/")) {
+            return QStringLiteral("network-server");
+        }
+        return QStringLiteral("folder-remote");
     }
     return QStringLiteral("folder");
 }
@@ -209,11 +227,46 @@ QVector<Segment> adminPathSegments(const QUrl &url)
     return segments;
 }
 
+QVector<Segment> remotePathSegments(const QUrl &url)
+{
+    QVector<Segment> segments;
+    if (RemoteUrlHelper::isRemoteDiscoveryUrl(url)) {
+        segments.append({trLocal("Sieć", "Network"), QUrl(QStringLiteral("remote:/")), QStringLiteral("network-workgroup")});
+        segments.append({trLocal("Katalogi współdzielone (SMB)", "Shared Folders (SMB)"), url, QStringLiteral("network-workgroup")});
+        return segments;
+    }
+    if (!RemoteUrlHelper::isValidRemoteUrl(url)) return segments;
+
+    const QString rootText = RemoteUrlHelper::rootLabel(url);
+    const QUrl root = RemoteUrlHelper::rootUrl(url);
+    segments.append({rootText, root, QStringLiteral("network-server")});
+
+    const QStringList parts = url.path().split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    QString cumulativePath;
+    for (const QString &part : parts) {
+        cumulativePath += QLatin1Char('/') + part;
+        QUrl segmentUrl = url;
+        segmentUrl.setPath(cumulativePath);
+        segmentUrl.setQuery(QString());
+        segmentUrl.setFragment(QString());
+        segments.append({part, segmentUrl, QStringLiteral("folder-remote")});
+    }
+    return segments;
+}
+
 QUrl parentUrl(const QUrl &url, const QVector<DriveInfo> &drives, ParentProfile profile)
 {
     if ((profile == ParentProfile::Split && !url.isValid())
         || sameLocation(url, kThisPcUrl)) {
         return {};
+    }
+    if (RemoteUrlHelper::isRemoteUrl(url)) {
+        QUrl parent = RemoteUrlHelper::parentUrl(url);
+        if (profile == ParentProfile::Split && parent != kThisPcUrl) {
+            parent.setQuery(QString());
+            return normalizedUrl(parent);
+        }
+        return parent;
     }
     if (isSearchLocation(url)) {
         const QUrl base = searchBaseFromUrl(url);

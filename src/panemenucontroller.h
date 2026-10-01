@@ -27,6 +27,7 @@ public:
         bool terminalEnabled = false;
         bool adminVisible = false;
         bool inheritedRuleEnabled = false;
+        bool saveRemoteVisible = false;
     };
 
     struct BackgroundCallbacks {
@@ -45,6 +46,7 @@ public:
         std::function<void()> openAdmin;
         std::function<void()> applyInheritedRule;
         std::function<void()> removeInheritedRule;
+        std::function<void()> saveRemote;
     };
 
     struct ItemState {
@@ -62,6 +64,7 @@ public:
         bool pasteIntoEnabled = false;
         bool terminalEnabled = false;
         bool adminVisible = false;
+        bool saveRemoteVisible = false;
     };
 
     struct ItemCallbacks {
@@ -87,6 +90,7 @@ public:
         std::function<void()> pasteInto;
         std::function<void()> copyAddress;
         std::function<void()> properties;
+        std::function<void()> saveRemote;
     };
 
     explicit PaneMenuController(SelectionMenuController *selectionMenus);

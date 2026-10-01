@@ -12,6 +12,9 @@
 
 #include "browsercommon.h"
 #include "directoryview.h"
+#include "remoteurlhelper.h"
+#include "savedremotelocation.h"
+#include "savedremotelocationdialog.h"
 
 #include <KProtocolManager>
 
@@ -64,7 +67,7 @@ public:
                   const QUrl &url,
                   QWidget *parent = nullptr)
         : QPushButton(themedIcon(iconName), text, parent)
-        , m_url(url)
+        , m_url(normalizedUrl(url))
     {
         setObjectName(QStringLiteral("sidebarButton"));
         setFlat(true);
@@ -96,6 +99,7 @@ public:
     {
         m_quickAccessEntry = enabled;
     }
+    void setRecentEntry(bool enabled) { m_recentEntry = enabled; }
 
 Q_SIGNALS:
     void activated(const QUrl &url);
@@ -139,6 +143,15 @@ protected:
     {
         QMenu menu(this);
 
+        // Keep the payload alive if a successful listing rebuilds Recent while
+        // this menu's nested event loop is running.
+        const QUrl target = m_url;
+        QAction *reconnectAction = nullptr;
+        if (m_recentEntry && RemoteUrlHelper::isRemoteUrl(target)) {
+            reconnectAction = menu.addAction(themedIcon(QStringLiteral("view-refresh")),
+                trLocal("Połącz ponownie", "Reconnect"));
+        }
+
         QAction *openAction = menu.addAction(
             themedIcon(QStringLiteral("folder-open")),
             trLocal("Otwórz", "Open"));
@@ -163,7 +176,9 @@ protected:
         }
 
         QAction *chosen = menu.exec(event->globalPos());
-        if (chosen == openAction) {
+        if (reconnectAction && chosen == reconnectAction) {
+            Q_EMIT activated(target);
+        } else if (chosen == openAction) {
             Q_EMIT activated(m_url);
         } else if (chosen == newTabAction) {
             Q_EMIT openInNewTabRequested(m_url, true);
@@ -182,6 +197,7 @@ protected:
 private:
     QUrl m_url;
     bool m_quickAccessEntry = false;
+    bool m_recentEntry = false;
 };
 
 
@@ -533,6 +549,11 @@ public:
         return m_contentLayout;
     }
 
+    QToolButton *headerButton() const
+    {
+        return m_header;
+    }
+
 private:
     void setExpanded(bool expanded)
     {
@@ -548,6 +569,194 @@ private:
     QToolButton *m_header = nullptr;
     QWidget *m_content = nullptr;
     QVBoxLayout *m_contentLayout = nullptr;
+};
+
+
+class SavedRemoteLocationSidebarButton : public SidebarButton
+{
+    Q_OBJECT
+
+public:
+    SavedRemoteLocationSidebarButton(const QString &id,
+                                     const QString &text,
+                                     const QString &iconName,
+                                     const QUrl &url,
+                                     QWidget *parent = nullptr)
+        : SidebarButton(text, iconName, url, parent)
+        , m_id(id)
+    {
+    }
+
+    QString id() const { return m_id; }
+
+Q_SIGNALS:
+    void renameRequested(const QString &id);
+    void removeRequested(const QString &id);
+    void addRemoteRequested();
+
+protected:
+    void contextMenuEvent(QContextMenuEvent *event) override
+    {
+        QMenu menu(this);
+
+        QAction *openAction = menu.addAction(
+            themedIcon(QStringLiteral("folder-open")),
+            trLocal("Otwórz", "Open"));
+        QAction *newTabAction = menu.addAction(
+            themedIcon(QStringLiteral("tab-new")),
+            trLocal("Otwórz w nowej karcie", "Open in new tab"));
+        QAction *newWindowAction = menu.addAction(
+            themedIcon(QStringLiteral("window-new")),
+            trLocal("Otwórz w nowym oknie", "Open in new window"));
+        QAction *splitPaneAction = menu.addAction(
+            themedIcon(QStringLiteral("view-split-left-right"),
+                       QStringLiteral("view-list-details")),
+            trLocal("Otwórz w drugim panelu", "Open in other pane"));
+
+        menu.addSeparator();
+
+        QAction *copyUrlAction = menu.addAction(
+            themedIcon(QStringLiteral("edit-copy")),
+            trLocal("Kopiuj adres", "Copy address"));
+
+        menu.addSeparator();
+
+        QAction *renameAction = menu.addAction(
+            themedIcon(QStringLiteral("edit-rename")),
+            trLocal("Zmień nazwę…", "Rename…"));
+
+        QAction *removeAction = menu.addAction(
+            themedIcon(QStringLiteral("list-remove"), QStringLiteral("edit-delete")),
+            trLocal("Usuń z zapisanych", "Remove from saved"));
+
+        menu.addSeparator();
+
+        QAction *addAction = menu.addAction(
+            themedIcon(QStringLiteral("list-add"), QStringLiteral("network-server")),
+            trLocal("Dodaj lokalizację zdalną…", "Add remote location…"));
+
+        QAction *chosen = menu.exec(event->globalPos());
+        if (chosen == openAction) {
+            Q_EMIT activated(url());
+        } else if (chosen == newTabAction) {
+            Q_EMIT openInNewTabRequested(url(), true);
+        } else if (chosen == newWindowAction) {
+            Q_EMIT openInNewWindowRequested(url());
+        } else if (chosen == splitPaneAction) {
+            Q_EMIT openInSplitPaneRequested(url());
+        } else if (chosen == copyUrlAction) {
+            const QUrl sanitized = RemoteUrlHelper::sanitizeUrl(url());
+            QGuiApplication::clipboard()->setText(sanitized.toString(QUrl::FullyEncoded));
+        } else if (chosen == renameAction) {
+            Q_EMIT renameRequested(m_id);
+        } else if (chosen == removeAction) {
+            Q_EMIT removeRequested(m_id);
+        } else if (chosen == addAction) {
+            Q_EMIT addRemoteRequested();
+        }
+
+        event->accept();
+    }
+
+private:
+    QString m_id;
+};
+
+
+class NetworkSidebarButton : public SidebarButton
+{
+    Q_OBJECT
+
+public:
+    NetworkSidebarButton(const QString &text,
+                         const QString &iconName,
+                         const QUrl &url,
+                         QWidget *parent = nullptr)
+        : SidebarButton(text, iconName, url, parent)
+    {
+    }
+
+Q_SIGNALS:
+    void addRemoteRequested();
+
+protected:
+    void contextMenuEvent(QContextMenuEvent *event) override
+    {
+        QMenu menu(this);
+
+        QAction *openAction = menu.addAction(
+            themedIcon(QStringLiteral("folder-open")),
+            trLocal("Otwórz", "Open"));
+        QAction *newTabAction = menu.addAction(
+            themedIcon(QStringLiteral("tab-new")),
+            trLocal("Otwórz w nowej karcie", "Open in new tab"));
+        QAction *newWindowAction = menu.addAction(
+            themedIcon(QStringLiteral("window-new")),
+            trLocal("Otwórz w nowym oknie", "Open in new window"));
+        QAction *splitPaneAction = menu.addAction(
+            themedIcon(QStringLiteral("view-split-left-right"),
+                       QStringLiteral("view-list-details")),
+            trLocal("Otwórz w drugim panelu", "Open in other pane"));
+
+        menu.addSeparator();
+
+        QAction *addAction = menu.addAction(
+            themedIcon(QStringLiteral("list-add"), QStringLiteral("network-server")),
+            trLocal("Dodaj lokalizację zdalną…", "Add remote location…"));
+
+        QAction *chosen = menu.exec(event->globalPos());
+        if (chosen == openAction) {
+            Q_EMIT activated(url());
+        } else if (chosen == newTabAction) {
+            Q_EMIT openInNewTabRequested(url(), true);
+        } else if (chosen == newWindowAction) {
+            Q_EMIT openInNewWindowRequested(url());
+        } else if (chosen == splitPaneAction) {
+            Q_EMIT openInSplitPaneRequested(url());
+        } else if (chosen == addAction) {
+            Q_EMIT addRemoteRequested();
+        }
+
+        event->accept();
+    }
+};
+
+
+class AddRemoteSidebarButton : public QPushButton
+{
+    Q_OBJECT
+
+public:
+    explicit AddRemoteSidebarButton(QWidget *parent = nullptr)
+        : QPushButton(themedIcon(QStringLiteral("list-add"), QStringLiteral("network-server")),
+                      trLocal("Dodaj lokalizację zdalną…", "Add remote location…"),
+                      parent)
+    {
+        setObjectName(QStringLiteral("sidebarButton"));
+        setFlat(true);
+        setCursor(Qt::PointingHandCursor);
+        setIconSize(QSize(18, 18));
+        setMinimumHeight(31);
+        setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        setToolTip(trLocal("Dodaj lokalizację zdalną…", "Add remote location…"));
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QStyleOptionButton option;
+        initStyleOption(&option);
+        int textWidth = style()->subElementRect(
+            QStyle::SE_PushButtonContents, &option, this).width();
+        if (!option.icon.isNull()) {
+            textWidth -= option.icon.actualSize(option.iconSize).width() + 4;
+        }
+        option.text = option.fontMetrics.elidedText(
+            option.text, Qt::ElideRight, std::max(0, textWidth),
+            Qt::TextShowMnemonic);
+        QStylePainter painter(this);
+        painter.drawControl(QStyle::CE_PushButton, option);
+    }
 };
 
 
@@ -573,6 +782,11 @@ public:
 
         loadPersistentState();
         buildSections();
+
+        connect(&SavedRemoteLocationsStore::instance(),
+                &SavedRemoteLocationsStore::locationsChanged,
+                this,
+                &SidebarPanel::rebuildRemoteLocations);
     }
 
     ~SidebarPanel() override
@@ -635,6 +849,7 @@ public:
         if (!url.isValid()
             || sameLocation(url, kThisPcUrl)
             || isSearchLocation(url)
+            || RemoteUrlHelper::isRemoteDiscoveryUrl(url)
             || !KProtocolManager::supportsListing(url)) {
             return;
         }
@@ -649,7 +864,6 @@ public:
         while (m_recentLocationUrls.size() > 10) {
             m_recentLocationUrls.removeLast();
         }
-
         saveRecentLocations();
         rebuildRecentLocations();
         restoreVerticalScrollPosition(scrollPosition);
@@ -681,6 +895,56 @@ public:
     {
         m_currentLocation = normalizedUrl(url);
         updateCurrent();
+    }
+
+    void promptAddRemoteLocation(const QUrl &prefillUrl = QUrl())
+    {
+        SavedRemoteLocationDialog dialog(
+            SavedRemoteLocationDialog::Mode::Add,
+            prefillUrl,
+            QString(),
+            QString(),
+            window());
+        if (dialog.exec() == QDialog::Accepted) {
+            const QUrl url = dialog.url();
+            const QString name = dialog.displayName();
+            if (SavedRemoteLocationsStore::instance().addLocation(name, url)) {
+                Q_EMIT statusMessageRequested(
+                    trLocal("Zapisano lokalizację zdalną.", "Saved remote location."),
+                    3000);
+            }
+        }
+    }
+
+    void promptRenameRemoteLocation(const QString &id)
+    {
+        if (!SavedRemoteLocationsStore::instance().hasLocation(id)) {
+            return;
+        }
+        const auto loc = SavedRemoteLocationsStore::instance().locationById(id);
+
+        SavedRemoteLocationDialog dialog(
+            SavedRemoteLocationDialog::Mode::Rename,
+            loc.url,
+            loc.displayName,
+            loc.id,
+            window());
+        if (dialog.exec() == QDialog::Accepted) {
+            if (SavedRemoteLocationsStore::instance().renameLocation(id, dialog.displayName())) {
+                Q_EMIT statusMessageRequested(
+                    trLocal("Zmieniono nazwę lokalizacji zdalnej.", "Renamed remote location."),
+                    3000);
+            }
+        }
+    }
+
+    void removeRemoteLocation(const QString &id)
+    {
+        if (SavedRemoteLocationsStore::instance().removeLocation(id)) {
+            Q_EMIT statusMessageRequested(
+                trLocal("Usunięto lokalizację zdalną.", "Removed remote location."),
+                3000);
+        }
     }
 
 Q_SIGNALS:
@@ -989,6 +1253,12 @@ private:
         while (m_recentLocationUrls.size() > 10) {
             m_recentLocationUrls.removeLast();
         }
+        const QStringList cleanRecent = encodedUrlList(m_recentLocationUrls);
+        if (settings.value(QStringLiteral("quickAccess/recentLocations")).toStringList() != cleanRecent)
+            settings.setValue(QStringLiteral("quickAccess/recentLocations"), cleanRecent);
+        const QStringList cleanFavorites = encodedUrlList(m_quickAccessUrls);
+        if (settings.value(QStringLiteral("quickAccess/favorites")).toStringList() != cleanFavorites)
+            settings.setValue(QStringLiteral("quickAccess/favorites"), cleanFavorites);
     }
 
     void saveQuickAccessUrls()
@@ -1098,11 +1368,22 @@ private:
             QStringLiteral("remote"),
             this);
         m_layout->addWidget(remoteSection);
-        addSidebarLocation(
-            remoteSection->contentLayout(),
-            trLocal("Sieć", "Network"),
-            QStringLiteral("network-workgroup"),
-            QUrl(QStringLiteral("remote:/")));
+        m_remoteSection = remoteSection;
+        m_remoteLayout = remoteSection->contentLayout();
+
+        remoteSection->headerButton()->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(remoteSection->headerButton(), &QWidget::customContextMenuRequested,
+                this, [this](const QPoint &pos) {
+            QMenu menu(this);
+            QAction *addAction = menu.addAction(
+                themedIcon(QStringLiteral("list-add"), QStringLiteral("network-server")),
+                trLocal("Dodaj lokalizację zdalną…", "Add remote location…"));
+            if (menu.exec(m_remoteSection->headerButton()->mapToGlobal(pos)) == addAction) {
+                promptAddRemoteLocation();
+            }
+        });
+
+        rebuildRemoteLocations();
 
         auto *devicesSection = new CollapsibleSection(
             trLocal("Urządzenia", "Devices"),
@@ -1203,6 +1484,7 @@ private:
                 QStringLiteral("document-open-recent"),
                 url,
                 this);
+            button->setRecentEntry(true);
             connectSidebarButton(button);
             m_recentLocationsLayout->addWidget(button);
         }
@@ -1249,6 +1531,62 @@ private:
             m_devicesLayout->addWidget(button);
             m_driveSidebarButtons.push_back(button);
         }
+    }
+
+    void rebuildRemoteLocations()
+    {
+        if (!m_remoteLayout) {
+            return;
+        }
+
+        const int scrollPosition = verticalScrollPosition();
+        clearLayout(m_remoteLayout);
+        m_remoteLocationButtons.clear();
+        m_networkButton = nullptr;
+
+        // 1. "Sieć" / "Network" (remote:/)
+        m_networkButton = new NetworkSidebarButton(
+            trLocal("Sieć", "Network"),
+            QStringLiteral("network-workgroup"),
+            QUrl(QStringLiteral("remote:/")),
+            this);
+        connectSidebarButton(m_networkButton);
+        connect(m_networkButton, &NetworkSidebarButton::addRemoteRequested,
+                this, [this] { promptAddRemoteLocation(); });
+        m_remoteLayout->addWidget(m_networkButton);
+
+        // 2. Saved remote locations
+        const auto &locations = SavedRemoteLocationsStore::instance().locations();
+        for (const auto &loc : locations) {
+            const QString iconName = RemoteUrlHelper::iconForRemoteUrl(loc.url);
+            auto *button = new SavedRemoteLocationSidebarButton(
+                loc.id,
+                loc.displayName,
+                iconName,
+                loc.url,
+                this);
+            connectSidebarButton(button);
+            connect(button, &SavedRemoteLocationSidebarButton::renameRequested,
+                    this, &SidebarPanel::promptRenameRemoteLocation);
+            connect(button, &SavedRemoteLocationSidebarButton::removeRequested,
+                    this, &SidebarPanel::removeRemoteLocation);
+            connect(button, &SavedRemoteLocationSidebarButton::addRemoteRequested,
+                    this, [this] { promptAddRemoteLocation(); });
+            registerTransferDropTarget(button, loc.url);
+
+            m_remoteLayout->addWidget(button);
+            m_remoteLocationButtons.append(button);
+        }
+
+        // 3. Dedicated Add button
+        auto *addButton = new AddRemoteSidebarButton(this);
+        connect(addButton, &QPushButton::clicked, this, [this] {
+            promptAddRemoteLocation();
+        });
+        m_remoteLayout->addWidget(addButton);
+
+        updateCurrent();
+        restoreVerticalScrollPosition(scrollPosition);
     }
 
     void pinQuickAccessLocation(const QUrl &rawUrl)
@@ -1400,6 +1738,33 @@ private:
             }
         }
 
+        for (SavedRemoteLocationSidebarButton *button :
+             std::as_const(m_remoteLocationButtons)) {
+            button->setCurrent(false);
+            if (button->url().isValid()
+                && isWithinLocation(m_currentLocation, button->url())) {
+                const int depth = locationDepth(button->url());
+                if (depth > bestDepth) {
+                    bestDepth = depth;
+                    bestStatic = button;
+                    bestDrive = nullptr;
+                }
+            }
+        }
+
+        if (m_networkButton) {
+            m_networkButton->setCurrent(false);
+            if (m_networkButton->url().isValid()
+                && isWithinLocation(m_currentLocation, m_networkButton->url())) {
+                const int depth = locationDepth(m_networkButton->url());
+                if (depth > bestDepth) {
+                    bestDepth = depth;
+                    bestStatic = m_networkButton;
+                    bestDrive = nullptr;
+                }
+            }
+        }
+
         for (SidebarDriveButton *button :
              std::as_const(m_driveSidebarButtons)) {
             button->setCurrent(false);
@@ -1431,6 +1796,9 @@ private:
     QVBoxLayout *m_quickAccessLayout = nullptr;
     QVBoxLayout *m_recentLocationsLayout = nullptr;
     QVBoxLayout *m_devicesLayout = nullptr;
+    CollapsibleSection *m_remoteSection = nullptr;
+    QVBoxLayout *m_remoteLayout = nullptr;
+    NetworkSidebarButton *m_networkButton = nullptr;
 
     QList<QUrl> m_quickAccessUrls;
     QList<QUrl> m_recentLocationUrls;
@@ -1439,6 +1807,7 @@ private:
 
     QList<QuickAccessSidebarButton *> m_quickAccessButtons;
     QList<SidebarButton *> m_staticSidebarButtons;
+    QList<SavedRemoteLocationSidebarButton *> m_remoteLocationButtons;
     QList<SidebarDriveButton *> m_driveSidebarButtons;
     int m_activeDriveContextMenus = 0;
     bool m_driveRebuildPending = false;

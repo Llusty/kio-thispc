@@ -5,6 +5,7 @@
 
 #include "directorylistingcore.h"
 
+#include "remoteurlhelper.h"
 #include "directoryview.h"
 #include "directoryviewsettings.h"
 
@@ -17,6 +18,11 @@
 
 #include <algorithm>
 
+#include <KIO/JobUiDelegateFactory>
+#include <KJobUiDelegate>
+#include <KJobWidgets>
+#include <QWidget>
+
 DirectoryListingCore::DirectoryListingCore(QObject *parent)
     : QObject(parent)
 {
@@ -26,34 +32,73 @@ void DirectoryListingCore::startListing(const QUrl &url,
     const ListingOptions &options, const ListingCallbacks &callbacks)
 {
     cancelListing();
-    m_files.clear();
+    m_loading = true;
+    m_currentUrl = url;
+    m_callbacks = callbacks;
+    m_stagedFiles.clear();
 
     KIO::ListJob *job = KIO::listDir(url, KIO::HideProgressInfo);
-    job->setUiDelegate(nullptr);
+    QWidget *parentWidget = qobject_cast<QWidget *>(parent());
+    QWidget *window = parentWidget ? parentWidget->window() : nullptr;
+    if (window) {
+        KJobWidgets::setWindow(job, window);
+        if (KJobUiDelegate *delegate =
+                KIO::createDefaultJobUiDelegate(KJobUiDelegate::AutoHandlingDisabled, window)) {
+            job->setUiDelegate(delegate);
+        }
+    } else {
+        job->setUiDelegate(nullptr);
+    }
     m_job = job;
 
     connect(job, &KIO::ListJob::entries, this,
         [this, url, job, options](KIO::Job *, const KIO::UDSEntryList &entries) {
             if (m_job != job) return;
-            appendEntries(m_files, url, entries, options);
+            appendEntries(m_stagedFiles, url, entries, options);
         });
-    connect(job, &KJob::result, this, [this, job, callbacks](KJob *) {
-        if (m_job != job) return;
-        m_job = nullptr;
-        if (job->error()) {
-            if (callbacks.failed) callbacks.failed(job->errorString());
-            return;
-        }
-        if (callbacks.succeeded) callbacks.succeeded(job);
-    });
+    connect(job, &KJob::result, this, &DirectoryListingCore::slotJobFinished);
+
+    Q_EMIT listingStarted(url);
+}
+
+void DirectoryListingCore::slotJobFinished(KJob *job)
+{
+    if (m_job != job) return;
+    m_job = nullptr;
+    m_loading = false;
+    ListingCallbacks callbacks = m_callbacks;
+    m_callbacks = {};
+
+    if (job->error()) {
+        m_stagedFiles.clear();
+        const QString err = RemoteUrlHelper::sanitizeErrorMessage(job->errorString(), m_currentUrl);
+        if (callbacks.failed) callbacks.failed(err);
+        Q_EMIT listingFailed(err);
+        return;
+    }
+
+    m_files = std::move(m_stagedFiles);
+    m_stagedFiles.clear();
+    if (callbacks.succeeded) callbacks.succeeded(qobject_cast<KIO::ListJob *>(job));
+    Q_EMIT listingFinished();
 }
 
 void DirectoryListingCore::cancelListing()
 {
-    if (!m_job) return;
-    KIO::ListJob *job = m_job.data();
-    m_job = nullptr;
-    job->kill();
+    if (!m_loading && !m_job) {
+        m_stagedFiles.clear();
+        return;
+    }
+    m_stagedFiles.clear();
+    m_loading = false;
+    m_callbacks = {};
+
+    if (m_job) {
+        KIO::ListJob *job = m_job.data();
+        m_job = nullptr;
+        job->kill(KJob::Quietly);
+    }
+    Q_EMIT listingCanceled();
 }
 
 KIO::ListJob *DirectoryListingCore::listingJob() const

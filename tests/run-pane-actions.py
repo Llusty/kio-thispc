@@ -35,7 +35,7 @@ group.add_argument('--all', action='store_true', help='run every regression suit
 group.add_argument('--suites', nargs='+', choices=[
     'panes', 'tabs', 'properties', 'search', 'actions', 'action_state', 'operations',
     'local_transfer', 'transfer_plan', 'local_move', 'local_tree', 'tree_history',
-    'sidebar_dnd', 'sidebar_layout', 'split_layout', 'templates', 'trash', 'archive', 'archive_jobs', 'archive_menu', 'archive_creation', 'preview', 'quick_look', 'batch_rename', 'view_settings', 'listing_core', 'drive_home', 'solid_monitor', 'device_mount', 'device_removal', 'split_compare', 'selection_menu', 'location_presentation', 'navigation_history', 'keyboard_navigation'],
+    'sidebar_dnd', 'sidebar_layout', 'split_layout', 'templates', 'trash', 'archive', 'archive_jobs', 'archive_menu', 'archive_creation', 'preview', 'quick_look', 'batch_rename', 'view_settings', 'listing_core', 'drive_home', 'solid_monitor', 'device_mount', 'device_removal', 'split_compare', 'selection_menu', 'location_presentation', 'navigation_history', 'keyboard_navigation', 'remote_url', 'saved_remote', 'recent_reconnect', 'session_history'],
     help='build once and run only the selected regression suites')
 options = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
@@ -149,7 +149,7 @@ with tempfile.TemporaryDirectory(prefix='thispc-pane-tests-', delete=not options
         if header.name in legacy_exposed_headers:
             contents = expose_legacy_header(contents)
         (tmp / 'src' / header.name).write_text(contents)
-    for implementation in ('actionstatecontroller.cpp', 'appwidgets.cpp', 'applicationstyle.cpp', 'directorylistingcore.cpp', 'drivehomecoordinator.cpp', 'soliddevicemonitor.cpp', 'devicemountcontroller.cpp', 'deviceremovalcontroller.cpp', 'keyboardnavigation.cpp', 'locationpresentation.cpp', 'navigationhistory.cpp', 'paneadapter.cpp', 'panemenucontroller.cpp', 'primarybrowserpane.cpp', 'previewcoordinator.cpp', 'tabcontroller.cpp', 'searchuicontroller.cpp', 'selectionmenucontroller.cpp'):
+    for implementation in ('actionstatecontroller.cpp', 'appwidgets.cpp', 'applicationstyle.cpp', 'directorylistingcore.cpp', 'drivehomecoordinator.cpp', 'soliddevicemonitor.cpp', 'devicemountcontroller.cpp', 'deviceremovalcontroller.cpp', 'keyboardnavigation.cpp', 'locationpresentation.cpp', 'navigationhistory.cpp', 'paneadapter.cpp', 'panemenucontroller.cpp', 'primarybrowserpane.cpp', 'previewcoordinator.cpp', 'tabcontroller.cpp', 'searchuicontroller.cpp', 'selectionmenucontroller.cpp', 'remoteurlhelper.cpp', 'savedremotelocation.cpp', 'savedremotelocationdialog.cpp'):
         (tmp / 'src' / implementation).write_text((root / 'src' / implementation).read_text())
     suites = {'trash': 'empty-trash.cpp', 'panes': 'pane-actions.cpp', 'templates': 'template-menu.cpp', 'tabs': 'tab-drag-drop.cpp', 'sidebar_dnd': 'sidebar-drag-drop.cpp', 'sidebar_layout': 'sidebar-layout.cpp', 'properties': 'properties-dialog.cpp', 'search': 'search-controller.cpp', 'actions': 'file-actions.cpp', 'action_state': 'action-state-controller.cpp', 'operations': 'operation-manager.cpp', 'local_transfer': 'local-file-copy-job.cpp', 'transfer_plan': 'local-transfer-plan.cpp', 'local_move': 'local-file-move-job.cpp', 'local_tree': 'local-transfer-job.cpp', 'tree_history': 'local-tree-history.cpp', 'archive': 'archive-detection.cpp', 'archive_jobs': 'archive-extraction.cpp', 'archive_menu': 'archive-menu.cpp', 'archive_creation': 'archive-creation.cpp'}
     suites['split_layout'] = 'split-layout.cpp'
@@ -167,6 +167,10 @@ with tempfile.TemporaryDirectory(prefix='thispc-pane-tests-', delete=not options
     suites['location_presentation'] = 'location-presentation.cpp'
     suites['navigation_history'] = 'navigation-history.cpp'
     suites['keyboard_navigation'] = 'keyboard-navigation.cpp'
+    suites['remote_url'] = 'remote-url-helper.cpp'
+    suites['saved_remote'] = 'saved-remote-locations.cpp'
+    suites['recent_reconnect'] = 'recent-reconnect.cpp'
+    suites['session_history'] = 'session-history.cpp'
     selected = options.suites or (list(suites) if options.all else ['trash' if options.trash else 'templates' if options.templates else 'sidebar_layout' if options.sidebar_layout else 'sidebar_dnd' if options.sidebar_dnd else 'local_move' if options.local_move else 'transfer_plan' if options.transfer_plan else 'local_transfer' if options.local_transfer else 'operations' if options.operations else 'action_state' if options.action_state else 'actions' if options.actions else 'tabs' if options.tabs else 'properties' if options.properties else 'search' if options.search else 'panes'])
     if 'batch_rename' in selected:
         subprocess.run(['cmake', '-S', str(root), '-B', str(root / 'build'),
@@ -202,7 +206,7 @@ find_package(ZLIB REQUIRED)
 find_package(TagLib REQUIRED)
 find_package(exiv2 REQUIRED CONFIG)
 file(GLOB TEST_HEADERS CONFIGURE_DEPENDS src/*.h)
-add_executable(pane-test src/thispcview.cpp src/actionstatecontroller.cpp src/appwidgets.cpp src/applicationstyle.cpp src/directorylistingcore.cpp src/drivehomecoordinator.cpp src/soliddevicemonitor.cpp src/devicemountcontroller.cpp src/deviceremovalcontroller.cpp src/keyboardnavigation.cpp src/locationpresentation.cpp src/navigationhistory.cpp src/paneadapter.cpp src/panemenucontroller.cpp src/primarybrowserpane.cpp src/previewcoordinator.cpp src/tabcontroller.cpp src/searchuicontroller.cpp src/selectionmenucontroller.cpp ${TEST_HEADERS})
+add_executable(pane-test src/thispcview.cpp src/actionstatecontroller.cpp src/appwidgets.cpp src/applicationstyle.cpp src/directorylistingcore.cpp src/drivehomecoordinator.cpp src/soliddevicemonitor.cpp src/devicemountcontroller.cpp src/deviceremovalcontroller.cpp src/keyboardnavigation.cpp src/locationpresentation.cpp src/navigationhistory.cpp src/paneadapter.cpp src/panemenucontroller.cpp src/primarybrowserpane.cpp src/previewcoordinator.cpp src/tabcontroller.cpp src/searchuicontroller.cpp src/selectionmenucontroller.cpp src/remoteurlhelper.cpp src/savedremotelocation.cpp src/savedremotelocationdialog.cpp ${TEST_HEADERS})
 target_compile_options(pane-test PRIVATE -g3 -O0 -fno-omit-frame-pointer -Wno-unused-function -Wno-unused-variable)
 target_include_directories(pane-test PRIVATE ${LibArchive_INCLUDE_DIRS})
 target_link_libraries(pane-test PRIVATE Qt6::Core Qt6::Concurrent Qt6::Gui Qt6::Widgets Qt6::PrintSupport Qt6::Pdf Qt6::DBus Qt6::Test KF6::KIOCore KF6::KIOWidgets KF6::ItemViews KF6::Solid ${LibArchive_LIBRARIES} ZLIB::ZLIB TagLib::TagLib Exiv2::exiv2lib)
@@ -242,4 +246,5 @@ target_compile_definitions(pane-test PRIVATE THISPC_BATCH_RENAME_TEST_HOOKS=1 TH
         if suite not in {'operations', 'local_transfer', 'transfer_plan', 'local_move', 'local_tree', 'tree_history',
                          'sidebar_layout', 'archive', 'archive_creation', 'solid_monitor'}:
             command = ['dbus-run-session', '--config-file=' + str(bus_config), '--'] + command
+        print(f'RUN SUITE: {suite}', flush=True)
         subprocess.run(command, env=env, check=True, timeout=60)

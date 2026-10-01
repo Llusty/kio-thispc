@@ -181,12 +181,15 @@ This ordering prioritizes core file-manager correctness, safety, and maintainabi
 
 ## Planned Releases
 
-### 0.36.0 — Network & Remote Locations
+### 0.36.0 — Network & Remote Locations ✅ completed, released (v0.36.0)
 - SMB, SFTP, FTP, and WebDAV via KIO where appropriate;
 - Saved remote locations;
 - Recent locations and reconnect actions where useful;
 - KWallet integration for credentials where appropriate;
 - Discovery only where reliable; never required for manual connections.
+- Native KIO/KWallet owns credentials; ThisPC persists no passwords.
+- Manual acceptance Stages 1–5: PASS; live discovered SMB server path: NOT TESTED because no discoverable LAN services were available.
+- Final automated regression: 39 suites / 9075 assertions PASS; CLI `thispc-view 0.36.0`, exit code 0: PASS.
 
 ### 0.37.0 — Storage Tools
 - Largest directories and files;

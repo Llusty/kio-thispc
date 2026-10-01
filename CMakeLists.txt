@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(kio-thispc VERSION 0.35.0 LANGUAGES CXX)
+project(kio-thispc VERSION 0.36.0 LANGUAGES CXX)
 
 set(QT_MIN_VERSION "6.5.0")
 set(KF_MIN_VERSION "6.17.0")
@@ -87,6 +87,13 @@ add_executable(thispc-view
     src/panemenucontroller.h
     src/primarybrowserpane.cpp
     src/primarybrowserpane.h
+    src/remoteurlhelper.cpp
+    src/remoteurlhelper.h
+    src/remotereconnectbar.h
+    src/savedremotelocation.cpp
+    src/savedremotelocation.h
+    src/savedremotelocationdialog.cpp
+    src/savedremotelocationdialog.h
     src/previewcoordinator.cpp
     src/previewcoordinator.h
     src/panecontext.h
@@ -166,6 +173,13 @@ add_executable(thispc-view-stage3c1-test EXCLUDE_FROM_ALL
     src/panemenucontroller.h
     src/primarybrowserpane.cpp
     src/primarybrowserpane.h
+    src/remoteurlhelper.cpp
+    src/remoteurlhelper.h
+    src/remotereconnectbar.h
+    src/savedremotelocation.cpp
+    src/savedremotelocation.h
+    src/savedremotelocationdialog.cpp
+    src/savedremotelocationdialog.h
     src/previewcoordinator.cpp
     src/previewcoordinator.h
     src/panecontext.h

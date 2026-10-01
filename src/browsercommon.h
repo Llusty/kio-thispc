@@ -10,6 +10,7 @@
 #pragma once
 
 #include <KIO/UDSEntry>
+#include "remoteurlhelper.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -273,6 +274,9 @@ inline QString fileTypeLabel(
 
 inline QUrl normalizedUrl(QUrl url)
 {
+    url = RemoteUrlHelper::sanitizeUrl(url);
+    if (RemoteUrlHelper::isRemoteUrl(url) && url.path().isEmpty())
+        url.setPath(QStringLiteral("/"));
     if (url.isLocalFile()) {
         url = QUrl::fromLocalFile(QDir::cleanPath(url.toLocalFile()));
         return url;
@@ -303,9 +307,11 @@ inline QString urlForDisplay(const QUrl &url)
         return url.toLocalFile();
     }
 
-    return url.toDisplayString(QUrl::PreferLocalFile);
+    return normalizedUrl(url).toDisplayString(QUrl::PreferLocalFile);
 }
 
+
+#include "remoteurlhelper.h"
 
 inline QUrl urlFromUserText(const QString &text)
 {
@@ -313,6 +319,14 @@ inline QUrl urlFromUserText(const QString &text)
 
     if (trimmed.isEmpty()) {
         return {};
+    }
+
+    const int colon = trimmed.indexOf(QLatin1Char(':'));
+    if (colon > 0) {
+        const QString schemeCandidate = trimmed.left(colon).toLower();
+        if (RemoteUrlHelper::isRemoteScheme(schemeCandidate)) {
+            return RemoteUrlHelper::parseUserInput(trimmed);
+        }
     }
 
     if (trimmed.startsWith(QLatin1Char('/'))) {

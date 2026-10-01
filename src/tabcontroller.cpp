@@ -28,11 +28,13 @@ int TabController::create(
     bool sortAscending)
 {
     TabState state;
-    state.currentUrl = url;
-    state.history = {url};
+    state.currentUrl = normalizedUrl(url);
+    state.history = {state.currentUrl};
     state.historyIndex = 0;
     state.splitEnabled = false;
-    state.splitUrl = url;
+    state.splitUrl = state.currentUrl;
+    state.splitHistory = {state.splitUrl};
+    state.splitHistoryIndex = 0;
     state.splitViewMode = -1;
     state.splitSortKey = sortKey;
     state.splitSortAscending = sortAscending;

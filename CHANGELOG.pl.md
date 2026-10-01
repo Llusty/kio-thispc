@@ -2,6 +2,16 @@
 
 # Changelog
 
+## 0.36.0 — Network & Remote Locations
+
+- Dodano ręczne połączenia zdalne SMB, SFTP, FTP, WebDAV i bezpieczny WebDAV przez natywne zadania i uwierzytelnianie KIO.
+- Dodano Saved Remote Locations z dodawaniem, zmianą nazwy, usuwaniem i nawigacją do aktywnego panelu.
+- Poświadczenia pozostają pod kontrolą natywnego KIO/KPasswdServer/KWallet; ThisPC nie zapisuje haseł w QSettings, zapisanych i ostatnich lokalizacjach ani historii sesji.
+- Dodano potwierdzane sukcesem Recent Locations i reconnect, w tym transakcyjną nawigację zdalną oraz odtwarzanie sesji/historii z niezależną historią Split zachowywaną między kartami i restartami.
+- Dodano opcjonalne natywne discovery przez `remote:/` i `smb:/`, bez własnego skanera sieci i bez uzależniania ręcznych połączeń od discovery.
+- Odbiór ręczny: Stage 1–5 PASS. Otwarcie pustego `smb:/` może chwilę czekać na timeouty natywnego backendu, ale nie blokuje interfejsu. Ścieżka z rzeczywistym wykrytym serwerem SMB pozostała **NOT TESTED — no discoverable LAN services available**.
+- Finalna automatyczna regresja: 39 zestawów / 9075 asercji PASS; build i CLI `thispc-view 0.36.0` PASS.
+
 ## 0.35.0 — Drives & Devices
 
 - Stage 1: dynamiczne wykrywanie dysków i urządzeń pamięci masowej w oparciu o KDE Solid; sterowany zdarzeniami `SolidDeviceMonitor` z debouncingiem (250 ms) reaguje na hotplug oraz zmiany zamontowania bez okresowego pollingu i bez migania statusu „Odświeżanie…”.

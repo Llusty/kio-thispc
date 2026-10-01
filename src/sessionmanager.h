@@ -25,6 +25,8 @@ struct TabState
     int historyIndex = -1;
     bool splitEnabled = false;
     QUrl splitUrl = kThisPcUrl;
+    QList<QUrl> splitHistory;
+    int splitHistoryIndex = -1;
     int splitViewMode = -1;
     int splitSortKey = 0;
     bool splitSortAscending = true;
@@ -75,13 +77,13 @@ public:
 
             settings.setValue(
                 QStringLiteral("currentUrl"),
-                state.currentUrl.toString(QUrl::FullyEncoded));
+                normalizedUrl(state.currentUrl).toString(QUrl::FullyEncoded));
 
             QStringList history;
             history.reserve(state.history.size());
             for (const QUrl &url : state.history) {
                 history.push_back(
-                    url.toString(QUrl::FullyEncoded));
+                    normalizedUrl(url).toString(QUrl::FullyEncoded));
             }
             settings.setValue(
                 QStringLiteral("history"),
@@ -94,7 +96,12 @@ public:
                 state.splitEnabled);
             settings.setValue(
                 QStringLiteral("splitUrl"),
-                state.splitUrl.toString(QUrl::FullyEncoded));
+                normalizedUrl(state.splitUrl).toString(QUrl::FullyEncoded));
+            QStringList splitHistory;
+            for (const QUrl &url : state.splitHistory)
+                splitHistory.push_back(normalizedUrl(url).toString(QUrl::FullyEncoded));
+            settings.setValue(QStringLiteral("splitHistory"), splitHistory);
+            settings.setValue(QStringLiteral("splitHistoryIndex"), state.splitHistoryIndex);
             settings.setValue(
                 QStringLiteral("splitViewMode"),
                 state.splitViewMode);
@@ -162,6 +169,29 @@ public:
             state.splitViewMode = settings.value(
                 QStringLiteral("splitViewMode"),
                 -1).toInt();
+            const QStringList splitValues = settings.value(QStringLiteral("splitHistory")).toStringList();
+            for (const QString &value : splitValues) {
+                const QUrl url = normalizedUrl(QUrl(value));
+                if (url.isValid()) state.splitHistory.push_back(url);
+            }
+            if (state.splitHistory.isEmpty()) state.splitHistory = {state.splitUrl};
+            state.splitHistoryIndex = std::clamp(settings.value(
+                QStringLiteral("splitHistoryIndex"), static_cast<int>(state.splitHistory.size()) - 1).toInt(),
+                0, static_cast<int>(state.splitHistory.size()) - 1);
+
+            // Rewrite only changed legacy URL fields, retaining unrelated settings.
+            for (const QString &key : {QStringLiteral("currentUrl"), QStringLiteral("splitUrl")}) {
+                const QString old = settings.value(key).toString();
+                const QString clean = RemoteUrlHelper::sanitizeUrl(QUrl(old)).toString(QUrl::FullyEncoded);
+                if (old != clean) settings.setValue(key, clean);
+            }
+            for (const QString &key : {QStringLiteral("history"), QStringLiteral("splitHistory")}) {
+                const QStringList old = settings.value(key).toStringList();
+                QStringList clean;
+                for (const QString &value : old)
+                    clean.push_back(RemoteUrlHelper::sanitizeUrl(QUrl(value)).toString(QUrl::FullyEncoded));
+                if (old != clean) settings.setValue(key, clean);
+            }
             state.splitSortKey = std::clamp(
                 settings.value(
                     QStringLiteral("splitSortKey"),

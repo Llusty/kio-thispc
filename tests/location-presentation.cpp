@@ -126,6 +126,38 @@ int main(int argc, char **argv)
     verify(!LocationPresentation::parentUrl(QUrl(), drives, LocationPresentation::ParentProfile::Split).isValid(),
            "invalid split location has no parent");
 
+    // Network discovery locations (remote:/ and smb://)
+    const QUrl remoteDiscoveryRoot(QStringLiteral("remote:/"));
+    const QUrl smbDiscoveryRoot(QStringLiteral("smb://"));
+    verify(LocationPresentation::primaryTitle(remoteDiscoveryRoot, drives) == trLocal("Sieć", "Network"),
+           "remote discovery root primary title");
+    verify(LocationPresentation::splitTitle(remoteDiscoveryRoot) == trLocal("Sieć", "Network"),
+           "remote discovery root split title");
+    verify(LocationPresentation::iconName(remoteDiscoveryRoot) == QStringLiteral("network-workgroup"),
+           "remote discovery root icon");
+    verify(LocationPresentation::parentUrl(remoteDiscoveryRoot, drives, LocationPresentation::ParentProfile::Primary) == thisPc,
+           "remote discovery root primary parent is This PC");
+    verify(LocationPresentation::parentUrl(remoteDiscoveryRoot, drives, LocationPresentation::ParentProfile::Split) == thisPc,
+           "remote discovery root split parent is This PC");
+
+    verify(LocationPresentation::primaryTitle(smbDiscoveryRoot, drives) == trLocal("Katalogi współdzielone (SMB)", "Shared Folders (SMB)"),
+           "smb discovery root primary title");
+    verify(LocationPresentation::splitTitle(smbDiscoveryRoot) == trLocal("Katalogi współdzielone (SMB)", "Shared Folders (SMB)"),
+           "smb discovery root split title");
+    verify(LocationPresentation::iconName(smbDiscoveryRoot) == QStringLiteral("network-workgroup"),
+           "smb discovery root icon");
+    verify(LocationPresentation::parentUrl(smbDiscoveryRoot, drives, LocationPresentation::ParentProfile::Primary) == remoteDiscoveryRoot,
+           "smb discovery root primary parent is remote:/");
+    verify(LocationPresentation::parentUrl(smbDiscoveryRoot, drives, LocationPresentation::ParentProfile::Split) == remoteDiscoveryRoot,
+           "smb discovery root split parent is remote:/");
+
+    const auto smbSegments = LocationPresentation::remotePathSegments(smbDiscoveryRoot);
+    verify(smbSegments.size() == 2, "smb discovery breadcrumb segments count");
+    verify(smbSegments.at(0).url == remoteDiscoveryRoot && smbSegments.at(0).text == trLocal("Sieć", "Network"),
+           "smb first crumb is remote:/");
+    verify(smbSegments.at(1).url == smbDiscoveryRoot && smbSegments.at(1).text == trLocal("Katalogi współdzielone (SMB)", "Shared Folders (SMB)"),
+           "smb second crumb is smb://");
+
     qInfo("PASS: %d location presentation assertions", checks);
     return 0;
 }

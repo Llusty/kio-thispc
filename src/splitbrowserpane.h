@@ -17,6 +17,8 @@
 #include "locationpresentation.h"
 #include "pathwidgets.h"
 #include "searchcontroller.h"
+#include "navigationhistory.h"
+#include "remotereconnectbar.h"
 
 #include <QAbstractItemView>
 #include <QAction>
@@ -443,6 +445,17 @@ public:
 
         m_contentStack = new QStackedWidget(this);
         outer->addWidget(m_contentStack, 1);
+        m_reconnect = new RemoteReconnectBar(this,
+            [this](const QUrl &url) { navigateTo(url, true); });
+        outer->addWidget(m_reconnect);
+        connect(&m_listingCore, &DirectoryListingCore::listingCanceled, this, [this] {
+            if (!m_pendingRemoteUrl.isValid()) return;
+            const QUrl target = m_pendingRemoteUrl;
+            m_pendingRemoteUrl.clear();
+            const QString message = trLocal("Połączenie anulowane.", "Connection canceled.");
+            m_status->setText(message);
+            m_reconnect->showFailure(target, message);
+        });
         m_directoryPage = new QWidget(m_contentStack);
         auto *directoryLayout = new QVBoxLayout(m_directoryPage);
         directoryLayout->setContentsMargins(0, 0, 0, 0);
@@ -690,7 +703,7 @@ public:
     DirectoryListWidget *listView() const { return m_list; }
     DirectoryTreeWidget *detailsView() const { return m_details; }
     KIO::ListJob *listingJob() const { return m_listingCore.listingJob(); }
-    void cancelListing() { m_listingCore.cancelListing(); }
+    void cancelListing() { m_listingCore.cancelListing(); m_pendingRemoteUrl.clear(); }
     const QList<FileInfo> &files() const { return m_listingCore.files(); }
     void setFiles(const QList<FileInfo> &files) { m_listingCore.setFiles(files); }
     QWidget *shortcutScope() const { return m_viewStack; }
@@ -885,7 +898,35 @@ public:
 
     void refresh()
     {
+        if (RemoteUrlHelper::isRemoteUrl(m_currentUrl)) navigateTo(m_currentUrl, false);
+        else loadDirectory(m_currentUrl);
+    }
+
+    NavigationHistory::Snapshot navigationSnapshot() const
+    { return {m_currentUrl, m_history, m_historyIndex}; }
+
+    void restoreNavigation(const NavigationHistory::Snapshot &snapshot)
+    {
+        cancelListing();
+        NavigationHistory restored;
+        restored.restore(snapshot);
+        const auto desired = restored.snapshot();
+        const bool remote = RemoteUrlHelper::isRemoteUrl(desired.currentUrl);
+        restored.restore(remote ? NavigationHistory::safeRestoreBaseline(desired) : desired);
+        const auto safe = restored.snapshot();
+        m_history = safe.history;
+        m_historyIndex = safe.historyIndex;
+        m_currentUrl = safe.currentUrl;
+        m_hasRemoteHistoryOnSuccess = false;
         loadDirectory(m_currentUrl);
+        updateNavigationButtons();
+        Q_EMIT locationChanged(m_currentUrl);
+        Q_EMIT stateChanged();
+        if (remote) {
+            navigateTo(desired.currentUrl, false);
+            m_remoteHistoryOnSuccess = desired;
+            m_hasRemoteHistoryOnSuccess = true;
+        }
     }
 
     void focusView()
@@ -931,12 +972,14 @@ Q_SIGNALS:
     void openInNewWindowRequested(
         const QUrl &url);
     void locationChanged(const QUrl &url);
+    void listingSucceeded(const QUrl &url);
     void stateChanged();
     void urlsDropped(
         const QList<QUrl> &urls,
         const QUrl &destination,
         const QPoint &globalPosition,
         Qt::KeyboardModifiers modifiers);
+    void statusMessageRequested(const QString &message, int timeoutMs);
 
 private:
     QString friendlyLocationText(
@@ -983,8 +1026,12 @@ private:
             for (const auto &segment : LocationPresentation::adminPathSegments(m_currentUrl)) {
                 segments.append({segment.text, segment.url});
             }
+        } else if (RemoteUrlHelper::isRemoteUrl(m_currentUrl)) {
+            for (const auto &segment : LocationPresentation::remotePathSegments(m_currentUrl)) {
+                segments.append({segment.text, segment.url});
+            }
         }
-        if (m_currentUrl.isLocalFile()) {
+        if (m_currentUrl.isLocalFile() || RemoteUrlHelper::isRemoteUrl(m_currentUrl)) {
             QStringList labels;
             for (const auto &segment : segments) labels.append(segment.text);
             m_breadcrumbButton->setText(labels.join(QStringLiteral("  ›  ")));
@@ -1016,6 +1063,97 @@ private:
             return;
         }
 
+        if (RemoteUrlHelper::isRemoteUrl(rawUrl)) {
+            const QUrl targetUrl = RemoteUrlHelper::sanitizeUrl(rawUrl);
+            if (!RemoteUrlHelper::isValidRemoteUrl(targetUrl) && !RemoteUrlHelper::isRemoteDiscoveryUrl(targetUrl)) {
+                return;
+            }
+
+            if (m_searchController->isRunning()) {
+                m_searchController->cancel();
+            }
+
+            m_listingCore.cancelListing();
+            if (!sameLocation(m_reconnect->targetUrl(), targetUrl))
+                m_hasRemoteHistoryOnSuccess = false;
+            m_reconnect->hide();
+            m_pendingRemoteUrl = targetUrl;
+            m_pendingRemoteAddHistory = addHistory;
+            const QString hostOrLabel = targetUrl.host().isEmpty()
+                ? trLocal("Katalogi współdzielone (SMB)", "Shared Folders (SMB)")
+                : targetUrl.host();
+            m_status->setText(
+                trLocal("Łączenie z %1…", "Connecting to %1…").arg(hostOrLabel));
+
+            DirectoryListingCore::ListingOptions options;
+            options.showHiddenFiles = m_showHiddenFiles;
+            options.emptyNamePolicy = DirectoryListingCore::EmptyNamePolicy::RawName;
+            m_listingCore.startListing(targetUrl, options, {
+                [this, targetUrl](KIO::ListJob *) {
+                    if (m_pendingRemoteUrl != targetUrl) return;
+                    const bool addHist = m_pendingRemoteAddHistory;
+                    m_pendingRemoteUrl.clear();
+
+                    if (m_hasRemoteHistoryOnSuccess) {
+                        NavigationHistory restored;
+                        restored.restore(m_remoteHistoryOnSuccess);
+                        m_history = restored.history();
+                        m_historyIndex = restored.historyIndex();
+                        m_hasRemoteHistoryOnSuccess = false;
+                    } else if (addHist) {
+                        if (m_historyIndex >= 0 && m_historyIndex < m_history.size()
+                            && sameLocation(m_history.at(m_historyIndex), targetUrl)) {
+                            // Already at target in history
+                        } else {
+                            while (m_history.size() > m_historyIndex + 1) {
+                                m_history.removeLast();
+                            }
+                            m_history.push_back(targetUrl);
+                            m_historyIndex = m_history.size() - 1;
+                        }
+                    }
+
+                    m_currentUrl = targetUrl;
+                    m_searchState.loadLocation(targetUrl);
+
+                    const DirectoryViewProfile profile = DirectoryViewSettings::resolveProfile(targetUrl);
+                    m_viewMode = profile.viewMode;
+                    m_iconSizeStep = profile.iconSizeStep;
+                    m_groupMode = profile.groupMode;
+                    setSortState(profile.sortKey, profile.sortAscending, false);
+                    scheduleDateGroupingRefresh();
+                    applyViewMode();
+
+                    m_list->setDropDirectory(targetUrl);
+                    m_details->setDropDirectory(targetUrl);
+                    m_details->setColumnHidden(4, true);
+
+                    m_contentStack->setCurrentWidget(m_directoryPage);
+
+                    renderItems();
+                    updateLocationPresentation();
+                    updateNavigationButtons();
+                    Q_EMIT searchUiChanged();
+                    Q_EMIT locationChanged(m_currentUrl);
+                    Q_EMIT listingSucceeded(m_currentUrl);
+                    Q_EMIT stateChanged();
+                },
+                [this, targetUrl](const QString &error) {
+                    if (m_pendingRemoteUrl != targetUrl) return;
+                    m_pendingRemoteUrl.clear();
+                    const QString sanitized = RemoteUrlHelper::sanitizeErrorMessage(error, targetUrl);
+                    m_status->setText(sanitized);
+                    m_reconnect->showFailure(targetUrl, sanitized);
+                    Q_EMIT statusMessageRequested(sanitized, 6000);
+                    updateNavigationButtons();
+                }
+            });
+            return;
+        }
+
+        m_pendingRemoteUrl.clear();
+        m_hasRemoteHistoryOnSuccess = false;
+        m_reconnect->hide();
         const QUrl url =
             normalizedUrl(rawUrl);
 
@@ -1054,6 +1192,14 @@ private:
             return;
         }
 
+        if (RemoteUrlHelper::isRemoteUrl(m_history.at(m_historyIndex - 1))) {
+            auto desired = navigationSnapshot();
+            desired.currentUrl = desired.history.at(--desired.historyIndex);
+            navigateTo(desired.currentUrl, false);
+            m_remoteHistoryOnSuccess = desired;
+            m_hasRemoteHistoryOnSuccess = true;
+            return;
+        }
         --m_historyIndex;
         m_currentUrl =
             m_history.at(m_historyIndex);
@@ -1071,6 +1217,14 @@ private:
             return;
         }
 
+        if (RemoteUrlHelper::isRemoteUrl(m_history.at(m_historyIndex + 1))) {
+            auto desired = navigationSnapshot();
+            desired.currentUrl = desired.history.at(++desired.historyIndex);
+            navigateTo(desired.currentUrl, false);
+            m_remoteHistoryOnSuccess = desired;
+            m_hasRemoteHistoryOnSuccess = true;
+            return;
+        }
         ++m_historyIndex;
         m_currentUrl =
             m_history.at(m_historyIndex);
@@ -1109,7 +1263,14 @@ private:
     void loadDirectory(
         const QUrl &url)
     {
+        if (RemoteUrlHelper::isRemoteUrl(url)) {
+            navigateTo(url, false);
+            return;
+        }
+        m_hasRemoteHistoryOnSuccess = false;
+        m_pendingRemoteUrl.clear();
         m_listingCore.cancelListing();
+        m_reconnect->hide();
 
         m_pendingSelection = sameLocation(m_currentUrl, url)
             ? captureDirectorySelection(m_list, m_details, m_viewMode == 2)
@@ -1157,7 +1318,10 @@ private:
         options.showHiddenFiles = m_showHiddenFiles;
         options.emptyNamePolicy = DirectoryListingCore::EmptyNamePolicy::RawName;
         m_listingCore.startListing(url, options, {
-            [this](KIO::ListJob *) { renderItems(); },
+            [this, url](KIO::ListJob *) {
+                renderItems();
+                Q_EMIT listingSucceeded(url);
+            },
             [this](const QString &error) { m_status->setText(error); }
         });
     }
@@ -1327,7 +1491,11 @@ private:
             item.data(
                 directory_view_detail::DirectoryRole).toBool();
 
-        if (isDir) {
+        const bool isNavigable = isDir
+            || url.scheme() == QStringLiteral("remote")
+            || RemoteUrlHelper::isRemoteUrl(url);
+
+        if (isNavigable) {
             navigateTo(url, true);
         } else if (url.isValid()) {
             QDesktopServices::openUrl(url);
@@ -1352,7 +1520,11 @@ private:
                 0,
                 Qt::UserRole + 1).toBool();
 
-        if (isDir) {
+        const bool isNavigable = isDir
+            || url.scheme() == QStringLiteral("remote")
+            || RemoteUrlHelper::isRemoteUrl(url);
+
+        if (isNavigable) {
             navigateTo(url, true);
         } else if (url.isValid()) {
             QDesktopServices::openUrl(url);
@@ -1409,6 +1581,11 @@ private:
     QUrl m_currentUrl = kThisPcUrl;
     QList<QUrl> m_history;
     int m_historyIndex = -1;
+    QUrl m_pendingRemoteUrl;
+    bool m_pendingRemoteAddHistory = false;
+    RemoteReconnectBar *m_reconnect = nullptr;
+    NavigationHistory::Snapshot m_remoteHistoryOnSuccess;
+    bool m_hasRemoteHistoryOnSuccess = false;
 
     int m_viewMode = 0;
     int m_iconSizeStep = DirectoryViewSettings::DefaultIconSizeStep;

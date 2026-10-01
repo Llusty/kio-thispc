@@ -1,12 +1,22 @@
 [English](README.md) | [Polski](README.pl.md)
 
-# kio-thispc (This PC) 0.35.0
+# kio-thispc (This PC) 0.36.0
 
 ThisPC is a native KDE/Qt file manager focused on a Windows Explorer-like workflow, dual-pane operation, KIO integration, safe local file operations, and native KDE/Linux device handling.
 
 - **Platform:** Linux / KDE Plasma 6
 - **Frameworks:** Qt 6 / KDE Frameworks 6
 - **License:** MIT License
+
+---
+
+## 0.36.0 — Network & Remote Locations
+
+- Manual SMB, SFTP, FTP, WebDAV, and WebDAVS connections through native KIO, plus Saved Remote Locations and success-confirmed Recent/Reconnect workflows.
+- Transactional remote session and history restore, including persistent independent Split history.
+- Optional native `remote:/` and `smb:/` discovery; manual connections do not depend on discovery.
+- Passwords are never stored by ThisPC in QSettings; credentials remain with KIO/KWallet.
+- Final automated regression: 39 suites / 9075 assertions PASS; build, CLI `thispc-view 0.36.0`, and manual acceptance Stages 1–5 PASS. Live discovered SMB server path: NOT TESTED (no discoverable LAN services available).
 
 ---
 
@@ -237,8 +247,8 @@ Features from 0.15.4 — compact operations popup, dynamic height, task cancella
 
 ```bash
 cd ~/Downloads
-tar -xzf kio-thispc-0.35.0.tar.gz
-cd kio-thispc-0.35.0
+tar -xzf kio-thispc-0.36.0.tar.gz
+cd kio-thispc-0.36.0
 chmod +x install.sh
 ./install.sh
 ```

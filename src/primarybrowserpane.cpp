@@ -24,6 +24,8 @@ PrimaryBrowserPane::PrimaryBrowserPane(QWidget *parent)
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
     m_contentStack = new QStackedWidget(this);
+    connect(&m_listingCore, &DirectoryListingCore::listingCanceled,
+            this, &PrimaryBrowserPane::listingCanceled);
 }
 
 void PrimaryBrowserPane::bindDirectoryViews(DirectoryListWidget *list,
@@ -36,6 +38,13 @@ void PrimaryBrowserPane::bindDirectoryViews(DirectoryListWidget *list,
 void PrimaryBrowserPane::cancelListing()
 {
     m_listingCore.cancelListing();
+}
+
+void PrimaryBrowserPane::setStatusText(const QString &text)
+{
+    if (m_directoryStatus) {
+        m_directoryStatus->setText(text);
+    }
 }
 
 KIO::ListJob *PrimaryBrowserPane::listingJob() const
@@ -74,6 +83,39 @@ void PrimaryBrowserPane::loadDirectory(const QUrl &url, bool preserveStatusMessa
     });
     if (KIO::ListJob *job = m_listingCore.listingJob())
         job->setProperty("thispcPreserveStatusMessage", preserveStatusMessage);
+}
+
+void PrimaryBrowserPane::loadRemoteDirectory(const QUrl &url,
+    bool showHiddenFiles, bool detailsActive, const std::function<void(bool)> &render,
+    const std::function<void(const QString &)> &reportError)
+{
+    cancelListing();
+    m_directoryStatus->setText(trLocal("Wczytywanie…", "Loading…"));
+    Q_EMIT listingStarted(url);
+    DirectoryListingCore::ListingOptions options;
+    options.showHiddenFiles = showHiddenFiles;
+    options.emptyNamePolicy = DirectoryListingCore::EmptyNamePolicy::DisplayName;
+    m_listingCore.startListing(url, options, {
+        [this, url, render, detailsActive](KIO::ListJob *job) {
+            m_pendingSelection = sameLocation(m_currentUrl, url)
+                ? captureDirectorySelection(m_directoryList, m_directoryDetails, detailsActive)
+                : DirectorySelectionSnapshot{};
+            m_currentUrl = url;
+            m_directoryList->clear(); m_directoryDetails->clear();
+            m_directoryList->setDropDirectory(url); m_directoryDetails->setDropDirectory(url);
+            m_directoryTitle->setText(LocationPresentation::contentHeaderText(url));
+            render(job ? job->property("thispcPreserveStatusMessage").toBool() : false);
+            Q_EMIT listingFinished(url, true);
+        },
+        [this, url, reportError](const QString &error) {
+            const QString sanitized = RemoteUrlHelper::sanitizeErrorMessage(error, url);
+            if (m_directoryStatus) {
+                m_directoryStatus->setText(sanitized);
+            }
+            if (reportError) reportError(sanitized);
+            Q_EMIT listingFinished(url, false);
+        }
+    });
 }
 
 QIcon PrimaryBrowserPane::iconForFile(const FileInfo &file,

@@ -33,7 +33,7 @@ public:
     explicit PrimaryBrowserPane(QWidget *parent = nullptr);
     QStackedWidget *contentStack() const { return m_contentStack; }
     QUrl currentUrl() const { return m_currentUrl; }
-    void setCurrentUrl(const QUrl &url) { m_currentUrl = url; }
+    void setCurrentUrl(const QUrl &url) { m_currentUrl = normalizedUrl(url); }
     void bindDirectoryViews(DirectoryListWidget *, DirectoryTreeWidget *, QLabel *, QLabel *);
     DirectoryListWidget *listView() const { return m_directoryList; }
     DirectoryTreeWidget *detailsView() const { return m_directoryDetails; }
@@ -45,12 +45,22 @@ public:
     void loadDirectory(const QUrl &, bool, bool, bool,
                        const std::function<void(bool)> &,
                        const std::function<void(const QString &)> &);
+    void loadRemoteDirectory(const QUrl &, bool, bool,
+                             const std::function<void(bool)> &,
+                             const std::function<void(const QString &)> &);
     void renderDirectoryItems(const RenderOptions &);
     QIcon iconForFile(const FileInfo &, QMimeDatabase &, bool);
     void cancelListing();
+    bool isLoading() const { return m_listingCore.isLoading(); }
+    void setStatusText(const QString &);
+    QLabel *statusLabel() const { return m_directoryStatus; }
+#ifdef THISPC_TEST_HARNESS
+    DirectoryListingCore &listingCoreForTesting() { return m_listingCore; }
+#endif
 Q_SIGNALS:
     void listingStarted(const QUrl &);
     void listingFinished(const QUrl &, bool);
+    void listingCanceled();
 private:
     QStackedWidget *m_contentStack = nullptr;
     DirectoryListWidget *m_directoryList = nullptr;

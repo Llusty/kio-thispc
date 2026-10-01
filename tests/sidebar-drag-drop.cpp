@@ -175,12 +175,13 @@ static void testConcreteSidebarTargetsAndQuickAccessPriority()
             homeRegistered = panel.m_transferDropTargets.contains(button);
         }
         if (sameLocation(button->url(), kThisPcUrl)
-            || button->url().scheme() == QStringLiteral("trash")
-            || button->url().scheme() == QStringLiteral("remote")) {
+            || button->url().scheme() == QStringLiteral("trash")) {
             verify(!panel.m_transferDropTargets.contains(button),
                    "virtual static place is not registered");
         }
     }
+    verify(panel.m_networkButton && !panel.m_transferDropTargets.contains(panel.m_networkButton),
+           "virtual static place is not registered");
     verify(homeRegistered, "standard Home place is registered");
 }
 

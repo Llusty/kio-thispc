@@ -1,5 +1,35 @@
 [English](UPDATE.md) | [Polski](UPDATE.pl.md)
 
+# Updating to 0.36.0
+
+This release adds Network & Remote Locations through native KIO: manual SMB, SFTP, FTP, WebDAV, and WebDAVS connections, Saved Remote Locations, Recent/Reconnect, transactional session/history restore, and optional native discovery.
+
+```bash
+cd ~/Downloads
+tar -xzf kio-thispc-0.36.0.tar.gz
+cd kio-thispc-0.36.0
+chmod +x install.sh
+./install.sh
+```
+
+## Scope of 0.36.0
+
+- manual remote connections through KIO and native KIO/KWallet authentication;
+- Saved Remote Locations and success-confirmed Recent/Reconnect;
+- transactional restore of remote sessions and Primary/Split history;
+- optional `remote:/` and `smb:/` discovery without a custom scanner;
+- no password persistence in ThisPC/QSettings.
+
+## Verification of 0.36.0
+
+- manual acceptance Stages 1–5: PASS;
+- build: PASS;
+- full regression: 39 suites / 9075 assertions PASS;
+- CLI `thispc-view 0.36.0`, exit code 0: PASS;
+- live discovered SMB server path: NOT TESTED — no discoverable LAN services available.
+
+---
+
 # Updating to 0.35.0
 
 This release introduces complete removable storage and drive management (Drives & Devices): dynamic device detection via KDE Solid, unmounted volume presentation on `thispc:/`, on-demand mounting, clean filesystem-only unmounting, safe physical removal (Safely Remove) with drive power-off, and optical disc media ejection (Eject).

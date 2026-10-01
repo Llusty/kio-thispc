@@ -109,6 +109,13 @@ void PaneMenuController::buildBackgroundMenu(
                   true, callbacks.toggleQuickAccess);
     }
 
+    if (state.saveRemoteVisible) {
+        addAction(menu, QStringLiteral("pane.saveRemote"),
+                  themedIcon(QStringLiteral("network-server"), QStringLiteral("bookmark-new")),
+                  trLocal("Zapisz bieżącą lokalizację zdalną…", "Save current remote location…"),
+                  true, callbacks.saveRemote);
+    }
+
     addAction(menu, QStringLiteral("pane.openTerminal"),
               themedIcon(QStringLiteral("utilities-terminal")),
               trLocal("Otwórz terminal tutaj", "Open terminal here"),
@@ -180,6 +187,13 @@ void PaneMenuController::buildItemMenu(
                       ? trLocal("Odepnij od Szybkiego dostępu", "Unpin from Quick access")
                       : trLocal("Przypnij do Szybkiego dostępu", "Pin to Quick access"),
                   true, callbacks.toggleQuickAccess);
+    }
+
+    if (state.saveRemoteVisible) {
+        addAction(menu, QStringLiteral("item.saveRemote"),
+                  themedIcon(QStringLiteral("network-server"), QStringLiteral("bookmark-new")),
+                  trLocal("Zapisz jako lokalizację zdalną…", "Save as remote location…"),
+                  true, callbacks.saveRemote);
     }
 
     addAction(menu, QStringLiteral("item.openDolphin"),

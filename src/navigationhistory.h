@@ -26,6 +26,7 @@ public:
     void updateCurrent(const QUrl &url, bool updateHistoryEntry = false);
     Snapshot snapshot() const;
     void restore(const Snapshot &snapshot);
+    static Snapshot safeRestoreBaseline(const Snapshot &snapshot);
 private:
     QUrl m_currentUrl = QUrl(QStringLiteral("thispc:/"));
     QList<QUrl> m_history;
