@@ -1,12 +1,25 @@
 [English](README.md) | [Polski](README.pl.md)
 
-# kio-thispc (This PC) 0.36.0
+# kio-thispc (This PC) 0.37.0
 
 ThisPC is a native KDE/Qt file manager focused on a Windows Explorer-like workflow, dual-pane operation, KIO integration, safe local file operations, and native KDE/Linux device handling.
 
 - **Platform:** Linux / KDE Plasma 6
 - **Frameworks:** Qt 6 / KDE Frameworks 6
 - **License:** MIT License
+
+---
+
+## 0.37.0 — Properties
+
+- **Comprehensive Properties 2.0:** Asynchronous data-model backed properties for files, directories, and filesystem volumes.
+- **General Info:** Full path and location details, logical vs. allocated disk size, inode number, owner/group, timestamps (including `statx` birth time), and symlink target resolution.
+- **Drive Properties:** Modeless filesystem volume inspector showing filesystem type, mount options, capacity/used/free space bars, UUID, parent disk bus hierarchy (NVMe/SATA/USB), and safe device removal indicators.
+- **POSIX & Native ACL Editor:** Standard permission bits with live write verification plus dedicated `libacl` table editor supporting named users/groups, mask computation, effective permissions, and default directory ACL inheritance.
+- **SHA-256 Checksums:** Dedicated checksum calculator computing hashes asynchronously in chunks with an animated progress bar, cancel/restart, clipboard copy, and file modification detection.
+- **KDE Metadata:** Lazy, read-only metadata inspection powered by KF6 `KFileMetaData` for images (EXIF), audio tags, video streams, and office/PDF documents.
+- **Modeless Multi-Window:** File, folder, and drive properties dialogs operate modelessly; multiple dialogs can stay open simultaneously across Primary and Split panes; safe target identity check (`st_dev`/`st_ino`) prevents saving into deleted or replaced files.
+- Final automated regression: 46 suites / 9690 assertions PASS; build, CLI `thispc-view 0.37.0`, and manual acceptance Stages 1–6 PASS.
 
 ---
 
@@ -247,8 +260,8 @@ Features from 0.15.4 — compact operations popup, dynamic height, task cancella
 
 ```bash
 cd ~/Downloads
-tar -xzf kio-thispc-0.36.0.tar.gz
-cd kio-thispc-0.36.0
+tar -xzf kio-thispc-0.37.0.tar.gz
+cd kio-thispc-0.37.0
 chmod +x install.sh
 ./install.sh
 ```

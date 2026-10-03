@@ -95,6 +95,13 @@ bool KeyboardNavigationRouter::routeKey(QWidget *focus, QKeyEvent *event)
     if (context == Context::None) return false;
 
     const Qt::KeyboardModifiers modifiers = event->modifiers();
+    if (modifiers == Qt::AltModifier
+        && (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)) {
+        if (m_callbacks.showProperties) {
+            m_callbacks.showProperties();
+            return true;
+        }
+    }
     const bool controlOnly = modifiers == Qt::ControlModifier;
     const bool shiftedControl = modifiers
         == (Qt::ControlModifier | Qt::ShiftModifier);

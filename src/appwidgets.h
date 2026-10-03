@@ -89,6 +89,7 @@ class ClickableFrame : public QFrame
 
 public:
     explicit ClickableFrame(const QUrl &url, QWidget *parent = nullptr);
+    QUrl targetUrl() const;
 
 Q_SIGNALS:
     void activated(const QUrl &url);
@@ -99,7 +100,6 @@ protected:
     void mousePressEvent(QMouseEvent *event) override;
     void mouseDoubleClickEvent(QMouseEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
-    QUrl targetUrl() const;
 
 private:
     QUrl m_url;
@@ -128,9 +128,11 @@ Q_SIGNALS:
     void unmountRequested(const DriveInfo &drive);
     void safelyRemoveRequested(const DriveInfo &drive);
     void ejectRequested(const DriveInfo &drive);
+    void propertiesRequested(const DriveInfo &drive);
 
 protected:
     void contextMenuEvent(QContextMenuEvent *event) override;
+    void keyPressEvent(QKeyEvent *event) override;
 
 private:
     DriveInfo m_drive;
@@ -146,7 +148,8 @@ void populateDriveContextMenu(QMenu &menu,
                               QAction **outSafelyRemoveAction = nullptr,
                               QAction **outEjectAction = nullptr,
                               QAction **outOpenAction = nullptr,
-                              QAction **outCopyPathAction = nullptr);
+                              QAction **outCopyPathAction = nullptr,
+                              QAction **outPropertiesAction = nullptr);
 
 ClickableFrame *makeFolderCard(const QString &name,
                                const QString &path,

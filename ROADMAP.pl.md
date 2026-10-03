@@ -369,7 +369,17 @@ zainstalowana i ręcznie potwierdzona przez użytkownika. Pełna regresja wydani
 - ręczny odbiór Stage 1–5: PASS; ścieżka z rzeczywistym wykrytym serwerem SMB: NOT TESTED z powodu braku wykrywalnych usług LAN;
 - pełna regresja: 39 zestawów / 9075 asercji PASS; CLI `thispc-view 0.36.0`, kod wyjścia 0: PASS.
 
-### 0.37.0 — Storage Tools
+### 0.37.0 — Właściwości (Properties) ✅ ukończone, wydane (v0.37.0)
+- Stage 1: model danych właściwości + General Info ✅ ukończone
+- Stage 2: właściwości dysków / systemów plików ✅ ukończone
+- Stage 3: uprawnienia POSIX + edytor ACL ✅ ukończone
+- Stage 4: sumy kontrolne SHA-256 ✅ ukończone
+- Stage 5: metadane KDE / KFileMetaData ✅ ukończone
+- Stage 6: beztrybowe okna właściwości pliku/folderu/dysku (modeless UX polish) ✅ ukończone
+- ręczny odbiór Stage 1–6: FULL MANUAL PASS.
+- pełna regresja: 46 zestawów / 9690 asercji PASS; CLI `thispc-view 0.37.0`, kod wyjścia 0: PASS.
+
+### 0.38.0 — Storage Tools
 - biggest directories/files;
 - background scan;
 - top-N views;
@@ -378,21 +388,12 @@ zainstalowana i ręcznie potwierdzona przez użytkownika. Pełna regresja wydani
 - duplicate discovery by size then hash;
 - safe review before removal/move.
 
-### 0.38.0 — Advanced Properties / ACL
-- POSIX ACL;
-- owner/group/inode/filesystem/mount;
-- atime/mtime/ctime;
-- MIME/checksum;
-- EXIF/media metadata;
-- stan `Hidden` / `Ukryty` oraz semantyka zmiany zależna od backendu; dla
-  lokalnego Unix zwykle przez rename z wiodącą kropką i zwykłą ścieżkę operacji
-  plikowej, a nie kosmetyczną flagę;
-- xattrs;
-- symlink target;
-- numeric permissions, np. `0755`;
-- continue verified NTFS behavior rather than blanket assumptions.
+### 0.39.0 — Rozszerzone właściwości — dalszy rozwój (Advanced Properties Follow-up)
+- atrybuty rozszerzone (`xattr` / podgląd i edycja tam, gdzie są wspierane);
+- numeryczna edycja uprawnień POSIX (`0755`) zsynchronizowana z istniejącym interfejsem;
+- semantyka ukrywania zależna od backendu (kropka w nazwie na uniksach vs. prawdziwe metadane/flagi atrybutów).
 
-### 0.39.0 — Advanced Search
+### 0.40.0 — Advanced Search
 - type/name/extension/date/size filters;
 - files-only/folders-only;
 - saved searches;
@@ -400,10 +401,10 @@ zainstalowana i ręcznie potwierdzona przez użytkownika. Pełna regresja wydani
 - szybki filtr bieżącego folderu jako lekkie rozszerzenie in-place, jeśli jego
   semantyka pozostanie spójna z wyszukiwaniem.
 
-### 0.40.0 — Administrator fallback for failed operations
+### 0.41.0 — Administrator fallback for failed operations
 When a normal operation receives permission denied, offer a targeted `admin://` retry instead of requiring an entire window to run elevated.
 
-### 0.41.0 — Transfer Queue & Control
+### 0.42.0 — Transfer Queue & Control
 - serial vs parallel;
 - concurrency limit;
 - priorities/order;
@@ -411,18 +412,18 @@ When a normal operation receives permission denied, offer a targeted `admin://` 
 - optional bandwidth limit wyłącznie dla backendów, które realnie mogą go
   zapewnić.
 
-### 0.42.0 — Notifications + Operation History
+### 0.43.0 — Notifications + Operation History
 - Plasma notification for long/background completions;
 - recent operation log with source/destination/result;
 - retry where meaningful and safe;
 - „Show in folder” po zakończeniu tam, gdzie ma sens.
 
-### 0.43.0 — Extensions / Service Actions
+### 0.44.0 — Extensions / Service Actions
 - preferować wykorzystanie KDE Service Actions i prostego extension contract
   zamiast budowania pełnego własnego plugin ecosystemu bez konkretnej potrzeby;
 - pozwolić dodawać nowe context actions i integracje bez edycji core window source.
 
-### 0.44.0 — Advanced Split Sync
+### 0.45.0 — Advanced Split Sync
 - opcjonalne recursive compare/sync;
 - dry-run i plan preview przed wykonaniem;
 - ignore patterns;
@@ -432,7 +433,7 @@ When a normal operation receives permission denied, offer a targeted `admin://` 
   potwierdzeniem;
 - zachować model safety, preflight i revalidation wypracowany w 0.31.
 
-### 0.45.0 — Image Printing / Print Pictures workflow
+### 0.46.0 — Image Printing / Print Pictures workflow
 - zastąpić i rozszerzyć obecną pojedynczą ścieżkę `Print` własnym, przewidywalnym
   workflow drukowania obrazów; obecnie `Print` jest wyłączone przy zaznaczeniu
   wielu obrazów i samo odblokowanie starej akcji nie jest rozwiązaniem;
@@ -510,6 +511,8 @@ sens i usunąć je, jeśli przestaną być użyteczne.
   hidden items (obecny domyślny poziom: 0.40). Na razie bez decyzji, czy takie
   ustawienie jest w ogóle potrzebne; jeśli kiedyś powstanie, preferować prostą
   preferencję wyglądu lub kilka presetów zamiast suwaka w menu Widok.
+- opcjonalne dźwięki akcji/zdarzeń: dyskretne sygnały dźwiękowe dla długich zadań, błędów lub zakończenia operacji (wyłącznie niezobowiązujący kandydat w przyszłości).
+- Kandydat integracji systemowej: możliwość ustawienia ThisPC jako domyślnego programu/menedżera do otwierania katalogów (inode/directory) przez standardowe mechanizmy XDG/KDE, z wykrywaniem obecnego handlera i możliwością bezpiecznego przywrócenia poprzedniego.
 
 ## Before 1.0
 Stability-focused cycle covering:

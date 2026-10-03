@@ -191,7 +191,17 @@ This ordering prioritizes core file-manager correctness, safety, and maintainabi
 - Manual acceptance Stages 1–5: PASS; live discovered SMB server path: NOT TESTED because no discoverable LAN services were available.
 - Final automated regression: 39 suites / 9075 assertions PASS; CLI `thispc-view 0.36.0`, exit code 0: PASS.
 
-### 0.37.0 — Storage Tools
+### 0.37.0 — Properties ✅ completed, released (v0.37.0)
+- Stage 1: Properties Data Model + General Info ✅ completed
+- Stage 2: Drive / Filesystem Properties ✅ completed
+- Stage 3: POSIX Permissions + ACL ✅ completed
+- Stage 4: SHA-256 Checksums ✅ completed
+- Stage 5: Metadata via KDE / KFileMetaData ✅ completed
+- Stage 6: Final Properties UX / Capability Polish (modeless File/Folder/Drive Properties) ✅ completed
+- Manual acceptance Stages 1–6: FULL MANUAL PASS.
+- Final automated regression: 46 suites / 9690 assertions PASS; CLI `thispc-view 0.37.0`, exit code 0: PASS.
+
+### 0.38.0 — Storage Tools
 - Largest directories and files;
 - Background disk scanning;
 - Top-N space usage views;
@@ -200,46 +210,39 @@ This ordering prioritizes core file-manager correctness, safety, and maintainabi
 - Duplicate discovery by size, then content hash;
 - Safe review before file removal or moves.
 
-### 0.38.0 — Advanced Properties / ACL
-- POSIX ACL support;
-- Detailed owner, group, inode, filesystem, and mount information;
-- Access, modification, and change timestamps (atime/mtime/ctime);
-- MIME type and checksum inspection;
-- EXIF and rich media metadata;
-- File hidden status and backend-dependent semantics (leading dot rename for local Unix vs. metadata flags);
-- Extended attributes (xattrs);
-- Symlink target resolution;
-- Numeric permission editing (e.g., `0755`);
-- Continued verified NTFS behavior rather than blanket assumptions.
+### 0.39.0 — Advanced Properties Follow-up
+- Extended attributes (`xattr` / inspect & edit where supported);
+- Numeric POSIX permission editing (`0755`) synchronized with existing UI;
+- Hidden-state semantics with backend awareness (leading-dot rename for Unix vs. real metadata/attribute flags).
 
-### 0.39.0 — Advanced Search
+### 0.40.0 — Advanced Search
 - Type, filename, extension, date, and size filters;
 - Files-only and folders-only toggles;
 - Saved search queries;
 - Baloo acceleration when available, falling back to current worker search;
 - Quick in-place folder filter if semantics remain coherent with search.
 
-### 0.40.0 — Administrator Fallback for Failed Operations
+### 0.41.0 — Administrator Fallback for Failed Operations
 When standard operations receive permission denied errors, provide targeted `admin://` retry prompts instead of requiring entire windows to run elevated.
 
-### 0.41.0 — Transfer Queue & Control
+### 0.42.0 — Transfer Queue & Control
 - Serial vs. parallel transfer modes;
 - Concurrency limit configuration;
 - Operation priority and reordering;
 - Queue-wide pause, resume, and cancellation;
 - Optional bandwidth throttling where supported by the underlying backend.
 
-### 0.42.0 — Notifications + Operation History
+### 0.43.0 — Notifications + Operation History
 - Plasma desktop notifications for completed background tasks;
 - Recent operation log with source, destination, and result status;
 - Safe retry for eligible failed operations;
 - "Show in folder" action upon task completion.
 
-### 0.43.0 — Extensions / Service Actions
+### 0.44.0 — Extensions / Service Actions
 - Leverage KDE Service Actions and clean extension contracts instead of building a redundant bespoke plugin ecosystem;
 - Support adding custom context actions and integrations without editing core window sources.
 
-### 0.44.0 — Advanced Split Sync
+### 0.45.0 — Advanced Split Sync
 - Optional recursive comparison and synchronization;
 - Dry-run and plan preview before execution;
 - Ignore pattern support;
@@ -248,7 +251,7 @@ When standard operations receive permission denied errors, provide targeted `adm
 - Mirror/delete only as an explicit, high-risk mode with distinct confirmation;
 - Preserve safety models, preflight checks, and revalidation established in 0.31.
 
-### 0.45.0 — Image Printing / Print Pictures Workflow
+### 0.46.0 — Image Printing / Print Pictures Workflow
 - Replace and expand the single-item `Print` action with a predictable image-printing workflow;
 - Handle multiple selected image files in a single job, accepting supported formats and handling mixed selections gracefully;
 - Ergonomics inspired by Windows 11 "Print Pictures" without cloning pixel-for-pixel: large current-image preview, page count, and page navigation;
@@ -293,6 +296,8 @@ When standard operations receive permission denied errors, provide targeted `adm
 Items in this section do not represent commitments or assignments to specific versions. Re-evaluate their utility during future roadmap reviews:
 
 - Appearance candidate: adjustable dimming level for visible hidden items (current default: 0.40). Prefer simple presets over menu sliders if implemented.
+- Optional action and event sound effects candidate: unobtrusive audio cues for long-running jobs, errors, or operation finishes (strictly non-committal future candidate).
+- System integration candidate: allow ThisPC to become the default handler/file manager for inode/directory, using standard XDG/KDE mechanisms; detect the current handler and provide a safe way to restore the previous one.
 
 ---
 

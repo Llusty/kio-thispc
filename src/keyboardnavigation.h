@@ -27,6 +27,7 @@ public:
         std::function<QList<QWidget *>()> homeCards;
         std::function<QWidget *()> currentHomeCard;
         std::function<void(QWidget *)> setCurrentHomeCard;
+        std::function<void()> showProperties;
     };
 
     explicit KeyboardNavigationRouter(Callbacks callbacks,

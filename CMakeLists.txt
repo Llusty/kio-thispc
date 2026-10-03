@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(kio-thispc VERSION 0.36.0 LANGUAGES CXX)
+project(kio-thispc VERSION 0.37.0 LANGUAGES CXX)
 
 set(QT_MIN_VERSION "6.5.0")
 set(KF_MIN_VERSION "6.17.0")
@@ -20,9 +20,11 @@ find_package(LibArchive REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(TagLib REQUIRED)
 find_package(exiv2 REQUIRED CONFIG)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(LIBACL REQUIRED IMPORTED_TARGET libacl)
 
 find_package(Qt6 ${QT_MIN_VERSION} CONFIG REQUIRED COMPONENTS Core Concurrent Gui Widgets PrintSupport Pdf DBus)
-find_package(KF6 ${KF_MIN_VERSION} REQUIRED COMPONENTS KIO ItemViews Solid)
+find_package(KF6 ${KF_MIN_VERSION} REQUIRED COMPONENTS KIO ItemViews Solid FileMetaData)
 
 # ---------------------------------------------------------------------------
 # KIO backend: thispc:/
@@ -120,7 +122,21 @@ add_executable(thispc-view
     src/localtransferjob.h
     src/localtreehistory.h
     src/operationmanager.h
+    src/propertiesdata.h
+    src/propertiesdataprovider.h
+    src/drivepropertiesdata.h
+    src/drivepropertiesprovider.h
     src/propertiesdialog.h
+    src/acldata.h
+    src/aclprovider.h
+    src/aclcontroller.h
+    src/acleditorwidget.h
+    src/checksumdata.h
+    src/checksumjob.h
+    src/checksumwidget.h
+    src/metadatadata.h
+    src/metadataprovider.h
+    src/metadatawidget.h
     src/previewpane.h
     src/quicklook.h
     src/sidebar.h
@@ -206,7 +222,21 @@ add_executable(thispc-view-stage3c1-test EXCLUDE_FROM_ALL
     src/localtransferjob.h
     src/localtreehistory.h
     src/operationmanager.h
+    src/propertiesdata.h
+    src/propertiesdataprovider.h
+    src/drivepropertiesdata.h
+    src/drivepropertiesprovider.h
     src/propertiesdialog.h
+    src/acldata.h
+    src/aclprovider.h
+    src/aclcontroller.h
+    src/acleditorwidget.h
+    src/checksumdata.h
+    src/checksumjob.h
+    src/checksumwidget.h
+    src/metadatadata.h
+    src/metadataprovider.h
+    src/metadatawidget.h
     src/previewpane.h
     src/quicklook.h
     src/sidebar.h
@@ -250,6 +280,8 @@ target_link_libraries(thispc-view PRIVATE
     KF6::KIOWidgets
     KF6::ItemViews
     KF6::Solid
+    KF6::FileMetaData
+    PkgConfig::LIBACL
 )
 
 kde_target_enable_exceptions(thispc-view-stage3c1-test PRIVATE)
@@ -257,7 +289,7 @@ target_include_directories(thispc-view-stage3c1-test PRIVATE ${LibArchive_INCLUD
 target_link_libraries(thispc-view-stage3c1-test PRIVATE
     ${LibArchive_LIBRARIES} ZLIB::ZLIB TagLib::TagLib Exiv2::exiv2lib
     Qt6::Core Qt6::Concurrent Qt6::Gui Qt6::Widgets Qt6::PrintSupport Qt6::Pdf Qt6::DBus
-    KF6::KIOCore KF6::KIOWidgets KF6::ItemViews KF6::Solid)
+    KF6::KIOCore KF6::KIOWidgets KF6::ItemViews KF6::Solid KF6::FileMetaData PkgConfig::LIBACL)
 
 install(TARGETS thispc-view DESTINATION ${KDE_INSTALL_BINDIR})
 

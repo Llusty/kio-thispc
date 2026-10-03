@@ -28,6 +28,7 @@ public:
         bool adminVisible = false;
         bool inheritedRuleEnabled = false;
         bool saveRemoteVisible = false;
+        bool isMountRoot = false;
     };
 
     struct BackgroundCallbacks {
@@ -47,6 +48,7 @@ public:
         std::function<void()> applyInheritedRule;
         std::function<void()> removeInheritedRule;
         std::function<void()> saveRemote;
+        std::function<void()> properties;
     };
 
     struct ItemState {

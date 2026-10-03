@@ -87,13 +87,15 @@ void populateDriveContextMenu(QMenu &menu,
                               QAction **outSafelyRemoveAction,
                               QAction **outEjectAction,
                               QAction **outOpenAction,
-                              QAction **outCopyPathAction)
+                              QAction **outCopyPathAction,
+                              QAction **outPropertiesAction)
 {
     QAction *openAction = nullptr;
     QAction *copyPathAction = nullptr;
     QAction *unmountAction = nullptr;
     QAction *safelyRemoveAction = nullptr;
     QAction *ejectAction = nullptr;
+    QAction *propertiesAction = nullptr;
 
     if (drive.isMounted) {
         openAction = menu.addAction(
@@ -126,11 +128,17 @@ void populateDriveContextMenu(QMenu &menu,
         }
     }
 
+    menu.addSeparator();
+    propertiesAction = menu.addAction(
+        themedIcon(QStringLiteral("document-properties")),
+        trLocal("Właściwości", "Properties"));
+
     if (outOpenAction) *outOpenAction = openAction;
     if (outCopyPathAction) *outCopyPathAction = copyPathAction;
     if (outUnmountAction) *outUnmountAction = unmountAction;
     if (outSafelyRemoveAction) *outSafelyRemoveAction = safelyRemoveAction;
     if (outEjectAction) *outEjectAction = ejectAction;
+    if (outPropertiesAction) *outPropertiesAction = propertiesAction;
 }
 
 HomePageWidget::HomePageWidget(QWidget *parent)
@@ -298,8 +306,8 @@ void ClickableFrame::mouseDoubleClickEvent(QMouseEvent *event)
 
 void ClickableFrame::keyPressEvent(QKeyEvent *event)
 {
-    if (event->key() == Qt::Key_Return
-        || event->key() == Qt::Key_Enter) {
+    if ((event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)
+        && (event->modifiers() == Qt::NoModifier || event->modifiers() == Qt::KeypadModifier)) {
         Q_EMIT activated(m_url);
         event->accept();
         return;
@@ -310,6 +318,17 @@ void ClickableFrame::keyPressEvent(QKeyEvent *event)
 QUrl ClickableFrame::targetUrl() const
 {
     return m_url;
+}
+
+void DriveFrame::keyPressEvent(QKeyEvent *event)
+{
+    if ((event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)
+        && event->modifiers() == Qt::AltModifier) {
+        Q_EMIT propertiesRequested(m_drive);
+        event->accept();
+        return;
+    }
+    ClickableFrame::keyPressEvent(event);
 }
 
 DriveFrame::DriveFrame(const DriveInfo &drive,
@@ -335,10 +354,11 @@ void DriveFrame::contextMenuEvent(QContextMenuEvent *event)
     QAction *ejectAction = nullptr;
     QAction *openAction = nullptr;
     QAction *copyPathAction = nullptr;
+    QAction *propertiesAction = nullptr;
 
     populateDriveContextMenu(menu, m_drive, m_canSafelyRemove, m_canEject,
                              &unmountAction, &safelyRemoveAction, &ejectAction,
-                             &openAction, &copyPathAction);
+                             &openAction, &copyPathAction, &propertiesAction);
 
     if (menu.actions().isEmpty()) {
         event->accept();
@@ -357,6 +377,8 @@ void DriveFrame::contextMenuEvent(QContextMenuEvent *event)
             openInDolphin(m_drive.targetUrl);
         } else if (chosen == copyPathAction) {
             QGuiApplication::clipboard()->setText(m_drive.mountPoint);
+        } else if (chosen == propertiesAction) {
+            Q_EMIT propertiesRequested(m_drive);
         }
     }
     event->accept();

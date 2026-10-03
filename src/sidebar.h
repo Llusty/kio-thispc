@@ -386,6 +386,7 @@ Q_SIGNALS:
     void openInNewWindowRequested(const QUrl &url);
     void openInSplitPaneRequested(const QUrl &url);
     void openInDolphinRequested(const QUrl &url);
+    void propertiesRequested(const DriveInfo &drive);
     void contextMenuActiveChanged(bool active);
 
 protected:
@@ -411,9 +412,16 @@ protected:
     {
         if (event->key() == Qt::Key_Return
             || event->key() == Qt::Key_Enter) {
-            Q_EMIT activated(m_drive.targetUrl);
-            event->accept();
-            return;
+            if (event->modifiers() == Qt::AltModifier) {
+                Q_EMIT propertiesRequested(m_drive);
+                event->accept();
+                return;
+            }
+            if (event->modifiers() == Qt::NoModifier || event->modifiers() == Qt::KeypadModifier) {
+                Q_EMIT activated(m_drive.targetUrl);
+                event->accept();
+                return;
+            }
         }
         QFrame::keyPressEvent(event);
     }
@@ -451,6 +459,11 @@ protected:
             themedIcon(QStringLiteral("edit-copy")),
             trLocal("Kopiuj punkt montowania", "Copy mount point"));
 
+        menu.addSeparator();
+        QAction *propertiesAction = menu.addAction(
+            themedIcon(QStringLiteral("document-properties")),
+            trLocal("Właściwości", "Properties"));
+
         QAction *chosen = menu.exec(event->globalPos());
         if (chosen == openAction) {
             Q_EMIT activated(drive.targetUrl);
@@ -464,6 +477,8 @@ protected:
             Q_EMIT openInDolphinRequested(drive.targetUrl);
         } else if (chosen == copyPathAction) {
             QGuiApplication::clipboard()->setText(drive.mountPoint);
+        } else if (chosen == propertiesAction) {
+            Q_EMIT propertiesRequested(drive);
         }
 
         Q_EMIT contextMenuActiveChanged(false);
@@ -953,6 +968,7 @@ Q_SIGNALS:
     void openInNewWindowRequested(const QUrl &url);
     void openInSplitPaneRequested(const QUrl &url);
     void openInDolphinRequested(const QUrl &url);
+    void drivePropertiesRequested(const DriveInfo &drive);
     void statusMessageRequested(const QString &message, int timeoutMs);
     void urlsDropped(const QList<QUrl> &urls,
                      const QUrl &destination,
@@ -1515,6 +1531,8 @@ private:
                     this, &SidebarPanel::openInSplitPaneRequested);
             connect(button, &SidebarDriveButton::openInDolphinRequested,
                     this, &SidebarPanel::openInDolphinRequested);
+            connect(button, &SidebarDriveButton::propertiesRequested,
+                    this, &SidebarPanel::drivePropertiesRequested);
             connect(button, &SidebarDriveButton::contextMenuActiveChanged,
                     this, [this](bool active) {
                 if (active) {

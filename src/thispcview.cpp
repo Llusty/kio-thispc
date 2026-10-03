@@ -2,7 +2,7 @@
  * thispc-view - a lightweight KDE/Qt file browser with a Windows-like
  * "This PC" home page, backed by KIO.
  *
- * Version 0.36.0
+ * Version 0.37.0
  * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
@@ -412,6 +412,44 @@ private:
     {
         if (!mutationAllowedByRecoveryGate()) return;
         const auto context = paneContext();
+        if (sameLocation(context.directory, kThisPcUrl)) {
+            QWidget *card = currentHomeCard(m_activePane);
+            if (!card) {
+                for (QWidget *w = QApplication::focusWidget(); w; w = w->parentWidget()) {
+                    if (auto *df = qobject_cast<DriveFrame *>(w)) {
+                        card = df;
+                        break;
+                    }
+                    if (auto *cf = qobject_cast<ClickableFrame *>(w)) {
+                        card = cf;
+                        break;
+                    }
+                }
+            }
+            if (auto *driveCard = qobject_cast<DriveFrame *>(card)) {
+                showDrivePropertiesDialog(driveCard->drive());
+                return;
+            }
+            if (auto *clickCard = qobject_cast<ClickableFrame *>(card)) {
+                const QString nav = clickCard->property("navigationUrl").toString();
+                const QUrl target = !nav.isEmpty() ? QUrl(nav) : clickCard->targetUrl();
+                if (target.isValid() && !target.isEmpty()) {
+                    const QString folderName = QFileInfo(target.toLocalFile()).fileName();
+                    showPropertiesDialog(folderName.isEmpty() ? target.toString() : folderName,
+                                         target,
+                                         true,
+                                         trLocal("Katalog", "Directory"),
+                                         QString(),
+                                         QString());
+                    return;
+                }
+            }
+            return;
+        }
+        if (context.items.isEmpty()) {
+            showCurrentDirectoryProperties();
+            return;
+        }
         if (context.items.size() != 1) return;
         const auto item = context.items.first();
         showPropertiesDialog(item.name, item.url, item.isDir,
@@ -651,6 +689,10 @@ protected:
                 m_operationManager->cancelAll();
             }
         }
+
+        // Modeless Properties dialogs are owned by this window: close them
+        // deterministically before the window goes away.
+        PropertiesLifecycle::instance().closeAllFor(this);
 
         saveSessionState();
 
@@ -1783,6 +1825,11 @@ private:
             });
         connect(
             m_sidebar,
+            &SidebarPanel::drivePropertiesRequested,
+            this,
+            &ThisPcWindow::showDrivePropertiesDialog);
+        connect(
+            m_sidebar,
             &SidebarPanel::statusMessageRequested,
             this,
             [this](const QString &message, int timeoutMs) {
@@ -2129,14 +2176,14 @@ private:
         statusBar()->setSizeGripEnabled(true);
 
         m_versionLabel = new QLabel(
-            QStringLiteral("v0.36.0"),
+            QStringLiteral("v0.37.0"),
             this);
         m_versionLabel->setObjectName(
             QStringLiteral("versionLabel"));
         m_versionLabel->setToolTip(
             trLocal(
-                "Wersja thispc-view 0.36.0",
-                "thispc-view version 0.36.0"));
+                "Wersja thispc-view 0.37.0",
+                "thispc-view version 0.37.0"));
         statusBar()->addPermanentWidget(m_versionLabel);
     }
 
@@ -2567,6 +2614,9 @@ private:
         callbacks.currentHomeCard = [this] { return currentHomeCard(m_activePane); };
         callbacks.setCurrentHomeCard = [this](QWidget *card) {
             setCurrentHomeCard(m_activePane, card);
+        };
+        callbacks.showProperties = [this] {
+            showSelectedProperties();
         };
         m_keyboardNavigation = new KeyboardNavigationRouter(std::move(callbacks), this);
         qApp->installEventFilter(m_keyboardNavigation);
@@ -4108,7 +4158,68 @@ private:
             [this](const QString &message, int timeout) {
                 statusBar()->showMessage(message, timeout);
             },
-            [this] { refreshCurrent(); });
+            [this] {
+                // Properties is modeless: the user may have navigated since
+                // opening it, so refresh both panes, not only the active one.
+                refreshPane(PaneId::Primary);
+                if (m_splitPane && !m_splitPane->isHidden()) {
+                    refreshPane(PaneId::Split);
+                }
+            });
+    }
+
+    void showDrivePropertiesDialog(const DriveInfo &drive)
+    {
+        PropertiesDialog::showForDrive(this, drive);
+    }
+
+    bool isLocationMountRoot(const QUrl &url) const
+    {
+        if (!url.isValid() || !url.isLocalFile()) {
+            return false;
+        }
+        return DrivePropertiesProvider::findExactMountPoint(url.toLocalFile()).has_value();
+    }
+
+    void showCurrentDirectoryProperties()
+    {
+        const auto context = paneContext();
+        if (sameLocation(context.directory, kThisPcUrl)) {
+            return;
+        }
+
+        const QString localPath = context.directory.isLocalFile() ? context.directory.toLocalFile() : QString();
+        const auto mountEntry = !localPath.isEmpty()
+            ? DrivePropertiesProvider::findExactMountPoint(localPath)
+            : std::nullopt;
+
+        if (mountEntry.has_value()) {
+            DriveInfo drive;
+            drive.mountPoint = mountEntry->mountPoint;
+            drive.fileSystem = mountEntry->fileSystemType;
+            drive.isMounted = true;
+            for (const DriveInfo &known : m_driveHomeCoordinator.drives()) {
+                if (!known.mountPoint.isEmpty() && QDir::cleanPath(known.mountPoint) == drive.mountPoint) {
+                    drive = known;
+                    break;
+                }
+            }
+            if (drive.name.isEmpty()) {
+                drive.name = QFileInfo(drive.mountPoint).fileName();
+                if (drive.name.isEmpty()) {
+                    drive.name = trLocal("Dysk systemowy", "System Drive");
+                }
+            }
+            showDrivePropertiesDialog(drive);
+        } else {
+            const QString dirName = QFileInfo(context.directory.path()).fileName();
+            showPropertiesDialog(dirName.isEmpty() ? context.directory.toString() : dirName,
+                                 context.directory,
+                                 true,
+                                 trLocal("Katalog", "Directory"),
+                                 QString(),
+                                 QString());
+        }
     }
 
     QUrl containingDirectoryForResult(
@@ -4253,12 +4364,14 @@ private:
                 [this](bool value) { setThumbnailsEnabled(value); }};
             const bool quickAccess = canQuickAccessLocation(context.directory);
             const bool saveRemote = RemoteUrlHelper::isValidRemoteUrl(context.directory);
+            const bool isMountRoot = isLocationMountRoot(context.directory);
             m_paneMenuController.buildBackgroundMenu(backgroundMenu,
                 {context.directory, availability, viewState, quickAccess,
                  quickAccess && isQuickAccessPinned(context.directory),
                  context.directory.isLocalFile(), context.directory.isLocalFile(),
                  DirectoryViewSettings::hasInheritedRule(context.directory),
-                 saveRemote},
+                 saveRemote,
+                 isMountRoot},
                 {viewCallbacks,
                  [this, pane = context.id] { refreshPane(pane); },
                  [this] { selectAllDirectoryItems(); },
@@ -4282,6 +4395,9 @@ private:
                  },
                  [this, directory = context.directory] {
                      if (m_sidebar) m_sidebar->promptAddRemoteLocation(directory);
+                 },
+                 [this] {
+                     showCurrentDirectoryProperties();
                  }});
             backgroundMenu.exec(globalPosition);
             return;
@@ -5439,6 +5555,11 @@ private:
                 [this, pane](const DriveInfo &drive) {
                     handleDeviceEject(pane, drive);
                 });
+            connect(
+                card,
+                &DriveFrame::propertiesRequested,
+                this,
+                &ThisPcWindow::showDrivePropertiesDialog);
             connectHomeCard(card, pane);
 
             drivesGrid->addWidget(

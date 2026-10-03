@@ -35,7 +35,7 @@ int main(int argc, char **argv)
     layout->addWidget(&d, 1, 0); layout->addWidget(&e, 1, 1);
     scope.resize(600, 240); scope.show(); app.processEvents();
 
-    int activated = 0, back = 0, forward = 0, up = 0, iconSizeDelta = 0;
+    int activated = 0, back = 0, forward = 0, up = 0, iconSizeDelta = 0, showPropertiesCount = 0;
     KeyboardNavigationRouter::Context context = KeyboardNavigationRouter::Context::FileView;
     QString currentHomeId = QStringLiteral("test:/a");
     QList<QWidget *> activeCards{&a, &b, &c, &d, &e};
@@ -59,11 +59,16 @@ int main(int argc, char **argv)
     callbacks.setCurrentHomeCard = [&](QWidget *card) {
         currentHomeId = card->property("navigationUrl").toString();
     };
+    callbacks.showProperties = [&] { ++showPropertiesCount; };
     KeyboardNavigationRouter router(std::move(callbacks));
     qApp->installEventFilter(&router);
 
     a.setFocus(); QTest::keyClick(&a, Qt::Key_Return);
     verify(activated == 1, "Enter activates the current file-view item");
+    QTest::keyClick(&a, Qt::Key_Return, Qt::AltModifier);
+    verify(showPropertiesCount == 1, "Alt+Return routes to showProperties in FileView");
+    QTest::keyClick(&a, Qt::Key_Enter, Qt::AltModifier);
+    verify(showPropertiesCount == 2, "Alt+Enter routes to showProperties in FileView");
     QTest::keyClick(&a, Qt::Key_Backspace);
     verify(up == 1, "Backspace routes to Up in a file view");
     QTest::keyClick(&a, Qt::Key_Left, Qt::AltModifier);
@@ -98,7 +103,14 @@ int main(int argc, char **argv)
     verify(back == 1, "editable combo owns Alt navigation");
 
     context = KeyboardNavigationRouter::Context::Home;
-    a.setFocus(); QTest::keyClick(&a, Qt::Key_Right);
+    a.setFocus();
+    QTest::keyClick(&a, Qt::Key_Return, Qt::AltModifier);
+    verify(showPropertiesCount == 3, "Alt+Return routes to showProperties in Home");
+    QTest::keyClick(&a, Qt::Key_Enter, Qt::AltModifier);
+    verify(showPropertiesCount == 4, "Alt+Enter routes to showProperties in Home");
+    QTest::keyClick(&a, Qt::Key_Return);
+    verify(showPropertiesCount == 4, "plain Return does not route to showProperties in Home");
+    QTest::keyClick(&a, Qt::Key_Right);
     verify(b.hasFocus(), "home Right follows the visual row");
     QTest::keyClick(&b, Qt::Key_Right);
     verify(c.hasFocus(), "home Right advances to the next card");

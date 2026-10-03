@@ -16,7 +16,7 @@
  * allows full unit-testing of debounce and connect/disconnect logic without
  * requiring physical hardware or a running Plasma session.
  *
- * Version 0.36.0
+ * Version 0.37.0
  * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */

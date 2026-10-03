@@ -2,6 +2,17 @@
 
 # Changelog
 
+## 0.37.0 — Właściwości (Properties 2.0)
+
+- **Model danych i informacje ogólne:** Zastąpiono statyczny dialog asynchronicznym modelem danych (`PropertiesDataProvider`). Prezentacja informacji lokalnych i zdalnych, rozmiar logiczny oraz faktyczny rozmiar na dysku, numer i-węzła (inode), właściciel i grupa, typ systemu plików, znaczniki czasu (dostęp, modyfikacja, zmiana atrybutów oraz czas utworzenia birth time z `statx` tylko gdy wspierany przez dany system plików) oraz bezpieczne odczytywanie celu dowiązań symbolicznych ze wskaźnikiem uszkodzonego linku.
+- **Właściwości dysków i systemów plików:** Dedykowany modeless dialog właściwości woluminów i partycji. Prezentuje typ systemu plików, punkt montowania, aktywne opcje montowania, pojemność / zajęte / wolne miejsce z paskiem zużycia, UUID, ścieżkę urządzenia, nadrzędny dysk fizyczny (NVMe, SATA, USB), status wymienności/hotplug oraz banner informacyjny o odłączeniu urządzenia w trakcie otwartego okna właściwości.
+- **Uprawnienia POSIX i edytor ACL:** Standardowa siatka praw POSIX z weryfikacją zapisu; wbudowany edytor oparty o natywne `libacl` obsługujący wpisy nazwanych użytkowników i grup, obliczanie maski, prezentację praw efektywnych, domyślne reguły ACL katalogów (Default ACL) oraz reguły dziedziczenia.
+- **Sumy kontrolne SHA-256:** Osobna zakładka sum kontrolnych ze strumieniowym, blokowym obliczaniem skrótu SHA-256 w wątku roboczym, paskiem postępu, natychmiastowym anulowaniem i restartem, kopiowaniem do schowka oraz wykrywaniem modyfikacji pliku w trakcie hashowania.
+- **Integracja metadanych KDE KFileMetaData:** Leniwa, asynchroniczna ekstrakcja metadanych biblioteką KF6 `KFileMetaData`, uruchamiana wyłącznie po wejściu na zakładkę Metadane. Podgląd w trybie tylko do odczytu dla formatów graficznych (EXIF), dźwiękowych, wideo oraz dokumentów.
+- **Modeless i obsługa wielu okien:** Unifikacja właściwości plików, folderów i dysków do architektury beztrybowej (modeless). Możliwość jednoczesnego otwarcia wielu niezależnych okien bez blokowania okna głównego ThisPC; pełna symetria między panelem głównym a Split View; bezpieczne zamykanie okien podrzędnych przez `PropertiesLifecycle`; ochrona przed zapisem do usuniętych lub zastąpionych plików (`PropertiesIdentity` / `st_dev` / `st_ino`).
+- **Odbiór ręczny:** Stage 1–6 FULL MANUAL PASS.
+- **Finalna automatyczna regresja:** 46 zestawów / 9690 asercji PASS; build, CLI `thispc-view 0.37.0` i kod wyjścia 0 PASS.
+
 ## 0.36.0 — Network & Remote Locations
 
 - Dodano ręczne połączenia zdalne SMB, SFTP, FTP, WebDAV i bezpieczny WebDAV przez natywne zadania i uwierzytelnianie KIO.

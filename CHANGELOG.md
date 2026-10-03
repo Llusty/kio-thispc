@@ -2,6 +2,17 @@
 
 # Changelog
 
+## 0.37.0 — Properties
+
+- **Properties Data Model & General Info:** Replaced static properties UI with an asynchronous data-model architecture (`PropertiesDataProvider`). Displays local and remote target info, logical size vs. allocated size on disk, inode number, owner and group, filesystem type, timestamps (access, modified, change, and birth time only when supported by the filesystem via `statx`), and safe literal symlink resolution with broken-link indicators.
+- **Drive & Filesystem Properties:** Dedicated modeless properties view for storage volumes and partitions. Shows filesystem type, mount point, active mount options, capacity / used / free disk space with visual usage bars, filesystem UUID, device node path, parent disk bus/model hierarchy (NVMe, SATA, USB), removable/hotplug attributes, and responsive removal notification banners when devices are detached while properties are open.
+- **POSIX Permissions & Native ACL Editor:** Standard POSIX permission grid with read/write verification; integrated native `libacl` editor supporting named user and group ACL entries, mask calculation, effective permission display, directory default ACL configuration, and inheritance rules.
+- **SHA-256 Checksums:** Dedicated Checksums tab featuring streaming, chunk-based SHA-256 computation in background worker threads, animated progress bar, responsive cancel/restart actions, clipboard copy, and automatic detection of file modifications during hashing.
+- **KDE KFileMetaData Integration:** Lazy, asynchronous metadata extraction powered by KF6 `KFileMetaData`, triggered only upon navigating to the Metadata tab. Presents read-only EXIF, audio tags, video dimensions/codecs, and document properties across supported media formats.
+- **Modeless Multi-Window Architecture:** Unification of File, Folder, and Drive Properties to modeless execution. Multiple independent dialogs can coexist without blocking the main window; supports parallel inspections across Primary and Split panes; safe parent window closure via `PropertiesLifecycle`; and target identity verification (`st_dev`/`st_ino`) protecting against inadvertent writes to deleted or replaced files.
+- **Manual Acceptance:** Stages 1–6 FULL MANUAL PASS.
+- **Final Automated Regression:** 46 test suites / 9690 assertions PASS; build, CLI `thispc-view 0.37.0`, and exit code 0 PASS.
+
 ## 0.36.0 — Network & Remote Locations
 
 - Added manual remote connections over SMB, SFTP, FTP, WebDAV, and secure WebDAV through native KIO jobs and authentication.

@@ -1,6 +1,19 @@
 [English](README.md) | [Polski](README.pl.md)
 
-# kio-thispc 0.36.0
+# kio-thispc 0.37.0
+
+## 0.37.0 — Właściwości (Properties 2.0)
+
+- **Kompleksowe Właściwości 2.0:** Asynchroniczny model danych właściwości dla plików, katalogów oraz woluminów dyskowych.
+- **Informacje ogólne:** Pełna ścieżka i lokalizacja, logiczny rozmiar vs. zajęte miejsce na dysku, numer i-węzła (inode), właściciel/grupa, znaczniki czasu (w tym czas utworzenia `statx` birth time) oraz bezpieczne odczytywanie celu symlinków.
+- **Właściwości dysków:** Beztrybowy inspektor woluminów prezentujący typ systemu plików, opcje montowania, paski pojemności/zajętości/wolnego miejsca, UUID, nadrzędną magistralę dysku (NVMe/SATA/USB) i powiadomienie o bezpiecznym usunięciu.
+- **Uprawnienia POSIX i edytor ACL:** Standardowa siatka praw z weryfikacją zapisu oraz edytor oparty o natywne `libacl` z obsługą nazwanych użytkowników/grup, maski, praw efektywnych i reguł dziedziczenia w katalogach (Default ACL).
+- **Sumy kontrolne SHA-256:** Dedykowany kalkulator obliczający skróty asynchronicznie w blokach z animowanym paskiem postępu, anulowaniem/restartem, kopiowaniem do schowka i wykrywaniem zmian pliku w trakcie hashowania.
+- **Metadane KDE:** Leniwy podgląd metadanych w trybie tylko do odczytu biblioteką KF6 `KFileMetaData` dla grafiki (EXIF), tagów audio, strumieni wideo i dokumentów PDF/biurowych.
+- **Modeless i wiele okien:** Właściwości plików, folderów i dysków działają beztrybowo; wiele okien może być otwartych równocześnie między panelem Primary a Split; weryfikacja tożsamości `st_dev`/`st_ino` chroni przed zapisem do usuniętych lub zastąpionych plików.
+- Finalna automatyczna regresja: 46 zestawów / 9690 asercji PASS; build, CLI `thispc-view 0.37.0` i odbiór manualny Stage 1–6 PASS.
+
+---
 
 ## 0.36.0 — Network & Remote Locations
 
@@ -260,8 +273,8 @@ Funkcje z 0.15.4 — kompaktowy popup operacji, dynamiczna wysokość, anulowani
 
 ```bash
 cd ~/Pobrane
-tar -xzf kio-thispc-0.36.0.tar.gz
-cd kio-thispc-0.36.0
+tar -xzf kio-thispc-0.37.0.tar.gz
+cd kio-thispc-0.37.0
 chmod +x install.sh
 ./install.sh
 ```

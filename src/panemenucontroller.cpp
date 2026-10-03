@@ -128,6 +128,16 @@ void PaneMenuController::buildBackgroundMenu(
                           "Open this folder as administrator"),
                   true, callbacks.openAdmin);
     }
+
+    if (callbacks.properties) {
+        menu.addSeparator();
+        addAction(menu, QStringLiteral("pane.properties"),
+                  themedIcon(state.isMountRoot ? QStringLiteral("drive-harddisk") : QStringLiteral("document-properties")),
+                  state.isMountRoot
+                      ? trLocal("Właściwości dysku", "Drive properties")
+                      : trLocal("Właściwości", "Properties"),
+                  true, callbacks.properties);
+    }
 }
 
 void PaneMenuController::addViewProfileActions(
