@@ -1,7 +1,7 @@
 /*
  * kio-thispc - KF6 KIO worker providing thispc:/
  *
- * Version 0.37.0
+ * Version 0.38.0
  * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */

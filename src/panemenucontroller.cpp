@@ -129,6 +129,14 @@ void PaneMenuController::buildBackgroundMenu(
                   true, callbacks.openAdmin);
     }
 
+    if (callbacks.analyzeStorage) {
+        menu.addSeparator();
+        addAction(menu, QStringLiteral("pane.analyzeStorage"),
+                  themedIcon(QStringLiteral("drive-harddisk"), QStringLiteral("document-properties")),
+                  trLocal("Analizuj zajęte miejsce…", "Analyze storage…"),
+                  true, callbacks.analyzeStorage);
+    }
+
     if (callbacks.properties) {
         menu.addSeparator();
         addAction(menu, QStringLiteral("pane.properties"),
@@ -282,6 +290,18 @@ void PaneMenuController::buildItemMenu(
     addAction(menu, QStringLiteral("item.copyAddress"), themedIcon(QStringLiteral("edit-copy")),
               trLocal("Kopiuj adres", "Copy address"), true,
               callbacks.copyAddress);
+    if (single && state.isDirectory && callbacks.analyzeStorage) {
+        addAction(menu, QStringLiteral("item.analyzeStorage"),
+                  themedIcon(QStringLiteral("drive-harddisk"), QStringLiteral("document-properties")),
+                  trLocal("Analizuj zajęte miejsce…", "Analyze storage…"),
+                  true, callbacks.analyzeStorage);
+    }
+    if (state.checksumVisible && callbacks.calculateChecksum) {
+        addAction(menu, QStringLiteral("item.calculateChecksum"),
+                  themedIcon(QStringLiteral("document-encrypted"), QStringLiteral("document-properties")),
+                  trLocal("Oblicz sumę kontrolną…", "Calculate checksum…"),
+                  true, callbacks.calculateChecksum);
+    }
     addAction(menu, QStringLiteral("item.properties"),
               themedIcon(QStringLiteral("document-properties")),
               trLocal("Właściwości", "Properties"),

@@ -1,6 +1,18 @@
 [English](README.md) | [Polski](README.pl.md)
 
-# kio-thispc 0.37.0
+# kio-thispc 0.38.0
+
+## 0.38.0 — Narzędzia pamięci masowej (Storage Tools)
+
+- **Silnik skanowania pamięci masowej (Storage Scan Core):** Wysokowydajny, asynchroniczny silnik skanowania katalogów w tle (`StorageScanJob`, `StorageScanWorker`) z licznikami na żywo, anulowaniem, zatrzymywaniem na granicach punktów montowania (`st_dev`), ignorowaniem dowiązań symbolicznych, deduplikacją twardych dowiązań i raportowaniem błędów.
+- **Największe pliki i foldery (Top-N):** Analiza zajętości przestrzeni z konfigurowalnym limitem (Top 25/50/100/Wszystkie), sortowaniem według rozmiaru logicznego lub przydzielonego na dysku, wchodzeniem do podfolderów i akcją „Pokaż w folderze”.
+- **Narzędzia sum kontrolnych (Hash Utilities):** Samodzielne beztrybowe okno sum kontrolnych (`HashUtilitiesDialog`) dla SHA-256, SHA-1 i MD5 ze strumieniowym hashowaniem w wątku roboczym, paskiem postępu, kopiowaniem do schowka i wykrywaniem równoległych modyfikacji.
+- **Wyszukiwarka duplikatów (Duplicate Finder):** Szybkie wyszukiwanie duplikatów (`DuplicateFinderJob`) poprzez grupowanie po rozmiarze, deduplikację tożsamości fizycznej (hardlinks) i sekwencyjną weryfikację SHA-256 tylko dla kolidujących bajtów.
+- **Bezpieczny przegląd i akcje (Safe Review & Actions):** Interaktywny kontroler rozwiązywania duplikatów (`DuplicateActionController`) zintegrowany z `FileActions` i `OperationManager`. Bezpieczne usuwanie do kosza i przenoszenie z potwierdzeniem, rewalidacją migawki przed akcją, pełnym cofaniem `KIO::FileUndoManager` i wykluczaniem zmienionych plików.
+- **Interaktywna mapa zajętości (Treemap):** Pamięciowy silnik Squarified Treemap (`StorageTreemapLayout`, `StorageTreemapWidget`) wizualizujący strukturę katalogu bez dodatkowych operacji I/O i bez próbkowania typów MIME. Kanoniczna własność fizyczna dla trybu allocated, tryb logiczny, drill-down, tooltipy i nawigacja klawiaturą.
+- Finalna automatyczna regresja: 52 zestawy / 32282+ asercji PASS; build, CLI `thispc-view 0.38.0` i odbiór manualny Stage 1–6 PASS.
+
+---
 
 ## 0.37.0 — Właściwości (Properties 2.0)
 

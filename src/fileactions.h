@@ -972,6 +972,44 @@ public:
             trLocal("Przenoszenie do Kosza", "Moving to Trash"));
     }
 
+    void trashUrls(const QList<QUrl> &urls, const std::function<void(KJob *)> &onFinished = {})
+    {
+        if (!mutationAllowed()) {
+            if (onFinished) onFinished(nullptr);
+            return;
+        }
+
+        if (urls.isEmpty()) {
+            if (onFinished) onFinished(nullptr);
+            return;
+        }
+
+        for (const QUrl &url : urls) {
+            if (!url.isLocalFile()) {
+                if (onFinished) onFinished(nullptr);
+                return;
+            }
+        }
+
+        KIO::CopyJob *job = KIO::trash(urls, KIO::HideProgressInfo);
+        job->setUiDelegate(nullptr);
+        if (m_undoController) {
+            m_undoController->recordTrashJob(urls, job);
+        }
+
+        if (onFinished) {
+            connect(job, &KJob::result, this, [onFinished](KJob *j) {
+                onFinished(j);
+            });
+        }
+
+        watchFileOperation(
+            job,
+            trLocal("Przeniesiono do Kosza", "Moved to Trash"),
+            false,
+            trLocal("Przenoszenie do Kosza", "Moving to Trash"));
+    }
+
     static bool isTrashRoot(const QUrl &directory)
     {
         return directory.isValid() && directory.scheme() == QStringLiteral("trash")
@@ -1045,6 +1083,50 @@ public:
         configureInteractiveCopyJob(job);
         if (m_undoController) {
             m_undoController->recordCopyJob(job);
+        }
+
+        watchFileOperation(
+            job,
+            action == Qt::MoveAction
+                ? trLocal("Przenoszenie zakończone", "Move completed")
+                : trLocal("Kopiowanie zakończone", "Copy completed"),
+            false,
+            action == Qt::MoveAction
+                ? trLocal("Przenoszenie", "Moving")
+                : trLocal("Kopiowanie", "Copying"));
+    }
+
+    void transferUrls(const QList<QUrl> &urls, const QUrl &destination, Qt::DropAction action,
+                      const std::function<void(KJob *)> &onFinished)
+    {
+        if (!mutationAllowed()) {
+            if (onFinished) onFinished(nullptr);
+            return;
+        }
+        if (urls.isEmpty() || !destination.isValid()) {
+            if (onFinished) onFinished(nullptr);
+            return;
+        }
+        KIO::CopyJob *job =
+            action == Qt::MoveAction
+                ? KIO::move(
+                    urls,
+                    destination,
+                    KIO::HideProgressInfo)
+                : KIO::copy(
+                    urls,
+                    destination,
+                    KIO::HideProgressInfo);
+
+        configureInteractiveCopyJob(job);
+        if (m_undoController) {
+            m_undoController->recordCopyJob(job);
+        }
+
+        if (onFinished) {
+            connect(job, &KJob::result, this, [onFinished](KJob *j) {
+                onFinished(j);
+            });
         }
 
         watchFileOperation(

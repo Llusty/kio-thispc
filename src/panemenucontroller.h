@@ -48,6 +48,7 @@ public:
         std::function<void()> applyInheritedRule;
         std::function<void()> removeInheritedRule;
         std::function<void()> saveRemote;
+        std::function<void()> analyzeStorage;
         std::function<void()> properties;
     };
 
@@ -67,6 +68,7 @@ public:
         bool terminalEnabled = false;
         bool adminVisible = false;
         bool saveRemoteVisible = false;
+        bool checksumVisible = false;
     };
 
     struct ItemCallbacks {
@@ -91,6 +93,8 @@ public:
         std::function<void()> trash;
         std::function<void()> pasteInto;
         std::function<void()> copyAddress;
+        std::function<void()> analyzeStorage;
+        std::function<void()> calculateChecksum;
         std::function<void()> properties;
         std::function<void()> saveRemote;
     };

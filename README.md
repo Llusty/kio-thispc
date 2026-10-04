@@ -1,12 +1,24 @@
 [English](README.md) | [Polski](README.pl.md)
 
-# kio-thispc (This PC) 0.37.0
+# kio-thispc (This PC) 0.38.0
 
 ThisPC is a native KDE/Qt file manager focused on a Windows Explorer-like workflow, dual-pane operation, KIO integration, safe local file operations, and native KDE/Linux device handling.
 
 - **Platform:** Linux / KDE Plasma 6
 - **Frameworks:** Qt 6 / KDE Frameworks 6
 - **License:** MIT License
+
+---
+
+## 0.38.0 — Storage Tools
+
+- **Storage Scan Core:** High-performance, asynchronous background directory scanner (`StorageScanJob`, `StorageScanWorker`) with live counters, cancel support, mount boundary isolation (`st_dev`), strict symlink rejection, hardlink deduplication, and aggregated error reporting.
+- **Largest Files & Directories (Top-N):** Disk space analyzer displaying the largest items with configurable limits (Top 25/50/100/All), logical vs. allocated sorting, subfolder drill-down, and "Show in folder" navigation.
+- **Hash Utilities:** Standalone modeless checksum dialog (`HashUtilitiesDialog`) for SHA-256, SHA-1, and MD5 using cancelable chunked streaming workers, live progress, clipboard copy, and concurrent modification detection.
+- **Duplicate Finder:** Fast duplicate detection (`DuplicateFinderJob`) using size-first candidate grouping, physical identity deduplication, and sequential SHA-256 validation only for colliding byte blocks.
+- **Safe Review & Actions:** Interactive duplicate cleanup controller (`DuplicateActionController`) integrated with native `FileActions` and `OperationManager`. Supports Trash and Move with confirmation dialogs, preflight snapshot revalidation, `KIO::FileUndoManager` Undo, and exclusion of modified files.
+- **Interactive Treemap ("Mapa zajętości"):** Pure in-memory Squarified Treemap layout engine (`StorageTreemapLayout`, `StorageTreemapWidget`) visualizing directory space without rescanning or MIME probing. Features canonical physical ownership for allocated space, logical extent mode, drill-down, hover tooltips, and keyboard navigation.
+- Final automated regression: 52 suites / 32282+ assertions PASS; build, CLI `thispc-view 0.38.0`, and manual acceptance Stages 1–6 PASS.
 
 ---
 

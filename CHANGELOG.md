@@ -2,6 +2,23 @@
 
 # Changelog
 
+## 0.38.0 — Storage Tools
+
+### Added
+- **Storage Scan Core:** High-performance, asynchronous background directory scanning engine (`StorageScanJob`, `StorageScanWorker`) with real-time counters, responsive cancellation, mount boundary containment (`st_dev`), strict non-traversal of symlinks, hardlink deduplication (`st_dev` + `st_ino`), and aggregated error reporting.
+- **Largest Files & Directories (Top-N):** Instant space analysis presenting the largest files and subdirectories with configurable limits (Top 25/50/100/All), sorting by logical or allocated disk space, drill-down into subfolders, and "Show in folder" navigation.
+- **Hash Utilities:** Modeless checksum dialog (`HashUtilitiesDialog`) supporting SHA-256, SHA-1, and MD5 calculation via chunked, cancelable streaming worker jobs (`ChecksumJob`), live progress reporting, clipboard copy, and concurrent modification detection.
+- **Duplicate Finder:** High-efficiency duplicate content discovery (`DuplicateFinderJob`) using a size-first candidate filtering strategy, physical identity deduplication, and sequential SHA-256 content verification only on colliding byte groups.
+- **Safe Review & Actions:** Interactive duplicate resolution controller (`DuplicateActionController`) integrated with native `FileActions` and `OperationManager`. Supports Trash and Move operations with mandatory confirmation dialogs, strict preflight snapshot revalidation, full `KIO::FileUndoManager` Undo support, and exclusion of stale/modified files.
+- **Interactive Treemap ("Mapa zajętości"):** Pure in-memory Squarified Treemap layout engine (`StorageTreemapLayout`, `StorageTreemapWidget`) visualizing directory space without filesystem traversal or MIME probing. Features canonical physical ownership for allocated mode, logical extent mode, interactive drill-down, hover tooltips, and keyboard navigation.
+
+### Changed
+- Generalized checksum calculation backend to unify hashing across Properties and standalone Hash Utilities.
+- Streamlined modeless storage dialog workflow with standardized styling and responsive layout handling.
+
+### Fixed
+- Resolved process shutdown blocker where modeless dialogs could bypass `WA_DeleteOnClose` and prevent `QApplication::lastWindowClosed` from terminating the event loop.
+
 ## 0.37.0 — Properties
 
 - **Properties Data Model & General Info:** Replaced static properties UI with an asynchronous data-model architecture (`PropertiesDataProvider`). Displays local and remote target info, logical size vs. allocated size on disk, inode number, owner and group, filesystem type, timestamps (access, modified, change, and birth time only when supported by the filesystem via `statx`), and safe literal symlink resolution with broken-link indicators.

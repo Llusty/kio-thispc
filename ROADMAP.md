@@ -201,14 +201,85 @@ This ordering prioritizes core file-manager correctness, safety, and maintainabi
 - Manual acceptance Stages 1–6: FULL MANUAL PASS.
 - Final automated regression: 46 suites / 9690 assertions PASS; CLI `thispc-view 0.37.0`, exit code 0: PASS.
 
-### 0.38.0 — Storage Tools
+### 0.38.0 — Storage Tools ✅ completed, released (v0.38.0)
 - Largest directories and files;
 - Background disk scanning;
 - Top-N space usage views;
-- Optional treemap visualization in a future stage;
 - SHA-256 / SHA-1 / MD5 hashing utilities;
-- Duplicate discovery by size, then content hash;
-- Safe review before file removal or moves.
+- Duplicate discovery;
+- Safe review before file removal or moves;
+- Interactive Treemap ("Mapa zajętości") with squarified layout, canonical physical ownership, and drill-down;
+- Modeless dialog shutdown and natural event loop lifetime fix.
+- Stage 1: Storage Scan Core ✅ completed
+- Stage 2: Largest Files & Directories / Top-N ✅ completed
+- Stage 3: Hash Utilities ✅ completed
+- Stage 4: Duplicate Finder ✅ completed
+- Stage 5: Safe Review & Actions ✅ completed
+- Stage 6: Treemap + Final Storage Tools Polish & Lifetime Fix ✅ completed
+- Manual acceptance Stages 1–6: FULL MANUAL PASS.
+- Final automated regression: 52 suites PASS; build, CLI `thispc-view 0.38.0`, exit code 0: PASS.
+
+**Global Principles & Safety Rules:**
+- **Local Only:** Recursive storage scan and duplicate finder are strictly local-only in 0.38. Remote KIO URLs (SFTP, SMB, FTP, WebDAV) are explicitly out of scope for recursive scanning.
+- **No Symlink Follow:** By default, do not follow symlinks recursively. A symlink is counted as its own directory entry, but its target is never traversed recursively (prevents loops and escaping the scan root).
+- **Hardlink Aware:** Hardlinks are tracked by stable local identity (`st_dev` + `st_ino`). Physical files are not multiply counted towards physical storage usage, and hardlinks sharing the same inode are never treated as duplicate-content candidates.
+- **Mount / Filesystem Boundaries:** By default, the scan does not traverse into other mounted filesystems under the scan root. Boundary enforcement relies on actual filesystem identity (`st_dev`), not path heuristics. Future opt-in ("include other filesystems") remains possible without being required in Stage 1 UI.
+- **Logical vs. Allocated Size:** Distinguish between logical file size and allocated size on disk (block allocation) where supported by the filesystem. Sparse files are represented accurately without assuming logical equals allocated space.
+- **Hidden Files:** Hidden files and directories are included by default in space usage totals. Filtering them from results views must not alter calculated storage totals.
+- **Errors & Diagnostics:** Permission denied, vanished files, unreadable entries, and transient stat failures are normal scan outcomes; aggregate them into status counters (skipped, inaccessible, disappeared, errors) rather than showing per-item error popups.
+- **Read-Only First & Zero Automatic Deletion:** Stages 1–4 are strictly read-only analysis. File mutations occur only in Stage 5 after explicit user review. Automated "delete all duplicates except one" without conscious manual selection is strictly prohibited.
+
+**Stage 1 — Storage Scan Core:**
+- Asynchronous recursive local scanning engine keeping the UI fully responsive;
+- Local filesystem paths only; remote KIO locations (SFTP, SMB, FTP, WebDAV) are excluded;
+- Progress reporting, Cancel support, scanned item counters, and processed byte counters where meaningful;
+- Symlink safety: count entry without traversing targets; no symlink loops or escaping scan root;
+- Hardlink accounting: stable identity via `st_dev` + `st_ino` avoids double-counting physical usage;
+- Filesystem boundary control: stay on scan root filesystem (`st_dev`) by default;
+- Size metrics: logical size alongside allocated/disk usage (sparse file awareness);
+- Hidden files/directories counted in storage totals by default;
+- Aggregated error reporting (skipped, inaccessible, disappeared, errors) without disruptive popups;
+- Strictly read-only; no file mutations.
+
+**Stage 2 — Largest Files & Directories / Top-N:**
+- Largest files and largest directories views powered by Stage 1 scan data (no duplicate scanning engine);
+- Top-N ranking, interactive column sorting, and drill-down into directories;
+- "Show in folder" and navigation to selected item location;
+- Logical vs. allocated size presentation where appropriate;
+- Strict data consistency with Storage Scan Core results.
+
+**Stage 3 — Hash Utilities:**
+- Supported algorithms: SHA-256 (default), SHA-1 (compatibility / integrity check), MD5 (compatibility / integrity check);
+- SHA-1 and MD5 clearly presented for integrity/compatibility only, never as secure cryptographic algorithms;
+- Asynchronous hashing of local regular files with progress, cancellation, and copy result to clipboard;
+- Reuse established safe patterns from the 0.37 Properties checksum implementation where architectural design permits, avoiding unnecessary code duplication.
+
+**Stage 4 — Duplicate Finder:**
+- Multi-step detection pipeline:
+  1. Local regular files only;
+  2. Size grouping (partition candidates by exact byte size);
+  3. Hash computation only for groups with identical sizes (no disk I/O on unique files);
+  4. Content hash comparison confirms duplicate candidates.
+- File name, extension, and timestamps are never treated as proof of duplicate content;
+- Hardlink deduplication: hardlinks sharing an inode are recognized and not presented as duplicate-content files;
+- Minimal I/O footprint via collision-only hashing.
+
+**Stage 5 — Safe Review & Actions:**
+- Mandatory interactive review before any mutation: user explicitly selects items; no automatic "delete all except one";
+- Safe actions: Trash, Move, and Show in folder;
+- Reuse existing safe ThisPC infrastructure: `FileActions`, `OperationManager`, Undo/Redo, and verified transfer/trash paths (no raw direct `unlink()`);
+- Preflight revalidation of target items to prevent acting on vanished or replaced files.
+
+**Stage 6 — Final Storage Tools UX & Regression:**
+- Comprehensive UI polish, visual consistency, and Primary/Split pane parity where feature is available;
+- Polished progress and Cancel responsiveness;
+- Aggregated error-summary display;
+- Large-directory performance and memory usage validation;
+- Full automated regression suite and manual KDE/CachyOS acceptance testing;
+- Release documentation and version bump only after full test PASS;
+- **Treemap ("Mapa zajętości"):** Pure in-memory Squarified Treemap visualization with canonical physical hardlink ownership, logical extent metric switching, sub-tree drill-down, hover tooltips, and keyboard navigation.
+- **Modeless Lifecycle & Shutdown Fix:** Deterministic cascading dialog close and `done(r)` -> `close()` wiring ensuring proper `WA_DeleteOnClose` and natural Qt event loop termination.
+
 
 ### 0.39.0 — Advanced Properties Follow-up
 - Extended attributes (`xattr` / inspect & edit where supported);
@@ -298,6 +369,7 @@ Items in this section do not represent commitments or assignments to specific ve
 - Appearance candidate: adjustable dimming level for visible hidden items (current default: 0.40). Prefer simple presets over menu sliders if implemented.
 - Optional action and event sound effects candidate: unobtrusive audio cues for long-running jobs, errors, or operation finishes (strictly non-committal future candidate).
 - System integration candidate: allow ThisPC to become the default handler/file manager for inode/directory, using standard XDG/KDE mechanisms; detect the current handler and provide a safe way to restore the previous one.
+- Storage visualization candidate: interactive Treemap space usage view (deferred from 0.38 core scope as a non-blocking future candidate).
 
 ---
 

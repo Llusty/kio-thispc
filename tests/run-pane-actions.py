@@ -35,7 +35,7 @@ group.add_argument('--all', action='store_true', help='run every regression suit
 group.add_argument('--suites', nargs='+', choices=[
     'panes', 'tabs', 'properties', 'search', 'actions', 'action_state', 'operations',
     'local_transfer', 'transfer_plan', 'local_move', 'local_tree', 'tree_history',
-    'sidebar_dnd', 'sidebar_layout', 'split_layout', 'templates', 'trash', 'archive', 'archive_jobs', 'archive_menu', 'archive_creation', 'preview', 'quick_look', 'batch_rename', 'view_settings', 'listing_core', 'drive_home', 'solid_monitor', 'device_mount', 'device_removal', 'split_compare', 'selection_menu', 'location_presentation', 'navigation_history', 'keyboard_navigation', 'remote_url', 'saved_remote', 'recent_reconnect', 'session_history', 'properties_data', 'drive_properties', 'acl', 'acl_editor', 'checksums', 'metadata', 'properties_lifecycle'],
+    'sidebar_dnd', 'sidebar_layout', 'split_layout', 'templates', 'trash', 'archive', 'archive_jobs', 'archive_menu', 'archive_creation', 'preview', 'quick_look', 'batch_rename', 'view_settings', 'listing_core', 'drive_home', 'solid_monitor', 'device_mount', 'device_removal', 'split_compare', 'selection_menu', 'location_presentation', 'navigation_history', 'keyboard_navigation', 'remote_url', 'saved_remote', 'recent_reconnect', 'session_history', 'properties_data', 'drive_properties', 'acl', 'acl_editor', 'checksums', 'metadata', 'properties_lifecycle', 'storage_scan', 'storage_analysis', 'hash_utilities', 'duplicate_finder', 'duplicate_actions', 'storage_treemap'],
     help='build once and run only the selected regression suites')
 options = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
@@ -178,6 +178,12 @@ with tempfile.TemporaryDirectory(prefix='thispc-pane-tests-', delete=not options
     suites['checksums'] = 'checksum-job.cpp'
     suites['metadata'] = 'metadata-provider.cpp'
     suites['properties_lifecycle'] = 'properties-lifecycle.cpp'
+    suites['storage_scan'] = 'storage-scan.cpp'
+    suites['storage_analysis'] = 'storage-analysis.cpp'
+    suites['hash_utilities'] = 'hash-utilities.cpp'
+    suites['duplicate_finder'] = 'duplicate-finder.cpp'
+    suites['duplicate_actions'] = 'duplicate-review.cpp'
+    suites['storage_treemap'] = 'storage-treemap.cpp'
     selected = options.suites or (list(suites) if options.all else ['trash' if options.trash else 'templates' if options.templates else 'sidebar_layout' if options.sidebar_layout else 'sidebar_dnd' if options.sidebar_dnd else 'local_move' if options.local_move else 'transfer_plan' if options.transfer_plan else 'local_transfer' if options.local_transfer else 'operations' if options.operations else 'action_state' if options.action_state else 'actions' if options.actions else 'tabs' if options.tabs else 'properties' if options.properties else 'search' if options.search else 'panes'])
     if 'batch_rename' in selected:
         subprocess.run(['cmake', '-S', str(root), '-B', str(root / 'build'),

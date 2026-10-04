@@ -19,8 +19,17 @@
 
 struct ChecksumJobOptions
 {
+    ChecksumAlgorithm algorithm = ChecksumAlgorithm::Sha256;
     qsizetype chunkSize = 4 * 1024 * 1024;
     int chunkDelayMilliseconds = 0;
+    bool verifyExpectedSnapshot = false;
+    quint64 expectedDevice = 0;
+    quint64 expectedInode = 0;
+    quint64 expectedSize = 0;
+    qint64 expectedMtimeSec = 0;
+    qint64 expectedMtimeNsec = 0;
+    qint64 expectedCtimeSec = 0;
+    qint64 expectedCtimeNsec = 0;
 #ifdef THISPC_TEST_HARNESS
     int forcedOpenError = 0;
 #endif
@@ -49,6 +58,7 @@ public Q_SLOTS:
         result.url = QUrl::fromLocalFile(m_path);
         result.capability = ChecksumCapability::SupportedLocalFile;
         result.state = ChecksumState::Running;
+        result.algorithm = m_options.algorithm;
 
 #ifdef THISPC_TEST_HARNESS
         if (m_options.forcedOpenError) {
@@ -74,10 +84,29 @@ public Q_SLOTS:
             return;
         }
 
+        if (m_options.verifyExpectedSnapshot) {
+            const bool snapshotMatches =
+                static_cast<quint64>(before.st_dev) == m_options.expectedDevice &&
+                static_cast<quint64>(before.st_ino) == m_options.expectedInode &&
+                static_cast<quint64>(before.st_size) == m_options.expectedSize &&
+                static_cast<qint64>(before.st_mtim.tv_sec) == m_options.expectedMtimeSec &&
+                static_cast<qint64>(before.st_mtim.tv_nsec) == m_options.expectedMtimeNsec &&
+                static_cast<qint64>(before.st_ctim.tv_sec) == m_options.expectedCtimeSec &&
+                static_cast<qint64>(before.st_ctim.tv_nsec) == m_options.expectedCtimeNsec;
+
+            if (!snapshotMatches) {
+                ::close(fd);
+                result.state = ChecksumState::ChangedDuringHash;
+                result.errorMessage = tr("The file was modified or replaced since it was scanned.");
+                Q_EMIT finished(result);
+                return;
+            }
+        }
+
         result.totalBytes = static_cast<quint64>(before.st_size);
         Q_EMIT totalBytesKnown(result.totalBytes);
 
-        QCryptographicHash hash(QCryptographicHash::Sha256);
+        QCryptographicHash hash(toCryptographicHashAlgorithm(m_options.algorithm));
         QByteArray buffer(qMax<qsizetype>(4096, m_options.chunkSize), Qt::Uninitialized);
         bool readFailed = false;
         int readError = 0;
@@ -126,7 +155,12 @@ public Q_SLOTS:
             result.errorMessage = errorText(readError);
         } else {
             result.state = ChecksumState::Completed;
-            result.sha256 = QString::fromLatin1(hash.result().toHex());
+            result.digest = QString::fromLatin1(hash.result().toHex());
+            if (result.algorithm == ChecksumAlgorithm::Sha256) {
+                result.sha256 = result.digest;
+            } else {
+                result.sha256.clear();
+            }
         }
         Q_EMIT finished(result);
     }
@@ -154,6 +188,7 @@ private:
 
     void finishOpenFailure(ChecksumData &result, int error)
     {
+        result.algorithm = m_options.algorithm;
         result.capability = error == EACCES || error == EPERM
             ? ChecksumCapability::Unreadable
             : ChecksumCapability::SupportedLocalFile;
@@ -180,6 +215,7 @@ public:
     {
         qRegisterMetaType<ChecksumData>();
         m_data.url = url;
+        m_data.algorithm = options.algorithm;
         m_data.capability = capabilityForUrl(url);
     }
 
@@ -206,12 +242,16 @@ public:
 
     const ChecksumData &data() const { return m_data; }
     bool isRunning() const { return m_data.state == ChecksumState::Running; }
+    ChecksumAlgorithm algorithm() const { return m_options.algorithm; }
+    const ChecksumJobOptions &options() const { return m_options; }
 
     bool start()
     {
         if (isRunning() || m_data.capability != ChecksumCapability::SupportedLocalFile)
             return false;
         m_data.state = ChecksumState::Running;
+        m_data.algorithm = m_options.algorithm;
+        m_data.digest.clear();
         m_data.sha256.clear();
         m_data.errorMessage.clear();
         m_data.bytesProcessed = 0;
@@ -233,8 +273,12 @@ public:
             m_data.totalBytes = total;
             Q_EMIT progress(done, total);
         });
+        if (m_cancelled.loadAcquire()) {
+            worker->requestCancel();
+        }
         connect(worker, &ChecksumWorker::finished, this, [this, thread](const ChecksumData &result) {
             m_data = result;
+            m_cancelled.storeRelease(false);
             Q_EMIT stateChanged(m_data);
             thread->quit();
         });
@@ -252,6 +296,7 @@ public:
 
     void cancel()
     {
+        m_cancelled.storeRelease(true);
         if (m_worker) m_worker->requestCancel();
     }
 
@@ -263,6 +308,7 @@ private:
     QUrl m_url;
     ChecksumJobOptions m_options;
     ChecksumData m_data;
+    QAtomicInteger<bool> m_cancelled = false;
     QPointer<QThread> m_thread;
     QPointer<ChecksumWorker> m_worker;
 };

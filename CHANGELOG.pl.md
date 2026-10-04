@@ -2,6 +2,23 @@
 
 # Changelog
 
+## 0.38.0 — Narzędzia pamięci masowej (Storage Tools)
+
+### Dodano
+- **Silnik skanowania pamięci masowej (Storage Scan Core):** Wysokowydajny, asynchroniczny silnik skanowania katalogów w tle (`StorageScanJob`, `StorageScanWorker`) z licznikami w czasie rzeczywistym, responsywnym anulowaniem, zatrzymywaniem na granicach punktów montowania (`st_dev`), ścisłym niepodążaniem za dowiązaniami symbolicznymi (symlinks), deduplikacją twardych dowiązań (hardlinks: `st_dev` + `st_ino`) oraz agregowanym raportowaniem błędów.
+- **Największe pliki i foldery (Top-N):** Natychmiastowa analiza zajętości przestrzeni prezentująca największe pliki i podkatalogi z konfigurowalnym limitem (Top 25/50/100/Wszystkie), sortowaniem według rozmiaru logicznego lub przydzielonego na dysku, przechodzeniem do podfolderów oraz akcją „Pokaż w folderze”.
+- **Narzędzia sum kontrolnych (Hash Utilities):** Beztrybowe okno sum kontrolnych (`HashUtilitiesDialog`) obsługujące SHA-256, SHA-1 i MD5 przy użyciu blokowego, anulowalnego hashowania strumieniowego w wątku roboczym (`ChecksumJob`), z paskiem postępu na żywo, kopiowaniem do schowka i wykrywaniem równoległej modyfikacji pliku.
+- **Wyszukiwarka duplikatów (Duplicate Finder):** Wysoce wydajne wyszukiwanie zduplikowanej zawartości (`DuplicateFinderJob`) wykorzystujące filtrowanie po rozmiarze, deduplikację tożsamości fizycznej (hardlinks) oraz sekwencyjną weryfikację skrótem SHA-256 wyłącznie dla kolidujących grup bajtów.
+- **Bezpieczny przegląd i akcje (Safe Review & Actions):** Interaktywny kontroler rozwiązywania duplikatów (`DuplicateActionController`) zintegrowany z natywnym `FileActions` i `OperationManager`. Obsługuje przenoszenie do kosza oraz do innego katalogu z obowiązkowymi dialogami potwierdzenia, ścisłą rewalidacją migawki przed wykonaniem akcji, pełnym wsparciem cofania (Undo) przez `KIO::FileUndoManager` i wykluczaniem nieaktualnych/zmodyfikowanych plików.
+- **Interaktywna mapa zajętości (Treemap):** Czysto pamięciowy silnik układu Squarified Treemap (`StorageTreemapLayout`, `StorageTreemapWidget`) wizualizujący przestrzeń katalogu bez ponownego skanowania systemu plików i bez próbkowania typów MIME. Oferuje kanoniczną własność fizyczną dla trybu przydzielonego miejsca (allocated), tryb rozmiaru logicznego, interaktywne zagłębianie się w hierarchię, etykiety tooltip oraz nawigację klawiaturą.
+
+### Zmieniono
+- Uogólniono backend obliczania sum kontrolnych, unifikując hashowanie między oknem Właściwości a samodzielnymi Narzędziami sum kontrolnych.
+- Ujednolicono przepływ beztrybowych okien narzędzi pamięci masowej ze spójnym stylem i responsywnym układem.
+
+### Naprawiono
+- Rozwiązano problem zamykania procesu, w którym beztrybowe dialogi mogły omijać `WA_DeleteOnClose` i uniemożliwiać zakończenie pętli zdarzeń przez `QApplication::lastWindowClosed`.
+
 ## 0.37.0 — Właściwości (Properties 2.0)
 
 - **Model danych i informacje ogólne:** Zastąpiono statyczny dialog asynchronicznym modelem danych (`PropertiesDataProvider`). Prezentacja informacji lokalnych i zdalnych, rozmiar logiczny oraz faktyczny rozmiar na dysku, numer i-węzła (inode), właściciel i grupa, typ systemu plików, znaczniki czasu (dostęp, modyfikacja, zmiana atrybutów oraz czas utworzenia birth time z `statx` tylko gdy wspierany przez dany system plików) oraz bezpieczne odczytywanie celu dowiązań symbolicznych ze wskaźnikiem uszkodzonego linku.

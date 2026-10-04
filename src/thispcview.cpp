@@ -2,7 +2,7 @@
  * thispc-view - a lightweight KDE/Qt file browser with a Windows-like
  * "This PC" home page, backed by KIO.
  *
- * Version 0.37.0
+ * Version 0.38.0
  * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
@@ -97,6 +97,7 @@
 #include <QMimeDatabase>
 #include <QMimeType>
 #include <QMouseEvent>
+#include <QWindow>
 #include <QPainter>
 #include <QPair>
 #include <QPalette>
@@ -155,6 +156,8 @@
 #include "searchuicontroller.h"
 #include "splitbrowserpane.h"
 #include "splitcomparedialog.h"
+#include "storagescandialog.h"
+#include "hashutilitiesdialog.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -693,6 +696,14 @@ protected:
         // Modeless Properties dialogs are owned by this window: close them
         // deterministically before the window goes away.
         PropertiesLifecycle::instance().closeAllFor(this);
+
+        // Modeless child dialogs (StorageScanDialog, HashUtilitiesDialog, etc.)
+        // are owned by this window: close them deterministically so any running
+        // background jobs are cancelled and child windows do not linger.
+        const auto childDialogs = findChildren<QDialog *>();
+        for (QDialog *dialog : childDialogs) {
+            dialog->close();
+        }
 
         saveSessionState();
 
@@ -2176,14 +2187,14 @@ private:
         statusBar()->setSizeGripEnabled(true);
 
         m_versionLabel = new QLabel(
-            QStringLiteral("v0.37.0"),
+            QStringLiteral("v0.38.0"),
             this);
         m_versionLabel->setObjectName(
             QStringLiteral("versionLabel"));
         m_versionLabel->setToolTip(
             trLocal(
-                "Wersja thispc-view 0.37.0",
-                "thispc-view version 0.37.0"));
+                "Wersja thispc-view 0.38.0",
+                "thispc-view version 0.38.0"));
         statusBar()->addPermanentWidget(m_versionLabel);
     }
 
@@ -4173,6 +4184,88 @@ private:
         PropertiesDialog::showForDrive(this, drive);
     }
 
+public:
+    void showStorageScanDialog(const QUrl &url)
+    {
+        auto *dialog = new StorageScanDialog(url, this);
+        dialog->setFileActions(m_fileActions);
+        if (auto *controller = dialog->duplicateActionController()) {
+            if (m_fileActions) {
+                controller->setTrashExecutor([this](const QList<QUrl> &urls,
+                    std::function<void(const DuplicateActionController::OperationResult &)> cb) {
+                    m_fileActions->trashUrls(urls, [cb, urls](KJob *job) {
+                        DuplicateActionController::OperationResult res;
+                        if (!job || job->error() == KJob::KilledJobError || job->error() == KIO::ERR_USER_CANCELED) {
+                            res.cancelled = true;
+                        } else if (job->error() != 0) {
+                            res.errorMessage = job->errorString();
+                            for (const auto &u : urls) {
+                                if (!QFile::exists(u.toLocalFile())) {
+                                    res.successfulPaths.insert(u.toLocalFile());
+                                } else {
+                                    res.failedPaths.append(u.toLocalFile());
+                                }
+                            }
+                        } else {
+                            for (const auto &u : urls) {
+                                res.successfulPaths.insert(u.toLocalFile());
+                            }
+                        }
+                        cb(res);
+                    });
+                });
+
+                controller->setMoveExecutor([this](const QList<QUrl> &urls, const QUrl &destUrl,
+                    std::function<void(const DuplicateActionController::OperationResult &)> cb) {
+                    const QString cleanDest = destUrl.toLocalFile();
+                    m_fileActions->transferUrls(urls, destUrl, Qt::MoveAction, [cb, urls, cleanDest](KJob *job) {
+                        DuplicateActionController::OperationResult res;
+                        if (!job || job->error() == KJob::KilledJobError || job->error() == KIO::ERR_USER_CANCELED) {
+                            res.cancelled = true;
+                        } else if (job->error() != 0) {
+                            res.errorMessage = job->errorString();
+                            for (const auto &u : urls) {
+                                const QString src = u.toLocalFile();
+                                const QString dest = cleanDest + QLatin1Char('/') + QFileInfo(src).fileName();
+                                if (!QFile::exists(src) && QFile::exists(dest)) {
+                                    res.successfulPaths.insert(src);
+                                    res.movedFinalPaths.insert(src, dest);
+                                } else {
+                                    res.failedPaths.append(src);
+                                }
+                            }
+                        } else {
+                            for (const auto &u : urls) {
+                                const QString src = u.toLocalFile();
+                                const QString dest = cleanDest + QLatin1Char('/') + QFileInfo(src).fileName();
+                                res.successfulPaths.insert(src);
+                                res.movedFinalPaths.insert(src, dest);
+                            }
+                        }
+                        cb(res);
+                    });
+                });
+            }
+        }
+        connect(dialog, &StorageScanDialog::navigateRequested, this, [this](const QUrl &navUrl) {
+            navigateTo(navUrl, true);
+        });
+        connect(dialog, &StorageScanDialog::drillDownRequested, this, [this](const QUrl &drillUrl) {
+            showStorageScanDialog(drillUrl);
+        });
+        dialog->show();
+        dialog->raise();
+        dialog->activateWindow();
+    }
+
+    void showHashUtilitiesDialog(const QUrl &url)
+    {
+        auto *dialog = new HashUtilitiesDialog(url, this);
+        dialog->show();
+        dialog->raise();
+        dialog->activateWindow();
+    }
+
     bool isLocationMountRoot(const QUrl &url) const
     {
         if (!url.isValid() || !url.isLocalFile()) {
@@ -4396,6 +4489,9 @@ private:
                  [this, directory = context.directory] {
                      if (m_sidebar) m_sidebar->promptAddRemoteLocation(directory);
                  },
+                 [this, directory = context.directory] {
+                     showStorageScanDialog(directory);
+                 },
                  [this] {
                      showCurrentDirectoryProperties();
                  }});
@@ -4420,7 +4516,8 @@ private:
              m_selectionMenuController.canSetWallpaper(url, isDir),
              isDir && mime && mime->hasUrls(), isDir && url.isLocalFile(),
              single && url.isLocalFile(),
-             saveRemote},
+             saveRemote,
+             single && !isDir && url.isLocalFile() && ChecksumJob::capabilityForUrl(url) == ChecksumCapability::SupportedLocalFile},
             {[this, pane = context.id, url, isDir] {
                  if (isDir)
                      navigatePane(pane, url);
@@ -4455,6 +4552,12 @@ private:
              [this] { trashSelected(); },
              [this, url] { pasteClipboardInto(url); },
              [url] { QGuiApplication::clipboard()->setText(urlForDisplay(url)); },
+             [this, clicked] {
+                 showStorageScanDialog(clicked.url);
+             },
+             [this, clicked] {
+                 showHashUtilitiesDialog(clicked.url);
+             },
              [this, clicked] {
                  showPropertiesDialog(clicked.name, clicked.url, clicked.isDir,
                                       clicked.type, clicked.size, clicked.modified);

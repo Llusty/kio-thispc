@@ -94,7 +94,7 @@ public:
         m_busy = busy;
         if (!busy && m_pending) {
             m_pending = false;
-            QDialog::done(m_pendingResult);
+            done(m_pendingResult);
         }
     }
 
@@ -106,6 +106,19 @@ public:
             return;
         }
         QDialog::done(result);
+        close();
+    }
+
+protected:
+    void closeEvent(QCloseEvent *event) override
+    {
+        if (m_busy) {
+            m_pending = true;
+            m_pendingResult = QDialog::Rejected;
+            event->ignore();
+            return;
+        }
+        QDialog::closeEvent(event);
     }
 
 private:
@@ -1661,7 +1674,7 @@ public:
 
         // Close button box
         auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, dialog);
-        QObject::connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::accept);
+        QObject::connect(buttons, &QDialogButtonBox::rejected, dialog, &QWidget::close);
         outer->addWidget(buttons);
 
         // Provider wiring

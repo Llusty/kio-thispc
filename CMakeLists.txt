@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(kio-thispc VERSION 0.37.0 LANGUAGES CXX)
+project(kio-thispc VERSION 0.38.0 LANGUAGES CXX)
 
 set(QT_MIN_VERSION "6.5.0")
 set(KF_MIN_VERSION "6.17.0")
@@ -134,6 +134,22 @@ add_executable(thispc-view
     src/checksumdata.h
     src/checksumjob.h
     src/checksumwidget.h
+    src/hashutilitiesdialog.h
+    src/storagescandata.h
+    src/storagescanworker.h
+    src/storagescanjob.h
+    src/storagescandialog.h
+    src/storageanalysisdata.h
+    src/storageanalysisaccumulator.h
+    src/storageanalysismodel.h
+    src/duplicatefinderdata.h
+    src/duplicatefinderjob.h
+    src/duplicategroupmodel.h
+    src/duplicateactiondata.h
+    src/duplicateactioncontroller.h
+    src/storagetreemapdata.h
+    src/storagetreemaplayout.h
+    src/storagetreemapwidget.h
     src/metadatadata.h
     src/metadataprovider.h
     src/metadatawidget.h
@@ -234,6 +250,22 @@ add_executable(thispc-view-stage3c1-test EXCLUDE_FROM_ALL
     src/checksumdata.h
     src/checksumjob.h
     src/checksumwidget.h
+    src/hashutilitiesdialog.h
+    src/storagescandata.h
+    src/storagescanworker.h
+    src/storagescanjob.h
+    src/storagescandialog.h
+    src/storageanalysisdata.h
+    src/storageanalysisaccumulator.h
+    src/storageanalysismodel.h
+    src/duplicatefinderdata.h
+    src/duplicatefinderjob.h
+    src/duplicategroupmodel.h
+    src/duplicateactiondata.h
+    src/duplicateactioncontroller.h
+    src/storagetreemapdata.h
+    src/storagetreemaplayout.h
+    src/storagetreemapwidget.h
     src/metadatadata.h
     src/metadataprovider.h
     src/metadatawidget.h

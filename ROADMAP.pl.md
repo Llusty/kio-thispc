@@ -379,14 +379,85 @@ zainstalowana i ręcznie potwierdzona przez użytkownika. Pełna regresja wydani
 - ręczny odbiór Stage 1–6: FULL MANUAL PASS.
 - pełna regresja: 46 zestawów / 9690 asercji PASS; CLI `thispc-view 0.37.0`, kod wyjścia 0: PASS.
 
-### 0.38.0 — Storage Tools
-- biggest directories/files;
-- background scan;
-- top-N views;
-- optional treemap later;
-- SHA-256 / SHA-1 / MD5 utilities;
-- duplicate discovery by size then hash;
-- safe review before removal/move.
+### 0.38.0 — Narzędzia pamięci masowej (Storage Tools) ✅ ukończone, wydane (v0.38.0)
+- największe katalogi i pliki;
+- skanowanie dysku w tle;
+- widoki wykorzystania przestrzeni Top-N;
+- narzędzia sum kontrolnych SHA-256 / SHA-1 / MD5;
+- wykrywanie duplikatów;
+- bezpieczny przegląd przed usunięciem lub przeniesieniem;
+- interaktywna mapa zajętości (Treemap) z układem squarified, kanoniczną własnością fizyczną i zagłębianiem;
+- naprawa cyklu życia i zamykania dialogów modeless.
+- Stage 1: Rdzeń skanowania pamięci masowej (Storage Scan Core) ✅ ukończone
+- Stage 2: Największe pliki i katalogi / Top-N ✅ ukończone
+- Stage 3: Narzędzia skrótów (Hash Utilities) ✅ ukończone
+- Stage 4: Wyszukiwarka duplikatów (Duplicate Finder) ✅ ukończone
+- Stage 5: Bezpieczny przegląd i akcje (Safe Review & Actions) ✅ ukończone
+- Stage 6: Mapa zajętości, szlif narzędzi pamięci masowej i naprawa cyklu życia ✅ ukończone
+- Odbiór ręczny Stages 1–6: FULL MANUAL PASS.
+- Pełna automatyczna regresja: 52 zestawy PASS; build, CLI `thispc-view 0.38.0`, kod wyjścia 0: PASS.
+
+**Zasady globalne i bezpieczeństwo:**
+- **Tylko lokalne ścieżki (Local Only):** rekurencyjne skanowanie pamięci masowej i wyszukiwanie duplikatów w 0.38 dotyczą wyłącznie lokalnych systemów plików. Zdalne zasoby KIO (SFTP, SMB, FTP, WebDAV) są bezwzględnie poza zakresem rekurencyjnego skanowania;
+- **Brak podążania za symlinkami (No Symlink Follow):** domyślnie skaner nie podąża rekurencyjnie za dowiązaniami symbolicznymi. Symlink może być uwzględniony jako pojedynczy wpis, lecz jego cel nie jest rekurencyjnie skanowany (zapobieganie pętlom oraz wychodzeniu poza katalog bazowy skanu);
+- **Świadomość hardlinków (Hardlink Aware):** dowiązania twarde są śledzone przez stabilną lokalną tożsamość (`st_dev` + `st_ino`). Pojedynczy fizyczny plik nie może być wielokrotnie wliczany do fizycznego zużycia miejsca, a hardlinki wskazujące na ten sam inode nie mogą być traktowane jako zwykłe duplikaty zawartości;
+- **Granice systemów plików (Mount Boundaries):** domyślnie skan nie schodzi automatycznie na inne zamontowane systemy plików znajdujące się pod ścieżką początkową. Polityka opiera się o rzeczywistą tożsamość systemu plików (`st_dev`), a nie heurystykę ścieżek. Możliwość przyszłego jawnego włączenia („uwzględnij inne systemy plików”) pozostaje otwarta bez wymuszania jej w UI Stage 1;
+- **Rozmiar logiczny vs. alokowany (Logical vs. Allocated Size):** rozróżnianie rozmiaru logicznego oraz rozmiaru alokowanego na dysku (size on disk / bloki) tam, gdzie system plików udostępnia te dane. Pliki rzadkie (sparse files) muszą być reprezentowane poprawnie, bez zakładania tożsamości rozmiaru logicznego z fizyczną alokacją;
+- **Pliki ukryte (Hidden Files):** ukryte pliki i katalogi są domyślnie uwzględniane w obliczaniu całkowitej zajętości przestrzeni; ewentualne ukrycie ich w widoku prezentacji nie może zmieniać rzeczywistych sum;
+- **Błędy i diagnostyka:** odmowa dostępu (permission denied), zniknięcie pliku w trakcie skanu, brak możliwości odczytu czy przejściowe błędy `stat` są normalnymi wynikami skanowania; należy je raportować w zagregowanych licznikach (pominięte, niedostępne, zniknięte, błędy) zamiast wyświetlania uciążliwych okien dialogowych dla każdego pliku;
+- **Najpierw tylko do odczytu i brak automatycznego usuwania:** etapy 1–4 to wyłącznie analiza w trybie tylko do odczytu (read-only). Jakiekolwiek operacje na plikach są dopuszczalne dopiero w Stage 5 po jawnym przeglądzie użytkownika. Automatyczne usuwanie („usuń wszystkie duplikaty oprócz jednego”) bez świadomego wyboru jest zabronione.
+
+**Stage 1 — Rdzeń skanowania pamięci masowej (Storage Scan Core):**
+- asynchroniczny silnik rekurencyjnego skanowania lokalnego, zachowujący pełną responsywność interfejsu użytkownika;
+- wyłącznie lokalne ścieżki i systemy plików; zdalne lokalizacje KIO (SFTP, SMB, FTP, WebDAV) są wyłączone z rekurencyjnego skanowania;
+- raportowanie postępu, obsługa anulowania (Cancel), licznik przeskanowanych elementów oraz licznik przetworzonych bajtów tam, gdzie ma to sens;
+- bezpieczeństwo symlinków: uwzględnienie wpisu bez przechodzenia do celu; ochrona przed pętlami i ucieczką poza korzeń skanu;
+- obsługa hardlinków: stabilna identyfikacja (`st_dev` + `st_ino`) zapobiega zawyżaniu fizycznego zużycia miejsca;
+- kontrola granic montowania: domyślne pozostawanie w obrębie początkowego systemu plików (`st_dev`);
+- metryki rozmiaru: rozmiar logiczny obok alokacji dyskowej (uwzględnienie sparse files);
+- pliki i foldery ukryte domyślnie wliczane do sumarycznej zajętości;
+- zbiorcze raportowanie błędów i pominięć (pominięte, niedostępne, zniknięte, błędy) bez wyskakujących okienek;
+- tryb wyłącznie do odczytu; brak jakichkolwiek mutacji na systemie plików.
+
+**Stage 2 — Największe pliki i katalogi / Top-N (Largest Files & Directories / Top-N):**
+- widoki największych plików oraz największych katalogów oparte bezpośrednio na danych z silnika Stage 1 (bez budowania osobnego mechanizmu skanowania);
+- ranking Top-N, interaktywne sortowanie kolumn oraz przechodzenie w głąb katalogów (drill-down);
+- akcja „Pokaż w folderze” oraz przejście do lokalizacji wybranego elementu;
+- prezentacja rozmiaru logicznego vs. alokowanego tam, gdzie ma to zastosowanie;
+- ścisła spójność danych z wynikami Storage Scan Core.
+
+**Stage 3 — Narzędzia sum kontrolnych (Hash Utilities):**
+- wspierane algorytmy: SHA-256 (domyślny), SHA-1 (zgodność / weryfikacja integralności), MD5 (zgodność / weryfikacja integralności);
+- SHA-1 i MD5 wyraźnie oznaczone jako algorytmy wyłącznie do weryfikacji integralności/zgodności, nigdy jako bezpieczne skróty kryptograficzne;
+- asynchroniczne obliczanie sum kontrolnych dla lokalnych zwykłych plików z paskiem postępu, możliwością anulowania oraz kopiowaniem wyniku do schowka;
+- ponowne wykorzystanie (reuse) sprawdzonych wzorców z implementacji sum kontrolnych w oknie właściwości (0.37), o ile pozwala na to architektura, zapobiegając zbędnej duplikacji kodu.
+
+**Stage 4 — Wyszukiwanie duplikatów (Duplicate Finder):**
+- wieloetapowy potok wykrywania:
+  1. wyłącznie lokalne zwykłe pliki (regular files);
+  2. grupowanie kandydatów według dokładnego rozmiaru w bajtach;
+  3. obliczanie skrótu tylko dla grup o identycznym rozmiarze (brak operacji I/O dla plików o unikalnym rozmiarze);
+  4. potwierdzenie duplikatów przez porównanie sumy kontrolnej zawartości.
+- nazwa pliku, rozszerzenie ani znaczniki czasu nigdy nie stanowią dowodu na duplikat zawartości;
+- rozpoznawanie dowiązań twardych: pliki o tym samym inode są identyfikowane i nie są prezentowane jako duplikaty zawartości;
+- minimalizacja obciążenia wejścia/wyjścia (I/O).
+
+**Stage 5 — Bezpieczny przegląd i akcje (Safe Review & Actions):**
+- obowiązkowy interaktywny przegląd przed jakąkolwiek mutacją: użytkownik świadomie zaznacza konkretne elementy; brak automatycznego kasowania „wszystkich prócz jednego”;
+- bezpieczne operacje: Kosz (Trash), Przeniesienie (Move) oraz Pokaż w folderze (Show in folder);
+- wykorzystanie istniejącej, bezpiecznej infrastruktury ThisPC: `FileActions`, `OperationManager`, Undo/Redo oraz zweryfikowanych ścieżek transferu i usuwania (brak surowego, bezpośredniego `unlink()`);
+- wstępna ponowna walidacja (preflight revalidation) celów, chroniąca przed operacjami na plikach usuniętych lub podmienionych w międzyczasie.
+
+**Stage 6 — Końcowy UX narzędzi pamięci masowej i regresja (Final Storage Tools UX & Regression):**
+- dopracowanie spójności całego interfejsu, układu oraz parytetu między panelem głównym a Split View tam, gdzie funkcja jest dostępna;
+- dopracowanie obsługi anulowania (Cancel) i płynności paska postępu;
+- przejrzyste podsumowanie diagnostyki i błędów (error-summary UX);
+- weryfikacja wydajności i stabilności zużycia pamięci przy operacjach na bardzo dużych strukturach katalogów;
+- pełna automatyczna regresja testowa oraz manualna akceptacja w środowisku KDE/CachyOS;
+- aktualizacja dokumentacji i przygotowanie wydania dopiero po pełnym przejściu testów (PASS);
+- **Mapa zajętości (Treemap):** czysto pamięciowa wizualizacja Squarified Treemap z kanoniczną własnością fizyczną dla dowiązań twardych, przełączaniem metryki logicznej, zagłębianiem w poddrzewa, etykietami informacyjnymi i nawigacją klawiaturą;
+- **Naprawa cyklu życia i zamykania dialogów modeless:** deterministyczne kaskadowe zamykanie dialogów i obsługa `done(r)` -> `close()`, zapewniające poprawne działanie `WA_DeleteOnClose` oraz naturalne zakończenie pętli zdarzeń Qt.
+
 
 ### 0.39.0 — Rozszerzone właściwości — dalszy rozwój (Advanced Properties Follow-up)
 - atrybuty rozszerzone (`xattr` / podgląd i edycja tam, gdzie są wspierane);
@@ -513,6 +584,7 @@ sens i usunąć je, jeśli przestaną być użyteczne.
   preferencję wyglądu lub kilka presetów zamiast suwaka w menu Widok.
 - opcjonalne dźwięki akcji/zdarzeń: dyskretne sygnały dźwiękowe dla długich zadań, błędów lub zakończenia operacji (wyłącznie niezobowiązujący kandydat w przyszłości).
 - Kandydat integracji systemowej: możliwość ustawienia ThisPC jako domyślnego programu/menedżera do otwierania katalogów (inode/directory) przez standardowe mechanizmy XDG/KDE, z wykrywaniem obecnego handlera i możliwością bezpiecznego przywrócenia poprzedniego.
+- Kandydat wizualizacji pamięci masowej: interaktywny widok mapy drzewa (treemap) do analizy zajętości dysku (odłożony poza podstawowy zakres 0.38 jako nieblokujący kandydat na przyszłość).
 
 ## Before 1.0
 Stability-focused cycle covering:
