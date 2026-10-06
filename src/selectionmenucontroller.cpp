@@ -163,7 +163,7 @@ void SelectionMenuController::addViewSubmenu(QMenu &menu, const ViewState &state
     QAction *hidden = show->addAction(themedIcon(QStringLiteral("view-hidden")), trLocal("Ukryte elementy", "Hidden items"));
     hidden->setCheckable(true); hidden->setChecked(state.showHidden);
     QObject::connect(hidden, &QAction::toggled, show, callbacks.setShowHidden);
-    QAction *thumbs = show->addAction(themedIcon(QStringLiteral("view-preview")), trLocal("Miniatury obrazów", "Image thumbnails"));
+    QAction *thumbs = show->addAction(themedIcon(QStringLiteral("view-preview")), trLocal("Pokaż podglądy", "Show Previews"));
     thumbs->setCheckable(true); thumbs->setChecked(state.thumbnails);
     QObject::connect(thumbs, &QAction::toggled, show, callbacks.setThumbnails);
     show->addAction(state.previewAction); show->addAction(state.fullNamesAction);

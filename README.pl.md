@@ -1,6 +1,17 @@
 [English](README.md) | [Polski](README.pl.md)
 
-# kio-thispc 0.38.0
+# kio-thispc 0.39.0
+
+## 0.39.0 — Natywna integracja plików i bogate podglądy
+
+- Lokalne pliki są prawidłowo rozwiązywane do adresów `file://` i uruchamiane przez natywny proces KDE/KIO Open/Execute, w tym lokalne pliki wykonywalne i binaria Windows obsługiwane przez skojarzenia systemowe.
+- Miniatury obrazów i wideo, natywne ikony plików wykonywalnych Windows oraz podglądy zawartości folderów korzystają z infrastruktury podglądów KDE KIO ze standardową ikoną MIME jako fallbackiem.
+- Ustawienie **Widok → Pokaż podglądy** jest zapisywane osobno dla każdej lokalizacji w `DirectoryViewProfile` i działa spójnie w panelu głównym, Split View oraz wynikach wyszukiwania.
+- `PreviewController` planuje podglądy asynchronicznie w ograniczonych partiach, buforuje wyniki, priorytetyzuje widoczne elementy w dużych katalogach i odrzuca nieaktualne wyniki za pomocą tokenów generacji.
+- Podglądy zdalne pozostają wyłączone. F5 unieważnia stan podglądów, a zadania są bezpiecznie anulowane podczas nawigacji i zamykania aplikacji.
+- Ręczny odbiór Stage 1–7: FULL MANUAL PASS. Końcowa regresja wydania jest odnotowana w changelogu 0.39.0.
+
+---
 
 ## 0.38.0 — Narzędzia pamięci masowej (Storage Tools)
 

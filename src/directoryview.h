@@ -69,6 +69,8 @@ enum ItemRole {
     FileItemRole,
     OriginalOrderRole,
     HiddenRole,
+    PreviewPixmapRole,
+    MimeTypeRole,
 };
 
 inline constexpr qreal HiddenItemOpacity = 0.40;
@@ -503,6 +505,19 @@ public:
         : QStyledItemDelegate(view)
         , m_view(view)
     {
+    }
+
+    void initStyleOption(QStyleOptionViewItem *option, const QModelIndex &index) const override
+    {
+        QStyledItemDelegate::initStyleOption(option, index);
+        const QVariant previewData = index.data(directory_view_detail::PreviewPixmapRole);
+        if (previewData.isValid() && !previewData.isNull()) {
+            const QPixmap pixmap = previewData.value<QPixmap>();
+            if (!pixmap.isNull()) {
+                option->icon = QIcon(pixmap);
+                option->features |= QStyleOptionViewItem::HasDecoration;
+            }
+        }
     }
 
     void setAlwaysShowFullNames(bool enabled)
@@ -1075,6 +1090,7 @@ public:
         item->setData(modifiedText, directory_view_detail::ModifiedTextRole);
         item->setData(true, directory_view_detail::FileItemRole);
         item->setData(file.isHidden, directory_view_detail::HiddenRole);
+        item->setData(file.mimeType, directory_view_detail::MimeTypeRole);
         item->setData(m_sourceModel->rowCount(), directory_view_detail::OriginalOrderRole);
         item->setData(categoryDisplay, KCategorizedSortFilterProxyModel::CategoryDisplayRole);
         item->setData(categoryOrder, KCategorizedSortFilterProxyModel::CategorySortRole);
@@ -1442,6 +1458,22 @@ public:
             HiddenDetailsDelegate(QTreeWidget *view,
                                   ExplorerNameDelegate::RenameRequest *request)
                 : QStyledItemDelegate(view), m_view(view), m_request(request) {}
+
+            void initStyleOption(QStyleOptionViewItem *option,
+                                 const QModelIndex &index) const override
+            {
+                QStyledItemDelegate::initStyleOption(option, index);
+                if (index.column() == 0) {
+                    const QVariant previewData = index.data(directory_view_detail::PreviewPixmapRole);
+                    if (previewData.isValid() && !previewData.isNull()) {
+                        const QPixmap pixmap = previewData.value<QPixmap>();
+                        if (!pixmap.isNull()) {
+                            option->icon = QIcon(pixmap);
+                            option->features |= QStyleOptionViewItem::HasDecoration;
+                        }
+                    }
+                }
+            }
 
             void paint(QPainter *painter, const QStyleOptionViewItem &option,
                        const QModelIndex &index) const override
@@ -2004,6 +2036,10 @@ inline void addDirectoryFileItems(
         0,
         directory_view_detail::HiddenRole,
         file.isHidden);
+    detailsItem->setData(
+        0,
+        directory_view_detail::MimeTypeRole,
+        file.mimeType);
     detailsItem->setToolTip(0, toolTip);
     detailsItem->setTextAlignment(
         2,

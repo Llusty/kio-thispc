@@ -2,6 +2,21 @@
 
 # Changelog
 
+## 0.39.0 — Natywna integracja plików i bogate podglądy
+
+### Dodano
+- Natywną obsługę KDE/KIO Open/Execute dla plików lokalnych, z prawidłowym rozwiązywaniem adresów `file://` i obsługą lokalnych plików wykonywalnych przez skojarzenia systemowe.
+- Miniatury obrazów i wideo oparte na KIO, natywne podglądy ikon plików wykonywalnych Windows oraz podglądy zawartości folderów ze standardowymi ikonami MIME/folderu jako fallbackiem.
+- Ustawienie **Widok → Pokaż podglądy**, zapisywane osobno dla każdej lokalizacji przez `DirectoryViewProfile` w panelu głównym, Split View i wynikach wyszukiwania.
+
+### Zmieniono
+- Dodano asynchroniczne przetwarzanie partiami, ograniczony cache, tokeny generacji i planowanie wyłącznie widocznych elementów w dużych katalogach przez `PreviewController`.
+- Generowanie podglądów pozostaje wyłącznie lokalne; lokalizacje zdalne nie planują zadań podglądu.
+
+### Naprawiono
+- F5 unieważnia stan podglądów przed odświeżeniem, zapobiegając użyciu nieaktualnych miniatur z cache.
+- Anulowanie zadań podglądu i cykl życia obiektów są deterministyczne podczas nawigacji, odświeżania i zamykania aplikacji.
+
 ## 0.38.0 — Narzędzia pamięci masowej (Storage Tools)
 
 ### Dodano

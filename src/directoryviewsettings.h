@@ -22,6 +22,7 @@ struct DirectoryViewProfile
     int sortKey = 0;
     bool sortAscending = true;
     int groupMode = 0;
+    bool previewsEnabled = true;
 
     bool operator==(const DirectoryViewProfile &) const = default;
 };
@@ -29,7 +30,7 @@ struct DirectoryViewProfile
 class DirectoryViewSettings final
 {
 public:
-    static constexpr int ProfileVersion = 2;
+    static constexpr int ProfileVersion = 3;
     static constexpr int DefaultIconSizeMode = 1;
     static constexpr int DefaultIconSizeStep = 5;
     static constexpr int NoGrouping = 0;
@@ -44,7 +45,8 @@ public:
                           legacyModeToStep(settings.value(QStringLiteral("directory/iconSizeMode"), DefaultIconSizeMode).toInt()),
                           settings.value(QStringLiteral("directory/sortKey"), 0).toInt(),
                           settings.value(QStringLiteral("directory/sortAscending"), true).toBool(),
-                          NoGrouping});
+                          NoGrouping,
+                          true});
     }
 
     static constexpr int iconSizeStepCount() { return 9; }
@@ -266,6 +268,7 @@ private:
         settings.setValue(prefix + QStringLiteral("/sortKey"), profile.sortKey);
         settings.setValue(prefix + QStringLiteral("/sortAscending"), profile.sortAscending);
         settings.setValue(prefix + QStringLiteral("/groupMode"), profile.groupMode);
+        settings.setValue(prefix + QStringLiteral("/previewsEnabled"), profile.previewsEnabled);
     }
 
     static bool readProfile(QSettings &settings, const QString &prefix,
@@ -273,14 +276,15 @@ private:
     {
         if (!settings.contains(prefix + QStringLiteral("/viewMode"))) return false;
         const int version = settings.value(QStringLiteral("version"), 1).toInt();
-        const int iconStep = version >= ProfileVersion
+        const int iconStep = version >= 2
             ? settings.value(prefix + QStringLiteral("/iconSizeStep"), DefaultIconSizeStep).toInt()
             : legacyModeToStep(settings.value(prefix + QStringLiteral("/iconSizeMode"), DefaultIconSizeMode).toInt());
         *profile = sanitized({settings.value(prefix + QStringLiteral("/viewMode")).toInt(),
                               iconStep,
                               settings.value(prefix + QStringLiteral("/sortKey"), 0).toInt(),
                               settings.value(prefix + QStringLiteral("/sortAscending"), true).toBool(),
-                              settings.value(prefix + QStringLiteral("/groupMode"), NoGrouping).toInt()});
+                              settings.value(prefix + QStringLiteral("/groupMode"), NoGrouping).toInt(),
+                              settings.value(prefix + QStringLiteral("/previewsEnabled"), true).toBool()});
         return true;
     }
 

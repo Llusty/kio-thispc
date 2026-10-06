@@ -13,6 +13,7 @@
 
 class DirectoryListWidget;
 class DirectoryTreeWidget;
+class DirectoryPreviewAdapter;
 class QLabel;
 class QMimeDatabase;
 class QStackedWidget;
@@ -33,14 +34,16 @@ public:
     explicit PrimaryBrowserPane(QWidget *parent = nullptr);
     QStackedWidget *contentStack() const { return m_contentStack; }
     QUrl currentUrl() const { return m_currentUrl; }
-    void setCurrentUrl(const QUrl &url) { m_currentUrl = normalizedUrl(url); }
+    void setCurrentUrl(const QUrl &url);
     void bindDirectoryViews(DirectoryListWidget *, DirectoryTreeWidget *, QLabel *, QLabel *);
     DirectoryListWidget *listView() const { return m_directoryList; }
     DirectoryTreeWidget *detailsView() const { return m_directoryDetails; }
+    DirectoryPreviewAdapter *previewAdapter() const { return m_previewAdapter; }
     const QList<FileInfo> &files() const { return m_listingCore.files(); }
     QList<FileInfo> &mutableFiles() { return m_listingCore.mutableFiles(); }
     void setFiles(const QList<FileInfo> &files) { m_listingCore.setFiles(files); }
     KIO::ListJob *listingJob() const;
+    quint64 listingStartCount() const { return m_listingCore.startListingCount(); }
     void clearThumbnailCache() { m_listingCore.clearThumbnailCache(); }
     void loadDirectory(const QUrl &, bool, bool, bool,
                        const std::function<void(bool)> &,
@@ -70,4 +73,5 @@ private:
     QUrl m_currentUrl = kThisPcUrl;
     DirectoryListingCore m_listingCore;
     DirectorySelectionSnapshot m_pendingSelection;
+    DirectoryPreviewAdapter *m_previewAdapter = nullptr;
 };

@@ -157,7 +157,7 @@ int main(int argc, char **argv)
     QMenu *groupMenu = submenu(*sortMenu, trLocal("Grupuj według", "Group by"));
     action(*groupMenu, trLocal("Rozmiar", "Size"))->trigger();
     action(background, trLocal("Ukryte elementy", "Hidden items"))->trigger();
-    action(background, trLocal("Miniatury obrazów", "Image thumbnails"))->trigger();
+    action(background, trLocal("Pokaż podglądy", "Show Previews"))->trigger();
     verify(viewMode == 0 && iconSize == 2, "View routes to active-pane step callbacks");
     verify(sortKey == 0 && ascending, "Sort routes to active-pane callbacks");
     verify(groupMode == DirectoryViewSettings::GroupBySize, "Grouping routes to active-pane callback");

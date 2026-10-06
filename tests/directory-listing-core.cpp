@@ -252,14 +252,14 @@ int main(int argc, char **argv)
                        QUrl::fromLocalFile(imagePath), false, QFileInfo(imagePath).size(), 1};
     core.clearThumbnailCache();
     verify(!core.iconForFile(imageFile, mimeDatabase, true, true).isNull()
-               && core.thumbnailCacheSize() == 1,
-           "Primary thumbnail path decodes and caches a local image");
+               && core.thumbnailCacheSize() == 0,
+           "legacy icon path returns a canonical MIME icon without decoding or caching");
     core.iconForFile(imageFile, mimeDatabase, true, true);
-    verify(core.thumbnailCacheSize() == 1, "cached thumbnail is reused by stable identity");
+    verify(core.thumbnailCacheSize() == 0, "legacy thumbnail cache remains unused");
     core.clearThumbnailCache();
     verify(!core.iconForFile(imageFile, mimeDatabase, true, false).isNull()
                && core.thumbnailCacheSize() == 0,
-           "Split thumbnail adapter decodes without populating the cache");
+           "Split legacy icon path also preserves canonical fallback without caching");
 
     DirectoryListingCore primaryAdapter;
     DirectoryListingCore splitAdapter;

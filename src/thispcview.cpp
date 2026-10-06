@@ -2,7 +2,7 @@
  * thispc-view - a lightweight KDE/Qt file browser with a Windows-like
  * "This PC" home page, backed by KIO.
  *
- * Version 0.38.0
+ * Version 0.39.0
  * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
@@ -28,9 +28,11 @@
 #include "previewcoordinator.h"
 #include "selectionmenucontroller.h"
 #include "tabcontroller.h"
+#include "launchurlresolver.h"
 #include <KIO/CopyJob>
 #include <KIO/Global>
 #include <KIO/JobUiDelegateFactory>
+#include <KIO/OpenUrlJob>
 #include <KIO/ChmodJob>
 #include <KIO/StoredTransferJob>
 #include <KIO/ListJob>
@@ -1426,10 +1428,7 @@ private:
                 QStringLiteral("directory/showHidden"),
                 false).toBool();
 
-        m_thumbnailsEnabled =
-            settings.value(
-                QStringLiteral("directory/thumbnails"),
-                true).toBool();
+        m_thumbnailsEnabled = DirectoryViewSettings::globalDefault().previewsEnabled;
 
         m_alwaysShowFullNames =
             settings.value(
@@ -1515,7 +1514,7 @@ private:
 
         m_thumbnailsAction = showMenu->addAction(
             themedIcon(QStringLiteral("view-preview")),
-            trLocal("Miniatury obrazów", "Image thumbnails"));
+            trLocal("Pokaż podglądy", "Show Previews"));
         m_thumbnailsAction->setCheckable(true);
         m_thumbnailsAction->setChecked(m_thumbnailsEnabled);
         connect(
@@ -1972,6 +1971,9 @@ private:
         m_splitPane = new SplitBrowserPane(m_contentSplitter);
         m_splitPane->setAlwaysShowFullNames(
             m_alwaysShowFullNames);
+        m_splitPane->setLaunchHandler([this](const QUrl &url) {
+            launchResolvedUrl(url);
+        });
         m_contentSplitter->addWidget(m_splitPane);
         m_splitPane->hide();
 
@@ -1984,7 +1986,12 @@ private:
                 [this] { return m_directoryList; },
                 [this] { return m_directoryDetails; },
                 [this](const QUrl &url) { navigateTo(url, true); },
-                [this] { refreshCurrent(); },
+                [this] {
+                    if (m_primaryPane && m_primaryPane->previewAdapter()) {
+                        m_primaryPane->previewAdapter()->invalidatePreviews();
+                    }
+                    refreshCurrent();
+                },
                 [this](const QUrl &url) { openInSplitPane(url); }},
             PaneBinding{
                 [this] { return m_splitPane && m_splitPane->isVisible(); },
@@ -2187,14 +2194,14 @@ private:
         statusBar()->setSizeGripEnabled(true);
 
         m_versionLabel = new QLabel(
-            QStringLiteral("v0.38.0"),
+            QStringLiteral("v0.39.0"),
             this);
         m_versionLabel->setObjectName(
             QStringLiteral("versionLabel"));
         m_versionLabel->setToolTip(
             trLocal(
-                "Wersja thispc-view 0.38.0",
-                "thispc-view version 0.38.0"));
+                "Wersja thispc-view 0.39.0",
+                "thispc-view version 0.39.0"));
         statusBar()->addPermanentWidget(m_versionLabel);
     }
 
@@ -3734,6 +3741,9 @@ private:
                     m_sortKey = profile.sortKey;
                     m_sortAscending = profile.sortAscending;
                     m_groupMode = profile.groupMode;
+                    m_thumbnailsEnabled = profile.previewsEnabled;
+                    if (m_primaryPane && m_primaryPane->previewAdapter())
+                        m_primaryPane->previewAdapter()->setEnabled(m_thumbnailsEnabled);
                     if (m_sortButton) m_sortButton->setIcon(themedIcon(
                         m_sortAscending ? QStringLiteral("view-sort-ascending")
                                         : QStringLiteral("view-sort-descending")));
@@ -3797,6 +3807,9 @@ private:
         m_sortKey = profile.sortKey;
         m_sortAscending = profile.sortAscending;
         m_groupMode = profile.groupMode;
+        m_thumbnailsEnabled = profile.previewsEnabled;
+        if (m_primaryPane && m_primaryPane->previewAdapter())
+            m_primaryPane->previewAdapter()->setEnabled(m_thumbnailsEnabled);
         if (m_sortButton) m_sortButton->setIcon(themedIcon(
             m_sortAscending ? QStringLiteral("view-sort-ascending")
                             : QStringLiteral("view-sort-descending")));
@@ -3876,7 +3889,7 @@ private:
         const FileInfo &file,
         QMimeDatabase &mimeDatabase)
     {
-        return m_primaryPane->iconForFile(file, mimeDatabase, m_thumbnailsEnabled);
+        return m_primaryPane->iconForFile(file, mimeDatabase, false);
     }
 
     void renderDirectoryItems(bool preserveStatusMessage = false)
@@ -3885,7 +3898,7 @@ private:
         options.sortKey = m_sortKey;
         options.sortAscending = m_sortAscending;
         options.groupMode = m_groupMode;
-        options.thumbnailsEnabled = m_thumbnailsEnabled;
+        options.thumbnailsEnabled = false;
         options.detailsActive = m_directoryViewMode == 2;
         options.acceptsFile = [this](const FileInfo &file, QMimeDatabase &mimeDb) {
             if (!fileMatchesSearch(file)) return false;
@@ -3914,6 +3927,24 @@ private:
         updateFileActionStates();
     }
 
+    void launchResolvedUrl(const QUrl &url)
+    {
+        if (!url.isValid()) {
+            return;
+        }
+        auto *job = new KIO::OpenUrlJob(url);
+        job->setUiDelegate(KIO::createDefaultJobUiDelegate(KJobUiDelegate::AutoHandlingEnabled, this));
+        job->setShowOpenOrExecuteDialog(true);
+        job->setRunExecutables(false);
+        job->start();
+    }
+
+    void launchFile(const QUrl &rawUrl)
+    {
+        const QUrl resolved = LaunchUrlResolver::resolveLaunchUrl(rawUrl, m_driveHomeCoordinator.drives());
+        launchResolvedUrl(resolved);
+    }
+
     void activateDirectoryItem(const QModelIndex &item)
     {
         m_directoryList->cancelEditingForActivation();
@@ -3934,7 +3965,7 @@ private:
         if (isNavigable) {
             navigateTo(url, true);
         } else {
-            QDesktopServices::openUrl(url);
+            launchFile(url);
         }
     }
 
@@ -3961,7 +3992,7 @@ private:
         if (isNavigable) {
             navigateTo(url, true);
         } else {
-            QDesktopServices::openUrl(url);
+            launchFile(url);
         }
     }
 
@@ -4444,7 +4475,7 @@ public:
                     && context.directory.scheme() != QStringLiteral("thispcsearch")
                     && !sameLocation(context.directory, kThisPcUrl),
                 m_showHiddenFiles,
-                m_thumbnailsEnabled,
+                split ? m_splitPane->previewsEnabled() : m_thumbnailsEnabled,
                 m_previewAction,
                 m_fullNamesAction};
             const SelectionMenuController::ViewCallbacks viewCallbacks{
@@ -4454,7 +4485,10 @@ public:
                 [this, split](bool ascending) { split ? m_splitPane->setSortState(m_splitPane->sortKey(), ascending) : setSortAscending(ascending); },
                 [this, split](int mode) { split ? m_splitPane->setGroupMode(mode) : setGroupMode(mode); },
                 [this](bool value) { setShowHiddenFiles(value); },
-                [this](bool value) { setThumbnailsEnabled(value); }};
+                [this, pane = context.id](bool value) {
+                    setActivePane(pane);
+                    setThumbnailsEnabled(value);
+                }};
             const bool quickAccess = canQuickAccessLocation(context.directory);
             const bool saveRemote = RemoteUrlHelper::isValidRemoteUrl(context.directory);
             const bool isMountRoot = isLocationMountRoot(context.directory);
@@ -4522,7 +4556,7 @@ public:
                  if (isDir)
                      navigatePane(pane, url);
                  else
-                     QDesktopServices::openUrl(url);
+                     launchFile(url);
              },
              [this, url] { createNewTab(url, true); },
              [this, url] { openInNewWindow(url); },
@@ -4637,6 +4671,13 @@ public:
         const bool ascending = split
             ? m_splitPane->sortAscending()
             : m_sortAscending;
+        const bool previews = split
+            ? m_splitPane->previewsEnabled()
+            : m_thumbnailsEnabled;
+        if (m_thumbnailsAction && m_thumbnailsAction->isChecked() != previews) {
+            QSignalBlocker blocker(m_thumbnailsAction);
+            m_thumbnailsAction->setChecked(previews);
+        }
         if (m_viewButton) {
             static const QStringList icons = {
                 QStringLiteral("view-list-icons"),
@@ -4964,39 +5005,22 @@ public:
             if (isSearchLocation(m_navigation.currentUrl())) loadSearchLocation(m_navigation.currentUrl());
             else loadDirectory(m_navigation.currentUrl());
         }
-        if (m_splitPane) m_splitPane->setDisplayOptions(m_showHiddenFiles, m_thumbnailsEnabled);
+        if (m_splitPane)
+            m_splitPane->setDisplayOptions(m_showHiddenFiles, m_splitPane->previewsEnabled());
     }
 
     void setThumbnailsEnabled(bool enabled)
     {
-        if (m_thumbnailsEnabled == enabled) {
-            return;
+        if (paneContext().id == PaneId::Split && m_splitPane) {
+            m_splitPane->setPreviewsEnabled(enabled);
+        } else {
+            if (m_thumbnailsEnabled == enabled) return;
+            m_thumbnailsEnabled = enabled;
+            if (m_primaryPane && m_primaryPane->previewAdapter())
+                m_primaryPane->previewAdapter()->setEnabled(enabled);
+            savePrimaryDirectoryProfile();
         }
-
-        m_thumbnailsEnabled = enabled;
-
-        if (m_thumbnailsAction
-            && m_thumbnailsAction->isChecked() != enabled) {
-            m_thumbnailsAction->blockSignals(true);
-            m_thumbnailsAction->setChecked(enabled);
-            m_thumbnailsAction->blockSignals(false);
-        }
-
-        QSettings settings;
-        settings.setValue(
-            QStringLiteral("directory/thumbnails"),
-            enabled);
-
-        if (!enabled) {
-            m_primaryPane->clearThumbnailCache();
-        }
-
-        if (m_contentStack
-            && m_contentStack->currentWidget()
-                == m_directoryPage) {
-            renderDirectoryItems();
-        }
-        if (m_splitPane) m_splitPane->setDisplayOptions(m_showHiddenFiles, m_thumbnailsEnabled);
+        updateFileActionStates();
     }
 
     void setAlwaysShowFullNames(bool enabled)
@@ -5168,6 +5192,10 @@ public:
             m_directoryViewMode,
             m_directoryIconSizeStep);
 
+        if (m_primaryPane && m_primaryPane->previewAdapter()) {
+            m_primaryPane->previewAdapter()->scheduleUpdate();
+        }
+
         updateFileActionStates();
     }
 
@@ -5208,7 +5236,7 @@ public:
     DirectoryViewProfile primaryDirectoryProfile() const
     {
         return {m_directoryViewMode, m_directoryIconSizeStep, m_sortKey,
-                m_sortAscending, m_groupMode};
+                m_sortAscending, m_groupMode, m_thumbnailsEnabled};
     }
 
     void savePrimaryDirectoryProfile()
@@ -5468,6 +5496,9 @@ private Q_SLOTS:
     void refreshCurrent(bool preserveStatusMessage = false)
     {
         reloadDrives();
+        if (m_primaryPane && m_primaryPane->previewAdapter()) {
+            m_primaryPane->previewAdapter()->invalidatePreviews();
+        }
         if (RemoteUrlHelper::isRemoteUrl(m_navigation.currentUrl())) {
             navigateTo(m_navigation.currentUrl(), false);
             return;
@@ -5489,6 +5520,9 @@ private Q_SLOTS:
             m_sortKey = profile.sortKey;
             m_sortAscending = profile.sortAscending;
             m_groupMode = profile.groupMode;
+            m_thumbnailsEnabled = profile.previewsEnabled;
+            if (m_primaryPane && m_primaryPane->previewAdapter())
+                m_primaryPane->previewAdapter()->setEnabled(m_thumbnailsEnabled);
             if (m_sortButton) {
                 m_sortButton->setIcon(themedIcon(
                     m_sortAscending ? QStringLiteral("view-sort-ascending")

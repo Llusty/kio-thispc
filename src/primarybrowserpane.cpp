@@ -12,6 +12,7 @@
 #include <KIO/ListJob>
 #include <QLabel>
 #include <QMimeDatabase>
+#include "directorypreviewadapter.h"
 #include <QStackedWidget>
 #include <QVBoxLayout>
 
@@ -24,8 +25,17 @@ PrimaryBrowserPane::PrimaryBrowserPane(QWidget *parent)
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
     m_contentStack = new QStackedWidget(this);
+    m_previewAdapter = new DirectoryPreviewAdapter(this);
     connect(&m_listingCore, &DirectoryListingCore::listingCanceled,
             this, &PrimaryBrowserPane::listingCanceled);
+}
+
+void PrimaryBrowserPane::setCurrentUrl(const QUrl &url)
+{
+    m_currentUrl = normalizedUrl(url);
+    if (m_previewAdapter) {
+        m_previewAdapter->setCurrentDirectoryUrl(m_currentUrl);
+    }
 }
 
 void PrimaryBrowserPane::bindDirectoryViews(DirectoryListWidget *list,
@@ -33,11 +43,17 @@ void PrimaryBrowserPane::bindDirectoryViews(DirectoryListWidget *list,
 {
     m_directoryList = list; m_directoryDetails = details;
     m_directoryTitle = title; m_directoryStatus = status;
+    if (m_previewAdapter) {
+        m_previewAdapter->attachViews(list, details);
+    }
 }
 
 void PrimaryBrowserPane::cancelListing()
 {
     m_listingCore.cancelListing();
+    if (m_previewAdapter) {
+        m_previewAdapter->cancel();
+    }
 }
 
 void PrimaryBrowserPane::setStatusText(const QString &text)
@@ -159,4 +175,5 @@ void PrimaryBrowserPane::renderDirectoryItems(const RenderOptions &options)
     }
     restoreDirectorySelection(m_directoryList, m_directoryDetails, selection);
     if (options.updateStatus) options.updateStatus(prepared.visibleCount, prepared.totalCount);
+    if (m_previewAdapter) m_previewAdapter->scheduleUpdate();
 }

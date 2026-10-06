@@ -12,13 +12,18 @@
 #include "browsercommon.h"
 #include "appwidgets.h"
 #include "directorylistingcore.h"
+#include "directorypreviewadapter.h"
 #include "directoryview.h"
 #include "directoryviewsettings.h"
+#include "launchurlresolver.h"
 #include "locationpresentation.h"
 #include "pathwidgets.h"
 #include "searchcontroller.h"
 #include "navigationhistory.h"
 #include "remotereconnectbar.h"
+
+#include <KIO/JobUiDelegateFactory>
+#include <KIO/OpenUrlJob>
 
 #include <QAbstractItemView>
 #include <QAction>
@@ -101,10 +106,7 @@ public:
             settings.value(
                 QStringLiteral("directory/showHidden"),
                 false).toBool();
-        m_thumbnailsEnabled =
-            settings.value(
-                QStringLiteral("directory/thumbnails"),
-                true).toBool();
+        m_thumbnailsEnabled = DirectoryViewSettings::globalDefault().previewsEnabled;
 
         m_dateGroupingTimer.setSingleShot(true);
         connect(&m_dateGroupingTimer, &QTimer::timeout, this, [this] {
@@ -519,6 +521,9 @@ public:
         m_viewStack->addWidget(m_details);
         directoryLayout->addWidget(m_viewStack, 1);
 
+        m_previewAdapter = new DirectoryPreviewAdapter(this);
+        m_previewAdapter->attachViews(m_list, m_details);
+
         connect(
             m_backButton,
             &QToolButton::clicked,
@@ -678,6 +683,10 @@ public:
         m_drives = drives;
         updateNavigationButtons();
     }
+    void setLaunchHandler(std::function<void(const QUrl &)> handler)
+    {
+        m_launchHandler = std::move(handler);
+    }
     void renderSearchItems() { renderItems(); }
     void updateSearchFilters(const QUrl &url)
     {
@@ -702,8 +711,10 @@ public:
 
     DirectoryListWidget *listView() const { return m_list; }
     DirectoryTreeWidget *detailsView() const { return m_details; }
+    DirectoryPreviewAdapter *previewAdapter() const { return m_previewAdapter; }
     KIO::ListJob *listingJob() const { return m_listingCore.listingJob(); }
-    void cancelListing() { m_listingCore.cancelListing(); m_pendingRemoteUrl.clear(); }
+    quint64 listingStartCount() const { return m_listingCore.startListingCount(); }
+    void cancelListing() { m_listingCore.cancelListing(); m_pendingRemoteUrl.clear(); if (m_previewAdapter) m_previewAdapter->cancel(); }
     const QList<FileInfo> &files() const { return m_listingCore.files(); }
     void setFiles(const QList<FileInfo> &files) { m_listingCore.setFiles(files); }
     QWidget *shortcutScope() const { return m_viewStack; }
@@ -715,10 +726,10 @@ public:
         const bool hiddenChanged = hidden != m_showHiddenFiles;
         m_showHiddenFiles = hidden;
         m_thumbnailsEnabled = thumbnails;
-        if (!hiddenChanged && isSearchLocation(m_currentUrl)) {
-            renderItems();
-            return;
+        if (m_previewAdapter) {
+            m_previewAdapter->setEnabled(thumbnails);
         }
+        if (!hiddenChanged) return; // previews toggle only: no relisting
         refresh();
     }
 
@@ -795,6 +806,8 @@ public:
         return m_sortAscending;
     }
 
+    bool previewsEnabled() const { return m_thumbnailsEnabled; }
+
     int groupMode() const
     {
         return m_groupMode;
@@ -802,7 +815,8 @@ public:
 
     DirectoryViewProfile currentProfile() const
     {
-        return {m_viewMode, m_iconSizeStep, m_sortKey, m_sortAscending, m_groupMode};
+        return {m_viewMode, m_iconSizeStep, m_sortKey, m_sortAscending, m_groupMode,
+                m_thumbnailsEnabled};
     }
 
     void saveCurrentProfile()
@@ -819,6 +833,15 @@ public:
         }
         renderItems();
         scheduleDateGroupingRefresh();
+        Q_EMIT stateChanged();
+    }
+
+    void setPreviewsEnabled(bool enabled, bool rememberForLocation = true)
+    {
+        if (m_thumbnailsEnabled == enabled) return;
+        m_thumbnailsEnabled = enabled;
+        if (m_previewAdapter) m_previewAdapter->setEnabled(enabled);
+        if (rememberForLocation) saveCurrentProfile();
         Q_EMIT stateChanged();
     }
 
@@ -898,6 +921,7 @@ public:
 
     void refresh()
     {
+        if (m_previewAdapter) m_previewAdapter->invalidatePreviews();
         if (RemoteUrlHelper::isRemoteUrl(m_currentUrl)) navigateTo(m_currentUrl, false);
         else loadDirectory(m_currentUrl);
     }
@@ -1120,6 +1144,8 @@ private:
                     m_viewMode = profile.viewMode;
                     m_iconSizeStep = profile.iconSizeStep;
                     m_groupMode = profile.groupMode;
+                    m_thumbnailsEnabled = profile.previewsEnabled;
+                    if (m_previewAdapter) m_previewAdapter->setEnabled(m_thumbnailsEnabled);
                     setSortState(profile.sortKey, profile.sortAscending, false);
                     scheduleDateGroupingRefresh();
                     applyViewMode();
@@ -1270,6 +1296,9 @@ private:
         m_hasRemoteHistoryOnSuccess = false;
         m_pendingRemoteUrl.clear();
         m_listingCore.cancelListing();
+        if (m_previewAdapter) {
+            m_previewAdapter->cancel();
+        }
         m_reconnect->hide();
 
         m_pendingSelection = sameLocation(m_currentUrl, url)
@@ -1281,10 +1310,15 @@ private:
         m_list->clear();
         m_details->clear();
         m_currentUrl = url;
+        if (m_previewAdapter) {
+            m_previewAdapter->setCurrentDirectoryUrl(url);
+        }
         const DirectoryViewProfile profile = DirectoryViewSettings::resolveProfile(url);
         m_viewMode = profile.viewMode;
         m_iconSizeStep = profile.iconSizeStep;
         m_groupMode = profile.groupMode;
+        m_thumbnailsEnabled = profile.previewsEnabled;
+        if (m_previewAdapter) m_previewAdapter->setEnabled(m_thumbnailsEnabled);
         setSortState(profile.sortKey, profile.sortAscending, false);
         scheduleDateGroupingRefresh();
         applyViewMode();
@@ -1330,8 +1364,7 @@ private:
         const FileInfo &file,
         QMimeDatabase &database)
     {
-        return m_listingCore.iconForFile(
-            file, database, m_thumbnailsEnabled, false);
+        return m_listingCore.iconForFile(file, database, false, false);
     }
 
     void renderItems()
@@ -1413,6 +1446,9 @@ private:
             m_status->setText(directory_view_detail::itemCountText(
                 prepared.visibleCount, prepared.totalCount, true));
         }
+        if (m_previewAdapter) {
+            m_previewAdapter->scheduleUpdate();
+        }
     }
 
     void scheduleDateGroupingRefresh()
@@ -1442,6 +1478,10 @@ private:
             m_viewButton,
             m_viewMode,
             m_iconSizeStep);
+
+        if (m_previewAdapter) {
+            m_previewAdapter->scheduleUpdate();
+        }
 
         if (m_viewButton
             && m_viewButton->menu()) {
@@ -1475,6 +1515,25 @@ private:
                         "view-sort-descending")));
     }
 
+    void launchItem(const QUrl &rawUrl)
+    {
+        const QUrl resolved = LaunchUrlResolver::resolveLaunchUrl(rawUrl, m_drives);
+        if (m_launchHandler) {
+            m_launchHandler(resolved);
+            return;
+        }
+        if (!resolved.isValid()) {
+            return;
+        }
+        auto *job = new KIO::OpenUrlJob(resolved);
+        if (window()) {
+            job->setUiDelegate(KIO::createDefaultJobUiDelegate(KJobUiDelegate::AutoHandlingEnabled, window()));
+        }
+        job->setShowOpenOrExecuteDialog(true);
+        job->setRunExecutables(false);
+        job->start();
+    }
+
     void activateListItem(
         const QModelIndex &item)
     {
@@ -1498,7 +1557,7 @@ private:
         if (isNavigable) {
             navigateTo(url, true);
         } else if (url.isValid()) {
-            QDesktopServices::openUrl(url);
+            launchItem(url);
         }
     }
 
@@ -1527,7 +1586,7 @@ private:
         if (isNavigable) {
             navigateTo(url, true);
         } else if (url.isValid()) {
-            QDesktopServices::openUrl(url);
+            launchItem(url);
         }
     }
 
@@ -1577,6 +1636,7 @@ private:
     QStackedWidget *m_viewStack = nullptr;
     DirectoryListWidget *m_list = nullptr;
     DirectoryTreeWidget *m_details = nullptr;
+    DirectoryPreviewAdapter *m_previewAdapter = nullptr;
 
     QUrl m_currentUrl = kThisPcUrl;
     QList<QUrl> m_history;
@@ -1598,4 +1658,5 @@ private:
 
     DirectoryListingCore m_listingCore;
     DirectorySelectionSnapshot m_pendingSelection;
+    std::function<void(const QUrl &)> m_launchHandler;
 };

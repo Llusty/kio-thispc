@@ -35,7 +35,7 @@ group.add_argument('--all', action='store_true', help='run every regression suit
 group.add_argument('--suites', nargs='+', choices=[
     'panes', 'tabs', 'properties', 'search', 'actions', 'action_state', 'operations',
     'local_transfer', 'transfer_plan', 'local_move', 'local_tree', 'tree_history',
-    'sidebar_dnd', 'sidebar_layout', 'split_layout', 'templates', 'trash', 'archive', 'archive_jobs', 'archive_menu', 'archive_creation', 'preview', 'quick_look', 'batch_rename', 'view_settings', 'listing_core', 'drive_home', 'solid_monitor', 'device_mount', 'device_removal', 'split_compare', 'selection_menu', 'location_presentation', 'navigation_history', 'keyboard_navigation', 'remote_url', 'saved_remote', 'recent_reconnect', 'session_history', 'properties_data', 'drive_properties', 'acl', 'acl_editor', 'checksums', 'metadata', 'properties_lifecycle', 'storage_scan', 'storage_analysis', 'hash_utilities', 'duplicate_finder', 'duplicate_actions', 'storage_treemap'],
+    'sidebar_dnd', 'sidebar_layout', 'split_layout', 'templates', 'trash', 'archive', 'archive_jobs', 'archive_menu', 'archive_creation', 'preview', 'quick_look', 'batch_rename', 'view_settings', 'listing_core', 'drive_home', 'solid_monitor', 'device_mount', 'device_removal', 'split_compare', 'selection_menu', 'location_presentation', 'navigation_history', 'keyboard_navigation', 'remote_url', 'saved_remote', 'recent_reconnect', 'session_history', 'properties_data', 'drive_properties', 'acl', 'acl_editor', 'checksums', 'metadata', 'properties_lifecycle', 'storage_scan', 'storage_analysis', 'hash_utilities', 'duplicate_finder', 'duplicate_actions', 'storage_treemap', 'launch_url_resolver', 'preview_controller', 'image_video_previews', 'executable_previews', 'folder_previews', 'preview_settings'],
     help='build once and run only the selected regression suites')
 options = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
@@ -86,6 +86,8 @@ source = intercept(source, '    void extractArchiveWithArk(', '        auto *job
 source = intercept(source, '    void refreshPane(', '        if (m_paneAdapter)',
                    'refreshedPanes.push_back(pane == PaneId::Split ? 1 : 0);',
                    'interceptPaneRefreshes')
+source = intercept(source, '    void launchResolvedUrl(', '        auto *job =',
+                   'dispatch = {"launch", {url}, {}};')
 
 def expose_legacy_header(text):
     return text.replace('private:', 'public:').replace('protected:', 'public:').replace('    Q_OBJECT', '    Q_OBJECT\npublic:')
@@ -94,10 +96,10 @@ def expose_legacy_header(text):
 # do not silently expose every header copied into the synthetic translation unit.
 legacy_exposed_headers = {
     'appwidgets.h', 'archive-creation.h', 'archive-extraction.h',
-    'batchrename.h', 'batchrenamerecovery.h', 'directoryview.h',
-    'fileactions.h', 'localfilecopyjob.h', 'localfilemovejob.h',
+    'batchrename.h', 'batchrenamerecovery.h', 'directorypreviewadapter.h', 'directoryview.h',
+    'fileactions.h', 'launchurlresolver.h', 'localfilecopyjob.h', 'localfilemovejob.h',
     'localtransferjob.h', 'localtransferplan.h', 'localtreehistory.h',
-    'operationmanager.h', 'pathwidgets.h', 'previewpane.h', 'quicklook.h',
+    'operationmanager.h', 'pathwidgets.h', 'previewcontroller.h', 'previewpane.h', 'quicklook.h',
     'searchcontroller.h', 'sidebar.h', 'splitbrowserpane.h',
     'splitcomparedialog.h', 'splitsyncexecutiondialog.h',
     'splitsyncpreviewdialog.h', 'templatemenu.h', 'undocontroller.h',
@@ -105,11 +107,14 @@ legacy_exposed_headers = {
 prelude = '''#include <QtTest>
 #include <QPdfWriter>
 #include <KIO/RenameDialog>
+#include <KIO/OpenUrlJob>
 #include "localfilecopyjob.h"
 #include "localfilemovejob.h"
 #include "localtransferplan.h"
 #include "localtransferjob.h"
 #include "localtreehistory.h"
+#include "previewcontroller.h"
+#include "directorypreviewadapter.h"
 struct Dispatch { QString kind; QList<QUrl> sources; QUrl destination; };
 static Dispatch dispatch;
 static bool interceptFileJobs = true;
@@ -149,7 +154,7 @@ with tempfile.TemporaryDirectory(prefix='thispc-pane-tests-', delete=not options
         if header.name in legacy_exposed_headers:
             contents = expose_legacy_header(contents)
         (tmp / 'src' / header.name).write_text(contents)
-    for implementation in ('actionstatecontroller.cpp', 'appwidgets.cpp', 'applicationstyle.cpp', 'directorylistingcore.cpp', 'drivehomecoordinator.cpp', 'soliddevicemonitor.cpp', 'devicemountcontroller.cpp', 'deviceremovalcontroller.cpp', 'keyboardnavigation.cpp', 'locationpresentation.cpp', 'navigationhistory.cpp', 'paneadapter.cpp', 'panemenucontroller.cpp', 'primarybrowserpane.cpp', 'previewcoordinator.cpp', 'tabcontroller.cpp', 'searchuicontroller.cpp', 'selectionmenucontroller.cpp', 'remoteurlhelper.cpp', 'savedremotelocation.cpp', 'savedremotelocationdialog.cpp'):
+    for implementation in ('actionstatecontroller.cpp', 'appwidgets.cpp', 'applicationstyle.cpp', 'directorylistingcore.cpp', 'drivehomecoordinator.cpp', 'soliddevicemonitor.cpp', 'devicemountcontroller.cpp', 'deviceremovalcontroller.cpp', 'keyboardnavigation.cpp', 'locationpresentation.cpp', 'navigationhistory.cpp', 'paneadapter.cpp', 'panemenucontroller.cpp', 'primarybrowserpane.cpp', 'previewcoordinator.cpp', 'previewcontroller.cpp', 'directorypreviewadapter.cpp', 'tabcontroller.cpp', 'searchuicontroller.cpp', 'selectionmenucontroller.cpp', 'remoteurlhelper.cpp', 'savedremotelocation.cpp', 'savedremotelocationdialog.cpp'):
         (tmp / 'src' / implementation).write_text((root / 'src' / implementation).read_text())
     suites = {'trash': 'empty-trash.cpp', 'panes': 'pane-actions.cpp', 'templates': 'template-menu.cpp', 'tabs': 'tab-drag-drop.cpp', 'sidebar_dnd': 'sidebar-drag-drop.cpp', 'sidebar_layout': 'sidebar-layout.cpp', 'properties': 'properties-dialog.cpp', 'search': 'search-controller.cpp', 'actions': 'file-actions.cpp', 'action_state': 'action-state-controller.cpp', 'operations': 'operation-manager.cpp', 'local_transfer': 'local-file-copy-job.cpp', 'transfer_plan': 'local-transfer-plan.cpp', 'local_move': 'local-file-move-job.cpp', 'local_tree': 'local-transfer-job.cpp', 'tree_history': 'local-tree-history.cpp', 'archive': 'archive-detection.cpp', 'archive_jobs': 'archive-extraction.cpp', 'archive_menu': 'archive-menu.cpp', 'archive_creation': 'archive-creation.cpp'}
     suites['split_layout'] = 'split-layout.cpp'
@@ -184,6 +189,12 @@ with tempfile.TemporaryDirectory(prefix='thispc-pane-tests-', delete=not options
     suites['duplicate_finder'] = 'duplicate-finder.cpp'
     suites['duplicate_actions'] = 'duplicate-review.cpp'
     suites['storage_treemap'] = 'storage-treemap.cpp'
+    suites['launch_url_resolver'] = 'launch-url-resolver.cpp'
+    suites['preview_controller'] = 'preview-controller.cpp'
+    suites['image_video_previews'] = 'image-video-previews.cpp'
+    suites['executable_previews'] = 'executable-previews.cpp'
+    suites['folder_previews'] = 'folder-previews.cpp'
+    suites['preview_settings'] = 'preview-settings.cpp'
     selected = options.suites or (list(suites) if options.all else ['trash' if options.trash else 'templates' if options.templates else 'sidebar_layout' if options.sidebar_layout else 'sidebar_dnd' if options.sidebar_dnd else 'local_move' if options.local_move else 'transfer_plan' if options.transfer_plan else 'local_transfer' if options.local_transfer else 'operations' if options.operations else 'action_state' if options.action_state else 'actions' if options.actions else 'tabs' if options.tabs else 'properties' if options.properties else 'search' if options.search else 'panes'])
     if 'batch_rename' in selected:
         subprocess.run(['cmake', '-S', str(root), '-B', str(root / 'build'),
@@ -215,6 +226,7 @@ find_package(KF6KIO REQUIRED)
 find_package(KF6ItemViews REQUIRED)
 find_package(KF6Solid REQUIRED)
 find_package(KF6FileMetaData REQUIRED)
+find_package(KF6Config REQUIRED)
 find_package(LibArchive REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(TagLib REQUIRED)
@@ -222,10 +234,10 @@ find_package(exiv2 REQUIRED CONFIG)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBACL REQUIRED IMPORTED_TARGET libacl)
 file(GLOB TEST_HEADERS CONFIGURE_DEPENDS src/*.h)
-add_executable(pane-test src/thispcview.cpp src/actionstatecontroller.cpp src/appwidgets.cpp src/applicationstyle.cpp src/directorylistingcore.cpp src/drivehomecoordinator.cpp src/soliddevicemonitor.cpp src/devicemountcontroller.cpp src/deviceremovalcontroller.cpp src/keyboardnavigation.cpp src/locationpresentation.cpp src/navigationhistory.cpp src/paneadapter.cpp src/panemenucontroller.cpp src/primarybrowserpane.cpp src/previewcoordinator.cpp src/tabcontroller.cpp src/searchuicontroller.cpp src/selectionmenucontroller.cpp src/remoteurlhelper.cpp src/savedremotelocation.cpp src/savedremotelocationdialog.cpp ${TEST_HEADERS})
+add_executable(pane-test src/thispcview.cpp src/actionstatecontroller.cpp src/appwidgets.cpp src/applicationstyle.cpp src/directorylistingcore.cpp src/drivehomecoordinator.cpp src/soliddevicemonitor.cpp src/devicemountcontroller.cpp src/deviceremovalcontroller.cpp src/keyboardnavigation.cpp src/locationpresentation.cpp src/navigationhistory.cpp src/paneadapter.cpp src/panemenucontroller.cpp src/primarybrowserpane.cpp src/previewcoordinator.cpp src/previewcontroller.cpp src/directorypreviewadapter.cpp src/tabcontroller.cpp src/searchuicontroller.cpp src/selectionmenucontroller.cpp src/remoteurlhelper.cpp src/savedremotelocation.cpp src/savedremotelocationdialog.cpp ${TEST_HEADERS})
 target_compile_options(pane-test PRIVATE -g3 -O0 -fno-omit-frame-pointer -Wno-unused-function -Wno-unused-variable)
 target_include_directories(pane-test PRIVATE ${LibArchive_INCLUDE_DIRS})
-target_link_libraries(pane-test PRIVATE Qt6::Core Qt6::Concurrent Qt6::Gui Qt6::Widgets Qt6::PrintSupport Qt6::Pdf Qt6::DBus Qt6::Test KF6::KIOCore KF6::KIOWidgets KF6::ItemViews KF6::Solid KF6::FileMetaData ${LibArchive_LIBRARIES} ZLIB::ZLIB TagLib::TagLib Exiv2::exiv2lib PkgConfig::LIBACL)
+target_link_libraries(pane-test PRIVATE Qt6::Core Qt6::Concurrent Qt6::Gui Qt6::Widgets Qt6::PrintSupport Qt6::Pdf Qt6::DBus Qt6::Test KF6::KIOCore KF6::KIOGui KF6::KIOWidgets KF6::ItemViews KF6::Solid KF6::FileMetaData KF6::ConfigCore ${LibArchive_LIBRARIES} ZLIB::ZLIB TagLib::TagLib Exiv2::exiv2lib PkgConfig::LIBACL)
 target_compile_definitions(pane-test PRIVATE THISPC_BATCH_RENAME_TEST_HOOKS=1 THISPC_TEST_HARNESS=1)
 '''
     (tmp / 'CMakeLists.txt').write_text(cmake)

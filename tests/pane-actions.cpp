@@ -1147,5 +1147,35 @@ int main(int argc, char **argv)
     verify(window.m_navigation.currentUrl() == kThisPcUrl && window.m_splitPane->currentUrl() == right
                && window.m_contentStack->currentWidget() == window.m_homePage,
            "pane swap preserves This PC virtual-page semantics");
+
+    // Launch activation and dispatch seam verification:
+    // 1. Direct launch of local file in primary pane
+    dispatch = {};
+    const QUrl testExe = QUrl::fromLocalFile(files.path() + "/test.exe");
+    window.launchFile(testExe);
+    verify(dispatch.kind == "launch" && dispatch.sources.value(0) == testExe,
+           "primary pane launchFile dispatches through launch seam with local URL");
+
+    // 2. Launch of thispc drive file resolves to mounted targetUrl
+    DriveInfo testDrive;
+    testDrive.id = QStringLiteral("drive-test");
+    testDrive.targetUrl = left;
+    testDrive.isMounted = true;
+    window.m_driveHomeCoordinator.setSnapshotForTesting({testDrive});
+
+    dispatch = {};
+    const QUrl virtualExe(QStringLiteral("thispc:/drive-test/app.exe"));
+    const QUrl resolvedExe = QUrl::fromLocalFile(left.toLocalFile() + "/app.exe");
+    window.launchFile(virtualExe);
+    verify(dispatch.kind == "launch" && dispatch.sources.value(0) == resolvedExe,
+           "primary pane launchFile resolves thispc drive URL to local mount path");
+
+    // 3. Split pane launchItem delegates through the same window launch seam
+    dispatch = {};
+    window.m_splitPane->setDrives({testDrive});
+    window.m_splitPane->launchItem(virtualExe);
+    verify(dispatch.kind == "launch" && dispatch.sources.value(0) == resolvedExe,
+           "split pane launchItem resolves and delegates to window launch seam");
+
     qInfo("PASS: %d assertions, Icons/List/Details/Compact, both panes; KIO dispatch intercepted", checks);
 }

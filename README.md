@@ -1,12 +1,23 @@
 [English](README.md) | [Polski](README.pl.md)
 
-# kio-thispc (This PC) 0.38.0
+# kio-thispc (This PC) 0.39.0
 
 ThisPC is a native KDE/Qt file manager focused on a Windows Explorer-like workflow, dual-pane operation, KIO integration, safe local file operations, and native KDE/Linux device handling.
 
 - **Platform:** Linux / KDE Plasma 6
 - **Frameworks:** Qt 6 / KDE Frameworks 6
 - **License:** MIT License
+
+---
+
+## 0.39.0 — Native File Integration & Rich Previews
+
+- Local files now resolve to proper `file://` URLs and launch through the native KDE/KIO Open/Execute workflow, including local executables and Windows binaries handled by their system associations.
+- Image and video thumbnails, native Windows executable icons, and folder content previews use the KDE KIO preview infrastructure with standard MIME-icon fallback.
+- **View → Show Previews** is stored per location in `DirectoryViewProfile` and applies consistently to Primary, Split, and search views.
+- `PreviewController` schedules previews asynchronously in bounded batches, caches results, prioritizes visible items in large directories, and rejects stale results with generation tokens.
+- Remote previews stay disabled. F5 invalidates preview state, and preview jobs are cancelled safely during navigation and shutdown.
+- Manual acceptance Stages 1–7: FULL MANUAL PASS. Final release regression is recorded in the 0.39.0 changelog.
 
 ---
 

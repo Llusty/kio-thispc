@@ -1,5 +1,34 @@
 [English](UPDATE.md) | [Polski](UPDATE.pl.md)
 
+# Updating to 0.39.0
+
+This release adds native local-file launching and rich, asynchronous previews through KDE/KIO.
+
+```bash
+cd ~/Downloads
+tar -xzf kio-thispc-0.39.0.tar.gz
+cd kio-thispc-0.39.0
+chmod +x install.sh
+./install.sh
+```
+
+## Scope of 0.39.0
+
+- correct local `file://` resolution and the native KDE Open/Execute workflow;
+- KIO image/video thumbnails, Windows executable icon previews, and folder content previews;
+- per-location **Show Previews** persistence through `DirectoryViewProfile`;
+- asynchronous bounded batching, cache and generation safety in `PreviewController`;
+- visible-only preview scheduling for large directories;
+- remote previews disabled;
+- F5 invalidation and deterministic preview-job lifetime handling.
+
+## Verification of 0.39.0
+
+- manual acceptance Stages 1–7: FULL MANUAL PASS;
+- clean build, version CLI, focused regression, and full regression: see the release commit validation.
+
+---
+
 # Updating to 0.36.0
 
 This release adds Network & Remote Locations through native KIO: manual SMB, SFTP, FTP, WebDAV, and WebDAVS connections, Saved Remote Locations, Recent/Reconnect, transactional session/history restore, and optional native discovery.

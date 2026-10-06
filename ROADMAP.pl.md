@@ -459,12 +459,59 @@ zainstalowana i ręcznie potwierdzona przez użytkownika. Pełna regresja wydani
 - **Naprawa cyklu życia i zamykania dialogów modeless:** deterministyczne kaskadowe zamykanie dialogów i obsługa `done(r)` -> `close()`, zapewniające poprawne działanie `WA_DeleteOnClose` oraz naturalne zakończenie pętli zdarzeń Qt.
 
 
-### 0.39.0 — Rozszerzone właściwości — dalszy rozwój (Advanced Properties Follow-up)
+### 0.39.0 — Natywna integracja plików i bogate podglądy (Native File Integration & Rich Previews) ✅ ukończone, wydane (v0.39.0)
+
+**Stage 1 — Uruchamianie plików lokalnych i integracja KIO (Local File Launch / KIO Integration)** ✅ ukończone (testy automatyczne i manualne PASS)
+- Standardowy proces KDE Open/Execute przez `KIO::OpenUrlJob` (`setShowOpenOrExecuteDialog(true)`, `setRunExecutables(false)`);
+- Lokalne pliki `.exe` i binarne respektują skojarzenia systemowe MIME (np. Wine/Bottles) bez błędu blokady `ERR_ACCESS_DENIED`;
+- Prawidłowa semantyka adresów lokalnych `file://` oraz przekierowanie wpisów katalogów (`thispc:/` -> lokalny punkt montowania);
+- Czysty deterministyczny komponent `LaunchUrlResolver` wymuszający ścisłe dopasowanie `drive.id`, leksykalną blokadę traversalu i zachowanie protokołów zdalnych;
+- Pełna parzystość między panelem głównym, Split View i wynikami wyszukiwania;
+- Bezpieczna polityka dla plików zdalnych; brak własnego launchera Wine, brak wywołań powłoki/QProcess, brak omijania zabezpieczeń.
+
+**Stage 2 — Rdzeń podglądów i architektura miniatur (Preview Core / Thumbnail Architecture)** ✅ ukończone (testy automatyczne i manualne PASS):
+- Dedykowany moduł koordynacji podglądów i miniatur (`src/previewcontroller.h` / `src/previewcontroller.cpp` lub `src/thumbnailcontroller.h` / `.cpp`);
+- Asynchroniczne planowanie zadań przy użyciu natywnego stacku KDE (`KIO::PreviewJob` / twórcy miniatur);
+- Priorytetyzacja widocznych elementów i śledzenie widoku paneli;
+- Natychmiastowe anulowanie i tokeny generacji przy zmianie katalogu;
+- Pamięć podręczna miniatur w pamięci RAM zintegrowana ze standardowym cache KDE;
+- Bezpieczne zamykanie okna i obsługa wielu niezależnych instancji.
+
+**Stage 3 — Miniatury obrazów i wideo (Image & Video Thumbnails)** ✅ ukończone (testy automatyczne i manualne PASS):
+- Podglądy obrazów: PNG, JPEG, WebP oraz formaty obsługiwane przez systemowe wtyczki;
+- Klatki miniatur wideo przez infrastrukturę podglądu KDE (`ffmpegthumbs` / systemowe thumbnailery);
+- Respektowanie współczynnika DPI ekranu i rozmiaru ikon bez blokowania wątku interfejsu;
+- Płynny fallback do standardowej ikony MIME w przypadku braku miniatury.
+
+**Stage 4 — Ikony plików wykonywalnych i binariów (Executable / File Icon Previews)** ✅ ukończone (testy automatyczne i manualne PASS):
+- Pobieranie natywnych ikon dla plików Windows `.exe` i binariów PE zgodnie z prezentacją Dolphina;
+- Wykorzystanie istniejącej infrastruktury wtyczek thumbnailerów KDE;
+- Deterministyczny łańcuch fallbacku: miniatura -> natywna ikona systemowa -> ikona MIME.
+
+**Stage 5 — Podgląd zawartości folderów (Folder Content Previews)** ✅ ukończone (testy automatyczne i manualne PASS):
+- Miniaturowy podgląd zawartości folderów (np. foldery ze zdjęciami) w stylu Dolphina;
+- Integracja ze standardowym systemem podglądu katalogów KDE bez własnego ad-hoc skanowania dysku;
+- Fallback do standardowej ikony katalogu w przypadku braku podglądu lub pustego folderu.
+
+**Stage 6 — Integracja z widokami i UX (View Integration & UX)** ✅ ukończone (testy automatyczne i manualne PASS):
+- Jednolita prezentacja podglądów w panelu głównym, panelu podzielonym i wynikach wyszukiwania;
+- Obsługa we wszystkich trybach: Ikony, Lista, Szczegóły, Kafelki/Kompaktowy;
+- Opcja widoku: `Widok -> Pokaż podglądy` (`View -> Show Previews`);
+- Spójność z istniejącym systemem ustawień widoku per-folder i modelem zapisu.
+
+**Stage 7 — Wydajność, cykl życia i szlif końcowy (Performance / Lifetime / Final Polish)** ✅ ukończone (testy automatyczne i manualne PASS):
+- Całkowity brak blokowania wątku GUI i synchronicznego I/O;
+- Kontrola zużycia pamięci; brak generowania miniatur dla tysięcy elementów naraz;
+- Podglądy włączone dla systemów lokalnych, domyślnie wyłączone dla lokalizacji zdalnych (`sftp:`, `smb:`, `fish:`);
+- Kompletny zestaw testów automatycznych i manualna akceptacja w środowisku KDE Plasma 6.
+
+
+### 0.40.0 — Rozszerzone właściwości — dalszy rozwój (Advanced Properties Follow-up)
 - atrybuty rozszerzone (`xattr` / podgląd i edycja tam, gdzie są wspierane);
 - numeryczna edycja uprawnień POSIX (`0755`) zsynchronizowana z istniejącym interfejsem;
 - semantyka ukrywania zależna od backendu (kropka w nazwie na uniksach vs. prawdziwe metadane/flagi atrybutów).
 
-### 0.40.0 — Advanced Search
+### 0.41.0 — Advanced Search
 - type/name/extension/date/size filters;
 - files-only/folders-only;
 - saved searches;
@@ -472,10 +519,10 @@ zainstalowana i ręcznie potwierdzona przez użytkownika. Pełna regresja wydani
 - szybki filtr bieżącego folderu jako lekkie rozszerzenie in-place, jeśli jego
   semantyka pozostanie spójna z wyszukiwaniem.
 
-### 0.41.0 — Administrator fallback for failed operations
+### 0.42.0 — Administrator fallback for failed operations
 When a normal operation receives permission denied, offer a targeted `admin://` retry instead of requiring an entire window to run elevated.
 
-### 0.42.0 — Transfer Queue & Control
+### 0.43.0 — Transfer Queue & Control
 - serial vs parallel;
 - concurrency limit;
 - priorities/order;
@@ -483,18 +530,18 @@ When a normal operation receives permission denied, offer a targeted `admin://` 
 - optional bandwidth limit wyłącznie dla backendów, które realnie mogą go
   zapewnić.
 
-### 0.43.0 — Notifications + Operation History
+### 0.44.0 — Notifications + Operation History
 - Plasma notification for long/background completions;
 - recent operation log with source/destination/result;
 - retry where meaningful and safe;
 - „Show in folder” po zakończeniu tam, gdzie ma sens.
 
-### 0.44.0 — Extensions / Service Actions
+### 0.45.0 — Extensions / Service Actions
 - preferować wykorzystanie KDE Service Actions i prostego extension contract
   zamiast budowania pełnego własnego plugin ecosystemu bez konkretnej potrzeby;
 - pozwolić dodawać nowe context actions i integracje bez edycji core window source.
 
-### 0.45.0 — Advanced Split Sync
+### 0.46.0 — Advanced Split Sync
 - opcjonalne recursive compare/sync;
 - dry-run i plan preview przed wykonaniem;
 - ignore patterns;
@@ -504,7 +551,7 @@ When a normal operation receives permission denied, offer a targeted `admin://` 
   potwierdzeniem;
 - zachować model safety, preflight i revalidation wypracowany w 0.31.
 
-### 0.46.0 — Image Printing / Print Pictures workflow
+### 0.47.0 — Image Printing / Print Pictures workflow
 - zastąpić i rozszerzyć obecną pojedynczą ścieżkę `Print` własnym, przewidywalnym
   workflow drukowania obrazów; obecnie `Print` jest wyłączone przy zaznaczeniu
   wielu obrazów i samo odblokowanie starej akcji nie jest rozwiązaniem;

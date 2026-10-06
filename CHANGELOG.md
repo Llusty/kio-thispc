@@ -2,6 +2,21 @@
 
 # Changelog
 
+## 0.39.0 — Native File Integration & Rich Previews
+
+### Added
+- Native KDE/KIO Open/Execute handling for local files, with correct local `file://` resolution and system-association handling for local executables.
+- KIO-backed image and video thumbnails, native Windows executable icon previews, and folder content previews with standard MIME/folder fallbacks.
+- **View → Show Previews**, persisted per location through `DirectoryViewProfile` across Primary, Split, and search views.
+
+### Changed
+- Added `PreviewController` asynchronous batching, bounded caching, generation safety, and visible-only scheduling for large directories.
+- Kept preview generation local-only; remote locations do not schedule previews.
+
+### Fixed
+- F5 now invalidates preview state before refreshing, preventing stale cached thumbnails.
+- Preview job cancellation and object lifetime handling are deterministic during navigation, refresh, and shutdown.
+
 ## 0.38.0 — Storage Tools
 
 ### Added

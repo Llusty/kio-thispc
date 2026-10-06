@@ -281,39 +281,86 @@ This ordering prioritizes core file-manager correctness, safety, and maintainabi
 - **Modeless Lifecycle & Shutdown Fix:** Deterministic cascading dialog close and `done(r)` -> `close()` wiring ensuring proper `WA_DeleteOnClose` and natural Qt event loop termination.
 
 
-### 0.39.0 — Advanced Properties Follow-up
+### 0.39.0 — Native File Integration & Rich Previews ✅ completed, released (v0.39.0)
+
+**Stage 1 — Local File Launch / KIO Integration** ✅ completed (automated & manual pass)
+- Standard KDE Open/Execute workflow via `KIO::OpenUrlJob` (`setShowOpenOrExecuteDialog(true)`, `setRunExecutables(false)`);
+- Local `.exe` and binary files respect desktop MIME associations (e.g. Wine/Bottles) without `ERR_ACCESS_DENIED` blocks;
+- Correct local `file://` URL semantics and directory listing redirection (`thispc:/` -> local mount path);
+- Pure deterministic `LaunchUrlResolver` enforcing exact `drive.id` matching, lexical traversal rejection, and remote scheme preservation;
+- Primary pane, Split View pane, and Search results parity;
+- Safe remote executable policy preserved; no hardcoded Wine launcher, no `QProcess` or shell bypass, no security compromise.
+
+**Stage 2 — Preview Core / Thumbnail Architecture** ✅ completed (automated & manual pass):
+- Dedicated preview and thumbnail coordinator module (`src/previewcontroller.h` / `src/previewcontroller.cpp` or `src/thumbnailcontroller.h` / `.cpp`);
+- Asynchronous scheduling using KDE's native preview stack (`KIO::PreviewJob` / thumbnail creators);
+- Visible-item prioritization and per-pane tracking;
+- Immediate cancellation and generation tokens on directory changes;
+- In-memory thumbnail caching integrating with standard KDE thumbnail storage;
+- Safe window close and multi-window lifecycle handling.
+
+**Stage 3 — Image & Video Thumbnails** ✅ completed (automated & manual pass):
+- Image previews: PNG, JPEG, WebP, and common formats supported by system thumbnailers;
+- Video thumbnail frames via KDE preview infrastructure (`ffmpegthumbs` / system thumbnailers);
+- Device pixel ratio and icon size awareness without freezing the UI thread;
+- Fallback to standard MIME icon when thumbnail unavailable.
+
+**Stage 4 — Executable / File Icon Previews** ✅ completed (automated & manual pass):
+- Native icon extraction for Windows `.exe` and PE binaries matching Dolphin's presentation;
+- Reuse KDE thumbnailer/plugin infrastructure where available;
+- Clean fallback chain: successful preview -> native/system icon -> standard MIME icon.
+
+**Stage 5 — Folder Content Previews** ✅ completed (automated & manual pass):
+- Miniature previews of folder contents (e.g. image folders) matching Dolphin's presentation;
+- Standard KDE directory thumbnailing integration without ad-hoc disk scans;
+- Fallback to standard folder icon when preview is unavailable or empty.
+
+**Stage 6 — View Integration & UX** ✅ completed (automated & manual pass):
+- Unified preview presentation across Primary pane, Split pane, and Search results;
+- Supported across view modes: Icons, List, Details, and Compact;
+- View toggle: `View -> Show Previews` (Polish: `Widok -> Pokaż podglądy`);
+- Consistency with existing per-folder View Settings and persistence model.
+
+**Stage 7 — Performance / Lifetime / Final Polish** ✅ completed (automated & manual pass):
+- Zero GUI thread freezing, zero blocking file I/O;
+- Bound memory footprint; avoid loading all directory items at once;
+- Local filesystem previews enabled; remote locations (`sftp:`, `smb:`, `fish:`) default to disabled;
+- Thorough automated regression suite and manual KDE/Plasma 6 acceptance testing.
+
+
+### 0.40.0 — Advanced Properties Follow-up
 - Extended attributes (`xattr` / inspect & edit where supported);
 - Numeric POSIX permission editing (`0755`) synchronized with existing UI;
 - Hidden-state semantics with backend awareness (leading-dot rename for Unix vs. real metadata/attribute flags).
 
-### 0.40.0 — Advanced Search
+### 0.41.0 — Advanced Search
 - Type, filename, extension, date, and size filters;
 - Files-only and folders-only toggles;
 - Saved search queries;
 - Baloo acceleration when available, falling back to current worker search;
 - Quick in-place folder filter if semantics remain coherent with search.
 
-### 0.41.0 — Administrator Fallback for Failed Operations
+### 0.42.0 — Administrator Fallback for Failed Operations
 When standard operations receive permission denied errors, provide targeted `admin://` retry prompts instead of requiring entire windows to run elevated.
 
-### 0.42.0 — Transfer Queue & Control
+### 0.43.0 — Transfer Queue & Control
 - Serial vs. parallel transfer modes;
 - Concurrency limit configuration;
 - Operation priority and reordering;
 - Queue-wide pause, resume, and cancellation;
 - Optional bandwidth throttling where supported by the underlying backend.
 
-### 0.43.0 — Notifications + Operation History
+### 0.44.0 — Notifications + Operation History
 - Plasma desktop notifications for completed background tasks;
 - Recent operation log with source, destination, and result status;
 - Safe retry for eligible failed operations;
 - "Show in folder" action upon task completion.
 
-### 0.44.0 — Extensions / Service Actions
+### 0.45.0 — Extensions / Service Actions
 - Leverage KDE Service Actions and clean extension contracts instead of building a redundant bespoke plugin ecosystem;
 - Support adding custom context actions and integrations without editing core window sources.
 
-### 0.45.0 — Advanced Split Sync
+### 0.46.0 — Advanced Split Sync
 - Optional recursive comparison and synchronization;
 - Dry-run and plan preview before execution;
 - Ignore pattern support;
@@ -322,7 +369,7 @@ When standard operations receive permission denied errors, provide targeted `adm
 - Mirror/delete only as an explicit, high-risk mode with distinct confirmation;
 - Preserve safety models, preflight checks, and revalidation established in 0.31.
 
-### 0.46.0 — Image Printing / Print Pictures Workflow
+### 0.47.0 — Image Printing / Print Pictures Workflow
 - Replace and expand the single-item `Print` action with a predictable image-printing workflow;
 - Handle multiple selected image files in a single job, accepting supported formats and handling mixed selections gracefully;
 - Ergonomics inspired by Windows 11 "Print Pictures" without cloning pixel-for-pixel: large current-image preview, page count, and page navigation;

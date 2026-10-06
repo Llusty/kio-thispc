@@ -11,7 +11,6 @@
 
 #include <KIO/ListJob>
 #include <KJob>
-#include <QImageReader>
 #include <QMimeDatabase>
 #include <QMimeType>
 #include <QPixmap>
@@ -31,11 +30,14 @@ DirectoryListingCore::DirectoryListingCore(QObject *parent)
 void DirectoryListingCore::startListing(const QUrl &url,
     const ListingOptions &options, const ListingCallbacks &callbacks)
 {
+    ++m_startListingCount;
     cancelListing();
     m_loading = true;
     m_currentUrl = url;
     m_callbacks = callbacks;
     m_stagedFiles.clear();
+
+    const quint64 generation = ++m_generation;
 
     KIO::ListJob *job = KIO::listDir(url, KIO::HideProgressInfo);
     QWidget *parentWidget = qobject_cast<QWidget *>(parent());
@@ -51,10 +53,15 @@ void DirectoryListingCore::startListing(const QUrl &url,
     }
     m_job = job;
 
+    connect(job, &KIO::ListJob::redirection, this,
+        [this, job, generation](KIO::Job *, const QUrl &newUrl) {
+            if (m_job != job || m_generation != generation) return;
+            m_currentUrl = newUrl;
+        });
     connect(job, &KIO::ListJob::entries, this,
-        [this, url, job, options](KIO::Job *, const KIO::UDSEntryList &entries) {
-            if (m_job != job) return;
-            appendEntries(m_stagedFiles, url, entries, options);
+        [this, job, generation, options](KIO::Job *, const KIO::UDSEntryList &entries) {
+            if (m_job != job || m_generation != generation) return;
+            appendEntries(m_stagedFiles, m_currentUrl, entries, options);
         });
     connect(job, &KJob::result, this, &DirectoryListingCore::slotJobFinished);
 
@@ -143,18 +150,25 @@ DirectoryListingCore::PreparedListing DirectoryListingCore::prepare(
     for (const FileInfo &file : std::as_const(m_files)) {
         if (options.acceptsFile && !options.acceptsFile(file, mimeDatabase)) continue;
         ++prepared.visibleCount;
-        const QString typeText = fileTypeLabel(file, mimeDatabase);
+        FileInfo preparedFile = file;
+        if (preparedFile.mimeType.isEmpty() || preparedFile.mimeType == QStringLiteral("application/octet-stream")) {
+            const QMimeType resolved = resolvedMimeType(preparedFile, mimeDatabase);
+            if (resolved.isValid() && !resolved.isDefault()) {
+                preparedFile.mimeType = resolved.name();
+            }
+        }
+        const QString typeText = fileTypeLabel(preparedFile, mimeDatabase);
         if (options.groupMode == DirectoryViewSettings::GroupByDate) {
             const auto category = directory_view_detail::dateCategoryForModification(
-                file.modificationTime);
-            prepared.files.push_back({file, typeText, category.display, category.sortKey});
+                preparedFile.modificationTime);
+            prepared.files.push_back({preparedFile, typeText, category.display, category.sortKey});
         } else if (options.groupMode == DirectoryViewSettings::GroupBySize) {
-            const auto category = directory_view_detail::sizeCategoryForFile(file);
-            prepared.files.push_back({file, typeText, category.display, category.sortKey});
+            const auto category = directory_view_detail::sizeCategoryForFile(preparedFile);
+            prepared.files.push_back({preparedFile, typeText, category.display, category.sortKey});
         } else {
-            prepared.files.push_back({file, typeText,
-                file.isDir ? trLocal("Foldery", "Folders") : typeText,
-                file.isDir ? QString() : typeText.toCaseFolded()});
+            prepared.files.push_back({preparedFile, typeText,
+                preparedFile.isDir ? trLocal("Foldery", "Folders") : typeText,
+                preparedFile.isDir ? QString() : typeText.toCaseFolded()});
         }
     }
     if (options.groupMode != DirectoryViewSettings::NoGrouping) {
@@ -169,35 +183,13 @@ DirectoryListingCore::PreparedListing DirectoryListingCore::prepare(
 QIcon DirectoryListingCore::iconForFile(const FileInfo &file,
     QMimeDatabase &mimeDatabase, bool thumbnailsEnabled, bool cacheThumbnail)
 {
+    Q_UNUSED(thumbnailsEnabled)
+    Q_UNUSED(cacheThumbnail)
     const QMimeType mime = resolvedMimeType(file, mimeDatabase);
     const QString iconName = resolvedIconName(file, mimeDatabase);
     const QIcon fallback = themedIcon(iconName,
         file.isDir ? QStringLiteral("folder") : QStringLiteral("text-x-generic"));
-    const QString mimeName = mime.isValid() ? mime.name() : QString();
-    if (!thumbnailsEnabled || file.isDir || !file.url.isLocalFile()
-        || !mimeName.startsWith(QStringLiteral("image/"))
-        || file.size > 64LL * 1024LL * 1024LL) return fallback;
-
-    const QString path = file.url.toLocalFile();
-    const QString cacheKey = QStringLiteral("%1|%2|%3")
-        .arg(path).arg(file.modificationTime).arg(file.size);
-    if (cacheThumbnail) {
-        const auto cached = m_thumbnailCache.constFind(cacheKey);
-        if (cached != m_thumbnailCache.constEnd()) return cached.value();
-    }
-    QImageReader reader(path);
-    reader.setAutoTransform(true);
-    const QSize sourceSize = reader.size();
-    const QSize targetSize(128, 128);
-    if (sourceSize.isValid()
-        && (sourceSize.width() > targetSize.width() || sourceSize.height() > targetSize.height()))
-        reader.setScaledSize(sourceSize.scaled(targetSize, Qt::KeepAspectRatio));
-    const QImage image = reader.read();
-    if (image.isNull()) return fallback;
-    const QIcon icon(QPixmap::fromImage(image).scaled(
-        targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
-    if (cacheThumbnail) m_thumbnailCache.insert(cacheKey, icon);
-    return icon;
+    return fallback;
 }
 
 QString DirectoryListingCore::resolvedIconName(const FileInfo &file,

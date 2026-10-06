@@ -81,6 +81,10 @@ public:
     void clearThumbnailCache() { m_thumbnailCache.clear(); }
     int thumbnailCacheSize() const { return m_thumbnailCache.size(); }
 
+    quint64 generation() const { return m_generation; }
+    quint64 startListingCount() const { return m_startListingCount; }
+    QUrl currentUrl() const { return m_currentUrl; }
+
     static FileInfo mapEntry(const QUrl &, const KIO::UDSEntry &);
     static bool acceptsEntry(const KIO::UDSEntry &, const FileInfo &,
                              const ListingOptions &);
@@ -101,6 +105,8 @@ public Q_SLOTS:
 
 private:
     bool m_loading = false;
+    quint64 m_generation = 0;
+    quint64 m_startListingCount = 0;
     QUrl m_currentUrl;
     QList<FileInfo> m_files;
     QList<FileInfo> m_stagedFiles;

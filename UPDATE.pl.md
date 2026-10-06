@@ -1,5 +1,34 @@
 [English](UPDATE.md) | [Polski](UPDATE.pl.md)
 
+# Aktualizacja do 0.39.0
+
+Wydanie dodaje natywne uruchamianie plików lokalnych oraz bogate, asynchroniczne podglądy przez KDE/KIO.
+
+```bash
+cd ~/Pobrane
+tar -xzf kio-thispc-0.39.0.tar.gz
+cd kio-thispc-0.39.0
+chmod +x install.sh
+./install.sh
+```
+
+## Zakres 0.39.0
+
+- prawidłowe rozwiązywanie lokalnych adresów `file://` i natywny proces KDE Open/Execute;
+- miniatury obrazów/wideo KIO, podglądy ikon plików wykonywalnych Windows i zawartości folderów;
+- zapisywane per lokalizacja ustawienie **Pokaż podglądy** przez `DirectoryViewProfile`;
+- asynchroniczne ograniczone partie, cache i tokeny generacji w `PreviewController`;
+- planowanie podglądów wyłącznie dla widocznych elementów w dużych katalogach;
+- wyłączone podglądy zdalne;
+- unieważnianie przez F5 i deterministyczna obsługa cyklu życia zadań podglądu.
+
+## Weryfikacja 0.39.0
+
+- ręczny odbiór Stage 1–7: FULL MANUAL PASS;
+- clean build, version CLI, focused regression i pełna regresja: patrz walidacja commita wydania.
+
+---
+
 # Aktualizacja do 0.36.0
 
 Wydanie dodaje Network & Remote Locations przez natywne KIO: ręczne połączenia SMB, SFTP, FTP, WebDAV i WebDAVS, Saved Remote Locations, Recent/Reconnect, transakcyjne odtwarzanie sesji/historii oraz opcjonalne natywne discovery.
