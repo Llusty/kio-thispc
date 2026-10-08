@@ -14,6 +14,12 @@
 #include "batchrenamerecovery.h"
 #include "browsercommon.h"
 #include "propertiesdata.h"
+#include "soliddevicemonitor.h"
+#include <QFileSystemWatcher>
+#include <QTimer>
+#include "propertiesposixmode.h"
+#include "propertieshidden.h"
+#include <QSignalBlocker>
 #include "propertiesdataprovider.h"
 #include "drivepropertiesdata.h"
 #include "drivepropertiesprovider.h"
@@ -88,10 +94,18 @@ public:
     using QDialog::QDialog;
 
     bool isBusy() const { return m_busy; }
+    std::function<void()> onIdle;
+    QPointer<QWidget> deferredOwnerClose;
 
     void setBusy(bool busy)
     {
         m_busy = busy;
+        if (!busy && onIdle) onIdle();
+        if (!busy && deferredOwnerClose) {
+            const auto owner = deferredOwnerClose;
+            deferredOwnerClose.clear();
+            QTimer::singleShot(0, owner, [owner] { if (owner) owner->close(); });
+        }
         if (!busy && m_pending) {
             m_pending = false;
             done(m_pendingResult);
@@ -169,6 +183,21 @@ public:
         }
     }
 
+    // Parent destruction must not delete a busy dialog inside KJob::exec().
+    bool deferCloseFor(QWidget *owner)
+    {
+        bool busy = false;
+        for (auto *dialog : openDialogs()) {
+            auto *window = dynamic_cast<PropertiesWindow *>(dialog);
+            if (window && window->parentWidget() == owner && window->isBusy()) {
+                window->deferredOwnerClose = owner;
+                window->close();
+                busy = true;
+            }
+        }
+        return busy;
+    }
+
 private:
     void prune()
     {
@@ -176,23 +205,6 @@ private:
     }
 
     QList<QPointer<QDialog>> m_open;
-};
-
-// Stable (device, inode) identity of a local target, so Apply never writes to
-// a different file that replaced the original path.
-struct PropertiesIdentity
-{
-    static bool read(const QString &path, quint64 *dev, quint64 *ino)
-    {
-        struct stat info {};
-        if (path.isEmpty()
-            || ::lstat(QFile::encodeName(path).constData(), &info) != 0) {
-            return false;
-        }
-        *dev = static_cast<quint64>(info.st_dev);
-        *ino = static_cast<quint64>(info.st_ino);
-        return true;
-    }
 };
 
 class PropertiesDialog final
@@ -240,9 +252,7 @@ public:
             int currentMode = -1;
             QString permissionOwner;
             QString permissionGroup;
-            bool haveIdentity = false;
-            quint64 dev = 0;
-            quint64 ino = 0;
+            PropertiesTargetCapabilities capabilities;
         };
         auto st = std::make_shared<State>();
         st->workingUrl = url;
@@ -250,10 +260,9 @@ public:
 
         const QString physicalPath =
             localPathForFileOrAdmin(url);
-        if (url.isLocalFile() || isAdminUrl(url)) {
-            st->haveIdentity = PropertiesIdentity::read(
-                physicalPath, &st->dev, &st->ino);
-        }
+        st->capabilities = (url.isLocalFile() || isAdminUrl(url))
+            ? PropertiesCapabilityResolver::resolve(QUrl::fromLocalFile(physicalPath))
+            : PropertiesTargetCapabilities();
         const QString fileSystem =
             filesystemTypeForUrl(url);
         const bool permissionBehaviorMayDependOnMount =
@@ -299,11 +308,20 @@ public:
         // --------------------------------------------------------------
         // General (Presentation Layer fed by PropertiesDataProvider)
         // --------------------------------------------------------------
-        auto *general = new QWidget(tabs);
-        auto *generalForm =
-            new QFormLayout(general);
-        generalForm->setFieldGrowthPolicy(
-            QFormLayout::AllNonFixedFieldsGrow);
+        auto *generalScroll = new QScrollArea(tabs);
+        generalScroll->setFrameShape(QFrame::NoFrame);
+        generalScroll->setWidgetResizable(true);
+        generalScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        auto *general = new QWidget(generalScroll);
+        generalScroll->setWidget(general);
+        // A vertical layout allocates the Hidden widget's full height-for-width.
+        // Nesting it as a spanning QFormLayout row can leave that row at its
+        // cached pre-wrap height while the child grows over the following rows.
+        auto *generalLayout = new QVBoxLayout(general);
+        generalLayout->setSizeConstraint(QLayout::SetMinimumSize);
+        auto *nameForm = new QFormLayout;
+        nameForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+        generalLayout->addLayout(nameForm);
 
         auto *nameEdit =
             new QLineEdit(name, general);
@@ -311,9 +329,15 @@ public:
         nameEdit->setReadOnly(
             !(url.isLocalFile()
               || isAdminUrl(url)));
-        generalForm->addRow(
+        nameForm->addRow(
             trLocal("Nazwa:", "Name:"),
             nameEdit);
+
+        auto *hiddenWidget = new PropertiesHiddenWidget(url, st->capabilities, nameEdit, general);
+        generalLayout->addWidget(hiddenWidget);
+        auto *generalForm = new QFormLayout;
+        generalForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+        generalLayout->addLayout(generalForm);
 
         auto *typeLabel = makeValueLabel(typeText);
         generalForm->addRow(trLocal("Typ:", "Type:"), typeLabel);
@@ -454,7 +478,7 @@ public:
         provider->load(st->workingUrl, name, isDir, typeText, sizeText, modifiedText);
 
         tabs->addTab(
-            general,
+            generalScroll,
             themedIcon(
                 QStringLiteral(
                     "document-properties")),
@@ -466,7 +490,7 @@ public:
             themedIcon(QStringLiteral("document-encrypt")),
             trLocal("Sumy kontrolne", "Checksums"));
 
-        auto *metadataPage = new MetadataWidget(st->workingUrl, tabs);
+        auto *metadataPage = new MetadataWidget(st->workingUrl, tabs, {}, st->capabilities.entryIdentity, st->capabilities);
         const int metadataTab = tabs->addTab(
             metadataPage,
             themedIcon(QStringLiteral("documentinfo")),
@@ -595,8 +619,20 @@ public:
         permGrid->addWidget(
             otherExec, 3, 3);
 
-        permissionsLayout->addWidget(
-            permissionsGroup);
+        auto *numericMode = new QLineEdit(permissionsGroup);
+        numericMode->setObjectName(QStringLiteral("propertiesNumericMode"));
+        numericMode->setMaximumWidth(100);
+        numericMode->setToolTip(trLocal(
+            "Format 0000–0777 (rwx). Istniejące setuid/setgid/sticky są zachowywane.",
+            "Format 0000–0777 (rwx). Existing setuid/setgid/sticky bits are preserved."));
+        permGrid->addWidget(new QLabel(trLocal("Tryb numeryczny (rwx):", "Numeric mode (rwx):"), permissionsGroup), 4, 0);
+        permGrid->addWidget(numericMode, 4, 1, 1, 3);
+        auto *modeValidation = new QLabel(permissionsGroup);
+        modeValidation->setObjectName(QStringLiteral("propertiesModeValidation"));
+        modeValidation->setWordWrap(true);
+        permGrid->addWidget(modeValidation, 5, 0, 1, 4);
+        auto syncingMode = std::make_shared<bool>(false);
+        permissionsLayout->addWidget(permissionsGroup);
 
         auto *recursivePermissions =
             new QCheckBox(
@@ -632,12 +668,17 @@ public:
                  permissionBoxes) {
                 box->setEnabled(enabled);
             }
-            recursivePermissions->setEnabled(
-                enabled && isDir);
+            recursivePermissions->setEnabled(enabled && isDir);
+            numericMode->setEnabled(enabled && PropertiesPosixMode::editable(url, st->capabilities)
+                && !recursivePermissions->isChecked());
         };
 
         auto setPermissionBoxesFromMode =
             [=](int mode) {
+            *syncingMode = true;
+            const QSignalBlocker blocker(numericMode);
+            numericMode->setText(PropertiesPosixMode::format(mode));
+            modeValidation->clear();
             userRead->setChecked(
                 mode & 0400);
             userWrite->setChecked(
@@ -656,8 +697,8 @@ public:
                 mode & 0004);
             otherWrite->setChecked(
                 mode & 0002);
-            otherExec->setChecked(
-                mode & 0001);
+            otherExec->setChecked(mode & 0001);
+            *syncingMode = false;
         };
 
         auto modeFromPermissionBoxes =
@@ -692,9 +733,26 @@ public:
                 mode |= 0001;
             }
 
-            return mode;
+            return PropertiesPosixMode::merge(st->currentMode < 0 ? 0 : st->currentMode, mode);
         };
 
+        for (auto *box : permissionBoxes) QObject::connect(box, &QCheckBox::toggled, dialog, [=] {
+            if (*syncingMode) return;
+            const QSignalBlocker blocker(numericMode);
+            numericMode->setText(PropertiesPosixMode::format(modeFromPermissionBoxes()));
+            modeValidation->clear();
+        });
+        QObject::connect(numericMode, &QLineEdit::textChanged, dialog, [=](const QString &text) {
+            int mode = 0;
+            if (!PropertiesPosixMode::parse(text, &mode)) {
+                modeValidation->setText(trLocal("Wpisz cztery cyfry oktalne: 0000–0777.", "Enter four octal digits: 0000–0777."));
+                return;
+            }
+            setPermissionBoxesFromMode(mode);
+        });
+        QObject::connect(recursivePermissions, &QCheckBox::toggled, dialog, [=] {
+            setPermissionBoxesEnabled(st->canEditPermissions);
+        });
         st->adminUnlocked = isAdminUrl(st->workingUrl);
         QString permissionReadError;
 
@@ -785,6 +843,13 @@ public:
             adminUnlockButton->setVisible(true);
         }
 
+        // Never permit the shared checkbox/backend path to chmod a link target.
+        if (st->capabilities.entryKind == PropertiesEntryKind::SymbolicLink) {
+            st->canEditPermissions = false;
+            setPermissionBoxesEnabled(false);
+            adminUnlockButton->hide();
+            permissionsInfo->setText(trLocal("Edycja trybu dowiązania jest niewspierana (bez podążania za celem).", "Link mode editing is unsupported (no target following)."));
+        }
         AclData aclData;
         if (ordinaryLocal) {
             const QFileInfo aclInfo(physicalPath);
@@ -896,16 +961,94 @@ public:
                 dialog);
         outer->addWidget(buttons);
 
+        auto targetUnavailable = std::make_shared<bool>(false);
+        auto invalidateTarget = [=] {
+            if (*targetUnavailable) return;
+            *targetUnavailable = true;
+            st->canEditPermissions = false;
+            setPermissionBoxesEnabled(false);
+            nameEdit->setEnabled(false);
+            hiddenWidget->setEnabled(false);
+            aclEditor->setEnabled(false);
+            adminUnlockButton->hide();
+            metadataPage->findChild<PropertiesXattrWidget *>()->invalidateTarget();
+            permissionsInfo->setText(trLocal(
+                "Element niedostępny lub podmieniony. Zapis zablokowany; otwórz Właściwości ponownie.",
+                "Item unavailable or replaced. Writes blocked; reopen Properties."));
+            dialog->setProperty("propertiesTargetUnavailable", true);
+        };
+        // Event driven, local only. The captured identity is never replaced
+        // with a new snapshot after a loss, including unmount/remount.
+        if (st->capabilities.entryIdentity.valid) {
+            auto *watcher = new QFileSystemWatcher(dialog);
+            watcher->setObjectName(QStringLiteral("propertiesTargetWatcher"));
+            auto *check = new QTimer(dialog);
+            check->setSingleShot(true);
+            auto watchPaths = [st] {
+                QStringList paths;
+                QString path = st->capabilities.normalizedUrl.toLocalFile();
+                // A watch follows its inode after a parent rename. Observe
+                // ancestors too, so moving any path component invalidates it.
+                while (!paths.contains(path)) {
+                    paths.append(path);
+                    path = QFileInfo(path).absolutePath();
+                }
+                return paths;
+            };
+            QObject::connect(check, &QTimer::timeout, dialog, [=] {
+                if (!alive || alive->isBusy() || *targetUnavailable) return;
+                if (PropertiesCapabilityResolver::revalidate(st->capabilities)
+                    != PropertiesRevalidationResult::SameTarget) {
+                    invalidateTarget();
+                    return;
+                }
+                const auto paths = watchPaths();
+                for (const auto &p : paths)
+                    if (!watcher->files().contains(p) && !watcher->directories().contains(p))
+                        watcher->addPath(p);
+            });
+            auto schedule = [check] { check->start(0); };
+            QObject::connect(watcher, &QFileSystemWatcher::fileChanged, dialog, schedule);
+            QObject::connect(watcher, &QFileSystemWatcher::directoryChanged, dialog, schedule);
+            auto *devices = new SolidDeviceMonitor(dialog);
+            devices->setObjectName(QStringLiteral("propertiesDeviceMonitor"));
+            QObject::connect(devices, &SolidDeviceMonitor::devicesChanged, dialog, schedule);
+            alive->onIdle = schedule;
+            watcher->addPaths(watchPaths());
+        }
+        QObject::connect(metadataPage->findChild<PropertiesXattrWidget *>(),
+            &PropertiesXattrWidget::attributesChanged, dialog, [=] {
+                if (refreshView) refreshView();
+                provider->load(st->workingUrl, st->workingName, isDir, typeText, sizeText, modifiedText);
+            });
+
         auto applyChanges = [=]() -> bool {
             if (!alive || alive->isBusy()) return false;
+            if (*targetUnavailable) {
+                QMessageBox::warning(dialog, trLocal("Właściwości", "Properties"), permissionsInfo->text());
+                return false;
+            }
+            if (st->canEditPermissions && !PropertiesPosixMode::parse(numericMode->text(), nullptr)) {
+                modeValidation->setText(trLocal("Wpisz cztery cyfry oktalne: 0000–0777.", "Enter four octal digits: 0000–0777."));
+                numericMode->setFocus();
+                return false;
+            }
+            if (st->canEditPermissions && st->workingUrl.isLocalFile()
+                && (!st->capabilities.entryIdentity.valid
+                    || PropertiesCapabilityResolver::revalidate(st->capabilities) != PropertiesRevalidationResult::SameTarget)) {
+                invalidateTarget();
+                permissionsInfo->setText(trLocal("Nie można potwierdzić tożsamości elementu. Zapis zablokowany.", "Cannot confirm item identity. Write blocked."));
+                QMessageBox::warning(dialog, trLocal("Właściwości", "Properties"), permissionsInfo->text());
+                return false;
+            }
 
             // The target may have vanished or been replaced while this
             // modeless dialog was open. Never write to a different item.
-            if (st->haveIdentity) {
-                quint64 dev = 0, ino = 0;
-                if (!PropertiesIdentity::read(
-                        localPathForFileOrAdmin(st->workingUrl), &dev, &ino)
-                    || dev != st->dev || ino != st->ino) {
+            if (st->capabilities.entryIdentity.valid) {
+                const auto identityState =
+                    PropertiesCapabilityResolver::revalidate(st->capabilities);
+                if (identityState != PropertiesRevalidationResult::SameTarget) {
+                    invalidateTarget();
                     st->canEditPermissions = false;
                     setPermissionBoxesEnabled(false);
                     nameEdit->setEnabled(false);
@@ -964,7 +1107,8 @@ public:
 
             if (st->canEditPermissions
                 && !readOnlyFileSystem
-                && !aclWriteThisApply) {
+                && !aclWriteThisApply
+                && (modeFromPermissionBoxes() != st->currentMode || recursivePermissions->isChecked())) {
                 const int requestedMode =
                     modeFromPermissionBoxes();
                 const bool recursive =
@@ -1054,6 +1198,14 @@ public:
                                             : fileSystem);
                     }
 
+                    int actualMode = -1;
+                    if (readKioPermissions(st->workingUrl, &actualMode)) {
+                        st->currentMode = actualMode;
+                        setPermissionBoxesFromMode(actualMode);
+                        if (st->workingUrl.isLocalFile())
+                            aclEditor->refresh(AclProvider::load(st->workingUrl.toLocalFile(), true,
+                        st->capabilities.entryKind == PropertiesEntryKind::SymbolicLink, isDir, readOnlyFileSystem));
+                    }
                     QMessageBox::warning(
                         dialog,
                         trLocal(
@@ -1089,12 +1241,14 @@ public:
                     return false;
                 }
 
-                setPermissionBoxesFromMode(
-                    verifiedMode);
+                setPermissionBoxesFromMode(verifiedMode);
                 st->currentMode = verifiedMode;
+                if (st->workingUrl.isLocalFile())
+                    aclEditor->refresh(AclProvider::load(st->workingUrl.toLocalFile(), true,
+                        st->capabilities.entryKind == PropertiesEntryKind::SymbolicLink, isDir, readOnlyFileSystem));
 
-                if ((verifiedMode & 0777)
-                    != (requestedMode & 0777)) {
+                if ((verifiedMode & 07777)
+                    != (requestedMode & 07777)) {
                     if (url.isLocalFile()
                         && !st->adminUnlocked) {
                         adminUnlockButton->show();
@@ -1106,19 +1260,19 @@ public:
                                 "System zaakceptował operację, ale po ponownym odczycie prawa nadal mają wartość %1 zamiast %2.")
                                 .arg(
                                     QString::number(
-                                        verifiedMode & 0777,
+                                        verifiedMode & 07777,
                                         8),
                                     QString::number(
-                                        requestedMode & 0777,
+                                        requestedMode & 07777,
                                         8))
                             : QStringLiteral(
                                 "The operation completed, but after reading the file back its mode is still %1 instead of %2.")
                                 .arg(
                                     QString::number(
-                                        verifiedMode & 0777,
+                                        verifiedMode & 07777,
                                         8),
                                     QString::number(
-                                        requestedMode & 0777,
+                                        requestedMode & 07777,
                                         8));
 
                     if (permissionBehaviorMayDependOnMount) {
@@ -1188,8 +1342,18 @@ public:
                     return false;
                 }
 
+                // Revalidate directly before rename, after any earlier permission job.
+                if (st->workingUrl.isLocalFile()
+                    && (!st->capabilities.entryIdentity.valid
+                        || PropertiesCapabilityResolver::revalidate(st->capabilities) != PropertiesRevalidationResult::SameTarget)) {
+                    invalidateTarget();
+                    hiddenWidget->reload(st->workingUrl, st->capabilities);
+                    QMessageBox::warning(dialog, trLocal("Właściwości", "Properties"),
+                        trLocal("Nie można potwierdzić tożsamości elementu. Zmiana nazwy zablokowana.", "Cannot verify item identity. Rename blocked."));
+                    return false;
+                }
                 const QString targetLocalPath = localPathForFileOrAdmin(newUrl);
-                if (!targetLocalPath.isEmpty() && QFile::exists(targetLocalPath)) {
+                if (!targetLocalPath.isEmpty() && (QFileInfo::exists(targetLocalPath) || QFileInfo(targetLocalPath).isSymLink())) {
                     QMessageBox::warning(
                         dialog,
                         trLocal("Właściwości", "Properties"),
@@ -1231,10 +1395,18 @@ public:
 
                 st->workingUrl = newUrl;
                 st->workingName = requestedName;
+                if (st->capabilities.entryIdentity.valid) {
+                    st->capabilities.requestedUrl = newUrl;
+                    st->capabilities.normalizedUrl = QUrl::fromLocalFile(
+                        QDir::cleanPath(QFileInfo(localPathForFileOrAdmin(newUrl)).absoluteFilePath()));
+                }
                 checksumPage->setUrl(st->workingUrl);
                 metadataPage->setUrl(st->workingUrl);
-                headerName->setText(
-                    requestedName);
+                headerName->setText(requestedName);
+                hiddenWidget->reload(st->workingUrl, st->capabilities);
+                if (st->workingUrl.isLocalFile())
+                    aclEditor->refresh(AclProvider::load(st->workingUrl.toLocalFile(), true,
+                        st->capabilities.entryKind == PropertiesEntryKind::SymbolicLink, isDir, readOnlyFileSystem));
             }
 
             const bool recursiveApplied =
@@ -1290,6 +1462,7 @@ public:
                     3500);
             }
 
+            provider->load(st->workingUrl, st->workingName, isDir, typeText, sizeText, modifiedText);
             if (refreshView) {
                 refreshView();
             }
@@ -1418,7 +1591,7 @@ private:
         }
 
         if (mode) {
-            *mode = static_cast<int>(access) & 0777;
+            *mode = static_cast<int>(access) & 07777;
         }
 
         if (owner) {

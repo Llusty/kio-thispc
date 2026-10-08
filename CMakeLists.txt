@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(kio-thispc VERSION 0.39.0 LANGUAGES CXX)
+project(kio-thispc VERSION 0.40.0 LANGUAGES CXX)
 
 set(QT_MIN_VERSION "6.5.0")
 set(KF_MIN_VERSION "6.17.0")
@@ -127,7 +127,13 @@ add_executable(thispc-view
     src/localtransferjob.h
     src/localtreehistory.h
     src/operationmanager.h
+    src/propertieshidden.h
+    src/propertiesposixmode.h
     src/propertiesdata.h
+    src/propertiesxattrwriter.h
+    src/propertiesxattrs.h
+    src/propertiesxattrwidget.h
+    src/propertiescapabilities.h
     src/propertiesdataprovider.h
     src/drivepropertiesdata.h
     src/drivepropertiesprovider.h
@@ -248,7 +254,13 @@ add_executable(thispc-view-stage3c1-test EXCLUDE_FROM_ALL
     src/localtransferjob.h
     src/localtreehistory.h
     src/operationmanager.h
+    src/propertieshidden.h
+    src/propertiesposixmode.h
     src/propertiesdata.h
+    src/propertiesxattrwriter.h
+    src/propertiesxattrs.h
+    src/propertiesxattrwidget.h
+    src/propertiescapabilities.h
     src/propertiesdataprovider.h
     src/drivepropertiesdata.h
     src/drivepropertiesprovider.h

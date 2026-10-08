@@ -119,8 +119,32 @@ int main(int argc, char **argv)
     input.selection = {localFile};
     state = ActionStateController::compute(input);
     verify(state.copyEnabled && state.cutEnabled && !state.renameEnabled
-               && !state.propertiesEnabled && !state.trashEnabled,
+               && state.propertiesEnabled && !state.trashEnabled,
            "recovery fence preserves Copy and Cut historical behavior");
+
+    QTemporaryDir fixture;
+    verify(fixture.isValid(), "readable NTFS policy fixture directory");
+    QFile readable(fixture.filePath("regular.txt"));
+    verify(readable.open(QIODevice::WriteOnly), "NTFS policy fixture created");
+    readable.write("readable"); readable.close();
+    const auto fixtureUrl=QUrl::fromLocalFile(readable.fileName());
+    for(const char *fs:{"fuseblk","ntfs3"}) {
+        auto caps=PropertiesCapabilityResolver::resolve(fixtureUrl);
+        caps.fileSystemType=QString::fromLatin1(fs);
+        caps.posixModeEditable=PropertiesCapabilityState::ReadOnly;
+        caps.userXattrEditable=PropertiesCapabilityState::ReadOnly;
+        auto hidden=PropertiesHiddenPolicy::fromEntry(fixtureUrl,KIO::UDSEntry{});
+        verify(caps.entryIdentity.valid && !PropertiesHiddenPolicy::editable(fixtureUrl,caps,hidden,"regular.txt"),
+               "NTFS-like identified entry keeps Hidden read-only");
+        for(const auto &directory:{QUrl::fromLocalFile(fixture.path()),QUrl("thispcsearch:/fixture")}) {
+            auto fenced=directoryInput(directory); fenced.selection={fixtureUrl};
+            fenced.recoverySafe=false; fenced.clipboardHasUrls=true;
+            const auto result=ActionStateController::compute(fenced);
+            verify(result.propertiesEnabled && !result.renameEnabled && !result.trashEnabled
+                   && !result.pasteEnabled && !result.createEnabled,
+                   "readable NTFS-like selection opens Properties without enabling write actions, including Search");
+        }
+    }
 
     ActionStateInput invalid;
     invalid.recoverySafe = true;

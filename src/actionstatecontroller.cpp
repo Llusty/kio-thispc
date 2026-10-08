@@ -31,7 +31,9 @@ ActionAvailability ActionStateController::compute(const ActionStateInput &input)
     state.batchRenameEnabled = input.recoverySafe
         && input.selection.size() >= 2
         && input.isDirectory;
-    state.propertiesEnabled = input.recoverySafe && singleSelection;
+    // Opening an inspector is read-only; Apply retains its own recovery fence.
+    state.propertiesEnabled = singleSelection && input.selection.first().isValid()
+        && !input.selection.first().isEmpty();
     state.trashEnabled = input.recoverySafe && allLocal;
     state.emptyTrashVisible = input.isTrashRoot;
     state.emptyTrashEnabled = input.recoverySafe

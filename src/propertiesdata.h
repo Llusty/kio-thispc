@@ -10,6 +10,7 @@
 #pragma once
 
 #include "browsercommon.h"
+#include "propertiescapabilities.h"
 
 #include <QDateTime>
 #include <QLocale>
@@ -18,6 +19,7 @@
 
 struct PropertiesData
 {
+    PropertiesTargetCapabilities capabilities;
     QUrl url;
     QString name;
     QString location;

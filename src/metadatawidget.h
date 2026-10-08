@@ -3,6 +3,7 @@
 
 #include "browsercommon.h"
 #include "metadataprovider.h"
+#include "propertiesxattrwidget.h"
 
 #include <QFormLayout>
 #include <QLabel>
@@ -15,7 +16,7 @@ class MetadataWidget final : public QWidget
     Q_OBJECT
 public:
     explicit MetadataWidget(const QUrl &url, QWidget *parent = nullptr,
-                            MetadataExtractor extractor = {})
+                            MetadataExtractor extractor = {}, PropertiesObjectIdentity identity = {}, PropertiesTargetCapabilities capabilities = {})
         : QWidget(parent)
     {
         setObjectName(QStringLiteral("metadataWidget"));
@@ -32,16 +33,19 @@ public:
         scroll->setFrameShape(QFrame::NoFrame);
         scroll->setWidget(m_rows);
         layout->addWidget(scroll, 1);
+        m_xattrs = new PropertiesXattrWidget(url, this, identity, capabilities);
+        layout->addWidget(m_xattrs);
         m_provider = new MetadataProvider(url, this, std::move(extractor));
         connect(m_provider, &MetadataProvider::dataChanged, this, &MetadataWidget::render);
         render(m_provider->data());
     }
 
     MetadataProvider *provider() const { return m_provider; }
-    void activate() { m_provider->start(); }
+    void activate() { m_provider->start(); m_xattrs->activate(); }
 
     void setUrl(const QUrl &url)
     {
+        m_xattrs->setUrl(url);
         delete m_provider;
         m_provider = new MetadataProvider(url, this);
         connect(m_provider, &MetadataProvider::dataChanged, this, &MetadataWidget::render);
@@ -84,6 +88,7 @@ private:
         }
     }
 
+    PropertiesXattrWidget *m_xattrs = nullptr;
     MetadataProvider *m_provider = nullptr;
     QLabel *m_status = nullptr;
     QWidget *m_rows = nullptr;

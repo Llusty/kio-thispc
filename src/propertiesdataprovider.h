@@ -86,6 +86,7 @@ public:
         cancel();
         m_data = PropertiesData();
         m_data.url = url;
+        m_data.capabilities = PropertiesCapabilityResolver::resolve(url);
         m_data.name = initialName.isEmpty() ? url.fileName() : initialName;
         m_data.displayAddress = urlForDisplay(url);
         m_data.isDir = isDir;
@@ -405,6 +406,7 @@ private:
 
     void parseKioEntry(const KIO::UDSEntry &entry)
     {
+        PropertiesCapabilityResolver::applyKioEntry(&m_data.capabilities, entry);
         if (entry.contains(KIO::UDSEntry::UDS_NAME)) {
             m_data.name = entry.stringValue(KIO::UDSEntry::UDS_NAME);
         }

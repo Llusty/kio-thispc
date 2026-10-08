@@ -1,5 +1,26 @@
 [English](UPDATE.md) | [Polski](UPDATE.pl.md)
 
+# Aktualizacja do 0.40.0
+
+```bash
+cd ~/Pobrane
+tar -xzf kio-thispc-0.40.0.tar.gz
+cd kio-thispc-0.40.0
+chmod +x install.sh
+./install.sh
+```
+
+- Właściwości rozpoznają capabilities backendu i zachowują tożsamość elementu bez podążania za symlinkiem. Zniknięcie, przeniesienie, podmiana lub utrata mountu blokują zapis ze starego dialogu.
+- Atrybuty rozszerzone mają ograniczone podglądy tekstu i danych binarnych. Lokalne user.* można dodawać, edytować i usuwać przez zweryfikowany deskryptor. Zapis jest natychmiastowy, poza Zastosuj/Anuluj/Cofnij; security.*, trusted.* i system.* są chronione.
+- Tryb POSIX 0000–0777 jest zsynchronizowany z checkboxami, zachowuje istniejące special bits i odświeża ACL zgodnie z semantyką maski kernela.
+- Hidden rozróżnia widoczność KIO, kropkę w nazwie Unix i niepotwierdzone flagi natywne. Zmiana kropki korzysta ze wspólnego rename; natywne Hidden NTFS nie jest emulowane ani zapisywane.
+- Primary, Split i Search współdzielą dialog, odświeżanie, blokady utraty elementu i bezpieczne zamykanie. ACL działających i zerwanych symlinków pozostaje niedostępne również po rename.
+- FULL MANUAL PASS Stage 1–6 pochodzi z wcześniejszego odbioru potwierdzonego przez użytkownika. Realny ext4 i zdalny KIO: NOT TESTED. Końcowa weryfikacja wydania: [raport](docs/PROPERTIES_RELEASE_040.md); audyt przed wydaniem pozostaje historyczny.
+
+Poza zakresem: etykiety SELinux, chattr/immutable, Linux file capabilities, większy redesign ACL, admin:// retry.
+
+---
+
 # Aktualizacja do 0.39.0
 
 Wydanie dodaje natywne uruchamianie plików lokalnych oraz bogate, asynchroniczne podglądy przez KDE/KIO.

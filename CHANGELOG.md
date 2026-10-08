@@ -2,6 +2,17 @@
 
 # Changelog
 
+## 0.40.0 — Advanced Properties Follow-up
+
+- Properties now detects backend capabilities and retains a no-follow identity snapshot, rejecting writes after an item disappears, moves, is replaced, or loses its mount.
+- Extended Attributes shows bounded text/binary previews and supports immediate local user.* add/edit/remove through verified file descriptors. These operations are outside Apply/Cancel/Undo. security.*, trusted.* and system.* remain protected.
+- Numeric POSIX permissions (0000–0777) synchronize with permission checkboxes, preserve existing special bits, and refresh ACL state using normal kernel mask semantics.
+- Hidden presentation distinguishes KIO visibility, Unix dot-name semantics, and unverified native flags. Safe Unix dot-name changes use the shared rename path; NTFS native Hidden is not emulated or written.
+- Primary, Split and Search share Properties behavior, refresh, target-loss guards and safe close sequencing. ACL remains unavailable for links after rename, including broken links.
+- Manual Stage 1–6 acceptance is prior user-confirmed evidence. Live ext4 and remote KIO remain NOT TESTED; deterministic policies are covered automatically. Final release verification is recorded in [the release verification](docs/PROPERTIES_RELEASE_040.md); the pre-release audit remains historical.
+
+Excluded: SELinux labels, chattr/immutable, Linux file capabilities, larger ACL redesign, admin:// retry.
+
 ## 0.39.0 — Native File Integration & Rich Previews
 
 ### Added

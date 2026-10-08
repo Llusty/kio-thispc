@@ -329,9 +329,36 @@ This ordering prioritizes core file-manager correctness, safety, and maintainabi
 
 
 ### 0.40.0 — Advanced Properties Follow-up
-- Extended attributes (`xattr` / inspect & edit where supported);
-- Numeric POSIX permission editing (`0755`) synchronized with existing UI;
-- Hidden-state semantics with backend awareness (leading-dot rename for Unix vs. real metadata/attribute flags).
+- Stage 1: Properties capability layer (backend/locality, explicit symlink policy, identity snapshot and revalidation) — automated + FULL MANUAL PASS;
+  Real remote KIO manual smoke: NOT TESTED (no configured environment), non-blocking with automated zero-local-syscall coverage.
+  Stage 1 automated baseline: 59 suites / 32873 checks / 0 failures; version-cli 6/6 PASS.
+- Stage 2: read-only extended attributes (`xattr`) viewer — automated + FULL MANUAL PASS (60 suites / 32968 checks / 0 failures);
+  Read-only Metadata section; EntryNoFollow; remote Unsupported with zero local syscalls; bounded async pool and previews.
+  Limits: 64 KiB/value, 256 KiB total raw bytes, 256 entries, 1024 UTF-16 units/text preview, 64 bytes/binary preview, 3 size-race retries.
+- Stage 3: safe `user.*` xattr add/edit/remove — automated + FULL MANUAL PASS;
+  Stage 3 automated PASS: properties_xattr_edit 379 assertions; focused 12 suites / 2665 checks; full 61 suites / 33347 checks / 0 failures / exit 0; build and version-cli 6/6 PASS, version 0.39.0.
+  Verified FD writes, strict UTF-8/text and hex, immediate operations outside Apply/Undo; no symlink or remote writes.
+  Real remote KIO manual smoke: NOT TESTED, non-blocking with automated zero-write-call coverage.
+- Stage 4: numeric POSIX permissions (`0755`), rwx-only with special bits preservation — automated + FULL MANUAL PASS;
+  Stage 4 automated PASS: properties_posix_mode 163 assertions; focused 13 suites / 2828 checks; full 62 suites / 33510 checks / 0 failures / exit 0; build and version-cli 6/6 PASS, version 0.39.0. Manual acceptance confirmed by the user.
+- Stage 5 — Hidden semantics: automated + FULL MANUAL PASS (confirmed by the user).
+  Latest Stage 5 UI-polish baseline: focused 15 suites / 3811 checks; full 63 suites / 34457 checks / 0 failures / exit 0; no duplicate suites; build, version-cli 6/6 and diff check PASS, version 0.39.0. Audit: docs/PROPERTIES_HIDDEN_SEMANTICS.md.
+- Stage 6: final integration and regression across Primary, Split, and Search — AUTOMATED PASS + FULL MANUAL PASS (prior acceptance confirmed by the user on 2026-10-08; not rerun manually in this audit). Historical focused: 19 suites / 4360 checks; full: 64 suites / 34666 checks / 0 failures / exit 0, no duplicate suites. Build, version-cli 6/6 and diff check PASS. Historical audit runtime: 0.39.0. Release preparation: 0.40.0; publication pending GitHub verification. Current audit: docs/PROPERTIES_FINAL_AUDIT_040.md. Audit: docs/PROPERTIES_STAGE6_INTEGRATION.md.
+
+Out of scope for 0.40: SELinux label editing, `chattr`/immutable flags, Linux file capabilities, a larger ACL redesign, and `admin://` retry.
+
+#### Official 0.40 contract — Advanced Properties Follow-up
+
+Release intent: Advanced Properties Follow-up without expanding the project into system administration.
+
+- **Stage 1 — Properties capability layer:** backend/filesystem recognition; capability detection; explicit symlink policy; identity/revalidation before writes. Completed: automated + FULL MANUAL PASS.
+- **Stage 2 — Extended Attributes viewer:** xattr reading; namespaces; text versus binary data; value copying; no editing. Completed: automated + FULL MANUAL PASS.
+- **Stage 3 — Safe xattr editing:** local user.* add/edit/remove; meaningful errors; no dangerous security.*, trusted.* or system.* editing. Completed: automated + FULL MANUAL PASS.
+- **Stage 4 — Numeric POSIX permissions:** octal field; bidirectional synchronization with existing GUI; correct validation; rwx editing with existing special bits preserved. Completed: automated + FULL MANUAL PASS.
+- **Stage 5 — Hidden semantics:** audit Unix, NTFS and other backends; present the true hidden state; write only where semantics are unambiguous and safe. Unsupported or ambiguous writes remain disabled/read-only; no cross-backend emulation. automated + FULL MANUAL PASS (confirmed by the user).
+- **Stage 6 — Final integration & regression:** Primary/Split/Search; disappearing files; mount removal; ext4/Btrfs/NTFS; lifetime; full automated and manual acceptance. AUTOMATED PASS + FULL MANUAL PASS (user-confirmed prior acceptance); release audit: docs/PROPERTIES_FINAL_AUDIT_040.md.
+
+Out of scope: SELinux labels; chattr/immutable; Linux file capabilities; larger ACL redesign; admin:// retry.
 
 ### 0.41.0 — Advanced Search
 - Type, filename, extension, date, and size filters;

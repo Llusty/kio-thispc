@@ -25,4 +25,4 @@ if command -v kbuildsycoca6 >/dev/null 2>&1; then
     kbuildsycoca6 --noincremental >/dev/null 2>&1 || true
 fi
 
-echo "kio-thispc 0.4 usunięty."
+echo "kio-thispc usunięty."

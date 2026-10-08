@@ -41,6 +41,11 @@ public:
         populate(); setCapabilityState();
     }
 
+    void refresh(const AclData &data) {
+        m_data = data; m_dirty = false; m_explicitAccessEdits.clear();
+        populate(); setCapabilityState(); emitDirty();
+    }
+
     bool isDirty() const { return m_dirty; }
     const AclData &data() const { return m_data; }
     void setDirtyChangedCallback(std::function<void(bool)> callback) { m_dirtyChanged = std::move(callback); }

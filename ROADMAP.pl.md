@@ -507,9 +507,36 @@ zainstalowana i ręcznie potwierdzona przez użytkownika. Pełna regresja wydani
 
 
 ### 0.40.0 — Rozszerzone właściwości — dalszy rozwój (Advanced Properties Follow-up)
-- atrybuty rozszerzone (`xattr` / podgląd i edycja tam, gdzie są wspierane);
-- numeryczna edycja uprawnień POSIX (`0755`) zsynchronizowana z istniejącym interfejsem;
-- semantyka ukrywania zależna od backendu (kropka w nazwie na uniksach vs. prawdziwe metadane/flagi atrybutów).
+- Etap 1: warstwa capabilities Właściwości (backend/lokalność, jawna polityka symlinków, snapshot tożsamości i revalidation) — automated + FULL MANUAL PASS;
+  Rzeczywisty remote KIO manual smoke: NOT TESTED (brak środowiska), nieblokujące przy automatycznym pokryciu zero-local-syscall.
+  Baseline automatyczny Etapu 1: 59 suites / 32873 checks / 0 failures; version-cli 6/6 PASS.
+- Etap 2: przeglądarka atrybutów rozszerzonych (`xattr`) tylko do odczytu — automated + FULL MANUAL PASS (60 suites / 32968 checks / 0 failures);
+  Sekcja Metadane tylko do odczytu; EntryNoFollow; remote Unsupported bez lokalnych syscalli; ograniczona pula async i podglądy.
+  Limity: 64 KiB/wartość, 256 KiB raw bytes łącznie, 256 wpisów, 1024 jednostki UTF-16/text preview, 64 bajty/binary preview, 3 próby przy zmianie rozmiaru.
+- Etap 3: bezpieczne dodawanie/edycja/usuwanie xattr `user.*` — automated + FULL MANUAL PASS;
+  Etap 3 automated PASS: properties_xattr_edit 379 assertions; focused 12 suites / 2665 checks; full 61 suites / 33347 checks / 0 failures / exit 0; build i version-cli 6/6 PASS, wersja 0.39.0.
+  Zapis przez zweryfikowany FD, ścisłe UTF-8/text i hex, operacje natychmiastowe poza Zastosuj/Cofnij; bez zapisu symlinków i remote.
+  Real remote KIO manual smoke: NOT TESTED, nieblokujące przy automatycznym pokryciu zero-write-calls.
+- Etap 4: numeryczne uprawnienia POSIX (`0755`), rwx z zachowaniem special bits — automated + FULL MANUAL PASS;
+  Etap 4 automated PASS: properties_posix_mode 163 assertions; focused 13 suites / 2828 checks; full 62 suites / 33510 checks / 0 failures / exit 0; build i version-cli 6/6 PASS, wersja 0.39.0. Odbiór manualny potwierdzony przez użytkownika.
+- Stage 5 — Hidden semantics: automated + FULL MANUAL PASS (potwierdzone przez użytkownika).
+  Latest Stage 5 UI-polish baseline: focused 15 suites / 3811 checks; full 63 suites / 34457 checks / 0 failures / exit 0; bez duplikatów suite; build, version-cli 6/6 i diff check PASS, wersja 0.39.0. Audyt: docs/PROPERTIES_HIDDEN_SEMANTICS.md.
+- Etap 6: końcowa integracja i regresja w panelu głównym, podzielonym i wynikach wyszukiwania — AUTOMATED PASS + FULL MANUAL PASS (wcześniejszy odbiór potwierdzony przez użytkownika 2026-10-08; audyt nie powtarzał testów manualnych). Historyczny focused: 19 suites / 4360 checks; full: 64 suites / 34666 checks / 0 failures / exit 0, bez duplikatów suite. Build, version-cli 6/6 i diff check PASS. Historyczna wersja audytu: 0.39.0. Przygotowanie wydania: 0.40.0; publikacja oczekuje weryfikacji GitHub. Bieżący audyt: docs/PROPERTIES_FINAL_AUDIT_040.md. Audyt: docs/PROPERTIES_STAGE6_INTEGRATION.md.
+
+Poza zakresem 0.40: edycja etykiet SELinux, `chattr`/immutable, Linux file capabilities, większy redesign ACL oraz ponawianie przez `admin://`.
+
+#### Oficjalny kontrakt 0.40 — Advanced Properties Follow-up
+
+Intencja wydania: Advanced Properties Follow-up bez rozszerzania projektu na administrację systemem.
+
+- **Stage 1 — Properties capability layer:** rozpoznawanie backendu/systemu plików; capability detection; jawna polityka symlinków; identity/revalidation przed zapisem. Ukończony: automated + FULL MANUAL PASS.
+- **Stage 2 — Extended Attributes viewer:** odczyt xattr; namespaces; tekst vs dane binarne; kopiowanie wartości; bez edycji. Ukończony: automated + FULL MANUAL PASS.
+- **Stage 3 — Safe xattr editing:** lokalne user.* add/edit/remove; sensowna obsługa błędów; bez niebezpiecznej edycji security.*, trusted.*, system.*. Ukończony: automated + FULL MANUAL PASS.
+- **Stage 4 — Numeric POSIX permissions:** pole oktalne; synchronizacja w obie strony z obecnym GUI; poprawna walidacja; edycja rwx z zachowaniem istniejących special bits. Ukończony: automated + FULL MANUAL PASS.
+- **Stage 5 — Hidden semantics:** audyt Unix/NTFS/innych backendów; prezentacja prawdziwego stanu hidden; zapis wyłącznie tam, gdzie semantyka jest jednoznaczna i bezpieczna. Zapis niewspierany lub niejednoznaczny pozostaje disabled/read-only; bez emulowania innych backendów. automated + FULL MANUAL PASS (potwierdzone przez użytkownika).
+- **Stage 6 — Final integration & regression:** Primary/Split/Search; znikające pliki; mount removal; ext4/Btrfs/NTFS; lifetime; pełna automatyczna i manualna akceptacja. AUTOMATED PASS + FULL MANUAL PASS (wcześniejszy odbiór potwierdzony przez użytkownika); audyt: docs/PROPERTIES_FINAL_AUDIT_040.md.
+
+Poza zakresem: SELinux labels; chattr/immutable; Linux file capabilities; większy redesign ACL; admin:// retry.
 
 ### 0.41.0 — Advanced Search
 - type/name/extension/date/size filters;
