@@ -328,7 +328,10 @@ This ordering prioritizes core file-manager correctness, safety, and maintainabi
 - Thorough automated regression suite and manual KDE/Plasma 6 acceptance testing.
 
 
-### 0.40.0 — Advanced Properties Follow-up
+### 0.40.0 — Advanced Properties Follow-up ✅ completed, released (v0.40.0)
+
+Release verified on GitHub on 2026-10-08: [v0.40.0](https://github.com/Llusty/kio-thispc/releases/tag/v0.40.0), commit `4c87d21651819e18b88c688404ef3625ab7f3352`. Final focused 15 suites / 4359 checks; full 64 unique suites / 35064 checks / 0 failures / exit 0; version-cli 6/6, source-package build and isolated staging install/uninstall PASS. Prior FULL MANUAL PASS was not rerun. See [release verification](docs/PROPERTIES_RELEASE_040.md).
+
 - Stage 1: Properties capability layer (backend/locality, explicit symlink policy, identity snapshot and revalidation) — automated + FULL MANUAL PASS;
   Real remote KIO manual smoke: NOT TESTED (no configured environment), non-blocking with automated zero-local-syscall coverage.
   Stage 1 automated baseline: 59 suites / 32873 checks / 0 failures; version-cli 6/6 PASS.
@@ -343,7 +346,7 @@ This ordering prioritizes core file-manager correctness, safety, and maintainabi
   Stage 4 automated PASS: properties_posix_mode 163 assertions; focused 13 suites / 2828 checks; full 62 suites / 33510 checks / 0 failures / exit 0; build and version-cli 6/6 PASS, version 0.39.0. Manual acceptance confirmed by the user.
 - Stage 5 — Hidden semantics: automated + FULL MANUAL PASS (confirmed by the user).
   Latest Stage 5 UI-polish baseline: focused 15 suites / 3811 checks; full 63 suites / 34457 checks / 0 failures / exit 0; no duplicate suites; build, version-cli 6/6 and diff check PASS, version 0.39.0. Audit: docs/PROPERTIES_HIDDEN_SEMANTICS.md.
-- Stage 6: final integration and regression across Primary, Split, and Search — AUTOMATED PASS + FULL MANUAL PASS (prior acceptance confirmed by the user on 2026-10-08; not rerun manually in this audit). Historical focused: 19 suites / 4360 checks; full: 64 suites / 34666 checks / 0 failures / exit 0, no duplicate suites. Build, version-cli 6/6 and diff check PASS. Historical audit runtime: 0.39.0. Release preparation: 0.40.0; publication pending GitHub verification. Current audit: docs/PROPERTIES_FINAL_AUDIT_040.md. Audit: docs/PROPERTIES_STAGE6_INTEGRATION.md.
+- Stage 6: final integration and regression across Primary, Split, and Search — AUTOMATED PASS + FULL MANUAL PASS (prior acceptance confirmed by the user on 2026-10-08; not rerun manually in this audit). Historical focused: 19 suites / 4360 checks; full: 64 suites / 34666 checks / 0 failures / exit 0, no duplicate suites. Build, version-cli 6/6 and diff check PASS. Historical audit runtime: 0.39.0. Release 0.40.0 is now verified on GitHub; this Stage 6 paragraph preserves the historical audit evidence. Current audit: docs/PROPERTIES_FINAL_AUDIT_040.md. Audit: docs/PROPERTIES_STAGE6_INTEGRATION.md.
 
 Out of scope for 0.40: SELinux label editing, `chattr`/immutable flags, Linux file capabilities, a larger ACL redesign, and `admin://` retry.
 

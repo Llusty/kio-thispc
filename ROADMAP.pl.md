@@ -506,7 +506,10 @@ zainstalowana i ręcznie potwierdzona przez użytkownika. Pełna regresja wydani
 - Kompletny zestaw testów automatycznych i manualna akceptacja w środowisku KDE Plasma 6.
 
 
-### 0.40.0 — Rozszerzone właściwości — dalszy rozwój (Advanced Properties Follow-up)
+### 0.40.0 — Rozszerzone właściwości — dalszy rozwój (Advanced Properties Follow-up) ✅ ukończone, wydane (v0.40.0)
+
+Publikacja potwierdzona na GitHub 2026-10-08: [v0.40.0](https://github.com/Llusty/kio-thispc/releases/tag/v0.40.0), commit `4c87d21651819e18b88c688404ef3625ab7f3352`. Końcowy focused 15 suites / 4359 checks; full 64 unique suites / 35064 checks / 0 failures / exit 0; version-cli 6/6, build paczki i izolowany staging install/uninstall PASS. Wcześniejszego FULL MANUAL PASS nie powtarzano. Zobacz [raport wydania](docs/PROPERTIES_RELEASE_040.md).
+
 - Etap 1: warstwa capabilities Właściwości (backend/lokalność, jawna polityka symlinków, snapshot tożsamości i revalidation) — automated + FULL MANUAL PASS;
   Rzeczywisty remote KIO manual smoke: NOT TESTED (brak środowiska), nieblokujące przy automatycznym pokryciu zero-local-syscall.
   Baseline automatyczny Etapu 1: 59 suites / 32873 checks / 0 failures; version-cli 6/6 PASS.
@@ -521,7 +524,7 @@ zainstalowana i ręcznie potwierdzona przez użytkownika. Pełna regresja wydani
   Etap 4 automated PASS: properties_posix_mode 163 assertions; focused 13 suites / 2828 checks; full 62 suites / 33510 checks / 0 failures / exit 0; build i version-cli 6/6 PASS, wersja 0.39.0. Odbiór manualny potwierdzony przez użytkownika.
 - Stage 5 — Hidden semantics: automated + FULL MANUAL PASS (potwierdzone przez użytkownika).
   Latest Stage 5 UI-polish baseline: focused 15 suites / 3811 checks; full 63 suites / 34457 checks / 0 failures / exit 0; bez duplikatów suite; build, version-cli 6/6 i diff check PASS, wersja 0.39.0. Audyt: docs/PROPERTIES_HIDDEN_SEMANTICS.md.
-- Etap 6: końcowa integracja i regresja w panelu głównym, podzielonym i wynikach wyszukiwania — AUTOMATED PASS + FULL MANUAL PASS (wcześniejszy odbiór potwierdzony przez użytkownika 2026-10-08; audyt nie powtarzał testów manualnych). Historyczny focused: 19 suites / 4360 checks; full: 64 suites / 34666 checks / 0 failures / exit 0, bez duplikatów suite. Build, version-cli 6/6 i diff check PASS. Historyczna wersja audytu: 0.39.0. Przygotowanie wydania: 0.40.0; publikacja oczekuje weryfikacji GitHub. Bieżący audyt: docs/PROPERTIES_FINAL_AUDIT_040.md. Audyt: docs/PROPERTIES_STAGE6_INTEGRATION.md.
+- Etap 6: końcowa integracja i regresja w panelu głównym, podzielonym i wynikach wyszukiwania — AUTOMATED PASS + FULL MANUAL PASS (wcześniejszy odbiór potwierdzony przez użytkownika 2026-10-08; audyt nie powtarzał testów manualnych). Historyczny focused: 19 suites / 4360 checks; full: 64 suites / 34666 checks / 0 failures / exit 0, bez duplikatów suite. Build, version-cli 6/6 i diff check PASS. Historyczna wersja audytu: 0.39.0. Publikacja 0.40.0 jest już potwierdzona na GitHub; ten akapit Stage 6 zachowuje historyczne dowody audytu. Bieżący audyt: docs/PROPERTIES_FINAL_AUDIT_040.md. Audyt: docs/PROPERTIES_STAGE6_INTEGRATION.md.
 
 Poza zakresem 0.40: edycja etykiet SELinux, `chattr`/immutable, Linux file capabilities, większy redesign ACL oraz ponawianie przez `admin://`.
 
