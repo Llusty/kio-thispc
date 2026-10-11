@@ -2,6 +2,17 @@
 
 # Changelog
 
+## 0.40.1 — Multi-Selection Properties & Bulk Permissions
+
+- Added Multi-Selection Properties dialog for multiple selected files and directories across Primary View, Split View, and Search (`Alt+Enter` / context menu).
+- Aggregate General tab computes total file, folder, and symbolic link counts, cumulative logical size, and filesystem disk allocation (`st_blocks`) with hardlink deduplication.
+- Asynchronous, non-blocking background scanner with progressive counters, in-flight cancellation, and scan limit guards.
+- Bulk POSIX Permissions tab allows selective modification of 9 individual rwx bits across all directly selected entries without recursion.
+- Preserves untouched rwx bits and special bits (`setuid`, `setgid`, `sticky`). Group permission changes properly reflect kernel ACL mask adjustments.
+- Safety-first policy: direct regular files and directories only; mixed selections containing symbolic links (live or broken), remote KIO URLs, or unsupported filesystems are strictly read-only.
+- Inode and mount validation using `O_PATH | O_NOFOLLOW` descriptor pinning, detecting file disappearance, replacement, move, or mount loss before and after mutation.
+- Explicit confirmation dialog defaulting to "No"; modeless dialog lifecycle with cooperative worker cancellation.
+
 ## 0.40.0 — Advanced Properties Follow-up
 
 - Properties now detects backend capabilities and retains a no-follow identity snapshot, rejecting writes after an item disappears, moves, is replaced, or loses its mount.

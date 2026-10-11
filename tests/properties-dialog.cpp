@@ -110,6 +110,9 @@ int main(int argc, char **argv)
         verify(metadata && metadata->provider()->data().state == MetadataState::Idle
                && metadata->provider()->startCount() == 0,
                "opening Properties does not start metadata extraction");
+        verify(dialog->findChild<QLabel*>("propertiesHeaderName")
+            && dialog->findChild<QLabel*>("propertiesHeaderIcon"), "single uses shared shell header");
+        verify(dialog->minimumSize() == QSize(480, 460), "single retains minimum geometry");
         exercise(dialog);
         if (guard) dialog->close();
         QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);

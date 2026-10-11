@@ -32,7 +32,7 @@ ActionAvailability ActionStateController::compute(const ActionStateInput &input)
         && input.selection.size() >= 2
         && input.isDirectory;
     // Opening an inspector is read-only; Apply retains its own recovery fence.
-    state.propertiesEnabled = singleSelection && input.selection.first().isValid()
+    state.propertiesEnabled = hasSelection && input.selection.first().isValid()
         && !input.selection.first().isEmpty();
     state.trashEnabled = input.recoverySafe && allLocal;
     state.emptyTrashVisible = input.isTrashRoot;

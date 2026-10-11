@@ -14,6 +14,7 @@
 #include "batchrenamerecovery.h"
 #include "browsercommon.h"
 #include "propertiesdata.h"
+#include "propertiesshell.h"
 #include "soliddevicemonitor.h"
 #include <QFileSystemWatcher>
 #include <QTimer>
@@ -62,28 +63,6 @@
 #ifndef Q_OS_WIN
 #include <unistd.h>
 #endif
-
-class WrappingValueLabel : public QLabel
-{
-public:
-    explicit WrappingValueLabel(const QString &text = QString(), QWidget *parent = nullptr)
-        : QLabel(text.isEmpty() ? QStringLiteral("—") : text, parent)
-    {
-        setWordWrap(true);
-        setTextInteractionFlags(Qt::TextSelectableByMouse);
-        setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    }
-
-    QSize minimumSizeHint() const override
-    {
-        return QSize(40, fontMetrics().height());
-    }
-
-    void setValue(const QString &text)
-    {
-        setText(text.isEmpty() ? QStringLiteral("—") : text);
-    }
-};
 
 // Modeless Properties window. While an Apply is running (synchronous KIO
 // jobs spin a nested event loop) close requests are deferred so the dialog is
@@ -271,34 +250,13 @@ public:
         const bool readOnlyFileSystem =
             filesystemIsReadOnly(url);
 
-        auto *outer = new QVBoxLayout(dialog);
-
-        auto *header = new QHBoxLayout;
-        auto *iconLabel = new QLabel(dialog);
-        QIcon icon = themedIcon(
-            fileItem.iconName().isEmpty()
-                ? (isDir
-                    ? QStringLiteral("folder")
-                    : QStringLiteral("text-x-generic"))
-                : fileItem.iconName());
-        iconLabel->setPixmap(icon.pixmap(64, 64));
-        iconLabel->setFixedSize(72, 72);
-        iconLabel->setAlignment(Qt::AlignCenter);
-
-        auto *headerName = new QLabel(name, dialog);
-        QFont headerFont = headerName->font();
-        headerFont.setPointSize(
-            headerFont.pointSize() + 3);
-        headerFont.setBold(true);
-        headerName->setFont(headerFont);
-        headerName->setWordWrap(true);
-
-        header->addWidget(iconLabel);
-        header->addWidget(headerName, 1);
-        outer->addLayout(header);
-
-        auto *tabs = new QTabWidget(dialog);
-        outer->addWidget(tabs, 1);
+        QIcon icon = themedIcon(fileItem.iconName().isEmpty()
+            ? (isDir ? QStringLiteral("folder") : QStringLiteral("text-x-generic"))
+            : fileItem.iconName());
+        PropertiesShell shell(dialog, name, icon);
+        auto *outer = shell.outer;
+        auto *headerName = shell.headerName;
+        auto *tabs = shell.tabs;
 
         auto makeValueLabel =
             [dialog](const QString &value = QString()) {
@@ -308,10 +266,7 @@ public:
         // --------------------------------------------------------------
         // General (Presentation Layer fed by PropertiesDataProvider)
         // --------------------------------------------------------------
-        auto *generalScroll = new QScrollArea(tabs);
-        generalScroll->setFrameShape(QFrame::NoFrame);
-        generalScroll->setWidgetResizable(true);
-        generalScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        auto *generalScroll = PropertiesShell::scrollArea(tabs);
         auto *general = new QWidget(generalScroll);
         generalScroll->setWidget(general);
         // A vertical layout allocates the Hidden widget's full height-for-width.

@@ -71,9 +71,17 @@ int main(int argc, char **argv)
 
         QDir(tempDir.path()).mkdir(QStringLiteral("subfolder"));
 
-        if (QFile::exists(QStringLiteral("/home/sebastianh/Pobrane/Testy/preview-039/video/sample.mp4"))) {
-            QFile::copy(QStringLiteral("/home/sebastianh/Pobrane/Testy/preview-039/video/sample.mp4"), localVidMp4.toLocalFile());
-        }
+        // Own the disposable video fixture; old manual fixtures may have been cleaned.
+        QProcess video;
+        video.start(QStringLiteral("ffmpeg"), {QStringLiteral("-v"), QStringLiteral("error"),
+            QStringLiteral("-y"), QStringLiteral("-f"), QStringLiteral("lavfi"),
+            QStringLiteral("-i"), QStringLiteral("testsrc=size=160x120:rate=10"),
+            QStringLiteral("-t"), QStringLiteral("2"), QStringLiteral("-pix_fmt"),
+            QStringLiteral("yuv420p"), QStringLiteral("-c:v"), QStringLiteral("mpeg4"),
+            QStringLiteral("-threads"), QStringLiteral("1"), localVidMp4.toLocalFile()});
+        verify(video.waitForFinished(15000) && video.exitStatus() == QProcess::NormalExit
+                   && video.exitCode() == 0 && QFileInfo(localVidMp4.toLocalFile()).size() > 0,
+               "independent disposable MP4 fixture generated");
     }
 
     // 1-5. MIME type eligibility tests

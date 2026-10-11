@@ -1,0 +1,30 @@
+# Multi-selection Properties — Stage 2 (unreleased, version remains 0.40.0)
+
+Stage 1 General/scanner remains separate. Stage 2 adds the Permissions tab to the same modeless shell. Single Properties and ActionStateController/routing have no Stage 2 implementation changes. Existing aggregate routing covers Primary, Split and Search, Alt+Enter and the Properties action.
+
+## Architecture
+
+- `aggregatepermissionsmodel.h`: per-selected-entry snapshot, mount/parent identity, filesystem policy, current set/unset/mixed state; explicit `changeMask` and `valueMask` limited to 0777. Merge: `(current & 07777 & ~changeMask) | (valueMask & changeMask)`.
+- `aggregatepermissionswriter.h`: worker-safe, bounded sequential descriptor writes, cancellation, deduplication of selected aliases by device/inode, per-item result and verification. No traversal.
+- `aggregatepermissionswidget.h`: grid analogous to single POSIX permissions; current labels separate from neutral/Set/Clear selectors; explicit confirmation defaults No; async Apply, read-back, reset to neutral, per-item breakdown.
+- `aggregatepropertiesdialog.h`: integrates tab/buttons and existing scan/change monitor. Scan or scan Cancel blocks editing. OK with pending edit uses the same confirmation; only complete verified success closes. Cancel before Apply discards pending edits. Close/Cancel during a confirmed batch prevents further writes as soon as the worker observes cancellation; already completed writes are not rolled back. QObject-owned watchers and independent cancellation tokens protect modeless destruction, including confirmation lifetime.
+
+## Conservative supported policy
+
+Only directly selected local regular files/directories, owned by the current effective user, on a ready writable btrfs/ext2/ext3/ext4/xfs/tmpfs mount are supported. No elevation and no KIO mutation fallback. Unsupported/unknown filesystem types (including NTFS/FUSE, FAT, NFS and overlay), symlinks including broken links, remote KIO/admin/virtual URLs, nonempty file:// host URLs and omitted selections make the entire selection read-only. Remote permission capture never translates the URL into local syscalls. All/none capability policy prevents silently editing the supported subset of a mixed backend selection. After capability acceptance, runtime failures can still produce partial success.
+
+Linux O_PATH | O_NOFOLLOW pins the entry. Before every chmod: compare no-follow lstat/fstat device, inode, type/mode and ctime with opening snapshot; check parent device/inode and canonical location; check statx mount ID and exact /proc/self/mountinfo record, and fstatvfs read-only state. Immediately before mutation, repeat no-follow path/ctime and mount checks plus cancellation. Use fchmodat2(fd, empty path, requested mode, AT_EMPTY_PATH), with no pathname chmod fallback. Unsupported kernel/syscall fails safely. Read back the descriptor mode (all 07777), path identity and mount record. Replacement/disappearance/move/mount change blocks the item, and read-back failure after an actual write is explicitly reported as a write with failed verification. Selected hardlink aliases are applied once and later aliases are identity checked.
+
+## Semantics and remaining limits
+
+Unselected rwx and special bits 07000 are passed through from the revalidated current mode. The kernel may clear setgid according to its ownership/capability rules; read-back detects any requested-mode mismatch and reports failure, without pretending the write did not occur. This is chmod, not an ACL editor: named access entries and default ACLs are not explicitly rewritten. POSIX chmod changes owner/other access entries and group class (the access ACL mask when extended ACL exists); named effective permissions can therefore change. This effect is shown before confirmation and tested with native ACLs.
+
+No recursive option exists. Execute on directories means traverse. Overlapping selected directory/child roots are both edited once because both are explicitly selected, while unselected descendants remain untouched. No rename, xattr, ACL editor, hidden edit, chown, release, install or Stage 3.
+
+The batch is sequential, not atomic; no rollback guarantee. A race after the last validation can still rename/move the pinned inode, alter permissions/ACL concurrently, unmount its filesystem, or replace the path before verification. Descriptor mutation avoids chmod being redirected to a replacement/symlink target, but cannot lock the pathname or mount namespace against external actors. Post-write verification can report a failure after a real mutation. This does not erase the known 0.40 single KIO pathname TOCTOU limit: that backend is unchanged and has no new atomicity guarantee. Cancellation is cooperative; a syscall already entered can finish. Ambiguous state requires reopening Properties; failed batches do not silently adopt replacements for subsequent Apply.
+
+## Validation and manual handoff
+
+`aggregate-permissions.cpp` covers all 4096 modes × 9 bits × set/clear (73728 independent merge assertions), real selective writes, special bits, extended/default ACLs, direct directories/overlap/no recursion, links/broken links/substitution, duplicate/hardlink selections, remote/mixed/readonly policy, inode/ctime/parent/mount mismatch, vanished/moved/replaced items, injected EROFS and partial failures/cancel, GUI scan guards/mixed-neutral states/confirmation/Apply/second Apply/OK/Cancel/modeless lifetime. Real mounts were never unmounted or remounted for tests: mount loss/replacement/read-only rejection uses captured-state tampering and injected writer failure, not risky external media operations. Existing aggregate, single, routing, lifecycle and full pane suites run separately.
+
+Raw logs, exact totals, protected checksums, repository state and manual baseline are in the calling project's `stage2-evidence`; final report `STAGE2_FINAL_REPORT.md`. Manual 01 is PENDING with two disposable files in `~/Pobrane/Testy/thispc-0401-stage2-01-rwx`. See `STAGE2_MANUAL_01.md`. Cleanup follows user acceptance; Stage 3 is stopped.

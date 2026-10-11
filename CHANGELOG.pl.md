@@ -2,6 +2,17 @@
 
 # Changelog
 
+## 0.40.1 — Właściwości wielu elementów i zbiorcze uprawnienia
+
+- Dodano okno zbiorczych Właściwości dla wielu zaznaczonych plików i folderów w panelu głównym, Split View oraz wynikach wyszukiwania (`Alt+Enter` / menu podręczne).
+- Zakładka Ogólne sumuje liczbę plików, folderów, dowiązań symbolicznych, łączny rozmiar logiczny oraz alokację na dysku (`st_blocks`) z deduplikacją hardlinków.
+- Asynchroniczny skaner działający w tle z progresywnym licznikiem, możliwością anulowania i ochroną przed przekroczeniem limitu skanowania.
+- Zakładka Uprawnienia POSIX pozwala na selektywną zmianę 9 pojedynczych bitów rwx dla bezpośrednio zaznaczonych elementów bez rekurencji.
+- Zachowywanie nieedytowanych bitów rwx oraz bitów specjalnych (`setuid`, `setgid`, `sticky`). Zmiana uprawnień grupy prawidłowo odzwierciedla maskę ACL kernela.
+- Polityka bezpieczeństwa: tylko bezpośrednie pliki zwykłe i foldery; mieszane zaznaczenia zawierające symlinki (aktywne i zerwane), zdalne URL KIO lub nieobsługiwane systemy plików są w całości tylko do odczytu.
+- Weryfikacja tożsamości pliku i montowania przy użyciu deskryptorów `O_PATH | O_NOFOLLOW`, wykrywanie zniknięcia, podmiany, przeniesienia lub utraty montowania przed i po operacji.
+- Jawne okno dialogowe potwierdzenia z domyślnym wyborem „Nie”; niemodalny cykl życia okna z kooperacyjnym anulowaniem zadań roboczych.
+
 ## 0.40.0 — Advanced Properties Follow-up
 
 - Właściwości rozpoznają capabilities backendu i zachowują tożsamość elementu bez podążania za symlinkiem. Zniknięcie, przeniesienie, podmiana lub utrata mountu blokują zapis ze starego dialogu.

@@ -1,5 +1,25 @@
 [English](UPDATE.md) | [Polski](UPDATE.pl.md)
 
+# Update to 0.40.1
+
+```bash
+cd ~/Pobrane
+tar -xzf kio-thispc-0.40.1.tar.gz
+cd kio-thispc-0.40.1
+chmod +x install.sh
+./install.sh
+```
+
+- Multi-Selection Properties dialog for multiple selected files and directories across Primary View, Split View, and Search (`Alt+Enter` / context menu).
+- Aggregate General tab computes total file, folder, and symbolic link counts, cumulative logical size, and filesystem disk allocation (`st_blocks`) with hardlink deduplication.
+- Asynchronous background scanner with progressive updates and cancellation.
+- Bulk POSIX Permissions tab for selective modification of individual rwx bits across selected entries without recursion, preserving special bits (`setuid`, `setgid`, `sticky`).
+- Strict capability policy: direct regular files and directories only; mixed selections containing symbolic links or unsupported filesystems remain strictly read-only.
+- Verified descriptor mutations via `O_PATH | O_NOFOLLOW` with identity, parent, and mount consistency checks.
+- Explicit confirmation dialog defaulting to "No".
+
+---
+
 # Update to 0.40.0
 
 ```bash

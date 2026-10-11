@@ -33,7 +33,7 @@ group.add_argument('--transfer-plan', action='store_true', help='run native dire
 group.add_argument('--local-move', action='store_true', help='run safe native move and history tests')
 group.add_argument('--all', action='store_true', help='run every regression suite')
 group.add_argument('--suites', nargs='+', choices=[
-    'panes', 'tabs', 'properties', 'search', 'actions', 'action_state', 'operations',
+    'aggregate_permissions', 'aggregate_properties', 'panes', 'tabs', 'properties', 'search', 'actions', 'action_state', 'operations',
     'local_transfer', 'transfer_plan', 'local_move', 'local_tree', 'tree_history',
     'sidebar_dnd', 'sidebar_layout', 'split_layout', 'templates', 'trash', 'archive', 'archive_jobs', 'archive_menu', 'archive_creation', 'preview', 'quick_look', 'batch_rename', 'view_settings', 'listing_core', 'drive_home', 'solid_monitor', 'device_mount', 'device_removal', 'split_compare', 'selection_menu', 'location_presentation', 'navigation_history', 'keyboard_navigation', 'remote_url', 'saved_remote', 'recent_reconnect', 'session_history', 'properties_integration', 'properties_hidden', 'properties_posix_mode', 'properties_xattr_edit', 'properties_xattrs', 'properties_capabilities', 'properties_data', 'drive_properties', 'acl', 'acl_editor', 'checksums', 'metadata', 'properties_lifecycle', 'storage_scan', 'storage_analysis', 'hash_utilities', 'duplicate_finder', 'duplicate_actions', 'storage_treemap', 'launch_url_resolver', 'preview_controller', 'image_video_previews', 'executable_previews', 'folder_previews', 'preview_settings'],
     help='build once and run only the selected regression suites')
@@ -189,6 +189,8 @@ with tempfile.TemporaryDirectory(prefix='thispc-pane-tests-', delete=not options
     suites['checksums'] = 'checksum-job.cpp'
     suites['metadata'] = 'metadata-provider.cpp'
     suites['properties_lifecycle'] = 'properties-lifecycle.cpp'
+    suites['aggregate_properties'] = 'aggregate-properties.cpp'
+    suites['aggregate_permissions'] = 'aggregate-permissions.cpp'
     suites['storage_scan'] = 'storage-scan.cpp'
     suites['storage_analysis'] = 'storage-analysis.cpp'
     suites['hash_utilities'] = 'hash-utilities.cpp'

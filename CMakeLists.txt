@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(kio-thispc VERSION 0.40.0 LANGUAGES CXX)
+project(kio-thispc VERSION 0.40.1 LANGUAGES CXX)
 
 set(QT_MIN_VERSION "6.5.0")
 set(KF_MIN_VERSION "6.17.0")
@@ -137,6 +137,14 @@ add_executable(thispc-view
     src/propertiesdataprovider.h
     src/drivepropertiesdata.h
     src/drivepropertiesprovider.h
+    src/aggregatepropertiesformat.h
+    src/aggregatepropertiesmodel.h
+    src/aggregatepropertiesscan.h
+    src/aggregatepropertiesdialog.h
+    src/aggregatepermissionsmodel.h
+    src/aggregatepermissionswriter.h
+    src/aggregatepermissionswidget.h
+    src/propertiesshell.h
     src/propertiesdialog.h
     src/acldata.h
     src/aclprovider.h
@@ -264,6 +272,14 @@ add_executable(thispc-view-stage3c1-test EXCLUDE_FROM_ALL
     src/propertiesdataprovider.h
     src/drivepropertiesdata.h
     src/drivepropertiesprovider.h
+    src/aggregatepropertiesformat.h
+    src/aggregatepropertiesmodel.h
+    src/aggregatepropertiesscan.h
+    src/aggregatepropertiesdialog.h
+    src/aggregatepermissionsmodel.h
+    src/aggregatepermissionswriter.h
+    src/aggregatepermissionswidget.h
+    src/propertiesshell.h
     src/propertiesdialog.h
     src/acldata.h
     src/aclprovider.h

@@ -60,8 +60,8 @@ int main(int argc, char **argv)
     state = ActionStateController::compute(input);
     verify(state.copyEnabled && state.cutEnabled && state.batchRenameEnabled
                && state.trashEnabled && !state.renameEnabled
-               && !state.propertiesEnabled,
-           "multiple local selection enables batch actions only");
+               && state.propertiesEnabled,
+           "multiple local selection enables read-only Properties");
 
     auto remote = directoryInput(QUrl(QStringLiteral("sftp://host/path")));
     remote.selection = {QUrl(QStringLiteral("sftp://host/path/file"))};

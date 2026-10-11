@@ -1,8 +1,9 @@
+#include "aggregatepropertiesdialog.h"
 /*
  * thispc-view - a lightweight KDE/Qt file browser with a Windows-like
  * "This PC" home page, backed by KIO.
  *
- * Version 0.40.0
+ * Version 0.40.1
  * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
@@ -455,7 +456,12 @@ private:
             showCurrentDirectoryProperties();
             return;
         }
-        if (context.items.size() != 1) return;
+        if (context.items.size() > 1) {
+            QList<QUrl> urls;
+            for (const auto &item : context.items) urls.append(item.url);
+            (new AggregatePropertiesDialog(urls, this))->show();
+            return;
+        }
         const auto item = context.items.first();
         showPropertiesDialog(item.name, item.url, item.isDir,
                              item.type, item.size, item.modified);
@@ -2198,14 +2204,14 @@ private:
         statusBar()->setSizeGripEnabled(true);
 
         m_versionLabel = new QLabel(
-            QStringLiteral("v0.40.0"),
+            QStringLiteral("v0.40.1"),
             this);
         m_versionLabel->setObjectName(
             QStringLiteral("versionLabel"));
         m_versionLabel->setToolTip(
             trLocal(
-                "Wersja thispc-view 0.40.0",
-                "thispc-view version 0.40.0"));
+                "Wersja thispc-view 0.40.1",
+                "thispc-view version 0.40.1"));
         statusBar()->addPermanentWidget(m_versionLabel);
     }
 
@@ -4596,7 +4602,11 @@ public:
              [this, clicked] {
                  showHashUtilitiesDialog(clicked.url);
              },
-             [this, clicked] {
+             [this, clicked, selected] {
+                 if (selected.size() > 1) {
+                     (new AggregatePropertiesDialog(selected, this))->show();
+                     return;
+                 }
                  showPropertiesDialog(clicked.name, clicked.url, clicked.isDir,
                                       clicked.type, clicked.size, clicked.modified);
              },

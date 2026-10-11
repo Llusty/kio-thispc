@@ -1,6 +1,18 @@
 [English](README.md) | [Polski](README.pl.md)
 
-# kio-thispc 0.40.0
+# kio-thispc 0.40.1
+
+## 0.40.1 — Właściwości wielu elementów i zbiorcze uprawnienia
+
+- Okno zbiorczych Właściwości dla wielu zaznaczonych plików i folderów w panelu głównym, Split View oraz wynikach wyszukiwania (`Alt+Enter` / menu podręczne).
+- Zakładka Ogólne sumuje liczbę plików, folderów, symlinków, łączny rozmiar logiczny oraz alokację na dysku (`st_blocks`) z deduplikacją hardlinków.
+- Asynchroniczny skaner w tle z progresywnym licznikiem i bezpiecznym anulowaniem.
+- Zakładka Uprawnienia POSIX pozwala na selektywną zmianę pojedynczych bitów rwx dla bezpośrednio zaznaczonych pozycji bez rekurencji, z zachowaniem bitów specjalnych (`setuid`, `setgid`, `sticky`).
+- Restrykcyjna polityka: bezpośrednie pliki zwykłe i foldery; zaznaczenia z symlinkami lub nieobsługiwanymi systemami plików pozostają ściśle tylko do odczytu.
+- Zweryfikowane deskryptorowe mutacje przez `O_PATH | O_NOFOLLOW` ze sprawdzaniem tożsamości, rodzica i montowania.
+- Jawne potwierdzenie z domyślnym wyborem „Nie”.
+
+---
 
 ## 0.40.0 — Advanced Properties Follow-up
 
