@@ -24,6 +24,8 @@ static void verify(bool value, const char *description)
     ++checks;
 }
 
+#include "mtp-contract-spec.h"
+
 // Helper: make a DriveInfo for tests
 static DriveInfo makeRemovableDrive(
     const QString &id,
@@ -1328,8 +1330,314 @@ int main(int argc, char **argv)
         verify(tracker.solidTeardownCount == 0, "case 12: GUI 'Bezpiecznie usuń' did NOT trigger Solid teardown");
     }
 
-    qInfo("PASS: %d DeviceRemovalController assertions; unmount/eject/safely-remove, "
-          "multi-partition, exactly-once, capabilities, pane routing, Stage 2 regression",
-          checks);
+    // =========================================================================
+    // SECTION 41: Stage 1.2 — MTP Capabilities, Context Menu & Hotplug Disconnect (Section 4 & 6)
+    // =========================================================================
+    {
+        const QString mtpUdiA = QStringLiteral("/org/kde/solid/udev/sys/devices/pci0000:00/0000:00:14.0/usb1/1-2");
+        const QString mtpUdiB = QStringLiteral("/org/kde/solid/udev/sys/devices/pci0000:00/0000:00:14.0/usb1/1-5");
+
+        const DriveInfo phoneA = MtpUdsContract::makeMtpDriveInfo(
+            QStringLiteral("mtp-pixel8"), QStringLiteral("Google Pixel 8"), mtpUdiA);
+        const DriveInfo phoneB = MtpUdsContract::makeMtpDriveInfo(
+            QStringLiteral("mtp-pixel8pro"), QStringLiteral("Google Pixel 8 Pro"), mtpUdiB);
+
+        // 1. Live DeviceRemovalController rejects MTP UDev UDI for Eject / Safely Remove / Unmount
+        {
+            DeviceRemovalController liveCtrl;
+            verify(!liveCtrl.canEject(mtpUdiA), "MTP UDev UDI: canEject returns false");
+            verify(!liveCtrl.canSafelyRemove(mtpUdiA), "MTP UDev UDI: canSafelyRemove returns false");
+
+            int unmountFired = 0;
+            bool unmountOk = true;
+            liveCtrl.unmountDevice(mtpUdiA, [&](bool s, const QString &) {
+                ++unmountFired;
+                unmountOk = s;
+            });
+            verify(unmountFired == 1 && !unmountOk,
+                   "MTP UDev UDI: live unmountDevice rejects non-StorageAccess device");
+        }
+
+        // 2. Context menu for MTP card:
+        //    - Open in Dolphin and Properties are present
+        //    - Safely Remove and Eject are absent
+        //    - PENDING_MTP_SPEC [Stage 1.3]: Unmount ("Odmontuj") and Copy mount point ("Kopiuj punkt montowania")
+        //      must ALSO be absent for MTP devices!
+        {
+            QMenu mtpMenu;
+            QAction *unmountAct = nullptr;
+            QAction *safelyRemoveAct = nullptr;
+            QAction *ejectAct = nullptr;
+            QAction *openAct = nullptr;
+            QAction *copyAct = nullptr;
+            QAction *propAct = nullptr;
+
+            populateDriveContextMenu(mtpMenu, phoneA,
+                                     /*canSafelyRemove=*/false,
+                                     /*canEject=*/false,
+                                     &unmountAct, &safelyRemoveAct, &ejectAct,
+                                     &openAct, &copyAct, &propAct);
+
+            verify(safelyRemoveAct == nullptr, "MTP context menu: 'Bezpiecznie usuń' is absent");
+            verify(ejectAct == nullptr, "MTP context menu: 'Wysuń' is absent");
+            verify(openAct != nullptr, "MTP context menu: 'Otwórz w aplikacji Dolphin' is present");
+            verify(propAct != nullptr, "MTP context menu: 'Właściwości' is present");
+            verify(unmountAct == nullptr,
+                   "populateDriveContextMenu hides 'Odmontuj' (Unmount) for MTP devices");
+            verify(copyAct == nullptr,
+                   "populateDriveContextMenu hides 'Kopiuj punkt montowania' when mountPoint is empty / MTP");
+
+            // Even if Solid reports canSafelyRemove=true or canEject=true, MTP hides them
+            QMenu mtpMenu2;
+            QAction *ua2 = nullptr, *sra2 = nullptr, *ea2 = nullptr;
+            populateDriveContextMenu(mtpMenu2, phoneA,
+                                     /*canSafelyRemove=*/true,
+                                     /*canEject=*/true,
+                                     &ua2, &sra2, &ea2);
+            verify(ua2 == nullptr && sra2 == nullptr && ea2 == nullptr,
+                   "populateDriveContextMenu hides all UDisks2 removal actions for MTP even if flags are true");
+        }
+
+        // 3. Hotplug physical disconnect while browsing MTP in Primary or Split, and 2 phones simultaneously
+        {
+            ThisPcWindow windowMtp;
+            windowMtp.resize(1000, 700);
+            windowMtp.show();
+            windowMtp.setSplitViewEnabled(true);
+            QApplication::processEvents();
+
+            QTemporaryDir localDir;
+            const QUrl localUrl = QUrl::fromLocalFile(localDir.path());
+
+            int mtpRemovalHookCalls = 0;
+            DeviceRemovalController::Hooks mtpHooks;
+            mtpHooks.requestUnmount = [&](const QString &) { ++mtpRemovalHookCalls; return true; };
+            mtpHooks.requestSafelyRemove = [&](const QString &) { ++mtpRemovalHookCalls; return true; };
+            mtpHooks.requestEject = [&](const QString &) { ++mtpRemovalHookCalls; return true; };
+            windowMtp.removalControllerForTesting().setHooksForTesting(mtpHooks);
+
+            windowMtp.m_driveHomeCoordinator.setSnapshotForTesting({phoneA, phoneB});
+            QApplication::processEvents();
+
+            const auto primaryCards = windowMtp.m_homePage->findChildren<DriveFrame *>();
+            const auto splitCards = windowMtp.m_splitHomePage->findChildren<DriveFrame *>();
+            const auto sidebarDriveBtns = windowMtp.m_sidebar->findChildren<SidebarDriveButton *>();
+            verify(primaryCards.size() == 2 && splitCards.size() == 2,
+                   "Primary and Split home grids both render DriveFrame cards for 2 MTP phones");
+            verify(sidebarDriveBtns.size() == 2,
+                   "SidebarPanel renders SidebarDriveButton entries for both MTP phones");
+
+            windowMtp.handleDeviceUnmount(PaneId::Primary, phoneA);
+            windowMtp.handleDeviceSafelyRemove(PaneId::Primary, phoneA);
+            windowMtp.handleDeviceEject(PaneId::Primary, phoneA);
+            verify(mtpRemovalHookCalls == 0,
+                   "ThisPcWindow handleDeviceUnmount/SafelyRemove/Eject are strict no-ops for MTP devices");
+
+            // Primary is browsing inside Phone A; Split is browsing inside Phone B
+            const QUrl phoneADcim(QStringLiteral("mtp:/Google Pixel 8/Internal shared storage/DCIM"));
+            const QUrl phoneBDcim(QStringLiteral("mtp:/Google Pixel 8 Pro/Internal shared storage/DCIM"));
+            windowMtp.m_primaryPane->setCurrentUrl(phoneADcim);
+            windowMtp.m_navigation.navigate(phoneADcim);
+            windowMtp.m_splitPane->setCurrentUrl(phoneBDcim, false);
+
+            // Simulate Phone A physical disconnect (snapshot updates to only Phone B)
+            windowMtp.m_driveHomeCoordinator.setSnapshotForTesting({phoneB});
+            windowMtp.handlePostRemovalNavigation(phoneA.mountPoint);
+            QApplication::processEvents();
+
+            // Phone B in Split must NEVER be redirected when Phone A is disconnected!
+            verify(windowMtp.m_splitPane->currentUrl() == phoneBDcim,
+                   "unplugging Phone A does NOT redirect Split pane browsing Phone B");
+
+            verify(
+                windowMtp.m_primaryPane->currentUrl() == phoneADcim
+                    && windowMtp.m_navigation.currentUrl() == phoneADcim,
+                "unplugging Phone A keeps Primary pane on its MTP URL without redirecting to thispc:/");
+            verify(windowMtp.m_navigation.history().contains(phoneADcim),
+                   "unplugging Phone A preserves Primary navigation history and breadcrumbs");
+            verify(windowMtp.m_primaryPane->files().isEmpty()
+                       && windowMtp.m_directoryList->count() == 0,
+                   "unplugging Phone A clears stale file listings from Primary pane");
+            verify(windowMtp.m_primaryReconnect->isVisible()
+                       && windowMtp.m_primaryReconnect->targetUrl() == phoneADcim,
+                   "unplugging Phone A displays reconnect bar for Primary pane MTP location");
+
+            // Now test Split browsing Phone B while Primary is on localUrl, then Phone B is unplugged
+            windowMtp.m_primaryPane->setCurrentUrl(localUrl);
+            windowMtp.m_navigation.navigate(localUrl);
+            windowMtp.m_driveHomeCoordinator.setSnapshotForTesting({});
+            windowMtp.handlePostRemovalNavigation(phoneB.mountPoint);
+            QApplication::processEvents();
+
+            verify(windowMtp.m_primaryPane->currentUrl() == localUrl,
+                   "unplugging Phone B leaves Primary pane at local directory untouched");
+            verify(
+                windowMtp.m_splitPane->currentUrl() == phoneBDcim,
+                "unplugging Phone B keeps Split pane on its MTP URL without redirecting to thispc:/");
+            verify(windowMtp.m_splitPane->files().isEmpty(),
+                   "unplugging Phone B clears stale file listings from Split pane");
+            verify(windowMtp.m_splitPane->m_reconnect->isVisible()
+                       && windowMtp.m_splitPane->m_reconnect->targetUrl() == phoneBDcim,
+                   "unplugging Phone B displays reconnect bar for Split pane MTP location");
+
+            // Refreshing the other pane (Primary on localUrl) must NOT redirect Split from disconnected MTP
+            windowMtp.refreshPane(PaneId::Primary);
+            QApplication::processEvents();
+            verify(windowMtp.m_splitPane->currentUrl() == phoneBDcim,
+                   "refreshing Primary pane does NOT redirect disconnected MTP Split pane to thispc:/");
+
+            // 3b. Two phones of the EXACT SAME model ("Google Pixel 8") on different USB ports/UDIs
+            {
+                MtpRedirectionRegistry::clear();
+                const QString sameModelUdi1 = QStringLiteral("/org/kde/solid/udev/sys/devices/pci0000:00/0000:00:14.0/usb1/1-7");
+                const QString sameModelUdi2 = QStringLiteral("/org/kde/solid/udev/sys/devices/pci0000:00/0000:00:14.0/usb1/1-8");
+                const DriveInfo twinPhone1 = MtpUdsContract::makeMtpDriveInfo(
+                    QStringLiteral("mtp-twin-1"), QStringLiteral("Google Pixel 8"), sameModelUdi1);
+                const DriveInfo twinPhone2 = MtpUdsContract::makeMtpDriveInfo(
+                    QStringLiteral("mtp-twin-2"), QStringLiteral("Google Pixel 8"), sameModelUdi2);
+
+                const QUrl twin1Root(QStringLiteral("mtp:/Google Pixel 8"));
+                const QUrl twin1Dcim(QStringLiteral("mtp:/Google Pixel 8/Internal shared storage/DCIM"));
+                const QUrl twin2Root(QStringLiteral("mtp:/Google Pixel 8 (2)"));
+                const QUrl twin2Music(QStringLiteral("mtp:/Google Pixel 8 (2)/Internal shared storage/Music"));
+
+                MtpRedirectionRegistry::recordRedirection(twinPhone1.targetUrl, twin1Root);
+                MtpRedirectionRegistry::recordRedirection(twinPhone2.targetUrl, twin2Root);
+
+                verify(urlBelongsToMtpDrive(twin1Dcim, twinPhone1) && !urlBelongsToMtpDrive(twin1Dcim, twinPhone2),
+                   "MtpRedirectionRegistry binds mtp:/Google Pixel 8 strictly to twinPhone1 UDI");
+                verify(urlBelongsToMtpDrive(twin2Music, twinPhone2) && !urlBelongsToMtpDrive(twin2Music, twinPhone1),
+                   "MtpRedirectionRegistry binds mtp:/Google Pixel 8 (2) strictly to twinPhone2 UDI");
+
+                windowMtp.m_driveHomeCoordinator.setSnapshotForTesting({twinPhone1, twinPhone2});
+                windowMtp.m_primaryPane->setCurrentUrl(twin1Dcim);
+                windowMtp.m_navigation.navigate(twin1Dcim);
+                windowMtp.m_splitPane->setCurrentUrl(twin2Music, true);
+
+                // Configure Split search query and Advanced Filters before twinPhone1 is unplugged
+                windowMtp.m_splitPane->searchState().text = QStringLiteral("concert");
+                windowMtp.m_splitPane->searchState().extensions = {QStringLiteral("flac"), QStringLiteral("mp3")};
+                windowMtp.m_splitPane->searchState().sizeMin = 1024;
+
+                // Unplug twinPhone1 only; twinPhone2 ("Google Pixel 8" on USB 1-8) stays connected
+                windowMtp.m_driveHomeCoordinator.setSnapshotForTesting({twinPhone2});
+                QApplication::processEvents();
+
+                verify(windowMtp.m_primaryPane->currentUrl() == twin1Dcim
+                           && windowMtp.m_navigation.currentUrl() == twin1Dcim,
+                       "unplugging twinPhone1 keeps Primary pane on its MTP URL");
+                verify(windowMtp.m_primaryReconnect->isVisible(),
+                       "unplugging twinPhone1 displays reconnect bar");
+                verify(windowMtp.m_splitPane->currentUrl() == twin2Music,
+                       "unplugging twinPhone1 does NOT redirect Split pane viewing twinPhone2 of same model");
+                verify(windowMtp.m_splitPane->searchState().text == QStringLiteral("concert")
+                           && windowMtp.m_splitPane->searchState().extensions == QStringList({QStringLiteral("flac"), QStringLiteral("mp3")})
+                           && windowMtp.m_splitPane->searchState().sizeMin == std::optional<qint64>(1024),
+                       "Split pane search query and Advanced Filters remain intact when Primary MTP device disconnects");
+                verify(MtpRedirectionRegistry::redirectedDeviceSegmentForUdi(sameModelUdi1).isEmpty()
+                           && MtpRedirectionRegistry::udiForRedirectedDeviceSegment(QStringLiteral("Google Pixel 8")).isEmpty(),
+                       "disconnecting twinPhone1 cleans up its stale alias from MtpRedirectionRegistry");
+                verify(MtpRedirectionRegistry::redirectedDeviceSegmentForUdi(sameModelUdi2)
+                           == QStringLiteral("Google Pixel 8 (2)"),
+                       "remaining twinPhone2 retains its MtpRedirectionRegistry alias");
+
+                // Reconnect twinPhone1 on a new USB port UDI
+                const QString reconnectedUdi = QStringLiteral("/org/kde/solid/udev/sys/devices/pci0000:00/0000:00:14.0/usb1/1-9");
+                const DriveInfo twinPhone1Reconnected = MtpUdsContract::makeMtpDriveInfo(
+                    QStringLiteral("mtp-twin-1-reconnected"), QStringLiteral("Google Pixel 8"), reconnectedUdi);
+                windowMtp.m_driveHomeCoordinator.setSnapshotForTesting({twinPhone2, twinPhone1Reconnected});
+                QApplication::processEvents();
+
+                verify(windowMtp.m_drivesGrid->count() == 2 && windowMtp.m_splitDrivesGrid->count() == 2,
+                       "reconnected MTP phone on new UDI immediately appears in Ten komputer without duplicating entries");
+
+                MtpRedirectionRegistry::clear();
+            }
+
+            // 3c. Disconnect during active KIO listing (before entries, after redirection, after partial entries)
+            //     and late callbacks after disconnect
+            {
+                windowMtp.m_driveHomeCoordinator.setSnapshotForTesting({phoneA, phoneB});
+                auto &primaryCore = windowMtp.m_primaryPane->listingCoreForTesting();
+
+                // Start listing phoneA.targetUrl (mtp:udi=...)
+                windowMtp.m_primaryPane->setCurrentUrl(phoneA.targetUrl);
+                windowMtp.m_navigation.navigate(phoneA.targetUrl);
+                primaryCore.startListing(phoneA.targetUrl, {}, {});
+                QPointer<KIO::ListJob> inFlightJob = primaryCore.listingJob();
+                verify(primaryCore.isLoading() && inFlightJob != nullptr,
+                       "active KIO listing started on Phone A before unplug");
+
+                // Simulate KIO redirection to mtp:/Google Pixel 8 and partial entries before finish
+                const QUrl redirectedUrl(QStringLiteral("mtp:/Google Pixel 8"));
+                Q_EMIT inFlightJob->redirection(inFlightJob, redirectedUrl);
+                KIO::UDSEntry partialEntry;
+                partialEntry.fastInsert(KIO::UDSEntry::UDS_NAME, QStringLiteral("Internal shared storage"));
+                partialEntry.fastInsert(KIO::UDSEntry::UDS_FILE_TYPE, S_IFDIR);
+                Q_EMIT inFlightJob->entries(inFlightJob, {partialEntry});
+                verify(primaryCore.stagedFiles().size() == 1,
+                       "partial MTP entry staged during active listing before unplug");
+
+                // Physically unplug Phone A while KIO job is still in flight
+                windowMtp.m_driveHomeCoordinator.setSnapshotForTesting({phoneB});
+                QApplication::processEvents();
+
+                verify(!primaryCore.isLoading() && primaryCore.listingJob() == nullptr,
+                       "physical MTP disconnect cancels in-flight KIO listing job");
+                verify(primaryCore.stagedFiles().isEmpty(),
+                       "physical MTP disconnect clears partial staged entries");
+                verify(windowMtp.m_primaryPane->currentUrl() == phoneA.targetUrl
+                           && windowMtp.m_navigation.currentUrl() == phoneA.targetUrl,
+                       "physical MTP disconnect during active listing keeps pane on its MTP URL");
+                verify(windowMtp.m_primaryReconnect->isVisible(),
+                       "physical MTP disconnect displays reconnect bar");
+
+                // Late callback from old job (if any queued signal arrives) must be ignored
+                if (inFlightJob) {
+                    Q_EMIT inFlightJob->entries(inFlightJob, {partialEntry});
+                    primaryCore.slotJobFinished(inFlightJob);
+                }
+                verify(windowMtp.m_primaryPane->currentUrl() == phoneA.targetUrl
+                           && primaryCore.stagedFiles().isEmpty(),
+                       "late KIO callbacks after MTP disconnect are safely ignored");
+                MtpRedirectionRegistry::clear();
+            }
+
+            // 3d. Locked phone / KIO listing error while phone remains physically connected
+            //     must NOT falsely trigger physical disconnect redirect to thispc:/
+            {
+                windowMtp.m_driveHomeCoordinator.setSnapshotForTesting({phoneB});
+                const QUrl phoneBRoot(QStringLiteral("mtp:/Google Pixel 8 Pro"));
+                windowMtp.navigatePane(PaneId::Primary, phoneBRoot);
+                QPointer<KIO::ListJob> lockedJob = windowMtp.m_primaryPane->listingJob();
+                verify(lockedJob != nullptr, "locked Phone B starts KIO listing job");
+                // Simulate KIO listing failure while Phone B is STILL in DriveHomeCoordinator::drives()
+                windowMtp.m_primaryPane->listingCoreForTesting().cancelListing();
+                // Same snapshot emitted or phoneB still connected -> must remain on phoneBRoot
+                windowMtp.m_driveHomeCoordinator.setSnapshotForTesting({phoneB});
+                QApplication::processEvents();
+                verify(windowMtp.m_navigation.currentUrl() == phoneBRoot,
+                       "still-connected MTP phone is NOT redirected to thispc:/ when snapshot still contains it");
+            }
+        }
+
+        // 4. Application / window destruction during an active KIO MTP job (no crash, clean cancel)
+        {
+            auto tempWindow = std::make_unique<ThisPcWindow>();
+            tempWindow->show();
+            QApplication::processEvents();
+            tempWindow->m_primaryPane->listingCoreForTesting().startListing(
+                phoneA.targetUrl, {}, {});
+            verify(tempWindow->m_primaryPane->listingCoreForTesting().isLoading(),
+                   "active KIO MTP job running before window destruction");
+            tempWindow.reset();
+            QApplication::processEvents();
+            verify(true, "destroying ThisPcWindow during active KIO MTP job completes without crash");
+        }
+    }
+
+    qInfo("PASS: %d DeviceRemovalController assertions (%d pending MTP specs); unmount/eject/safely-remove, "
+          "multi-partition, exactly-once, capabilities, pane routing, Stage 2 regression, MTP removal contract",
+          checks, pendingMtpSpecs);
     return 0;
 }

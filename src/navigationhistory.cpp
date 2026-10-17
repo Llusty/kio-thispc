@@ -67,7 +67,14 @@ void NavigationHistory::restore(const Snapshot &snapshot)
 
 NavigationHistory::Snapshot NavigationHistory::safeRestoreBaseline(const Snapshot &snapshot)
 {
-    // An unverified restored remote must not become the active/history entry.
+    // An unverified restored remote or MTP URL must not become the active/history entry.
+    auto isMtpScheme = [](const QUrl &url) {
+        return url.scheme().compare(QStringLiteral("mtp"), Qt::CaseInsensitive) == 0;
+    };
+    auto isUnverifiedRestoreUrl = [&isMtpScheme](const QUrl &url) {
+        return RemoteUrlHelper::isRemoteUrl(url) || isMtpScheme(url);
+    };
+
     NavigationHistory normalized;
     normalized.restore(snapshot);
     Snapshot safe = normalized.snapshot();
@@ -76,7 +83,7 @@ NavigationHistory::Snapshot NavigationHistory::safeRestoreBaseline(const Snapsho
     if (!safe.history.isEmpty() && sameLocation(safe.history.at(index), safe.currentUrl))
         safe.history.removeAt(index);
     int fallback = std::min(index - 1, static_cast<int>(safe.history.size()) - 1);
-    while (fallback >= 0 && RemoteUrlHelper::isRemoteUrl(safe.history.at(fallback))) --fallback;
+    while (fallback >= 0 && isUnverifiedRestoreUrl(safe.history.at(fallback))) --fallback;
     if (fallback >= 0) {
         safe.currentUrl = safe.history.at(fallback);
         safe.historyIndex = fallback;
@@ -84,6 +91,24 @@ NavigationHistory::Snapshot NavigationHistory::safeRestoreBaseline(const Snapsho
         safe.currentUrl = kThisPcUrl;
         safe.history.prepend(kThisPcUrl);
         safe.historyIndex = 0;
+    }
+    if (isMtpScheme(normalized.currentUrl())) {
+        for (int i = safe.history.size() - 1; i >= 0; --i) {
+            if (isMtpScheme(safe.history.at(i))) {
+                safe.history.removeAt(i);
+                if (i <= safe.historyIndex && safe.historyIndex > 0) {
+                    --safe.historyIndex;
+                }
+            }
+        }
+        if (safe.history.isEmpty()) {
+            safe.currentUrl = kThisPcUrl;
+            safe.history = {kThisPcUrl};
+            safe.historyIndex = 0;
+        } else {
+            safe.historyIndex = std::clamp(safe.historyIndex, 0, static_cast<int>(safe.history.size()) - 1);
+            safe.currentUrl = safe.history.at(safe.historyIndex);
+        }
     }
     return safe;
 }

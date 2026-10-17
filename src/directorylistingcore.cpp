@@ -34,6 +34,7 @@ void DirectoryListingCore::startListing(const QUrl &url,
     cancelListing();
     m_loading = true;
     m_currentUrl = url;
+    m_requestedUrl = url;
     m_callbacks = callbacks;
     m_stagedFiles.clear();
 
@@ -55,8 +56,22 @@ void DirectoryListingCore::startListing(const QUrl &url,
 
     connect(job, &KIO::ListJob::redirection, this,
         [this, job, generation](KIO::Job *, const QUrl &newUrl) {
-            if (m_job != job || m_generation != generation) return;
-            m_currentUrl = newUrl;
+            if (m_job != job || m_generation != generation || !newUrl.isValid()) return;
+            const QUrl oldBase = m_currentUrl;
+            MtpRedirectionRegistry::recordRedirection(m_requestedUrl, newUrl);
+            m_currentUrl = normalizedUrl(newUrl);
+            if (!m_stagedFiles.isEmpty() && !sameLocation(oldBase, m_currentUrl)) {
+                const QString oldPrefix = oldBase.path() + QLatin1Char('/');
+                for (FileInfo &staged : m_stagedFiles) {
+                    if (staged.url.scheme() == oldBase.scheme()
+                        && staged.url.path().startsWith(oldPrefix)) {
+                        const QString suffix = staged.url.path().mid(oldBase.path().size());
+                        QUrl rebased = m_currentUrl;
+                        rebased.setPath(m_currentUrl.path() + suffix);
+                        staged.url = rebased;
+                    }
+                }
+            }
         });
     connect(job, &KIO::ListJob::entries, this,
         [this, job, generation, options](KIO::Job *, const KIO::UDSEntryList &entries) {
@@ -78,7 +93,9 @@ void DirectoryListingCore::slotJobFinished(KJob *job)
 
     if (job->error()) {
         m_stagedFiles.clear();
-        const QString err = RemoteUrlHelper::sanitizeErrorMessage(job->errorString(), m_currentUrl);
+        const QUrl errorUrl = m_currentUrl;
+        m_currentUrl = m_requestedUrl;
+        const QString err = RemoteUrlHelper::sanitizeErrorMessage(job->errorString(), errorUrl);
         if (callbacks.failed) callbacks.failed(err);
         Q_EMIT listingFailed(err);
         return;
@@ -98,6 +115,7 @@ void DirectoryListingCore::cancelListing()
     }
     m_stagedFiles.clear();
     m_loading = false;
+    m_currentUrl = m_requestedUrl;
     m_callbacks = {};
 
     if (m_job) {

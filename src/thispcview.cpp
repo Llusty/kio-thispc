@@ -3,7 +3,7 @@
  * thispc-view - a lightweight KDE/Qt file browser with a Windows-like
  * "This PC" home page, backed by KIO.
  *
- * Version 0.41.0
+ * Version 0.41.1
  * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
@@ -625,14 +625,48 @@ public:
             }
         });
         connect(&m_driveHomeCoordinator, &DriveHomeCoordinator::drivesChanged, this,
-            [this](const QList<DriveInfo> &) {
+            [this](const QList<DriveInfo> &drives) {
+                QList<DriveInfo> removedMtpDrives;
+                for (const DriveInfo &oldDrive : std::as_const(m_knownDrives)) {
+                    if (!oldDrive.isMtpDevice()) {
+                        continue;
+                    }
+                    bool stillPresent = false;
+                    for (const DriveInfo &newDrive : drives) {
+                        if (!newDrive.isMtpDevice()) {
+                            continue;
+                        }
+                        if (!oldDrive.udi.isEmpty() && !newDrive.udi.isEmpty()) {
+                            if (oldDrive.udi == newDrive.udi) {
+                                stillPresent = true;
+                                break;
+                            }
+                        } else if (!oldDrive.id.isEmpty() && !newDrive.id.isEmpty()) {
+                            if (oldDrive.id == newDrive.id) {
+                                stillPresent = true;
+                                break;
+                            }
+                        } else if (sameLocation(oldDrive.targetUrl, newDrive.targetUrl)) {
+                            stillPresent = true;
+                            break;
+                        }
+                    }
+                    if (!stillPresent) {
+                        removedMtpDrives.push_back(oldDrive);
+                    }
+                }
+                m_knownDrives = drives;
+
                 rebuildDriveGrid();
                 if (m_sidebar) {
                     QList<DriveInfo> mountedDrives;
                     for (const DriveInfo &d : m_driveHomeCoordinator.drives()) {
-                        if (d.isMounted) mountedDrives.push_back(d);
+                        if (d.canNavigate()) mountedDrives.push_back(d);
                     }
                     m_sidebar->setDrives(mountedDrives);
+                }
+                for (const DriveInfo &removedDrive : std::as_const(removedMtpDrives)) {
+                    handleDisconnectedMtpDevice(removedDrive);
                 }
                 rebuildBreadcrumbs();
                 updateSidebarCurrent();
@@ -2153,7 +2187,14 @@ private:
         m_contentStack = m_primaryPane->contentStack();
         primaryLayout->addWidget(m_contentStack, 1);
         m_primaryReconnect = new RemoteReconnectBar(m_primaryPane,
-            [this](const QUrl &url) { navigateTo(url, true); });
+            [this](const QUrl &url) {
+                const QUrl target = resolveReconnectedMtpUrl(url, m_driveHomeCoordinator.drives());
+                if (!RemoteUrlHelper::isRemoteUrl(target) && sameLocation(m_navigation.currentUrl(), target)) {
+                    loadLocation(target, false);
+                    return;
+                }
+                navigateTo(target, true);
+            });
         primaryLayout->addWidget(m_primaryReconnect);
         connect(m_primaryPane, &PrimaryBrowserPane::listingFinished, this,
             [this](const QUrl &url, bool success) {
@@ -2395,14 +2436,14 @@ private:
         statusBar()->setSizeGripEnabled(true);
 
         m_versionLabel = new QLabel(
-            QStringLiteral("v0.41.0"),
+            QStringLiteral("v0.41.1"),
             this);
         m_versionLabel->setObjectName(
             QStringLiteral("versionLabel"));
         m_versionLabel->setToolTip(
             trLocal(
-                "Wersja thispc-view 0.41.0",
-                "thispc-view version 0.41.0"));
+                "Wersja thispc-view 0.41.1",
+                "thispc-view version 0.41.1"));
         statusBar()->addPermanentWidget(m_versionLabel);
     }
 
@@ -3637,6 +3678,10 @@ private:
             return themedIcon(QStringLiteral("network-workgroup"));
         }
 
+        if (url.scheme().compare(QStringLiteral("mtp"), Qt::CaseInsensitive) == 0) {
+            return themedIcon(LocationPresentation::iconName(url));
+        }
+
         return themedIcon(QStringLiteral("folder"));
     }
 
@@ -3714,6 +3759,23 @@ private:
         }
 
         m_tabController.restore(snapshot);
+        for (int i = 0; i < m_tabs.size(); ++i) {
+            TabState &state = m_tabs[i];
+            if (isDisconnectedMtpLocation(state.currentUrl)) {
+                const auto safe = NavigationHistory::safeRestoreBaseline(
+                    {state.currentUrl, state.history, state.historyIndex});
+                state.currentUrl = safe.currentUrl;
+                state.history = safe.history;
+                state.historyIndex = safe.historyIndex;
+            }
+            if (state.splitEnabled && isDisconnectedMtpLocation(state.splitUrl)) {
+                const auto safeSplit = NavigationHistory::safeRestoreBaseline(
+                    {state.splitUrl, state.splitHistory, state.splitHistoryIndex});
+                state.splitUrl = safeSplit.currentUrl;
+                state.splitHistory = safeSplit.history;
+                state.splitHistoryIndex = safeSplit.historyIndex;
+            }
+        }
         m_tabChangeInProgress = true;
         for (int i = 0; i < m_tabs.size(); ++i) {
             const TabState &state = m_tabs.at(i);
@@ -3932,7 +3994,8 @@ private:
         const QUrl previousPrimaryUrl = m_navigation.currentUrl();
         const NavigationHistory::Snapshot restoredNavigation{
             state.currentUrl, state.history, state.historyIndex};
-        m_navigation.restore(RemoteUrlHelper::isRemoteUrl(state.currentUrl)
+        const bool disconnectedMtp = isDisconnectedMtpLocation(state.currentUrl);
+        m_navigation.restore((RemoteUrlHelper::isRemoteUrl(state.currentUrl) || disconnectedMtp)
             ? NavigationHistory::safeRestoreBaseline(restoredNavigation) : restoredNavigation);
 
         m_tabChangeInProgress = true;
@@ -4275,7 +4338,9 @@ private:
                 [this, targetUrl](const QString &error) {
                     if (m_pendingRemoteUrl != targetUrl) return;
                     m_pendingRemoteUrl.clear();
-                    const QString sanitized = RemoteUrlHelper::sanitizeErrorMessage(error, targetUrl);
+                    const QString sanitized = targetUrl.scheme().compare(QStringLiteral("mtp"), Qt::CaseInsensitive) == 0
+                        ? mtpErrorMessageForUrl(targetUrl, m_driveHomeCoordinator.drives())
+                        : RemoteUrlHelper::sanitizeErrorMessage(error, targetUrl);
                     m_primaryReconnect->showFailure(targetUrl, sanitized);
                     if (m_directoryStatus) {
                         m_directoryStatus->setText(sanitized);
@@ -4374,8 +4439,34 @@ private:
         m_primaryPane->loadDirectory(
             url, preserveStatusMessage, m_showHiddenFiles,
             m_directoryViewMode == 2,
-            [this](bool preserve) { renderDirectoryItems(preserve); },
-            [this](const QString &error) { statusBar()->showMessage(error, 6000); });
+            [this, url](bool preserve) {
+                const QUrl effectiveUrl = m_primaryPane->currentUrl();
+                if (effectiveUrl.isValid() && !sameLocation(url, effectiveUrl)
+                    && sameLocation(m_navigation.currentUrl(), url)) {
+                    m_navigation.updateCurrent(effectiveUrl, true);
+                    m_primarySearch.location = effectiveUrl;
+                    rebuildBreadcrumbs();
+                    updateNavigationActions();
+                    updateSidebarCurrent();
+                    syncActiveTabState();
+                    updateActiveTabPresentation();
+                }
+                renderDirectoryItems(preserve);
+            },
+            [this, url](const QString &error) {
+                if (url.scheme().compare(QStringLiteral("mtp"), Qt::CaseInsensitive) == 0) {
+                    const QString sanitized = mtpErrorMessageForUrl(url, m_driveHomeCoordinator.drives());
+                    if (m_primaryReconnect) {
+                        m_primaryReconnect->showFailure(url, sanitized);
+                    }
+                    if (m_directoryStatus) {
+                        m_directoryStatus->setText(sanitized);
+                    }
+                    statusBar()->showMessage(sanitized, 6000);
+                    return;
+                }
+                statusBar()->showMessage(error, 6000);
+            });
     }
 
     bool fileMatchesSearch(const FileInfo &file) const
@@ -5847,6 +5938,20 @@ public:
                         : themedIcon(segment.iconName),
                     segment.url);
             }
+        } else if (m_navigation.currentUrl().scheme().compare(QStringLiteral("mtp"), Qt::CaseInsensitive) == 0) {
+            const auto segments = LocationPresentation::mtpPathSegments(
+                m_navigation.currentUrl(),
+                m_driveHomeCoordinator.drives());
+            for (qsizetype index = 0; index < segments.size(); ++index) {
+                if (index > 0) addSeparator();
+                const auto &segment = segments.at(index);
+                addCrumb(
+                    segment.text,
+                    segment.iconName.isEmpty()
+                        ? QIcon()
+                        : themedIcon(segment.iconName),
+                    segment.url);
+            }
         } else if (RemoteUrlHelper::isRemoteUrl(m_navigation.currentUrl())) {
             const auto segments = LocationPresentation::remotePathSegments(
                 m_navigation.currentUrl());
@@ -6047,6 +6152,9 @@ private Q_SLOTS:
 
     void reloadDrives()
     {
+        if (m_suppressDriveReload) {
+            return;
+        }
         m_driveHomeCoordinator.refresh();
     }
 
@@ -6165,8 +6273,12 @@ private:
              i < drives.size();
              ++i) {
             const DriveInfo &d = drives.at(i);
-            const bool canSafelyRemove = m_removalController.canSafelyRemove(d.udi);
-            const bool canEject = m_removalController.canEject(d.udi);
+            const bool canSafelyRemove = d.isMtpDevice()
+                ? false
+                : m_removalController.canSafelyRemove(d.udi);
+            const bool canEject = d.isMtpDevice()
+                ? false
+                : m_removalController.canEject(d.udi);
             DriveFrame *card =
                 makeDriveCard(
                     d,
@@ -6238,16 +6350,23 @@ private:
 
     void handleDriveActivation(PaneId pane, const DriveInfo &drive)
     {
-        if (drive.isMounted) {
+        if (drive.isMtpDevice() || drive.isMounted) {
             navigatePane(pane, drive.targetUrl);
             return;
         }
 
-        mountAndOpenDrive(pane, drive);
+        if (drive.canMount()) {
+            mountAndOpenDrive(pane, drive);
+        }
     }
 
     void mountAndOpenDrive(PaneId pane, const DriveInfo &drive)
     {
+        if (drive.isMtpDevice()) {
+            navigatePane(pane, drive.targetUrl);
+            return;
+        }
+
         statusBar()->showMessage(
             trLocal("Montowanie woluminu…", "Mounting volume…"), 3000);
 
@@ -6280,6 +6399,9 @@ private:
     void handleDeviceUnmount(PaneId pane, const DriveInfo &drive)
     {
         Q_UNUSED(pane);
+        if (drive.isMtpDevice()) {
+            return;
+        }
         if (m_removalController.isOperationPending(drive.udi)) {
             statusBar()->showMessage(
                 trLocal("Operacja dla tego urządzenia jest już w toku…",
@@ -6313,6 +6435,9 @@ private:
     void handleDeviceSafelyRemove(PaneId pane, const DriveInfo &drive)
     {
         Q_UNUSED(pane);
+        if (drive.isMtpDevice()) {
+            return;
+        }
         if (m_removalController.isOperationPending(drive.udi)) {
             statusBar()->showMessage(
                 trLocal("Operacja dla tego urządzenia jest już w toku…",
@@ -6347,6 +6472,9 @@ private:
     void handleDeviceEject(PaneId pane, const DriveInfo &drive)
     {
         Q_UNUSED(pane);
+        if (drive.isMtpDevice()) {
+            return;
+        }
         if (m_removalController.isOperationPending(drive.udi)) {
             statusBar()->showMessage(
                 trLocal("Operacja dla tego urządzenia jest już w toku…",
@@ -6395,6 +6523,85 @@ private:
         if (m_splitPane && isInsideMountPoint(m_splitPane->currentUrl())) {
             navigatePane(PaneId::Split, kThisPcUrl);
         }
+    }
+
+    static bool urlOrSearchBelongsToMtpDrive(const QUrl &url, const DriveInfo &drive)
+    {
+        if (urlBelongsToMtpDrive(url, drive)) {
+            return true;
+        }
+        if (isSearchLocation(url)) {
+            return urlBelongsToMtpDrive(searchBaseFromUrl(url), drive);
+        }
+        return false;
+    }
+
+    bool isDisconnectedMtpLocation(const QUrl &url) const
+    {
+        const QUrl target = isSearchLocation(url) ? searchBaseFromUrl(url) : url;
+        if (!target.isValid()
+            || target.scheme().compare(QStringLiteral("mtp"), Qt::CaseInsensitive) != 0) {
+            return false;
+        }
+        for (const DriveInfo &drive : m_driveHomeCoordinator.drives()) {
+            if (urlBelongsToMtpDrive(target, drive)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    void handleDisconnectedMtpDevice(const DriveInfo &removedDrive)
+    {
+        if (!removedDrive.isMtpDevice()) {
+            return;
+        }
+
+        const bool wasSuppressingReload = m_suppressDriveReload;
+        m_suppressDriveReload = true;
+
+        const bool primaryCurrentMatches = urlOrSearchBelongsToMtpDrive(m_navigation.currentUrl(), removedDrive)
+            || (m_primaryPane && urlOrSearchBelongsToMtpDrive(m_primaryPane->currentUrl(), removedDrive));
+        const bool primaryLoadingMatches = m_primaryPane
+            && (m_primaryPane->isLoading() || m_primaryPane->listingJob() != nullptr)
+            && (urlOrSearchBelongsToMtpDrive(m_primaryPane->activeListingUrl(), removedDrive)
+                || urlOrSearchBelongsToMtpDrive(m_primaryPane->requestedListingUrl(), removedDrive));
+
+        if (primaryCurrentMatches || primaryLoadingMatches) {
+            if (m_primaryPane) {
+                m_primaryPane->cancelListing();
+                m_primaryPane->setFiles({});
+            }
+            if (m_searchController && m_searchController->isRunning()) {
+                cancelSearch(PaneId::Primary, false);
+            }
+            if (m_directoryList) {
+                m_directoryList->clear();
+            }
+            if (m_directoryDetails) {
+                m_directoryDetails->clear();
+            }
+            if (m_contentStack && m_directoryPage) {
+                m_contentStack->setCurrentWidget(m_directoryPage);
+            }
+            const QString disconnectMsg = trLocal("Urządzenie MTP zostało odłączone.", "MTP device disconnected.");
+            if (m_primaryReconnect) {
+                m_primaryReconnect->showFailure(m_navigation.currentUrl(), disconnectMsg);
+            }
+            if (m_directoryStatus) {
+                m_directoryStatus->setText(disconnectMsg);
+            }
+            statusBar()->showMessage(disconnectMsg, 6000);
+            updateNavigationActions();
+        }
+
+        if (m_splitPane) {
+            m_splitPane->handleDisconnectedMtpDrive(removedDrive);
+        }
+
+        m_suppressDriveReload = wasSuppressingReload;
+
+        MtpRedirectionRegistry::removeRedirectionForUdi(removedDrive.udi);
     }
 
 
@@ -6537,6 +6744,8 @@ private:
 
     QTimer m_refreshTimer;
     DriveHomeCoordinator m_driveHomeCoordinator{this};
+    QList<DriveInfo> m_knownDrives;
+    bool m_suppressDriveReload = false;
     SolidDeviceMonitor m_solidMonitor{this};
     DeviceMountController m_mountController{this};
     DeviceRemovalController m_removalController{this};

@@ -1,12 +1,35 @@
 [English](README.md) | [Polski](README.pl.md)
 
-# kio-thispc (This PC) 0.41.0
+# kio-thispc (This PC) 0.41.1
 
 ThisPC is a native KDE/Qt file manager focused on a Windows Explorer-like workflow, dual-pane operation, KIO integration, safe local file operations, and native KDE/Linux device handling.
 
 - **Platform:** Linux / KDE Plasma 6
 - **Frameworks:** Qt 6 / KDE Frameworks 6
 - **License:** MIT License
+
+---
+
+## 0.41.1 — MTP Device Integration & Folder Size Calculator
+
+- **MTP Device Detection & Redirection (Android / Cameras):**
+  - Seamless detection of connected MTP devices on the "This PC" overview and sidebar.
+  - Transparent redirection and URL normalization from raw KIO UDI paths (`mtp:udi=...`) to friendly device URLs (`mtp:/<Device Name>`).
+  - Independent browsing and path synchronization across Primary and Split View.
+- **Hotplug & Disconnect Reconnect UX:**
+  - Automatic hotplug detection via Solid and KDE's KMTPd daemon (`org.kde.kmtpd5`).
+  - Physical disconnect handling: phone card and sidebar entry disappear automatically while the browsing pane preserves its URL and navigation history.
+  - View contents are cleared and replaced by a dedicated failure banner ("Urządzenie MTP zostało odłączone" / "MTP device disconnected.") with a "Połącz ponownie" ("Reconnect") button.
+  - Reconnecting USB allows immediate location recovery. Other open panes remain unaffected.
+  - Safe session recovery: starting a fresh session when the phone is unplugged safely falls back to "This PC" (`thispc:/`).
+- **Asynchronous Folder Size & Disk Usage in Properties:**
+  - Multi-threaded, non-blocking calculation of cumulative logical file size and filesystem block allocation for local directory Properties.
+  - File, subfolder, and symbolic link counting with localized grammar and pluralization.
+  - Dynamic live progress updates and subtle 3px accent progress bar without UI freezes.
+  - Filesystem-aware tooltips explaining allocation characteristics on Btrfs (CoW, transparent compression, reflink deduplication) and NTFS (cluster reporting via FUSE/kernel).
+  - Clarified measurement: reported disk size reflects filesystem block allocation (`st_blocks * 512`), not an unconditional physical byte count on modern compressed or CoW filesystems.
+  - Safety-first traversal: symlink boundary enforcement (`FollowSymlinks::NoFollow`), hardlink deduplication (`(dev, ino)`), mount boundary isolation, deterministic worker thread cancellation on window close, and instant target invalidation on deletion or rename.
+  - Single-folder Properties dialog intentionally limits recursive calculation to local directories (`file://`); remote/virtual protocols (`thispc:/`, `mtp:/`, `smb:/`, `sftp:/`, `admin:/`) remain protected against unbounded network or USB traversal.
 
 ---
 
@@ -336,8 +359,8 @@ Features from 0.15.4 — compact operations popup, dynamic height, task cancella
 
 ```bash
 cd ~/Downloads
-tar -xzf kio-thispc-0.41.0.tar.gz
-cd kio-thispc-0.41.0
+tar -xzf kio-thispc-0.41.1.tar.gz
+cd kio-thispc-0.41.1
 chmod +x install.sh
 ./install.sh
 ```

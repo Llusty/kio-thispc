@@ -51,6 +51,8 @@ static void verify(bool value, const char *description)
     ++checks;
 }
 
+#include "mtp-contract-spec.h"
+
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
@@ -803,6 +805,116 @@ int main(int argc, char **argv)
         verify(emptyData.formattedMountOptions() == QStringLiteral("—"), "formattedMountOptions on empty returns em-dash");
     }
 
-    printf("PASS: %d DriveProperties assertions; data model, mountinfo, Solid capabilities, unmounted safety, removal, UI\n", checks);
+    // ------------------------------------------------------------------
+    // 25. Stage 1.2 — MTP Device Properties, Missing Capacity & Card/Sidebar UI (Section 4)
+    // ------------------------------------------------------------------
+    {
+        const QString mtpUdi = QStringLiteral("/org/kde/solid/udev/sys/devices/pci0000:00/0000:00:14.0/usb1/1-2");
+        const DriveInfo mtpDrive = MtpUdsContract::makeMtpDriveInfo(
+            QStringLiteral("mtp-pixel8"),
+            QStringLiteral("Google Pixel 8 Pro"),
+            mtpUdi);
+
+        // 1. DrivePropertiesProvider::load(mtpDrive) does not mount, does not match '/',
+        //    and does not treat missing capacity as a 0 B disk.
+        DrivePropertiesProvider mtpProvider;
+        bool mtpReady = false;
+        QObject::connect(&mtpProvider, &DrivePropertiesProvider::dataReady, [&](const DrivePropertiesData &data) {
+            mtpReady = true;
+            verify(data.mountPoint.isEmpty(), "MTP provider: mountPoint remains empty (no fake local path)");
+            verify(data.mountOptions.isEmpty(), "MTP provider: mountOptions remains empty (does not match /)");
+            verify(data.volumeFsType == QStringLiteral("MTP"), "MTP provider: volumeFsType is MTP");
+            verify(data.driveBus == QStringLiteral("USB"), "MTP provider: driveBus is USB");
+            verify(data.isRemovable && data.isHotpluggable, "MTP provider: removable and hotpluggable are true");
+            verify(data.totalBytes == -1 && !data.hasTotalBytes(),
+                   "MTP provider: missing capacity is -1 (unavailable), NEVER 0 B");
+            verify(data.freeBytes == -1 && !data.hasFreeBytes(),
+                   "MTP provider: missing free space is -1 (unavailable), NEVER 0 B");
+            verify(data.usedBytes == -1 && !data.hasUsedBytes(),
+                   "MTP provider: missing used space is -1 (unavailable), NEVER 0 B");
+            verify(!data.formattedTotal().startsWith(QStringLiteral("0 B")),
+                   "MTP provider: formattedTotal() is never '0 B'");
+            verify(!data.formattedFree().startsWith(QStringLiteral("0 B")),
+                   "MTP provider: formattedFree() is never '0 B'");
+            verify(!data.formattedUsed().startsWith(QStringLiteral("0 B")),
+                   "MTP provider: formattedUsed() is never '0 B'");
+        });
+        mtpProvider.load(mtpDrive);
+        verify(mtpReady, "MTP provider emits dataReady synchronously without blocking");
+
+        // 2. Live hotplug removal on MTP UDev UDI updates PropertiesDialog banner and status
+        DrivePropertiesData mtpSnapshot;
+        mtpSnapshot.udi = mtpUdi;
+        mtpSnapshot.name = mtpDrive.name;
+        mtpSnapshot.volumeFsType = QStringLiteral("MTP");
+        mtpSnapshot.driveBus = QStringLiteral("USB");
+        mtpSnapshot.isMounted = true;
+        mtpSnapshot.isRemovable = true;
+        mtpSnapshot.isHotpluggable = true;
+        mtpSnapshot.totalBytes = -1;
+        mtpSnapshot.freeBytes = -1;
+        mtpSnapshot.usedBytes = -1;
+
+        QDialog *mtpDialog = PropertiesDialog::showForDrive(nullptr, mtpDrive, {}, &mtpSnapshot);
+        verify(mtpDialog != nullptr, "PropertiesDialog created for MTP device");
+        auto *mtpBanner = mtpDialog->findChild<QLabel *>(QStringLiteral("deviceRemovedBanner"));
+        auto *mtpUsageBar = mtpDialog->findChild<QProgressBar *>(QStringLiteral("driveUsageBar"));
+        auto *mtpSubtitle = mtpDialog->findChild<QLabel *>(QStringLiteral("driveHeaderSubtitle"));
+        auto *mtpMountedVal = mtpDialog->findChild<QLabel *>(QStringLiteral("driveMountedValue"));
+        auto *mtpMountPointVal = mtpDialog->findChild<QLabel *>(QStringLiteral("driveMountPointValue"));
+        verify(mtpBanner != nullptr && !mtpBanner->isVisible(), "MTP dialog removal banner initially hidden");
+        verify(mtpUsageBar != nullptr && !mtpUsageBar->isEnabled(),
+               "MTP dialog usage bar is disabled when totalBytes == -1 (no fake usage bar in Properties)");
+        verify(mtpSubtitle != nullptr && mtpSubtitle->text().contains(QStringLiteral("MTP")),
+               "MTP dialog header subtitle shows MTP portable device description");
+        verify(mtpMountedVal != nullptr && mtpMountedVal->text().contains(QStringLiteral("MTP")),
+               "MTP dialog status shows connected (MTP) instead of block volume mount state");
+        verify(mtpMountPointVal != nullptr && mtpMountPointVal->text() == QStringLiteral("—"),
+               "MTP dialog mount point shows em-dash");
+
+        Q_EMIT Solid::DeviceNotifier::instance()->deviceRemoved(mtpUdi);
+        verify(mtpBanner->isVisible(), "MTP dialog shows removal banner on UDev hotplug disconnect");
+        mtpDialog->accept();
+
+        // 3. Stage 1.3:
+        //    - makeDriveCard(mtpDrive) does NOT display a fake 0% QProgressBar or '— wolne z —'
+        //    - SidebarDriveButton(mtpDrive) hides its QProgressBar when hasCapacityInformation is false
+        std::unique_ptr<DriveFrame> card(makeDriveCard(mtpDrive, nullptr));
+        card->show();
+        QApplication::processEvents();
+        auto *cardBar = card->findChild<QProgressBar *>();
+        bool hasFakeFreeOfLabel = false;
+        bool hasMtpSubtitle = false;
+        for (auto *lbl : card->findChildren<QLabel *>()) {
+            if (lbl->text().contains(QStringLiteral("—")) && lbl->isVisible()) {
+                hasFakeFreeOfLabel = true;
+            }
+            if (lbl->text().contains(QStringLiteral("MTP")) && lbl->isVisible()) {
+                hasMtpSubtitle = true;
+            }
+        }
+        verify((cardBar == nullptr || !cardBar->isVisible()) && !hasFakeFreeOfLabel,
+               "makeDriveCard(mtpDrive) hides fake 0% QProgressBar and '— wolne z —' when capacity is unavailable");
+        verify(hasMtpSubtitle,
+               "makeDriveCard(mtpDrive) displays clean MTP Device subtitle");
+        verify(!card->toolTip().contains(QStringLiteral("—"))
+                   && !card->toolTip().contains(QStringLiteral("Punkt montowania"))
+                   && !card->toolTip().contains(QStringLiteral("Mount point")),
+               "makeDriveCard(mtpDrive) tooltip omits fake capacity and local mount point");
+
+        SidebarDriveButton sidebarBtn(mtpDrive);
+        sidebarBtn.show();
+        QApplication::processEvents();
+        auto *sidebarBar = sidebarBtn.findChild<QProgressBar *>();
+        verify(sidebarBar == nullptr || !sidebarBar->isVisible(),
+               "SidebarDriveButton(mtpDrive) hides fake 0% QProgressBar when capacity is unavailable");
+        verify(!sidebarBtn.toolTip().contains(QStringLiteral("—"))
+                   && !sidebarBtn.toolTip().contains(QStringLiteral("Punkt montowania"))
+                   && !sidebarBtn.toolTip().contains(QStringLiteral("Mount point")),
+               "SidebarDriveButton(mtpDrive) tooltip omits fake capacity and local mount point");
+    }
+
+    printf("PASS: %d DriveProperties assertions (%d pending MTP specs); data model, mountinfo, Solid capabilities, unmounted safety, removal, UI, MTP contract\n",
+           checks, pendingMtpSpecs);
     return 0;
 }

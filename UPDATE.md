@@ -1,5 +1,24 @@
 [English](UPDATE.md) | [Polski](UPDATE.pl.md)
 
+# Update to 0.41.1
+
+```bash
+cd ~/Pobrane
+tar -xzf kio-thispc-0.41.1.tar.gz
+cd kio-thispc-0.41.1
+chmod +x install.sh
+./install.sh
+```
+
+- Automatic MTP Android/camera device detection on "This PC" overview and navigation sidebar.
+- Seamless redirection from KIO UDI paths (`mtp:udi=...`) to user-friendly URLs (`mtp:/<Device Name>`).
+- Hotplug support with reconnect retaining navigation state and dedicated failure banner ("Urządzenie MTP zostało odłączone" / "MTP device disconnected.") with a "Połącz ponownie" ("Reconnect") button.
+- Asynchronous, non-blocking folder size and disk allocation calculation in local directory Properties dialogs.
+- File and folder counts with exact localized pluralization.
+- Safe local-only traversal with symlink loop protection, mount boundary isolation, and instant background worker cancellation.
+
+---
+
 # Update to 0.41.0
 
 ```bash

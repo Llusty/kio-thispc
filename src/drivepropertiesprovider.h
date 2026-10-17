@@ -27,6 +27,7 @@
 #include <Solid/Block>
 #include <Solid/Device>
 #include <Solid/DeviceNotifier>
+#include <Solid/PortableMediaPlayer>
 #include <Solid/StorageAccess>
 #include <Solid/StorageDrive>
 #include <Solid/StorageVolume>
@@ -285,6 +286,37 @@ public:
         Solid::Device dev;
         if (!drive.udi.isEmpty()) {
             dev = Solid::Device(drive.udi);
+        }
+
+        if (drive.isMtpDevice()) {
+            m_data.volumeFsType = !drive.fileSystem.isEmpty()
+                ? drive.fileSystem
+                : QStringLiteral("MTP");
+            m_data.isMounted = true;
+            m_data.isRemovable = true;
+            m_data.isHotpluggable = true;
+            m_data.driveBus = QStringLiteral("USB");
+            m_data.mountPoint.clear();
+            m_data.mountOptions.clear();
+            m_data.totalBytes = -1;
+            m_data.freeBytes = -1;
+            m_data.usedBytes = -1;
+            m_data.usedPercent = 0;
+
+            if (dev.isValid()) {
+                m_data.driveModel = dev.product().trimmed();
+                m_data.driveVendor = dev.vendor().trimmed();
+                if (const auto *player = dev.as<Solid::PortableMediaPlayer>()) {
+                    const QString serial = player->driverHandle(QStringLiteral("mtp")).toString().trimmed();
+                    if (!serial.isEmpty()) {
+                        m_data.uuid = serial;
+                    }
+                }
+            }
+
+            setupRemovalNotifier();
+            Q_EMIT dataReady(m_data);
+            return;
         }
 
         if (dev.isValid()) {

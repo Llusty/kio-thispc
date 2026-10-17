@@ -2,6 +2,27 @@
 
 # Changelog
 
+## 0.41.1 — MTP Device Integration & Folder Size Calculator
+
+- **MTP Device Detection & Navigation (Android / Cameras):**
+  - Resolved detection issues for MTP devices (smartphones, cameras) on the "This PC" overview and navigation sidebar.
+  - Transparent redirection and URL normalization from raw KIO UDI paths (`mtp:udi=...`) to user-friendly device URLs (`mtp:/<Device Name>`).
+  - Seamless dual-pane navigation: independent browsing and path synchronization across Primary and Split View.
+- **Automatic MTP Hotplug & Reconnect UX:**
+  - Automatic hotplug detection integrating Solid device monitors and KDE's KMTPd daemon (`org.kde.kmtpd5`).
+  - Graceful physical disconnect handling: phone card and sidebar entry disappear automatically while the browsing pane retains its location and navigation history.
+  - Content of disconnected MTP folders is cleared and replaced by a dedicated failure banner ("MTP device disconnected.") with a "Reconnect" button.
+  - Reconnecting USB allows immediate location recovery without navigation loss. Other open panes remain unaffected.
+  - Safe session recovery: starting a fresh session when the phone is unplugged safely falls back to "This PC" (`thispc:/`).
+- **Asynchronous Folder Size & Disk Usage in Properties:**
+  - Multi-threaded, non-blocking calculation of cumulative logical file size and filesystem block allocation in local directory Properties dialogs.
+  - Exact file, subfolder, and symbolic link counting with localized grammar and pluralization.
+  - Dynamic live progress updates and subtle 3px accent progress bar without UI freezes.
+  - Filesystem-aware tooltips explaining allocation characteristics on Btrfs (CoW, transparent compression, reflink deduplication) and NTFS (cluster reporting via FUSE/kernel).
+  - Clarified measurement: reported disk size reflects filesystem block allocation (`st_blocks * 512`), not an unconditional physical byte count on modern compressed or CoW filesystems.
+  - Safety-first traversal: symlink boundary enforcement (`FollowSymlinks::NoFollow`), hardlink deduplication (`(dev, ino)`), mount boundary isolation, deterministic worker thread cancellation on window close, and instant target invalidation on deletion or rename.
+  - Single-folder Properties dialog intentionally limits recursive calculation to local directories (`file://`); remote/virtual protocols (`thispc:/`, `mtp:/`, `smb:/`, `sftp:/`, `admin:/`) remain protected against unbounded network or USB traversal.
+
 ## 0.41.0 — Advanced Search & Responsive Search UI
 
 - **Compact Search Bar & Responsive Popover (Variant A):**

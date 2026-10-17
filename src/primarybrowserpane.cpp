@@ -87,8 +87,20 @@ void PrimaryBrowserPane::loadDirectory(const QUrl &url, bool preserveStatusMessa
     options.emptyNamePolicy = DirectoryListingCore::EmptyNamePolicy::DisplayName;
     m_listingCore.startListing(url, options, {
         [this, url, render](KIO::ListJob *job) {
-            render(job->property("thispcPreserveStatusMessage").toBool());
-            Q_EMIT listingFinished(url, true);
+            const QUrl effectiveUrl = normalizedUrl(m_listingCore.currentUrl().isValid()
+                ? m_listingCore.currentUrl()
+                : url);
+            if (!sameLocation(effectiveUrl, m_currentUrl)) {
+                m_currentUrl = effectiveUrl;
+                m_directoryList->setDropDirectory(effectiveUrl);
+                m_directoryDetails->setDropDirectory(effectiveUrl);
+                m_directoryTitle->setText(LocationPresentation::contentHeaderText(effectiveUrl));
+                if (m_previewAdapter) {
+                    m_previewAdapter->setCurrentDirectoryUrl(effectiveUrl);
+                }
+            }
+            render(job ? job->property("thispcPreserveStatusMessage").toBool() : false);
+            Q_EMIT listingFinished(effectiveUrl, true);
         },
         [this, url, reportError](const QString &error) {
             m_directoryStatus->setText(trLocal("Nie udało się otworzyć tej lokalizacji.",

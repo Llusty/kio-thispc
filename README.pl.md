@@ -1,6 +1,29 @@
 [English](README.md) | [Polski](README.pl.md)
 
-# kio-thispc 0.41.0
+# kio-thispc 0.41.1
+
+## 0.41.1 — Integracja urządzeń MTP i kalkulator rozmiaru folderów
+
+- **Wykrywanie i obsługa urządzeń MTP (Android / aparaty):**
+  - Bezproblemowe wykrywanie urządzeń MTP na stronie głównej oraz w panelu bocznym.
+  - Transparentne przekierowanie i normalizacja URL z technicznych identyfikatorów `mtp:udi=...` do przyjaznych adresów `mtp:/<Nazwa Urządzenia>`.
+  - Niezależna nawigacja i synchronizacja ścieżek w widoku pojedynczym i Split View.
+- **Automatyczny hotplug MTP i ponowne łączenie:**
+  - Automatyczne wykrywanie podłączenia i odłączenia z wykorzystaniem Solid oraz demona KDE KMTPd (`org.kde.kmtpd5`).
+  - Bezpieczna obsługa odłączenia kabla USB: karta urządzenia i wpis w pasku bocznym znikają natychmiast, natomiast panel przeglądający odłączony folder zachowuje swój adres URL oraz historię.
+  - Zawartość odłączonego katalogu zostaje wyczyszczona, a w panelu pojawia się czytelny komunikat („Urządzenie MTP zostało odłączone”) z przyciskiem „Połącz ponownie”.
+  - Ponowne podłączenie urządzenia pozwala błyskawicznie odzyskać przeglądaną lokalizację bez utraty kontekstu pracy. Drugi panel pozostaje nienaruszony.
+  - Bezpieczne przywracanie sesji: ponowne uruchomienie aplikacji z zapisaną sesją MTP przy odłączonym telefonie bezpiecznie przekierowuje panel do widoku „Ten komputer” (`thispc:/`).
+- **Asynchroniczny kalkulator rozmiaru folderu i zajętości dysku we Właściwościach:**
+  - Wielowątkowe obliczanie łącznego rozmiaru logicznego oraz raportowanej zajętości blokowej dla lokalnych katalogów w oknie Właściwości, bez blokowania interfejsu użytkownika.
+  - Dokładne liczniki plików, podfolderów i dowiązań symbolicznych z zachowaniem poprawnej polskiej deklinacji (np. *12 plików, 3 foldery*).
+  - Płynny podgląd postępu na żywo i subtelny 3-pikselowy pasek postępu w kolorze akcentu KDE.
+  - Podpowiedzi (tooltips) objaśniające specyfikę alokacji na systemach Btrfs (CoW, kompresja, reflink) oraz NTFS (rozmiar klastra raportowany przez sterownik FUSE/jądro).
+  - Precyzja pomiaru: raportowany „Rozmiar na dysku” odzwierciedla alokację blokową zwróconą przez system plików (`st_blocks * 512`), co na systemach z CoW lub kompresją jest estymatą blokową, a nie gwarantowaną fizyczną liczbą zajętych bajtów.
+  - Bezpieczeństwo trawersowania: ochrona przed zapętleniem dowiązań symbolicznych (`FollowSymlinks::NoFollow`), deduplikacja hardlinków (`(dev, ino)`), kontrola granic punktu montowania, deterministyczne anulowanie wątku w tle przy zamknięciu okna oraz unieważnienie stanu w przypadku usunięcia lub zmiany nazwy celu.
+  - Ochrona protokołów zdalnych i wirtualnych: okno Właściwości ogranicza rekursywne skanowanie do katalogów lokalnych (`file://`), nie wykonując rekurencyjnych zapytań dla `thispc:/`, `mtp:/`, `smb:/`, `sftp:/` ani `admin:/`.
+
+---
 
 ## 0.41.0 — Zaawansowane wyszukiwanie i responsywny interfejs
 
@@ -351,8 +374,8 @@ Funkcje z 0.15.4 — kompaktowy popup operacji, dynamiczna wysokość, anulowani
 
 ```bash
 cd ~/Pobrane
-tar -xzf kio-thispc-0.41.0.tar.gz
-cd kio-thispc-0.41.0
+tar -xzf kio-thispc-0.41.1.tar.gz
+cd kio-thispc-0.41.1
 chmod +x install.sh
 ./install.sh
 ```

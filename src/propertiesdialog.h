@@ -27,6 +27,8 @@
 #include "acleditorwidget.h"
 #include "checksumwidget.h"
 #include "metadatawidget.h"
+#include "foldersizecalculator.h"
+#include "foldersizecontract.h"
 
 #include <KFileItem>
 #include <KIO/ChmodJob>
@@ -41,6 +43,7 @@
 #include <QFileInfo>
 #include <QFont>
 #include <QFormLayout>
+#include <QFutureWatcher>
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QLabel>
@@ -55,9 +58,12 @@
 #include <QTabWidget>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <QtConcurrent/QtConcurrentRun>
 
+#include <atomic>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <sys/stat.h>
 
 #ifndef Q_OS_WIN
@@ -74,6 +80,7 @@ public:
 
     bool isBusy() const { return m_busy; }
     std::function<void()> onIdle;
+    std::function<void()> onClosed;
     QPointer<QWidget> deferredOwnerClose;
 
     void setBusy(bool busy)
@@ -98,8 +105,20 @@ public:
             m_pendingResult = result;
             return;
         }
+        if (onClosed) {
+            auto cb = std::move(onClosed);
+            cb();
+        }
         QDialog::done(result);
         close();
+    }
+
+    ~PropertiesWindow() override
+    {
+        if (onClosed) {
+            auto cb = std::move(onClosed);
+            cb();
+        }
     }
 
 protected:
@@ -110,6 +129,10 @@ protected:
             m_pendingResult = QDialog::Rejected;
             event->ignore();
             return;
+        }
+        if (onClosed) {
+            auto cb = std::move(onClosed);
+            cb();
         }
         QDialog::closeEvent(event);
     }
@@ -250,6 +273,12 @@ public:
         const bool readOnlyFileSystem =
             filesystemIsReadOnly(url);
 
+        const bool canScanFolder = isDir
+            && url.isLocalFile()
+            && !isAdminUrl(url)
+            && st->capabilities.entryKind == PropertiesEntryKind::Directory
+            && st->capabilities.entryIdentity.valid;
+
         QIcon icon = themedIcon(fileItem.iconName().isEmpty()
             ? (isDir ? QStringLiteral("folder") : QStringLiteral("text-x-generic"))
             : fileItem.iconName());
@@ -313,10 +342,30 @@ public:
         symlinkTargetLabel->hide();
 
         auto *sizeLabel = makeValueLabel(sizeText);
+        sizeLabel->setObjectName(QStringLiteral("propertiesSize"));
         generalForm->addRow(trLocal("Rozmiar:", "Size:"), sizeLabel);
 
         auto *diskSizeLabel = makeValueLabel();
+        diskSizeLabel->setObjectName(QStringLiteral("propertiesDiskSize"));
         generalForm->addRow(trLocal("Rozmiar na dysku:", "Size on disk:"), diskSizeLabel);
+
+        auto *containsRowLabel = new QLabel(trLocal("Zawiera:", "Contains:"), general);
+        containsRowLabel->setObjectName(QStringLiteral("propertiesContainsRowLabel"));
+        auto *containsLabel = makeValueLabel();
+        containsLabel->setObjectName(QStringLiteral("propertiesContains"));
+        generalForm->addRow(containsRowLabel, containsLabel);
+        if (!canScanFolder) {
+            containsRowLabel->hide();
+            containsLabel->hide();
+        }
+
+        auto *folderProgress = new QProgressBar(general);
+        folderProgress->setObjectName(QStringLiteral("propertiesFolderProgress"));
+        folderProgress->setRange(0, 0);
+        folderProgress->setFixedHeight(3);
+        folderProgress->setTextVisible(false);
+        generalLayout->addWidget(folderProgress);
+        folderProgress->hide();
 
         auto *fsLabel = makeValueLabel(fileSystem.isEmpty() ? QString() : fileSystem);
         generalForm->addRow(trLocal("System plików:", "Filesystem:"), fsLabel);
@@ -376,8 +425,10 @@ public:
             }
 
             if (data.isDir) {
-                sizeLabel->setText(!sizeText.isEmpty() ? sizeText : QStringLiteral("—"));
-                diskSizeLabel->setText(trLocal("Niedostępne", "Unavailable"));
+                if (!canScanFolder) {
+                    sizeLabel->setText(!sizeText.isEmpty() ? sizeText : QStringLiteral("—"));
+                    diskSizeLabel->setText(trLocal("Niedostępne", "Unavailable"));
+                }
             } else if (data.hasLogicalSize) {
                 sizeLabel->setText(data.formattedLogicalSize());
                 diskSizeLabel->setText(data.formattedAllocatedSize());
@@ -917,9 +968,17 @@ public:
         outer->addWidget(buttons);
 
         auto targetUnavailable = std::make_shared<bool>(false);
+        auto cancelToken = std::make_shared<std::atomic_bool>(false);
+        auto *scanTimer = new QTimer(dialog);
+        scanTimer->setObjectName(QStringLiteral("propertiesFolderScanTimer"));
+        scanTimer->setInterval(120);
+
         auto invalidateTarget = [=] {
             if (*targetUnavailable) return;
             *targetUnavailable = true;
+            if (cancelToken) cancelToken->store(true);
+            if (scanTimer) scanTimer->stop();
+            if (folderProgress) folderProgress->hide();
             st->canEditPermissions = false;
             setPermissionBoxesEnabled(false);
             nameEdit->setEnabled(false);
@@ -931,6 +990,13 @@ public:
                 "Element niedostępny lub podmieniony. Zapis zablokowany; otwórz Właściwości ponownie.",
                 "Item unavailable or replaced. Writes blocked; reopen Properties."));
             dialog->setProperty("propertiesTargetUnavailable", true);
+            if (canScanFolder) {
+                sizeLabel->setText(trLocal("Niedostępne (obiekt unieważniony)", "Unavailable (target invalidated)"));
+                diskSizeLabel->setText(trLocal("Niedostępne", "Unavailable"));
+                containsLabel->setText(trLocal("Niedostępne", "Unavailable"));
+                dialog->setProperty("propertiesFolderScanInvalidated", true);
+                dialog->setProperty("propertiesFolderScanFinished", true);
+            }
         };
         // Event driven, local only. The captured identity is never replaced
         // with a new snapshot after a loss, including unmount/remount.
@@ -976,6 +1042,140 @@ public:
                 if (refreshView) refreshView();
                 provider->load(st->workingUrl, st->workingName, isDir, typeText, sizeText, modifiedText);
             });
+
+        // --------------------------------------------------------------
+        // Folder Size & Disk Usage Async Scanner (0.41.1 Stage 2.4)
+        // --------------------------------------------------------------
+        if (canScanFolder && !*targetUnavailable) {
+            dialog->setProperty("propertiesFolderScanActive", true);
+            dialog->setProperty("propertiesFolderScanFinished", false);
+            dialog->setProperty("propertiesFolderScanInvalidated", false);
+            dialog->setProperty("propertiesFolderScanPartial", false);
+            dialog->setProperty("propertiesFolderScanError", false);
+
+            sizeLabel->setText(trLocal("Obliczanie…", "Calculating…"));
+            diskSizeLabel->setText(trLocal("Obliczanie…", "Calculating…"));
+            containsLabel->setText(trLocal("Obliczanie…", "Calculating…"));
+            folderProgress->show();
+
+            struct FolderScanSharedState {
+                std::mutex mutex;
+                FolderSizeProgress progress;
+                bool hasProgress = false;
+                FolderSizeResult result;
+                bool isFinished = false;
+            };
+            auto scanState = std::make_shared<FolderScanSharedState>();
+
+            dialog->onClosed = [cancelToken, scanTimer] {
+                if (cancelToken) cancelToken->store(true);
+                if (scanTimer) scanTimer->stop();
+            };
+            QObject::connect(dialog, &QObject::destroyed, [cancelToken] {
+                if (cancelToken) cancelToken->store(true);
+            });
+
+            QObject::connect(scanTimer, &QTimer::timeout, dialog, [=] {
+                if (!alive || *targetUnavailable || cancelToken->load()) return;
+                FolderSizeProgress prog;
+                bool hasProg = false;
+                {
+                    std::lock_guard lock(scanState->mutex);
+                    hasProg = scanState->hasProgress;
+                    prog = scanState->progress;
+                }
+                if (hasProg) {
+                    if (prog.logicalBytes > 0) {
+                        sizeLabel->setText(trLocal("Obliczanie… %1", "Calculating… %1")
+                                               .arg(FolderSizeResult::formatBriefSize(prog.logicalBytes)));
+                    } else {
+                        sizeLabel->setText(trLocal("Obliczanie…", "Calculating…"));
+                    }
+                    diskSizeLabel->setText(trLocal("Obliczanie…", "Calculating…"));
+                    if (prog.fileCount > 0 || prog.directoryCount > 0) {
+                        const QString filesStr = FolderSizeResult::formatPluralFiles(prog.fileCount);
+                        const QString foldersStr = FolderSizeResult::formatPluralFolders(prog.directoryCount);
+                        containsLabel->setText(trLocal("Obliczanie… (%1, %2)", "Calculating… (%1, %2)")
+                                                   .arg(filesStr, foldersStr));
+                    } else {
+                        containsLabel->setText(trLocal("Obliczanie…", "Calculating…"));
+                    }
+                }
+            });
+            scanTimer->start();
+
+            FolderSizeOptions options;
+            options.progressUpdateBatch = 64;
+
+            auto *scanWatcher = new QFutureWatcher<FolderSizeResult>(dialog);
+            scanWatcher->setObjectName(QStringLiteral("propertiesFolderSizeWatcher"));
+
+            QObject::connect(scanWatcher, &QFutureWatcher<FolderSizeResult>::finished, dialog, [=] {
+                if (!alive || *targetUnavailable || cancelToken->load()) return;
+                if (scanTimer) scanTimer->stop();
+                if (folderProgress) folderProgress->hide();
+
+                const FolderSizeResult res = scanWatcher->result();
+                if (res.status == FolderSizeStatus::Completed) {
+                    sizeLabel->setText(res.formattedLogicalSize());
+                    diskSizeLabel->setText(res.formattedAllocatedSize());
+                    diskSizeLabel->setToolTip(res.diskSizeTooltip());
+                    containsLabel->setText(res.formattedContents());
+                    dialog->setProperty("propertiesFolderScanFinished", true);
+                    dialog->setProperty("propertiesFolderLogicalBytes", QVariant::fromValue(res.logicalBytes));
+                    dialog->setProperty("propertiesFolderAllocatedBytes", QVariant::fromValue(res.allocatedBytes));
+                    dialog->setProperty("propertiesFolderFileCount", QVariant::fromValue(res.fileCount));
+                    dialog->setProperty("propertiesFolderDirectoryCount", QVariant::fromValue(res.directoryCount));
+                } else if (res.status == FolderSizeStatus::Partial) {
+                    const QString suffix = trLocal(" — wynik częściowy", " — partial result");
+                    sizeLabel->setText(res.formattedLogicalSize() + suffix);
+                    diskSizeLabel->setText(res.formattedAllocatedSize());
+                    diskSizeLabel->setToolTip(res.diskSizeTooltip());
+                    containsLabel->setText(res.formattedContents() + suffix);
+                    dialog->setProperty("propertiesFolderScanPartial", true);
+                    dialog->setProperty("propertiesFolderScanFinished", true);
+                    dialog->setProperty("propertiesFolderLogicalBytes", QVariant::fromValue(res.logicalBytes));
+                    dialog->setProperty("propertiesFolderAllocatedBytes", QVariant::fromValue(res.allocatedBytes));
+                    dialog->setProperty("propertiesFolderFileCount", QVariant::fromValue(res.fileCount));
+                    dialog->setProperty("propertiesFolderDirectoryCount", QVariant::fromValue(res.directoryCount));
+                } else if (res.status == FolderSizeStatus::Cancelled) {
+                    sizeLabel->setText(trLocal("Anulowano", "Cancelled"));
+                    diskSizeLabel->setText(trLocal("Anulowano", "Cancelled"));
+                    containsLabel->setText(trLocal("Anulowano", "Cancelled"));
+                    dialog->setProperty("propertiesFolderScanFinished", true);
+                } else if (res.status == FolderSizeStatus::Error) {
+                    sizeLabel->setText(trLocal("Błąd obliczania", "Calculation error"));
+                    sizeLabel->setToolTip(res.errorMessage);
+                    diskSizeLabel->setText(trLocal("Niedostępne", "Unavailable"));
+                    containsLabel->setText(trLocal("Błąd", "Error"));
+                    dialog->setProperty("propertiesFolderScanError", true);
+                    dialog->setProperty("propertiesFolderScanFinished", true);
+                } else if (res.status == FolderSizeStatus::Unsupported) {
+                    sizeLabel->setText(trLocal("Niedostępne", "Unavailable"));
+                    diskSizeLabel->setText(trLocal("Niedostępne", "Unavailable"));
+                    containsLabel->setText(trLocal("Niedostępne", "Unavailable"));
+                    dialog->setProperty("propertiesFolderScanFinished", true);
+                }
+            });
+
+            QString scanPath = physicalPath;
+            scanWatcher->setFuture(QtConcurrent::run([scanPath, cancelToken, options, scanState] {
+                return FolderSizeCalculator::calculatePath(
+                    scanPath,
+                    cancelToken,
+                    options,
+                    [scanState, cancelToken](const FolderSizeProgress &p) {
+                        if (cancelToken->load(std::memory_order_relaxed)) return;
+                        std::lock_guard lock(scanState->mutex);
+                        scanState->progress = p;
+                        scanState->hasProgress = true;
+                    }
+                );
+            }));
+        } else {
+            dialog->setProperty("propertiesFolderScanActive", false);
+            dialog->setProperty("propertiesFolderScanFinished", false);
+        }
 
         auto applyChanges = [=]() -> bool {
             if (!alive || alive->isBusy()) return false;
@@ -1636,11 +1836,17 @@ public:
         auto *iconLabel = new QLabel(dialog);
         QString iconName = drive.iconName;
         if (iconName.isEmpty()) {
-            iconName = drive.isRemovable
-                ? QStringLiteral("drive-removable-media")
-                : QStringLiteral("drive-harddisk");
+            if (drive.isMtpDevice()) {
+                iconName = QStringLiteral("smartphone");
+            } else {
+                iconName = drive.isRemovable
+                    ? QStringLiteral("drive-removable-media")
+                    : QStringLiteral("drive-harddisk");
+            }
         }
-        iconLabel->setPixmap(themedIcon(iconName).pixmap(56, 56));
+        iconLabel->setPixmap(themedIcon(
+            iconName,
+            drive.isMtpDevice() ? QStringLiteral("smartphone") : QStringLiteral("drive-harddisk")).pixmap(56, 56));
         iconLabel->setFixedSize(64, 64);
         iconLabel->setAlignment(Qt::AlignCenter);
 
@@ -1655,7 +1861,9 @@ public:
         headerName->setWordWrap(true);
 
         auto *headerSubtitle = new QLabel(
-            drive.isMounted ? drive.mountPoint : trLocal("Niezamontowany", "Not mounted"),
+            drive.isMtpDevice()
+                ? trLocal("Urządzenie przenośne (MTP)", "Portable device (MTP)")
+                : (drive.isMounted ? drive.mountPoint : trLocal("Niezamontowany", "Not mounted")),
             dialog);
         headerSubtitle->setObjectName(QStringLiteral("driveHeaderSubtitle"));
         headerSubtitle->setTextInteractionFlags(Qt::TextSelectableByMouse);
@@ -1832,22 +2040,30 @@ public:
             }
 
             fsTypeValue->setText(data.formattedFileSystem());
-            mountedValue->setText(data.isMounted
-                ? trLocal("Zamontowany", "Mounted")
-                : trLocal("Niezamontowany", "Not mounted"));
-
-            if (data.isMounted) {
-                accessModeValue->setText(data.isReadOnly
-                    ? trLocal("Tylko do odczytu (ro)", "Read-only (ro)")
-                    : trLocal("Odczyt i zapis (rw)", "Read/Write (rw)"));
-                mountPointValue->setText(data.mountPoint.isEmpty() ? QStringLiteral("—") : data.mountPoint);
-                mountOptionsValue->setText(data.formattedMountOptions());
-                headerSubtitle->setText(data.mountPoint.isEmpty() ? trLocal("Zamontowany", "Mounted") : data.mountPoint);
-            } else {
+            if (drive.isMtpDevice()) {
+                mountedValue->setText(trLocal("Połączono (MTP)", "Connected (MTP)"));
                 accessModeValue->setText(QStringLiteral("—"));
                 mountPointValue->setText(QStringLiteral("—"));
                 mountOptionsValue->setText(QStringLiteral("—"));
-                headerSubtitle->setText(trLocal("Niezamontowany", "Not mounted"));
+                headerSubtitle->setText(trLocal("Urządzenie przenośne (MTP)", "Portable device (MTP)"));
+            } else {
+                mountedValue->setText(data.isMounted
+                    ? trLocal("Zamontowany", "Mounted")
+                    : trLocal("Niezamontowany", "Not mounted"));
+
+                if (data.isMounted) {
+                    accessModeValue->setText(data.isReadOnly
+                        ? trLocal("Tylko do odczytu (ro)", "Read-only (ro)")
+                        : trLocal("Odczyt i zapis (rw)", "Read/Write (rw)"));
+                    mountPointValue->setText(data.mountPoint.isEmpty() ? QStringLiteral("—") : data.mountPoint);
+                    mountOptionsValue->setText(data.formattedMountOptions());
+                    headerSubtitle->setText(data.mountPoint.isEmpty() ? trLocal("Zamontowany", "Mounted") : data.mountPoint);
+                } else {
+                    accessModeValue->setText(QStringLiteral("—"));
+                    mountPointValue->setText(QStringLiteral("—"));
+                    mountOptionsValue->setText(QStringLiteral("—"));
+                    headerSubtitle->setText(trLocal("Niezamontowany", "Not mounted"));
+                }
             }
 
             removableValue->setText(data.isRemovable

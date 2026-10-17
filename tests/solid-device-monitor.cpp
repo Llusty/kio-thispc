@@ -210,5 +210,93 @@ int main(int argc, char **argv)
                "onReady hook receives correct SolidDeviceMonitor pointer");
     }
 
-    qInfo("PASS: %d SolidDeviceMonitor assertions; debounce, hotplug, mount transitions, spurious suppression", checks);
+    // ------------------------------------------------------------------
+    // Test 11: Stage 1.2 — MTP UDev hotplug add & remove
+    // ------------------------------------------------------------------
+    {
+        int changed = 0;
+        SolidDeviceMonitor monitor(
+            SolidDeviceMonitor::NotifierHooks{},
+            0);
+        QObject::connect(&monitor, &SolidDeviceMonitor::devicesChanged,
+                         [&] { ++changed; });
+
+        const QString mtpUdi = QStringLiteral(
+            "/org/kde/solid/udev/sys/devices/pci0000:00/0000:00:14.0/usb1/1-2");
+        monitor.simulateDeviceAdded(mtpUdi);
+        app.processEvents();
+        verify(changed == 1, "MTP UDev hotplug add triggers devicesChanged");
+
+        monitor.simulateDeviceRemoved(mtpUdi);
+        app.processEvents();
+        verify(changed == 2, "MTP UDev hotplug remove triggers devicesChanged");
+    }
+
+    // ------------------------------------------------------------------
+    // Test 12: Stage 1.2 — Phone USB mode switch (charging -> USB reset -> MTP)
+    // collapses into a single debounced devicesChanged signal
+    // ------------------------------------------------------------------
+    {
+        int changed = 0;
+        SolidDeviceMonitor monitor(
+            SolidDeviceMonitor::NotifierHooks{},
+            40 /* ms */);
+        QObject::connect(&monitor, &SolidDeviceMonitor::devicesChanged,
+                         [&] { ++changed; });
+
+        const QString chargingUdi = QStringLiteral(
+            "/org/kde/solid/udev/sys/devices/pci0000:00/0000:00:14.0/usb1/1-2");
+        const QString mtpInterfaceUdi = QStringLiteral(
+            "/org/kde/solid/udev/sys/devices/pci0000:00/0000:00:14.0/usb1/1-2/1-2:1.0");
+
+        // Android USB mode switch from Charging to File Transfer (MTP) causes a rapid
+        // USB disconnect + re-enumeration burst on the bus:
+        monitor.simulateDeviceRemoved(chargingUdi);
+        monitor.simulateDeviceAdded(chargingUdi);
+        monitor.simulateDeviceAdded(mtpInterfaceUdi);
+
+        QEventLoop loop;
+        QTimer::singleShot(100, &loop, &QEventLoop::quit);
+        loop.exec();
+
+        verify(changed == 1,
+               "Android Charging -> MTP USB reset burst collapses into 1 devicesChanged");
+    }
+
+    // ------------------------------------------------------------------
+    // Test 13: Stage 1.2 — Two MTP phones hotplugged and reconnected on new port
+    // ------------------------------------------------------------------
+    {
+        int changed = 0;
+        SolidDeviceMonitor monitor(
+            SolidDeviceMonitor::NotifierHooks{},
+            0);
+        QObject::connect(&monitor, &SolidDeviceMonitor::devicesChanged,
+                         [&] { ++changed; });
+
+        const QString phoneAUdiPort1 = QStringLiteral(
+            "/org/kde/solid/udev/sys/devices/pci0000:00/0000:00:14.0/usb1/1-1");
+        const QString phoneBUdiPort2 = QStringLiteral(
+            "/org/kde/solid/udev/sys/devices/pci0000:00/0000:00:14.0/usb1/1-2");
+        const QString phoneAUdiPort3 = QStringLiteral(
+            "/org/kde/solid/udev/sys/devices/pci0000:00/0000:00:14.0/usb1/1-3");
+
+        monitor.simulateDeviceAdded(phoneAUdiPort1);
+        app.processEvents();
+        verify(changed == 1, "first MTP phone connect triggers devicesChanged");
+
+        monitor.simulateDeviceAdded(phoneBUdiPort2);
+        app.processEvents();
+        verify(changed == 2, "second MTP phone connect triggers devicesChanged");
+
+        monitor.simulateDeviceRemoved(phoneAUdiPort1);
+        app.processEvents();
+        verify(changed == 3, "first MTP phone disconnect triggers devicesChanged");
+
+        monitor.simulateDeviceAdded(phoneAUdiPort3);
+        app.processEvents();
+        verify(changed == 4, "first MTP phone reconnect on port 3 triggers devicesChanged");
+    }
+
+    qInfo("PASS: %d SolidDeviceMonitor assertions; debounce, hotplug, mount transitions, MTP mode-switch, spurious suppression", checks);
 }

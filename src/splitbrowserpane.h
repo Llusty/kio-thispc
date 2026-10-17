@@ -449,7 +449,10 @@ public:
         m_contentStack = new QStackedWidget(this);
         outer->addWidget(m_contentStack, 1);
         m_reconnect = new RemoteReconnectBar(this,
-            [this](const QUrl &url) { navigateTo(url, true); });
+            [this](const QUrl &url) {
+                const QUrl target = resolveReconnectedMtpUrl(url, m_drives);
+                navigateTo(target, true);
+            });
         outer->addWidget(m_reconnect);
         connect(&m_listingCore, &DirectoryListingCore::listingCanceled, this, [this] {
             if (!m_pendingRemoteUrl.isValid()) return;
@@ -722,6 +725,8 @@ public:
     DirectoryTreeWidget *detailsView() const { return m_details; }
     DirectoryPreviewAdapter *previewAdapter() const { return m_previewAdapter; }
     KIO::ListJob *listingJob() const { return m_listingCore.listingJob(); }
+    DirectoryListingCore &listingCoreForTesting() { return m_listingCore; }
+    const DirectoryListingCore &listingCoreForTesting() const { return m_listingCore; }
     quint64 listingStartCount() const { return m_listingCore.startListingCount(); }
     void cancelListing() { m_listingCore.cancelListing(); m_pendingRemoteUrl.clear(); if (m_previewAdapter) m_previewAdapter->cancel(); }
     const QList<FileInfo> &files() const { return m_listingCore.files(); }
@@ -938,6 +943,79 @@ public:
     NavigationHistory::Snapshot navigationSnapshot() const
     { return {m_currentUrl, m_history, m_historyIndex}; }
 
+    static bool isMtpLocationUrl(const QUrl &url)
+    {
+        if (url.scheme().compare(QStringLiteral("mtp"), Qt::CaseInsensitive) == 0) {
+            return true;
+        }
+        if (isSearchLocation(url)) {
+            return searchBaseFromUrl(url).scheme().compare(
+                       QStringLiteral("mtp"), Qt::CaseInsensitive) == 0;
+        }
+        return false;
+    }
+
+    bool isDisconnectedMtpUrl(const QUrl &url) const
+    {
+        if (!isMtpLocationUrl(url)) {
+            return false;
+        }
+        const QUrl target = isSearchLocation(url) ? searchBaseFromUrl(url) : url;
+        for (const DriveInfo &drive : m_drives) {
+            if (urlBelongsToMtpDrive(target, drive)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool handleDisconnectedMtpDrive(const DriveInfo &removedDrive)
+    {
+        if (!removedDrive.isMtpDevice()) {
+            return false;
+        }
+        auto matchesRemoved = [&removedDrive](const QUrl &u) {
+            if (urlBelongsToMtpDrive(u, removedDrive)) {
+                return true;
+            }
+            if (isSearchLocation(u)) {
+                return urlBelongsToMtpDrive(searchBaseFromUrl(u), removedDrive);
+            }
+            return false;
+        };
+
+        const bool currentMatches = matchesRemoved(m_currentUrl);
+        const bool loadingMatches = (m_listingCore.isLoading() || m_listingCore.listingJob() != nullptr)
+            && (matchesRemoved(m_listingCore.currentUrl()) || matchesRemoved(m_listingCore.requestedUrl()));
+
+        if (currentMatches || loadingMatches) {
+            cancelListing();
+            cancelSearch(false);
+            m_listingCore.setFiles({});
+            if (m_list) {
+                m_list->clear();
+            }
+            if (m_details) {
+                m_details->clear();
+            }
+            if (m_contentStack && m_directoryPage) {
+                m_contentStack->setCurrentWidget(m_directoryPage);
+            }
+            const QString disconnectMsg = trLocal("Urządzenie MTP zostało odłączone.", "MTP device disconnected.");
+            if (m_reconnect) {
+                m_reconnect->showFailure(m_currentUrl, disconnectMsg);
+            }
+            if (m_status) {
+                m_status->setText(disconnectMsg);
+            }
+            Q_EMIT statusMessageRequested(disconnectMsg, 6000);
+            updateNavigationButtons();
+            return true;
+        }
+
+        return false;
+    }
+
     void restoreNavigation(const NavigationHistory::Snapshot &snapshot)
     {
         cancelListing();
@@ -945,7 +1023,9 @@ public:
         restored.restore(snapshot);
         const auto desired = restored.snapshot();
         const bool remote = RemoteUrlHelper::isRemoteUrl(desired.currentUrl);
-        restored.restore(remote ? NavigationHistory::safeRestoreBaseline(desired) : desired);
+        const bool disconnectedMtp = isDisconnectedMtpUrl(desired.currentUrl);
+        restored.restore((remote || disconnectedMtp)
+            ? NavigationHistory::safeRestoreBaseline(desired) : desired);
         const auto safe = restored.snapshot();
         m_history = safe.history;
         m_historyIndex = safe.historyIndex;
@@ -1053,10 +1133,15 @@ private:
             locationIcon(m_currentUrl));
 
         QVector<SegmentedPathButton::Segment> segments;
+        const bool isMtp = m_currentUrl.scheme().compare(QStringLiteral("mtp"), Qt::CaseInsensitive) == 0;
         if (m_currentUrl.isLocalFile()) {
             segments = localPathSegments(m_currentUrl);
         } else if (isAdminUrl(m_currentUrl)) {
             for (const auto &segment : LocationPresentation::adminPathSegments(m_currentUrl)) {
+                segments.append({segment.text, segment.url});
+            }
+        } else if (isMtp) {
+            for (const auto &segment : LocationPresentation::mtpPathSegments(m_currentUrl, m_drives)) {
                 segments.append({segment.text, segment.url});
             }
         } else if (RemoteUrlHelper::isRemoteUrl(m_currentUrl)) {
@@ -1064,7 +1149,7 @@ private:
                 segments.append({segment.text, segment.url});
             }
         }
-        if (m_currentUrl.isLocalFile() || RemoteUrlHelper::isRemoteUrl(m_currentUrl)) {
+        if (m_currentUrl.isLocalFile() || RemoteUrlHelper::isRemoteUrl(m_currentUrl) || isMtp) {
             QStringList labels;
             for (const auto &segment : segments) labels.append(segment.text);
             m_breadcrumbButton->setText(labels.join(QStringLiteral("  ›  ")));
@@ -1176,7 +1261,9 @@ private:
                 [this, targetUrl](const QString &error) {
                     if (m_pendingRemoteUrl != targetUrl) return;
                     m_pendingRemoteUrl.clear();
-                    const QString sanitized = RemoteUrlHelper::sanitizeErrorMessage(error, targetUrl);
+                    const QString sanitized = targetUrl.scheme().compare(QStringLiteral("mtp"), Qt::CaseInsensitive) == 0
+                        ? mtpErrorMessageForUrl(targetUrl, m_drives)
+                        : RemoteUrlHelper::sanitizeErrorMessage(error, targetUrl);
                     m_status->setText(sanitized);
                     m_reconnect->showFailure(targetUrl, sanitized);
                     Q_EMIT statusMessageRequested(sanitized, 6000);
@@ -1363,10 +1450,38 @@ private:
         options.emptyNamePolicy = DirectoryListingCore::EmptyNamePolicy::RawName;
         m_listingCore.startListing(url, options, {
             [this, url](KIO::ListJob *) {
+                const QUrl effectiveUrl = normalizedUrl(m_listingCore.currentUrl().isValid()
+                    ? m_listingCore.currentUrl()
+                    : url);
+                if (!sameLocation(effectiveUrl, m_currentUrl)) {
+                    m_currentUrl = effectiveUrl;
+                    if (m_historyIndex >= 0 && m_historyIndex < m_history.size()
+                        && sameLocation(m_history.at(m_historyIndex), url)) {
+                        m_history[m_historyIndex] = effectiveUrl;
+                    }
+                    m_searchState.location = effectiveUrl;
+                    m_list->setDropDirectory(effectiveUrl);
+                    m_details->setDropDirectory(effectiveUrl);
+                    if (m_previewAdapter) {
+                        m_previewAdapter->setCurrentDirectoryUrl(effectiveUrl);
+                    }
+                    updateNavigationButtons();
+                    Q_EMIT locationChanged(m_currentUrl);
+                    Q_EMIT stateChanged();
+                }
                 renderItems();
-                Q_EMIT listingSucceeded(url);
+                Q_EMIT listingSucceeded(m_currentUrl);
             },
-            [this](const QString &error) { m_status->setText(error); }
+            [this, url](const QString &error) {
+                if (url.scheme().compare(QStringLiteral("mtp"), Qt::CaseInsensitive) == 0 && m_reconnect) {
+                    const QString sanitized = mtpErrorMessageForUrl(url, m_drives);
+                    m_status->setText(sanitized);
+                    m_reconnect->showFailure(url, sanitized);
+                    Q_EMIT statusMessageRequested(sanitized, 6000);
+                    return;
+                }
+                m_status->setText(error);
+            }
         });
     }
 

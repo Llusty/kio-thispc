@@ -146,21 +146,42 @@ void DriveHomeCoordinator::receiveEntries(
             removableFlag = entry.stringValue(KIO::UDSEntry::UDS_EXTRA + 7);
         }
 
+        const QString kindTag = entry.stringValue(KIO::UDSEntry::UDS_EXTRA + 9).trimmed();
+        const bool explicitMtp = (kindTag.compare(QStringLiteral("mtp"), Qt::CaseInsensitive) == 0);
+        const bool explicitVolume = (kindTag.compare(QStringLiteral("volume"), Qt::CaseInsensitive) == 0);
+
         if (id == QStringLiteral(".") || id == QStringLiteral("..")
             || name.isEmpty() || name == QStringLiteral(".")) {
             continue;
         }
 
+        const QUrl candidateTargetUrl(target);
+        const bool inferredMtp = !explicitVolume
+            && candidateTargetUrl.isValid()
+            && candidateTargetUrl.scheme().compare(QStringLiteral("mtp"), Qt::CaseInsensitive) == 0;
+        const DriveDeviceKind deviceKind = (explicitMtp || inferredMtp)
+            ? DriveDeviceKind::PortableMediaMtp
+            : DriveDeviceKind::StorageVolume;
+
         bool isMounted = true;
-        if (!mountedFlag.isEmpty()) {
+        if (deviceKind == DriveDeviceKind::PortableMediaMtp) {
+            isMounted = true;
+        } else if (!mountedFlag.isEmpty()) {
             isMounted = (mountedFlag == QStringLiteral("1"));
         } else {
             isMounted = !target.isEmpty() && !mountPoint.isEmpty();
         }
 
         QUrl targetUrl;
-        if (isMounted) {
-            targetUrl = QUrl(target);
+        if (deviceKind == DriveDeviceKind::PortableMediaMtp) {
+            targetUrl = candidateTargetUrl;
+            if (target.isEmpty()
+                || !targetUrl.isValid()
+                || targetUrl.scheme().compare(QStringLiteral("mtp"), Qt::CaseInsensitive) != 0) {
+                continue;
+            }
+        } else if (isMounted) {
+            targetUrl = candidateTargetUrl;
             if (target.isEmpty() || !targetUrl.isValid()) {
                 continue;
             }
@@ -188,7 +209,9 @@ void DriveHomeCoordinator::receiveEntries(
         drive.id = id;
         drive.udi = udi;
         drive.isMounted = isMounted;
-        drive.isRemovable = (removableFlag == QStringLiteral("1"));
+        drive.isRemovable = (removableFlag == QStringLiteral("1"))
+            || (deviceKind == DriveDeviceKind::PortableMediaMtp);
+        drive.deviceKind = deviceKind;
         drive.name = name;
         drive.targetUrl = targetUrl;
         drive.iconName = entry.stringValue(KIO::UDSEntry::UDS_ICON_NAME);
@@ -196,7 +219,9 @@ void DriveHomeCoordinator::receiveEntries(
         drive.capacityText = entry.stringValue(KIO::UDSEntry::UDS_EXTRA + 1);
         drive.usedText = entry.stringValue(KIO::UDSEntry::UDS_EXTRA + 2);
         drive.fileSystem = entry.stringValue(KIO::UDSEntry::UDS_EXTRA + 3);
-        drive.mountPoint = mountPoint;
+        drive.mountPoint = (deviceKind == DriveDeviceKind::PortableMediaMtp)
+            ? QString()
+            : mountPoint;
 
         QString percentText = drive.usedText;
         percentText.remove(QLatin1Char('%'));

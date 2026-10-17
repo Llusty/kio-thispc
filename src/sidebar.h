@@ -335,13 +335,19 @@ public:
         layout->setSpacing(7);
 
         QString iconName = QStringLiteral("drive-harddisk");
-        if (drive.iconName.contains(QStringLiteral("removable"))) {
+        if (drive.isMtpDevice()) {
+            iconName = !drive.iconName.trimmed().isEmpty()
+                ? drive.iconName.trimmed()
+                : QStringLiteral("smartphone");
+        } else if (drive.iconName.contains(QStringLiteral("removable"))) {
             iconName = QStringLiteral("drive-removable-media");
         }
 
         auto *icon = new QLabel(this);
         icon->setPixmap(
-            themedIcon(iconName, QStringLiteral("drive-harddisk"))
+            themedIcon(
+                iconName,
+                drive.isMtpDevice() ? QStringLiteral("smartphone") : QStringLiteral("drive-harddisk"))
                 .pixmap(17, 17));
         icon->setFixedSize(19, 19);
         makePassive(icon);
@@ -360,6 +366,9 @@ public:
         bar->setTextVisible(false);
         bar->setFixedHeight(5);
         makePassive(bar);
+        if (drive.isMtpDevice() && !drive.hasCapacityInformation()) {
+            bar->setVisible(false);
+        }
 
         body->addWidget(name);
         body->addWidget(bar);
@@ -370,6 +379,11 @@ public:
     QUrl url() const
     {
         return m_drive.targetUrl;
+    }
+
+    const DriveInfo &drive() const
+    {
+        return m_drive;
     }
 
     void setCurrent(bool current)
@@ -452,12 +466,18 @@ protected:
             trLocal("Otwórz w drugim panelu", "Open in other pane"));
 
         menu.addSeparator();
-        QAction *openDolphinAction = menu.addAction(
-            themedIcon(QStringLiteral("system-file-manager")),
-            trLocal("Otwórz w Dolphinie", "Open in Dolphin"));
-        QAction *copyPathAction = menu.addAction(
-            themedIcon(QStringLiteral("edit-copy")),
-            trLocal("Kopiuj punkt montowania", "Copy mount point"));
+        QAction *openDolphinAction = nullptr;
+        if (drive.canNavigate()) {
+            openDolphinAction = menu.addAction(
+                themedIcon(QStringLiteral("system-file-manager")),
+                trLocal("Otwórz w Dolphinie", "Open in Dolphin"));
+        }
+        QAction *copyPathAction = nullptr;
+        if (drive.canCopyMountPoint()) {
+            copyPathAction = menu.addAction(
+                themedIcon(QStringLiteral("edit-copy")),
+                trLocal("Kopiuj punkt montowania", "Copy mount point"));
+        }
 
         menu.addSeparator();
         QAction *propertiesAction = menu.addAction(
@@ -473,9 +493,9 @@ protected:
             Q_EMIT openInNewWindowRequested(drive.targetUrl);
         } else if (chosen == splitPaneAction) {
             Q_EMIT openInSplitPaneRequested(drive.targetUrl);
-        } else if (chosen == openDolphinAction) {
+        } else if (openDolphinAction && chosen == openDolphinAction) {
             Q_EMIT openInDolphinRequested(drive.targetUrl);
-        } else if (chosen == copyPathAction) {
+        } else if (copyPathAction && chosen == copyPathAction) {
             QGuiApplication::clipboard()->setText(drive.mountPoint);
         } else if (chosen == propertiesAction) {
             Q_EMIT propertiesRequested(drive);
@@ -493,6 +513,24 @@ private:
 
     static QString driveTooltip(const DriveInfo &drive)
     {
+        if (drive.isMtpDevice()) {
+            QString tip = drive.name
+                + QStringLiteral("\n")
+                + trLocal("Urządzenie przenośne (MTP)", "Portable device (MTP)");
+            if (drive.hasCapacityInformation()) {
+                tip += QStringLiteral("\n")
+                    + drive.freeText
+                    + trLocal(" wolne z ", " free of ")
+                    + drive.capacityText;
+            }
+            if (!drive.fileSystem.isEmpty()) {
+                tip += QStringLiteral("\n")
+                    + trLocal("Protokół: ", "Protocol: ")
+                    + drive.fileSystem;
+            }
+            return tip;
+        }
+
         return drive.name
             + QStringLiteral("\n")
             + drive.freeText
@@ -1516,7 +1554,7 @@ private:
         m_driveSidebarButtons.clear();
 
         for (const DriveInfo &drive : std::as_const(m_drives)) {
-            if (!drive.isMounted || !drive.targetUrl.isValid()) {
+            if (!drive.canNavigate()) {
                 continue;
             }
             auto *button = new SidebarDriveButton(drive, this);
@@ -1786,7 +1824,10 @@ private:
         for (SidebarDriveButton *button :
              std::as_const(m_driveSidebarButtons)) {
             button->setCurrent(false);
-            if (isWithinLocation(m_currentLocation, button->url())) {
+            const bool withinDrive = isWithinLocation(m_currentLocation, button->url())
+                || (button->drive().isMtpDevice()
+                    && urlBelongsToMtpDrive(m_currentLocation, button->drive()));
+            if (withinDrive) {
                 const int depth = locationDepth(button->url());
                 if (depth > bestDepth) {
                     bestDepth = depth;

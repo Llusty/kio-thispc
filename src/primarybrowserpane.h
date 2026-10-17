@@ -55,6 +55,8 @@ public:
     QIcon iconForFile(const FileInfo &, QMimeDatabase &, bool);
     void cancelListing();
     bool isLoading() const { return m_listingCore.isLoading(); }
+    QUrl activeListingUrl() const { return m_listingCore.currentUrl(); }
+    QUrl requestedListingUrl() const { return m_listingCore.requestedUrl(); }
     void setStatusText(const QString &);
     QLabel *statusLabel() const { return m_directoryStatus; }
 #ifdef THISPC_TEST_HARNESS

@@ -11,6 +11,8 @@ static void verify(bool value, const char *description)
     ++checks;
 }
 
+#include "mtp-contract-spec.h"
+
 static KIO::UDSEntry makeEntry(
     const QString &id,
     const QString &name,
@@ -432,8 +434,275 @@ int main(int argc, char **argv)
         // Verify post-mount refresh does NOT activate periodic polling timer
         verify(!window.m_refreshTimer.isActive(),
                "post-mount refresh does not start cyclic timer or introduce periodic polling");
+
+        // ===================================================================
+        // Stage 1.2: MTP Activation, KIO Redirection & Navigation (Section 4, 5, 6)
+        // ===================================================================
+        const QString mtpUdi = QStringLiteral("/org/kde/solid/udev/sys/devices/pci0000:00/0000:00:14.0/usb1/1-2");
+        const DriveInfo mtpPhone = MtpUdsContract::makeMtpDriveInfo(
+            QStringLiteral("mtp-pixel8"),
+            QStringLiteral("Google Pixel 8 Pro"),
+            mtpUdi);
+        const QUrl redirectedRoot(QStringLiteral("mtp:/Google Pixel 8 Pro"));
+        const QUrl internalStorageUrl(QStringLiteral("mtp:/Google Pixel 8 Pro/Internal shared storage"));
+        const QUrl sdCardUrl(QStringLiteral("mtp:/Google Pixel 8 Pro/SD card"));
+
+        // 1. Live Solid validation on an MTP UDev UDI rejects Solid::StorageAccess::setup()
+        {
+            DeviceMountController liveSolidController;
+            int mtpMountFired = 0;
+            bool mtpMountSuccess = true;
+            liveSolidController.mountDevice(mtpUdi, [&](bool s, const QString &, const QString &) {
+                ++mtpMountFired;
+                mtpMountSuccess = s;
+            });
+            verify(mtpMountFired == 1 && !mtpMountSuccess,
+                   "DeviceMountController rejects MTP UDev UDI because it has no Solid::StorageAccess");
+        }
+
+        // 2. Activating an MTP card in Primary or Split NEVER calls DeviceMountController::mountDevice
+        windowMountRequestsStarted = 0;
+        lastRequestedWindowUdi.clear();
+        window.m_driveHomeCoordinator.setSnapshotForTesting({mountedDrive, unmountedDrive, mtpPhone});
+        QApplication::processEvents();
+
+        if (window.m_sidebar) {
+            verify(window.m_sidebar->drives().size() == 2,
+                   "sidebar includes mounted volume and navigable MTP phone, excludes unmounted volume");
+        }
+
+        window.handleDriveActivation(PaneId::Primary, mtpPhone);
+        verify(windowMountRequestsStarted == 0 && !window.mountControllerForTesting().isMountPending(mtpUdi),
+               "activating MTP phone in Primary NEVER calls Solid::StorageAccess::setup()");
+        verify(window.m_primaryPane->listingCoreForTesting().isLoading(),
+               "activating MTP phone starts KIO listing for mtp:udi=<UDI> in Primary");
+
+        // 3. Simulate KIO MTP redirection (mtp:udi=<UDI> -> mtp:/Google Pixel 8 Pro) + storage entries
+        {
+            auto &core = window.m_primaryPane->listingCoreForTesting();
+            QPointer<KIO::ListJob> job = core.listingJob();
+            verify(job != nullptr, "Primary KIO ListJob exists for MTP listing");
+
+            KIO::UDSEntry internalEntry;
+            internalEntry.fastInsert(KIO::UDSEntry::UDS_NAME, QStringLiteral("Internal shared storage"));
+            internalEntry.fastInsert(KIO::UDSEntry::UDS_FILE_TYPE, S_IFDIR);
+            internalEntry.fastInsert(KIO::UDSEntry::UDS_MIME_TYPE, QStringLiteral("inode/directory"));
+
+            KIO::UDSEntry sdEntry;
+            sdEntry.fastInsert(KIO::UDSEntry::UDS_NAME, QStringLiteral("SD card"));
+            sdEntry.fastInsert(KIO::UDSEntry::UDS_FILE_TYPE, S_IFDIR);
+            sdEntry.fastInsert(KIO::UDSEntry::UDS_MIME_TYPE, QStringLiteral("inode/directory"));
+
+            const quint64 listingCountBeforeFinish = core.startListingCount();
+            const int historySizeBeforeFinish = window.m_navigation.history().size();
+
+            Q_EMIT job->redirection(job, redirectedRoot);
+            verify(core.currentUrl() == redirectedRoot,
+                   "DirectoryListingCore updates its internal currentUrl upon KIO redirection");
+
+            Q_EMIT job->entries(job, {internalEntry, sdEntry});
+            core.slotJobFinished(job);
+            if (job) job->kill(KJob::Quietly);
+            QApplication::processEvents();
+
+            verify(core.files().size() == 2,
+                   "DirectoryListingCore commits 2 MTP storage entries after redirection");
+            verify(core.files().at(0).url == internalStorageUrl
+                       && core.files().at(1).url == sdCardUrl,
+                   "MTP storage child URLs use redirected mtp:/<Device>/<Storage> base, not mtp:udi=");
+
+            // Stage 1.4 active verification: PrimaryBrowserPane and ThisPcWindow::m_navigation
+            // synchronize their currentUrl to core.currentUrl() after KIO redirection!
+            verify(
+                window.m_primaryPane->currentUrl() == redirectedRoot
+                    && window.m_navigation.currentUrl() == redirectedRoot,
+                "PrimaryBrowserPane and ThisPcWindow::m_navigation update currentUrl from mtp:udi= to redirected mtp:/<Device>");
+            verify(core.startListingCount() == listingCountBeforeFinish,
+                   "MTP redirection synchronization in Primary does not trigger a duplicate KIO startListing");
+            verify(window.m_navigation.history().size() == historySizeBeforeFinish
+                       && window.m_navigation.history().at(window.m_navigation.historyIndex()) == redirectedRoot,
+                   "MTP redirection updates Primary current history entry in-place without leaving raw mtp:udi=");
+            verify(window.m_navigation.parentUrl(window.m_driveHomeCoordinator.drives()) == kThisPcUrl,
+                   "Primary parentUrl at redirected MTP device root is thispc:/");
+        }
+
+        // 4. Split View MTP activation & KIO redirection
+        window.setSplitViewEnabled(true);
+        QApplication::processEvents();
+        window.handleDriveActivation(PaneId::Split, mtpPhone);
+        verify(windowMountRequestsStarted == 0,
+               "activating MTP phone in Split NEVER calls Solid::StorageAccess::setup()");
+        if (window.m_splitPane) {
+            auto &splitCore = window.m_splitPane->m_listingCore;
+            const quint64 splitListingsBefore = splitCore.startListingCount();
+            const int splitHistBefore = window.m_splitPane->m_history.size();
+            QPointer<KIO::ListJob> splitJob = splitCore.listingJob();
+            verify(splitJob != nullptr, "Split KIO ListJob exists for MTP listing");
+            Q_EMIT splitJob->redirection(splitJob, redirectedRoot);
+            splitCore.slotJobFinished(splitJob);
+            if (splitJob) splitJob->kill(KJob::Quietly);
+            QApplication::processEvents();
+
+            verify(
+                window.m_splitPane->currentUrl() == redirectedRoot,
+                "SplitBrowserPane updates currentUrl from mtp:udi= to redirected mtp:/<Device>");
+            verify(splitCore.startListingCount() == splitListingsBefore,
+                   "MTP redirection synchronization in Split does not trigger a duplicate KIO startListing");
+            verify(window.m_splitPane->m_history.size() == splitHistBefore
+                       && window.m_splitPane->m_history.at(window.m_splitPane->m_historyIndex) == redirectedRoot,
+                   "MTP redirection updates Split current history entry in-place without leaving raw mtp:udi=");
+            verify(window.m_splitPane->parentUrl() == kThisPcUrl,
+                   "Split parentUrl at redirected MTP device root is thispc:/");
+        }
+
+        // 5. Locked phone / charging-only KIO failure (0 storages / ERR_CANNOT_ENTER_DIRECTORY)
+        {
+            auto &core = window.m_primaryPane->listingCoreForTesting();
+            bool failureReported = false;
+            QString capturedError;
+            core.startListing(mtpPhone.targetUrl, {}, {
+                [](KIO::ListJob *) {},
+                [&](const QString &err) {
+                    failureReported = true;
+                    capturedError = err;
+                }
+            });
+            QPointer<KIO::ListJob> lockedJob = core.listingJob();
+            verify(lockedJob != nullptr, "locked phone listing starts KIO ListJob");
+            Q_EMIT lockedJob->redirection(lockedJob, redirectedRoot);
+            // Cleanly cancel the test job and verify cancellation / failure state safety
+            core.cancelListing();
+            verify(!core.isLoading() && core.listingJob() == nullptr,
+                   "canceling active MTP KIO job resets loading state without dangling job pointer");
+            verify(core.currentUrl() == mtpPhone.targetUrl,
+                   "canceling redirected MTP KIO job rolls DirectoryListingCore::currentUrl back to requested URL");
+        }
+
+        // 6. NavigationHistory Back/Forward with KIO redirection updateCurrent
+        {
+            NavigationHistory nav;
+            nav.navigate(kThisPcUrl);
+            nav.navigate(mtpPhone.targetUrl);
+            // Simulate KIO redirection updating the current entry in-place:
+            nav.updateCurrent(redirectedRoot, true);
+            nav.navigate(internalStorageUrl);
+
+            verify(nav.currentUrl() == internalStorageUrl, "MTP nav at internal storage");
+            verify(nav.back() == redirectedRoot, "MTP Back returns to redirected mtp:/<Device>, not raw mtp:udi=");
+            verify(nav.back() == kThisPcUrl, "MTP second Back returns to thispc:/");
+            verify(nav.forward() == redirectedRoot, "MTP Forward goes to mtp:/<Device>");
+            verify(nav.forward() == internalStorageUrl, "MTP second Forward goes to internal storage");
+        }
+
+        // 7. Pane Swap (swapSplitPanes) between MTP URL and local directory
+        {
+            QTemporaryDir swapLocalDir;
+            const QUrl swapLocalUrl = QUrl::fromLocalFile(swapLocalDir.path());
+            window.m_primaryPane->setCurrentUrl(internalStorageUrl);
+            window.m_navigation.navigate(internalStorageUrl);
+            window.m_splitPane->setCurrentUrl(swapLocalUrl, true);
+
+            window.swapSplitPanes();
+            // Cancel any in-flight KIO job started by swapSplitPanes
+            window.m_primaryPane->cancelListing();
+            window.m_splitPane->cancelListing();
+            QApplication::processEvents();
+
+            verify(window.m_navigation.currentUrl() == swapLocalUrl,
+                   "swapSplitPanes moves local directory URL into Primary pane");
+            verify(window.m_splitPane->currentUrl() == internalStorageUrl,
+                   "swapSplitPanes moves MTP internal storage URL into Split pane");
+        }
+
+        // 8. Session save and restore with a stale/disconnected MTP URL
+        {
+            const QUrl staleMtpUrl(QStringLiteral("mtp:/Disconnected Phone/Internal shared storage/DCIM"));
+            const QUrl staleMtpUdiUrl(QStringLiteral("mtp:udi=/org/kde/solid/udev/sys/devices/usb9/9-9"));
+            QTemporaryDir sessionLocalDir;
+            const QUrl sessionLocalUrl = QUrl::fromLocalFile(sessionLocalDir.path());
+
+            // 8a. NavigationHistory::safeRestoreBaseline strips unverified/stale MTP URLs
+            const NavigationHistory::Snapshot rawMtpSnap{
+                staleMtpUrl, {kThisPcUrl, staleMtpUrl}, 1};
+            const NavigationHistory::Snapshot safeMtpSnap =
+                NavigationHistory::safeRestoreBaseline(rawMtpSnap);
+            verify(
+                safeMtpSnap.currentUrl == kThisPcUrl && safeMtpSnap.history == QList<QUrl>{kThisPcUrl}
+                    && safeMtpSnap.historyIndex == 0,
+                "Session restore with stale/disconnected MTP URL uses safe fallback or transactional rollback");
+
+            const NavigationHistory::Snapshot rawLocalThenMtpSnap{
+                staleMtpUrl,
+                {kThisPcUrl, sessionLocalUrl, QUrl(QStringLiteral("mtp:/Disconnected Phone")), staleMtpUrl},
+                3};
+            const NavigationHistory::Snapshot safeLocalFallbackSnap =
+                NavigationHistory::safeRestoreBaseline(rawLocalThenMtpSnap);
+            verify(
+                safeLocalFallbackSnap.currentUrl == sessionLocalUrl
+                    && !safeLocalFallbackSnap.history.contains(staleMtpUrl)
+                    && !safeLocalFallbackSnap.history.contains(QUrl(QStringLiteral("mtp:/Disconnected Phone"))),
+                "safeRestoreBaseline falls back to last valid local URL and strips stale MTP entries from history");
+
+            // 8b. Full ThisPcWindow session restore with stale MTP URLs in Tab 0 (Primary + Split) and local URL in Tab 1
+            SessionSnapshot saved;
+            TabState tab0;
+            tab0.currentUrl = staleMtpUrl;
+            tab0.history = {kThisPcUrl, staleMtpUrl};
+            tab0.historyIndex = 1;
+            tab0.splitEnabled = true;
+            tab0.splitUrl = staleMtpUdiUrl;
+            tab0.splitHistory = {kThisPcUrl, staleMtpUdiUrl};
+            tab0.splitHistoryIndex = 1;
+
+            TabState tab1;
+            tab1.currentUrl = sessionLocalUrl;
+            tab1.history = {kThisPcUrl, sessionLocalUrl};
+            tab1.historyIndex = 1;
+            tab1.splitEnabled = true;
+            tab1.splitUrl = sessionLocalUrl;
+            tab1.splitHistory = {kThisPcUrl, sessionLocalUrl};
+            tab1.splitHistoryIndex = 1;
+
+            saved.tabs = {tab0, tab1};
+            saved.activeTab = 0;
+            saved.splitPaneActive = true;
+            SessionManager::save(saved);
+
+            const SessionSnapshot loaded = SessionManager::load(0, true);
+            verify(loaded.tabs.size() == 2 && loaded.tabs.first().currentUrl == staleMtpUrl,
+                   "SessionManager round-trips MTP URL in saved tab state");
+
+            const bool prevRestorePref = SessionManager::restorePreviousSessionEnabled();
+            SessionManager::setRestorePreviousSessionEnabled(true);
+            {
+                ThisPcWindow restoredWindow(kThisPcUrl, true);
+                restoredWindow.show();
+                QApplication::processEvents();
+
+                verify(restoredWindow.m_navigation.currentUrl() == kThisPcUrl,
+                       "restored Tab 0 Primary with disconnected MTP URL falls back to thispc:/");
+                verify(restoredWindow.m_primaryPane->currentUrl() == kThisPcUrl,
+                       "restored Tab 0 PrimaryBrowserPane currentUrl is thispc:/");
+                verify(!restoredWindow.m_navigation.canGoBack() && !restoredWindow.m_navigation.canGoForward(),
+                       "restored Tab 0 Primary history has no dangling stale MTP entries");
+                verify(restoredWindow.m_splitPane->currentUrl() == kThisPcUrl,
+                       "restored Tab 0 Split with disconnected mtp:udi= URL falls back to thispc:/");
+                verify(!restoredWindow.m_splitPane->canGoBack() && !restoredWindow.m_splitPane->canGoForward(),
+                       "restored Tab 0 Split history has no dangling stale MTP entries");
+
+                // Switch to Tab 1 (local directory in both Primary and Split)
+                restoredWindow.switchToTab(1);
+                QApplication::processEvents();
+                verify(restoredWindow.m_navigation.currentUrl() == sessionLocalUrl,
+                       "restored Tab 1 with local URL opens normally without interference from Tab 0 stale MTP");
+                verify(restoredWindow.m_splitPane->currentUrl() == sessionLocalUrl,
+                       "restored Tab 1 Split with local URL opens normally");
+            }
+            SessionManager::setRestorePreviousSessionEnabled(prevRestorePref);
+        }
     }
 
-    qInfo("PASS: %d DeviceMountController assertions; unmounted discovery, stable ID, exactly-once signals, and pane routing", checks);
+    qInfo("PASS: %d DeviceMountController assertions (%d pending MTP specs); unmounted discovery, stable ID, exactly-once signals, pane routing, MTP redirection",
+          checks, pendingMtpSpecs);
     return 0;
 }

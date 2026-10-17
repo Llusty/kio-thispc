@@ -2,6 +2,27 @@
 
 # Changelog
 
+## 0.41.1 — Integracja urządzeń MTP i kalkulator rozmiaru folderów
+
+- **Wykrywanie i obsługa urządzeń MTP (Android / aparaty):**
+  - Rozwiązano problem z niewykrywaniem urządzeń MTP (smartfonów, aparatów) na stronie głównej „Ten komputer” oraz w panelu bocznym.
+  - Wprowadzono pełną obsługę przekierowań i normalizacji KIO z surowych adresów `mtp:udi=...` na przyjazne ścieżki `mtp:/<Nazwa Urządzenia>`.
+  - Spójna integracja z widokiem dwupanelowym: niezależna nawigacja i synchronizacja ścieżek w widoku pojedynczym i Split View.
+- **Automatyczny hotplug MTP i ponowne łączenie:**
+  - Automatyczne wykrywanie podłączenia i odłączenia dzięki integracji Solid z demonem KDE KMTPd (`org.kde.kmtpd5`).
+  - Dopracowana obsługa fizycznego odłączenia kabla USB: karta telefonu i wpis w pasku bocznym znikają natychmiast, natomiast panel przeglądający odłączony folder zachowuje swój adres URL oraz historię nawigacji.
+  - Zawartość odłączonego katalogu zostaje bezpiecznie wyczyszczona, a w widoku pojawia się komunikat o odłączeniu („Urządzenie MTP zostało odłączone”) z przyciskiem „Połącz ponownie”.
+  - Ponowne podłączenie telefonu pozwala natychmiast odzyskać poprzednią lokalizację bez utraty kontekstu. Drugi panel pozostaje nienaruszony.
+  - Bezpieczne przywracanie sesji: ponowne uruchomienie aplikacji z zapisaną sesją MTP przy odłączonym telefonie bezpiecznie przekierowuje panel do widoku „Ten komputer” (`thispc:/`).
+- **Asynchroniczny kalkulator rozmiaru folderu i zajętości dysku we Właściwościach:**
+  - Wielowątkowe, asynchroniczne obliczanie łącznego rozmiaru logicznego oraz raportowanej zajętości blokowej dla lokalnych katalogów w oknie Właściwości, bez blokowania wątku GUI.
+  - Dokładne zliczanie plików, podfolderów i dowiązań symbolicznych z zachowaniem poprawnej polskiej deklinacji (np. *12 plików, 3 foldery* / *co najmniej X plików...*).
+  - Płynny podgląd postępu na żywo i subtelny 3-pikselowy pasek postępu w kolorze akcentu KDE.
+  - Dedykowane podpowiedzi (tooltips) objaśniające specyfikę alokacji na systemach Btrfs (CoW, transparentna kompresja, reflink) oraz NTFS (rozmiar klastra raportowany przez sterownik FUSE/jądro).
+  - Precyzja terminologiczna: raportowany „Rozmiar na dysku” odzwierciedla alokację blokową zwróconą przez system plików (`st_blocks * 512`), co na nowoczesnych systemach z CoW lub kompresją jest estymatą blokową, a nie gwarantowaną fizyczną liczbą zajętych bajtów.
+  - Zabezpieczenia skanowania: ochrona przed zapętleniem dowiązań symbolicznych (`FollowSymlinks::NoFollow`), deduplikacja hardlinków (`(dev, ino)`), kontrola granic punktu montowania, deterministyczne anulowanie wątku w tle przy zamknięciu okna oraz unieważnienie stanu w przypadku usunięcia lub zmiany nazwy celu.
+  - Ochrona protokołów zdalnych i wirtualnych: okno Właściwości celowo ogranicza rekursywne skanowanie do katalogów lokalnych (`file://`), nie wykonując rekurencyjnych zapytań dla `thispc:/`, `mtp:/`, `smb:/`, `sftp:/` ani `admin:/`.
+
 ## 0.41.0 — Zaawansowane wyszukiwanie i responsywny interfejs
 
 - **Kompaktowe pole wyszukiwania i responsywny popover (Wariant A):**

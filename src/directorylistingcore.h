@@ -84,6 +84,7 @@ public:
     quint64 generation() const { return m_generation; }
     quint64 startListingCount() const { return m_startListingCount; }
     QUrl currentUrl() const { return m_currentUrl; }
+    QUrl requestedUrl() const { return m_requestedUrl; }
 
     static FileInfo mapEntry(const QUrl &, const KIO::UDSEntry &);
     static bool acceptsEntry(const KIO::UDSEntry &, const FileInfo &,
@@ -108,6 +109,7 @@ private:
     quint64 m_generation = 0;
     quint64 m_startListingCount = 0;
     QUrl m_currentUrl;
+    QUrl m_requestedUrl;
     QList<FileInfo> m_files;
     QList<FileInfo> m_stagedFiles;
     QHash<QString, QIcon> m_thumbnailCache;

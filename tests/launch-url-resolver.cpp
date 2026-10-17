@@ -197,6 +197,67 @@ int main(int argc, char **argv)
     verify(LaunchUrlResolver::resolveLaunchUrl(url30, drives) == url30,
            "30. Empty or invalid rawUrl handled safely");
 
+    // =======================================================================
+    // Stage 1.2: MTP URL Resolution & Non-Local Safety Contract (Section 4 & 5)
+    // =======================================================================
+    {
+        const QString mtpUdi = QStringLiteral("/org/kde/solid/udev/sys/devices/pci0000:00/0000:00:14.0/usb1/1-2");
+        DriveInfo mtpDrive;
+        mtpDrive.id = QStringLiteral("mtp-pixel8");
+        mtpDrive.name = QStringLiteral("Google Pixel 8 Pro");
+        mtpDrive.udi = mtpUdi;
+        mtpDrive.targetUrl = QUrl(QStringLiteral("mtp:udi=%1").arg(mtpUdi));
+        mtpDrive.mountPoint.clear();
+        mtpDrive.fileSystem = QStringLiteral("MTP");
+        mtpDrive.isMounted = true;
+        mtpDrive.isRemovable = true;
+
+        QList<DriveInfo> drivesWithMtp = drives;
+        drivesWithMtp.append(mtpDrive);
+
+        // 31. Direct mtp:udi=<UDI> URL preserved untouched, never converted to file://
+        const QUrl mtpUdiUrl = mtpDrive.targetUrl;
+        const QUrl res31 = LaunchUrlResolver::resolveLaunchUrl(mtpUdiUrl, drivesWithMtp);
+        verify(res31 == mtpUdiUrl && !res31.isLocalFile() && res31.scheme() == QStringLiteral("mtp"),
+               "31. Direct mtp:udi=<UDI> URL preserved untouched");
+
+        // 32. Redirected mtp:/<Device>/Internal shared storage/... preserved untouched
+        const QUrl mtpInternalFile(QStringLiteral("mtp:/Google Pixel 8 Pro/Internal shared storage/DCIM/Camera/IMG_20261017.jpg"));
+        const QUrl res32 = LaunchUrlResolver::resolveLaunchUrl(mtpInternalFile, drivesWithMtp);
+        verify(res32 == mtpInternalFile && !res32.isLocalFile() && res32.scheme() == QStringLiteral("mtp"),
+               "32. Redirected mtp:/ internal storage file URL preserved untouched");
+
+        // 33. Redirected mtp:/<Device>/SD card/... preserved untouched
+        const QUrl mtpSdFile(QStringLiteral("mtp:/Google Pixel 8 Pro/SD card/Music/Track 01.flac"));
+        const QUrl res33 = LaunchUrlResolver::resolveLaunchUrl(mtpSdFile, drivesWithMtp);
+        verify(res33 == mtpSdFile && !res33.isLocalFile(),
+               "33. Redirected mtp:/ SD card file URL preserved untouched");
+
+        // 34. Unicode and spaces in mtp:/ URL preserved untouched
+        const QUrl mtpUnicode(QStringLiteral("mtp:/Telefon Żółć/Pamięć wewnętrzna/Wideo z wakacji 4K.mp4"));
+        const QUrl res34 = LaunchUrlResolver::resolveLaunchUrl(mtpUnicode, drivesWithMtp);
+        verify(res34 == mtpUnicode && !res34.isLocalFile(),
+               "34. Unicode and spaces in mtp:/ URL preserved untouched");
+
+        // 35. Percent-encoded characters in mtp:/ URL preserved untouched
+        const QUrl mtpEncoded(QStringLiteral("mtp:/Phone%20%231%20%26%20Test/Internal%20storage/file%20%5B1%5D.pdf"));
+        const QUrl res35 = LaunchUrlResolver::resolveLaunchUrl(mtpEncoded, drivesWithMtp);
+        verify(res35 == mtpEncoded && !res35.isLocalFile(),
+               "35. Percent-encoded characters in mtp:/ URL preserved untouched");
+
+        // 36. Explicit mtp: targetUrl takes precedence over thispc:/ rawUrl and is never converted to file://
+        const QUrl rawThisPcMtp(QStringLiteral("thispc:/mtp-pixel8"));
+        const QUrl res36 = LaunchUrlResolver::resolveLaunchUrl(rawThisPcMtp, drivesWithMtp, mtpUdiUrl);
+        verify(res36 == mtpUdiUrl && !res36.isLocalFile() && res36.scheme() == QStringLiteral("mtp"),
+               "36. Explicit mtp: targetUrl takes precedence and is never converted to file://");
+
+        // 37. Synthetic thispc:/<mtp-id>/subpath is NEVER converted to a fake local file:// path
+        const QUrl syntheticThisPcSubpath(QStringLiteral("thispc:/mtp-pixel8/Internal shared storage/secret.txt"));
+        const QUrl res37 = LaunchUrlResolver::resolveLaunchUrl(syntheticThisPcSubpath, drivesWithMtp);
+        verify(!res37.isLocalFile() && res37.scheme() != QStringLiteral("file"),
+               "37. thispc:/<mtp-id>/subpath is never converted to a fake local file:// path");
+    }
+
     qInfo("PASS: %d launch url resolver assertions", checks);
     return 0;
 }

@@ -1,7 +1,7 @@
 /*
  * kio-thispc - KF6 KIO worker providing thispc:/
  *
- * Version 0.41.0
+ * Version 0.41.1
  * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
@@ -12,6 +12,7 @@
 #include <Solid/Device>
 #include <Solid/DeviceInterface>
 #include <Solid/DeviceNotifier>
+#include <Solid/PortableMediaPlayer>
 #include <Solid/StorageAccess>
 #include <Solid/StorageDrive>
 #include <Solid/StorageVolume>
@@ -20,6 +21,7 @@
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFileInfo>
+#include <QHash>
 #include <QLocale>
 #include <QSet>
 #include <QStorageInfo>
@@ -54,6 +56,9 @@ struct VolumeInfo
     qint64 availableBytes = 0;
     bool removable = false;
     bool isMounted = true;
+    bool isMtp = false;
+    QString targetUrl;
+    QString iconName;
 };
 
 bool isPolish()
@@ -182,6 +187,63 @@ QString stableId(const QString &key)
                 QCryptographicHash::Sha1)
                 .toHex()
                 .left(16));
+}
+
+QString stableMtpId(const QString &key)
+{
+    return QStringLiteral("mtp-")
+        + QString::fromLatin1(
+            QCryptographicHash::hash(
+                key.toUtf8(),
+                QCryptographicHash::Sha1)
+                .toHex()
+                .left(16));
+}
+
+bool supportsMtpProtocol(const Solid::PortableMediaPlayer *player)
+{
+    if (!player) {
+        return false;
+    }
+
+    const QStringList protocols = player->supportedProtocols();
+    for (const QString &protocol : protocols) {
+        if (protocol.trimmed().compare(QStringLiteral("mtp"), Qt::CaseInsensitive) == 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+QString resolveMtpDisplayName(const Solid::Device &device)
+{
+    const QString vendor = device.vendor().trimmed();
+    const QString product = device.product().trimmed();
+
+    if (!vendor.isEmpty() && !product.isEmpty()) {
+        if (product.startsWith(vendor, Qt::CaseInsensitive)) {
+            return product;
+        }
+        return QStringLiteral("%1 %2").arg(vendor, product);
+    }
+    if (!product.isEmpty()) {
+        return product;
+    }
+
+    const QString display = device.displayName().trimmed();
+    if (!display.isEmpty()) {
+        return display;
+    }
+
+    const QString description = device.description().trimmed();
+    if (!description.isEmpty()) {
+        return description;
+    }
+
+    return isPolish()
+        ? QStringLiteral("Urządzenie MTP")
+        : QStringLiteral("MTP Device");
 }
 
 bool isRemovableDrive(const Solid::Device &volumeDevice)
@@ -346,6 +408,7 @@ QList<VolumeInfo> discoveredVolumes()
     QList<VolumeInfo> result;
     QSet<QString> seenMountPoints;
     QSet<QString> seenIds;
+    QSet<QString> storageVolumeUdis;
 
     const auto devices =
         Solid::Device::listFromType(
@@ -379,6 +442,15 @@ QList<VolumeInfo> discoveredVolumes()
         }
 
         seenIds.insert(info->id);
+        if (!device.udi().trimmed().isEmpty()) {
+            storageVolumeUdis.insert(device.udi().trimmed());
+        }
+        const Solid::Device directParent = device.parent();
+        if (directParent.isValid()
+            && directParent.is<Solid::StorageDrive>()
+            && !directParent.udi().trimmed().isEmpty()) {
+            storageVolumeUdis.insert(directParent.udi().trimmed());
+        }
         result.push_back(*info);
     }
 
@@ -391,6 +463,81 @@ QList<VolumeInfo> discoveredVolumes()
             seenIds.insert(root.id);
             result.push_back(root);
         }
+    }
+
+    // Enumerate MTP portable media players (smartphones, tablets, media players).
+    // Do NOT invoke QStorageInfo, UDisks2 mount, or synchronous libmtp/kmtpd calls here.
+    const auto mtpDevices =
+        Solid::Device::listFromType(
+            Solid::DeviceInterface::PortableMediaPlayer);
+
+    QHash<QString, int> mtpSerialCounts;
+    for (const Solid::Device &device : mtpDevices) {
+        const QString udi = device.udi().trimmed();
+        if (udi.isEmpty() || storageVolumeUdis.contains(udi)) {
+            continue;
+        }
+        const auto *player = device.as<Solid::PortableMediaPlayer>();
+        if (!supportsMtpProtocol(player)) {
+            continue;
+        }
+        const QString serial = player->driverHandle(QStringLiteral("mtp")).toString().trimmed();
+        if (!serial.isEmpty()) {
+            mtpSerialCounts[serial] += 1;
+        }
+    }
+
+    for (const Solid::Device &device : mtpDevices) {
+        const QString udi = device.udi().trimmed();
+        if (udi.isEmpty() || storageVolumeUdis.contains(udi)) {
+            continue;
+        }
+
+        const Solid::Device directParent = device.parent();
+        if (directParent.isValid()
+            && directParent.is<Solid::StorageDrive>()
+            && storageVolumeUdis.contains(directParent.udi().trimmed())) {
+            continue;
+        }
+
+        const auto *player = device.as<Solid::PortableMediaPlayer>();
+        if (!supportsMtpProtocol(player)) {
+            continue;
+        }
+
+        const QString serial = player->driverHandle(QStringLiteral("mtp")).toString().trimmed();
+        QString idKey;
+        if (!serial.isEmpty() && mtpSerialCounts.value(serial) == 1) {
+            idKey = QStringLiteral("mtp-serial:%1").arg(serial);
+        } else if (!serial.isEmpty()) {
+            idKey = QStringLiteral("mtp-serial:%1|udi:%2").arg(serial, udi);
+        } else {
+            idKey = QStringLiteral("mtp-udi:%1").arg(udi);
+        }
+
+        const QString id = stableMtpId(idKey);
+        if (seenIds.contains(id)) {
+            continue;
+        }
+
+        VolumeInfo info;
+        info.id = id;
+        info.udi = udi;
+        info.name = resolveMtpDisplayName(device);
+        info.mountPoint.clear();
+        info.fileSystem = QStringLiteral("MTP");
+        info.totalBytes = -1;
+        info.availableBytes = -1;
+        info.removable = true;
+        info.isMounted = true;
+        info.isMtp = true;
+        info.targetUrl = QStringLiteral("mtp:udi=%1").arg(udi);
+        const QString devIcon = device.icon().trimmed();
+        info.iconName = !devIcon.isEmpty() ? devIcon : QStringLiteral("smartphone");
+
+        seenIds.insert(info.id);
+        storageVolumeUdis.insert(udi);
+        result.push_back(info);
     }
 
     std::sort(
@@ -408,6 +555,9 @@ QList<VolumeInfo> discoveredVolumes()
             }
             if (a.isMounted != b.isMounted) {
                 return a.isMounted;
+            }
+            if (a.isMtp != b.isMtp) {
+                return !a.isMtp;
             }
             return a.name.localeAwareCompare(b.name) < 0;
         });
@@ -484,7 +634,67 @@ KIO::UDSEntry volumeEntry(const VolumeInfo &volume)
         KIO::UDSEntry::UDS_MIME_TYPE,
         QStringLiteral("inode/directory"));
 
-    if (volume.isMounted) {
+    if (volume.isMtp) {
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_ICON_NAME,
+            volume.iconName.isEmpty() ? QStringLiteral("smartphone") : volume.iconName);
+
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_DISPLAY_TYPE,
+            isPolish()
+                ? QStringLiteral("Urządzenie MTP")
+                : QStringLiteral("MTP Device"));
+
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_TARGET_URL,
+            volume.targetUrl);
+
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_COMMENT,
+            isPolish()
+                ? QStringLiteral("Urządzenie przenośne (MTP)")
+                : QStringLiteral("Portable Device (MTP)"));
+
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_EXTRA + 0,
+            QStringLiteral("—"));
+
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_EXTRA + 1,
+            QStringLiteral("—"));
+
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_EXTRA + 2,
+            QStringLiteral("—"));
+
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_EXTRA + 3,
+            QStringLiteral("MTP"));
+
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_EXTRA + 4,
+            QString());
+
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_EXTRA + 5,
+            QStringLiteral("1"));
+
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_EXTRA + 6,
+            volume.udi);
+
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_EXTRA + 7,
+            QStringLiteral("1"));
+
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_EXTRA + 8,
+            QStringLiteral("1"));
+
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_EXTRA + 9,
+            QStringLiteral("mtp"));
+    } else if (volume.isMounted) {
         const int percent = usedPercent(volume);
 
         entry.fastInsert(
@@ -545,6 +755,10 @@ KIO::UDSEntry volumeEntry(const VolumeInfo &volume)
         entry.fastInsert(
             KIO::UDSEntry::UDS_EXTRA + 8,
             volume.removable ? QStringLiteral("1") : QStringLiteral("0"));
+
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_EXTRA + 9,
+            QStringLiteral("volume"));
     } else {
         entry.fastInsert(
             KIO::UDSEntry::UDS_ICON_NAME,
@@ -603,6 +817,10 @@ KIO::UDSEntry volumeEntry(const VolumeInfo &volume)
         entry.fastInsert(
             KIO::UDSEntry::UDS_EXTRA + 8,
             volume.removable ? QStringLiteral("1") : QStringLiteral("0"));
+
+        entry.fastInsert(
+            KIO::UDSEntry::UDS_EXTRA + 9,
+            QStringLiteral("volume"));
     }
 
 #ifndef Q_OS_WIN
@@ -629,6 +847,10 @@ QUrl redirectedLocalUrl(
     const VolumeInfo &volume,
     const QStringList &parts)
 {
+    if (volume.isMtp) {
+        return QUrl(volume.targetUrl);
+    }
+
     QString localPath = volume.mountPoint;
 
     if (parts.size() > 1) {

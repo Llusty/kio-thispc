@@ -7,7 +7,10 @@
 
 #include <Solid/Device>
 #include <Solid/DeviceNotifier>
+#include <Solid/PortableMediaPlayer>
 #include <Solid/StorageAccess>
+
+#include <QDBusConnection>
 
 // Production constructor: connects to real Solid::DeviceNotifier.
 SolidDeviceMonitor::SolidDeviceMonitor(QObject *parent, int debounceMs)
@@ -53,6 +56,23 @@ void SolidDeviceMonitor::initSolid()
     for (const Solid::Device &device : devices) {
         connectAccessSignal(device.udi());
     }
+
+    // Critical for MTP: prime UDevManager's internal m_devicesOfInterest list
+    // for already-connected MTP devices. UDevManager only emits deviceRemoved
+    // on physical USB disconnect if the device was in m_devicesOfInterest prior
+    // to sysfs removal.
+    Solid::Device::listFromType(Solid::DeviceInterface::PortableMediaPlayer);
+
+    // Also listen to KDE's KMTPd daemon (kio-extras) on the session bus, which
+    // monitors MTP hotplug and emits devicesChanged whenever a phone is connected,
+    // disconnected, or changes USB transfer mode.
+    QDBusConnection::sessionBus().connect(
+        QStringLiteral("org.kde.kmtpd5"),
+        QStringLiteral("/modules/kmtpd"),
+        QStringLiteral("org.kde.kmtp.Daemon"),
+        QStringLiteral("devicesChanged"),
+        this,
+        SLOT(scheduleRefresh()));
 }
 
 void SolidDeviceMonitor::onDeviceAdded(const QString &udi)
@@ -66,6 +86,7 @@ void SolidDeviceMonitor::onDeviceAdded(const QString &udi)
         for (const Solid::Device &device : devices) {
             connectAccessSignal(device.udi());
         }
+        Solid::Device::listFromType(Solid::DeviceInterface::PortableMediaPlayer);
     }
     scheduleRefresh();
 }
@@ -113,6 +134,10 @@ void SolidDeviceMonitor::disconnectAccessSignal(const QString &udi)
 
 void SolidDeviceMonitor::scheduleRefresh()
 {
+    // Keep UDevManager's interest list warm for any new or transitioning MTP devices
+    if (m_solidActive) {
+        Solid::Device::listFromType(Solid::DeviceInterface::PortableMediaPlayer);
+    }
     // Restart the timer on every event so rapid successive events (e.g. a USB
     // hub with multiple partitions) collapse into a single devicesChanged().
     m_debounce.start();

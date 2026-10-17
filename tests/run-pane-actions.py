@@ -33,7 +33,7 @@ group.add_argument('--transfer-plan', action='store_true', help='run native dire
 group.add_argument('--local-move', action='store_true', help='run safe native move and history tests')
 group.add_argument('--all', action='store_true', help='run every regression suite')
 group.add_argument('--suites', nargs='+', choices=[
-    'aggregate_permissions', 'aggregate_properties', 'panes', 'tabs', 'properties', 'search', 'actions', 'action_state', 'operations',
+    'aggregate_permissions', 'aggregate_properties', 'folder_size', 'properties_folder_size', 'panes', 'tabs', 'properties', 'search', 'actions', 'action_state', 'operations',
     'local_transfer', 'transfer_plan', 'local_move', 'local_tree', 'tree_history',
     'sidebar_dnd', 'sidebar_layout', 'split_layout', 'templates', 'trash', 'archive', 'archive_jobs', 'archive_menu', 'archive_creation', 'preview', 'quick_look', 'batch_rename', 'view_settings', 'listing_core', 'drive_home', 'solid_monitor', 'device_mount', 'device_removal', 'split_compare', 'selection_menu', 'location_presentation', 'navigation_history', 'keyboard_navigation', 'remote_url', 'saved_remote', 'recent_reconnect', 'session_history', 'properties_integration', 'properties_hidden', 'properties_posix_mode', 'properties_xattr_edit', 'properties_xattrs', 'properties_capabilities', 'properties_data', 'drive_properties', 'acl', 'acl_editor', 'checksums', 'metadata', 'properties_lifecycle', 'storage_scan', 'storage_analysis', 'hash_utilities', 'duplicate_finder', 'duplicate_actions', 'storage_treemap', 'launch_url_resolver', 'preview_controller', 'image_video_previews', 'executable_previews', 'folder_previews', 'preview_settings', 'search_query'],
     help='build once and run only the selected regression suites')
@@ -156,6 +156,8 @@ with tempfile.TemporaryDirectory(prefix='thispc-pane-tests-', delete=not options
         if header.name in legacy_exposed_headers:
             contents = expose_legacy_header(contents)
         (tmp / 'src' / header.name).write_text(contents)
+    for test_header in (root / 'tests').glob('*.h'):
+        (tmp / 'src' / test_header.name).write_text(test_header.read_text())
     for implementation in ('actionstatecontroller.cpp', 'appwidgets.cpp', 'applicationstyle.cpp', 'directorylistingcore.cpp', 'drivehomecoordinator.cpp', 'soliddevicemonitor.cpp', 'devicemountcontroller.cpp', 'deviceremovalcontroller.cpp', 'keyboardnavigation.cpp', 'locationpresentation.cpp', 'navigationhistory.cpp', 'paneadapter.cpp', 'panemenucontroller.cpp', 'primarybrowserpane.cpp', 'previewcoordinator.cpp', 'previewcontroller.cpp', 'directorypreviewadapter.cpp', 'tabcontroller.cpp', 'searchuicontroller.cpp', 'searchpopover.cpp', 'advancedsearchfiltersdialog.cpp', 'selectionmenucontroller.cpp', 'remoteurlhelper.cpp', 'savedremotelocation.cpp', 'savedremotelocationdialog.cpp'):
         (tmp / 'src' / implementation).write_text((root / 'src' / implementation).read_text())
     suites = {'trash': 'empty-trash.cpp', 'panes': 'pane-actions.cpp', 'templates': 'template-menu.cpp', 'tabs': 'tab-drag-drop.cpp', 'sidebar_dnd': 'sidebar-drag-drop.cpp', 'sidebar_layout': 'sidebar-layout.cpp', 'properties': 'properties-dialog.cpp', 'search': 'search-controller.cpp', 'actions': 'file-actions.cpp', 'action_state': 'action-state-controller.cpp', 'operations': 'operation-manager.cpp', 'local_transfer': 'local-file-copy-job.cpp', 'transfer_plan': 'local-transfer-plan.cpp', 'local_move': 'local-file-move-job.cpp', 'local_tree': 'local-transfer-job.cpp', 'tree_history': 'local-tree-history.cpp', 'archive': 'archive-detection.cpp', 'archive_jobs': 'archive-extraction.cpp', 'archive_menu': 'archive-menu.cpp', 'archive_creation': 'archive-creation.cpp'}
@@ -193,6 +195,8 @@ with tempfile.TemporaryDirectory(prefix='thispc-pane-tests-', delete=not options
     suites['properties_lifecycle'] = 'properties-lifecycle.cpp'
     suites['aggregate_properties'] = 'aggregate-properties.cpp'
     suites['aggregate_permissions'] = 'aggregate-permissions.cpp'
+    suites['folder_size'] = 'folder-size-calculator.cpp'
+    suites['properties_folder_size'] = 'properties-folder-size.cpp'
     suites['storage_scan'] = 'storage-scan.cpp'
     suites['storage_analysis'] = 'storage-analysis.cpp'
     suites['hash_utilities'] = 'hash-utilities.cpp'

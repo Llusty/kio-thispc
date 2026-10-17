@@ -4,6 +4,7 @@
  */
 
 // Appended to the temporary regression binary by run-pane-actions.py.
+#include "mtp-contract-spec.h"
 
 int main(int argc, char **argv)
 {
@@ -158,6 +159,172 @@ int main(int argc, char **argv)
     verify(smbSegments.at(1).url == smbDiscoveryRoot && smbSegments.at(1).text == trLocal("Katalogi współdzielone (SMB)", "Shared Folders (SMB)"),
            "smb second crumb is smb://");
 
-    qInfo("PASS: %d location presentation assertions", checks);
+    // =======================================================================
+    // Stage 1.2: MTP Location Presentation, Parent URLs & Breadcrumbs (Section 4 & 5)
+    // =======================================================================
+    {
+        const QString mtpUdi = QStringLiteral("/org/kde/solid/udev/sys/devices/pci0000:00/0000:00:14.0/usb1/1-2");
+        const DriveInfo mtpDrive = MtpUdsContract::makeMtpDriveInfo(
+            QStringLiteral("mtp-pixel8"),
+            QStringLiteral("Google Pixel 8 Pro"),
+            mtpUdi);
+        QVector<DriveInfo> drivesWithMtp = drives;
+        drivesWithMtp.append(mtpDrive);
+
+        const QUrl mtpUdiUrl = mtpDrive.targetUrl;
+        const QUrl mtpDeviceRoot(QStringLiteral("mtp:/Google Pixel 8 Pro"));
+        const QUrl mtpInternalStorage(QStringLiteral("mtp:/Google Pixel 8 Pro/Internal shared storage"));
+        const QUrl mtpSdCardDcim(QStringLiteral("mtp:/Google Pixel 8 Pro/SD card/DCIM/Camera"));
+        const QUrl mtpUnicode(QStringLiteral("mtp:/Telefon Żółć/Pamięć wewnętrzna/Zdjęcia z wakacji"));
+        const QUrl mtpEncoded(QStringLiteral("mtp:/Phone%20%231%20%26%20Test/Internal%20storage/Folder%20%5BA%5D"));
+
+        // 1. Titles for mtp:udi= and redirected mtp:/<Device>/...
+        verify(LocationPresentation::primaryTitle(mtpUdiUrl, drivesWithMtp) == QStringLiteral("Google Pixel 8 Pro"),
+               "MTP UDI URL primary title resolves to DriveInfo display name");
+        verify(LocationPresentation::primaryTitle(mtpDeviceRoot, drivesWithMtp) == QStringLiteral("Google Pixel 8 Pro"),
+               "MTP redirected device root primary title is device name");
+        verify(LocationPresentation::splitTitle(mtpDeviceRoot) == QStringLiteral("Google Pixel 8 Pro"),
+               "MTP redirected device root split title is device name");
+        verify(LocationPresentation::primaryTitle(mtpInternalStorage, drivesWithMtp) == QStringLiteral("Internal shared storage"),
+               "MTP internal storage primary title");
+        verify(LocationPresentation::splitTitle(mtpInternalStorage) == QStringLiteral("Internal shared storage"),
+               "MTP internal storage split title");
+        verify(LocationPresentation::primaryTitle(mtpSdCardDcim, drivesWithMtp) == QStringLiteral("Camera"),
+               "MTP SD card leaf folder primary title");
+        verify(LocationPresentation::splitTitle(mtpSdCardDcim) == QStringLiteral("Camera"),
+               "MTP SD card leaf folder split title");
+
+        // 2. Unicode, spaces, and URL-encoded characters in MTP URLs
+        verify(LocationPresentation::primaryTitle(mtpUnicode, drivesWithMtp) == QStringLiteral("Zdjęcia z wakacji"),
+               "MTP Unicode & spaces folder primary title");
+        verify(LocationPresentation::splitTitle(mtpUnicode) == QStringLiteral("Zdjęcia z wakacji"),
+               "MTP Unicode & spaces folder split title");
+        verify(LocationPresentation::primaryTitle(mtpEncoded, drivesWithMtp) == QStringLiteral("Folder [A]"),
+               "MTP percent-encoded folder primary title decodes cleanly");
+        verify(LocationPresentation::splitTitle(mtpEncoded) == QStringLiteral("Folder [A]"),
+               "MTP percent-encoded folder split title decodes cleanly");
+
+        // 3. Content header preserves mtp: scheme (never assumes local path)
+        verify(LocationPresentation::contentHeaderText(mtpInternalStorage) == urlForDisplay(mtpInternalStorage),
+               "MTP content header preserves mtp: URL display string");
+        verify(!LocationPresentation::contentHeaderText(mtpInternalStorage).startsWith(QLatin1Char('/')),
+               "MTP content header never strips scheme into fake local path");
+
+        // 4. Parent URL navigation for nested MTP folders
+        verify(LocationPresentation::parentUrl(mtpSdCardDcim, drivesWithMtp, LocationPresentation::ParentProfile::Primary)
+                   == QUrl(QStringLiteral("mtp:/Google Pixel 8 Pro/SD card/DCIM")),
+               "MTP nested folder Primary parent is parent folder");
+        verify(LocationPresentation::parentUrl(mtpSdCardDcim, drivesWithMtp, LocationPresentation::ParentProfile::Split)
+                   == QUrl(QStringLiteral("mtp:/Google Pixel 8 Pro/SD card/DCIM")),
+               "MTP nested folder Split parent is parent folder");
+        verify(LocationPresentation::parentUrl(mtpInternalStorage, drivesWithMtp, LocationPresentation::ParentProfile::Primary)
+                   == mtpDeviceRoot,
+               "MTP storage root Primary parent is mtp:/<Device>");
+        verify(LocationPresentation::parentUrl(mtpInternalStorage, drivesWithMtp, LocationPresentation::ParentProfile::Split)
+                   == mtpDeviceRoot,
+               "MTP storage root Split parent is mtp:/<Device>");
+        verify(LocationPresentation::parentUrl(mtpUdiUrl, drivesWithMtp, LocationPresentation::ParentProfile::Primary)
+                   == thisPc,
+               "MTP UDI URL Primary parent is This PC when drive is in snapshot");
+        verify(LocationPresentation::parentUrl(mtpUdiUrl, drivesWithMtp, LocationPresentation::ParentProfile::Split)
+                   == thisPc,
+               "MTP UDI URL Split parent is This PC when drive is in snapshot");
+
+        // 5. Safe segment-based URL hierarchy matching (preventing naive prefix match bugs)
+        const DriveInfo pixel8 = MtpUdsContract::makeMtpDriveInfo(
+            QStringLiteral("mtp-p8"), QStringLiteral("Pixel 8"),
+            QStringLiteral("/org/kde/solid/udev/sys/devices/pci0000:00/usb1/1-1"));
+        const DriveInfo pixel8Pro = MtpUdsContract::makeMtpDriveInfo(
+            QStringLiteral("mtp-p8p"), QStringLiteral("Pixel 8 Pro"),
+            QStringLiteral("/org/kde/solid/udev/sys/devices/pci0000:00/usb1/1-2"));
+
+        verify(MtpUrlContract::urlBelongsToMtpDevice(
+                   QUrl(QStringLiteral("mtp:/Pixel 8/Internal shared storage/DCIM")),
+                   pixel8, QUrl(QStringLiteral("mtp:/Pixel 8"))),
+               "urlBelongsToMtpDevice matches exact device root segment 'Pixel 8'");
+        verify(!MtpUrlContract::urlBelongsToMtpDevice(
+                   QUrl(QStringLiteral("mtp:/Pixel 8 Pro/Internal shared storage/DCIM")),
+                   pixel8, QUrl(QStringLiteral("mtp:/Pixel 8"))),
+               "urlBelongsToMtpDevice does NOT falsely match 'Pixel 8 Pro' as prefix of 'Pixel 8'");
+        verify(MtpUrlContract::urlBelongsToMtpDevice(
+                   QUrl(QStringLiteral("mtp:/Pixel 8 Pro/Internal shared storage/DCIM")),
+                   pixel8Pro, QUrl(QStringLiteral("mtp:/Pixel 8 Pro"))),
+               "urlBelongsToMtpDevice matches 'Pixel 8 Pro' accurately");
+
+        // 6. Expected breadcrumb contract and LocationPresentation::mtpPathSegments for mtp:/<Device>/<Storage>/<Subfolder>
+        const QUrl dcimUrl(QStringLiteral("mtp:/Google Pixel 8 Pro/Internal shared storage/DCIM"));
+        const auto expectedCrumbs = MtpUrlContract::expectedBreadcrumbSegments(dcimUrl);
+        verify(expectedCrumbs.size() == 4, "MTP breadcrumb spec has 4 segments (This PC -> Device -> Storage -> DCIM)");
+        verify(expectedCrumbs.at(0).url == thisPc && expectedCrumbs.at(1).url == mtpDeviceRoot
+                   && expectedCrumbs.at(2).url == mtpInternalStorage,
+               "MTP breadcrumb spec links each cumulative level cleanly");
+
+        const auto actualCrumbs = LocationPresentation::mtpPathSegments(dcimUrl, drivesWithMtp);
+        verify(actualCrumbs.size() == 4, "LocationPresentation::mtpPathSegments produces 4 segments for DCIM");
+        verify(actualCrumbs.at(0).url == thisPc && actualCrumbs.at(0).iconName == QStringLiteral("computer")
+                   && actualCrumbs.at(1).url == mtpDeviceRoot && actualCrumbs.at(1).text == QStringLiteral("Google Pixel 8 Pro")
+                   && actualCrumbs.at(1).iconName == QStringLiteral("smartphone")
+                   && actualCrumbs.at(2).url == mtpInternalStorage && actualCrumbs.at(2).text == QStringLiteral("Internal shared storage")
+                   && actualCrumbs.at(2).iconName == QStringLiteral("folder")
+                   && actualCrumbs.at(3).url == dcimUrl && actualCrumbs.at(3).text == QStringLiteral("DCIM"),
+               "LocationPresentation::mtpPathSegments matches expected hierarchy, labels, and icons");
+
+        const auto udiCrumbs = LocationPresentation::mtpPathSegments(mtpUdiUrl, drivesWithMtp);
+        verify(udiCrumbs.size() == 2 && udiCrumbs.at(0).url == thisPc
+                   && udiCrumbs.at(1).url == mtpUdiUrl && udiCrumbs.at(1).text == QStringLiteral("Google Pixel 8 Pro"),
+               "LocationPresentation::mtpPathSegments handles pre-redirection mtp:udi=<UDI> cleanly without splitting sysfs path");
+
+        const auto encodedCrumbs = LocationPresentation::mtpPathSegments(mtpEncoded, drivesWithMtp);
+        verify(encodedCrumbs.size() == 4
+                   && encodedCrumbs.at(1).text == QStringLiteral("Phone #1 & Test")
+                   && encodedCrumbs.at(3).text == QStringLiteral("Folder [A]"),
+               "LocationPresentation::mtpPathSegments decodes percent-encoded device and folder names cleanly");
+
+        verify(LocationPresentation::splitLocationText(dcimUrl).contains(QStringLiteral("Google Pixel 8 Pro"))
+                   && LocationPresentation::splitLocationText(dcimUrl).contains(QStringLiteral("DCIM")),
+               "LocationPresentation::splitLocationText formats MTP hierarchy with chevron separators");
+
+        // Solid vs KIO friendlyName mismatch alias test via MtpRedirectionRegistry
+        const QString customUdi = QStringLiteral("/org/kde/solid/udev/sys/devices/pci0000:00/usb1/1-9");
+        const DriveInfo customPhone = MtpUdsContract::makeMtpDriveInfo(
+            QStringLiteral("mtp-custom"), QStringLiteral("Samsung SM-S928B"), customUdi, QStringLiteral("multimedia-player"));
+        const QUrl customRedirected(QStringLiteral("mtp:/Telefon Jana (S24)/Internal storage/Photos"));
+        MtpRedirectionRegistry::recordRedirection(customPhone.targetUrl, QUrl(QStringLiteral("mtp:/Telefon Jana (S24)")));
+        verify(urlBelongsToMtpDrive(customRedirected, customPhone),
+               "urlBelongsToMtpDrive matches redirected KIO friendlyName when it differs from Solid vendor+product name");
+        verify(!urlBelongsToMtpDrive(customRedirected, mtpDrive),
+               "urlBelongsToMtpDrive does not match unrelated MTP phone");
+
+        // 7. Stage 1.4 active verifications:
+        //    - parentUrl of redirected device root mtp:/<Device> returns thispc:/ (not mtp:/)
+        //    - parentUrl of mtp:udi=<UDI> with empty drives list returns thispc:/ (not truncated sysfs path)
+        //    - urlFromUserText("mtp:udi=...") returns valid mtp: QUrl
+        //    - iconName("mtp:/<Device>") returns smartphone/multimedia-player at root, folder for subfolders
+        verify(
+            LocationPresentation::parentUrl(mtpDeviceRoot, drivesWithMtp, LocationPresentation::ParentProfile::Primary) == thisPc,
+            "LocationPresentation::parentUrl(mtp:/<Device>, Primary) returns thispc:/ instead of mtp:/");
+        verify(
+            LocationPresentation::parentUrl(mtpDeviceRoot, drivesWithMtp, LocationPresentation::ParentProfile::Split) == thisPc,
+            "LocationPresentation::parentUrl(mtp:/<Device>, Split) returns thispc:/ instead of mtp:/");
+        verify(
+            LocationPresentation::parentUrl(mtpUdiUrl, {}, LocationPresentation::ParentProfile::Primary) == thisPc,
+            "LocationPresentation::parentUrl(mtp:udi=<UDI>, empty drives) returns thispc:/ instead of truncating UDI path");
+        verify(
+            LocationPresentation::parentUrl(mtpUdiUrl, {}, LocationPresentation::ParentProfile::Split) == thisPc,
+            "LocationPresentation::parentUrl(mtp:udi=<UDI>, empty drives, Split) returns thispc:/ instead of truncating UDI path");
+        const QUrl parsedMtpUdi = urlFromUserText(mtpUdiUrl.toString());
+        verify(
+            parsedMtpUdi.isValid() && parsedMtpUdi.scheme() == QStringLiteral("mtp") && parsedMtpUdi == mtpUdiUrl,
+            "urlFromUserText('mtp:udi=...') preserves valid mtp:udi= QUrl without failing in QUrl::fromUserInput");
+        verify(
+            LocationPresentation::iconName(mtpDeviceRoot) == QStringLiteral("smartphone")
+                || LocationPresentation::iconName(mtpDeviceRoot) == QStringLiteral("multimedia-player"),
+            "LocationPresentation::iconName(mtp:/<Device>) returns smartphone/multimedia-player icon");
+        verify(
+            LocationPresentation::iconName(mtpInternalStorage) == QStringLiteral("folder"),
+            "LocationPresentation::iconName(mtp:/<Device>/<Storage>) returns folder icon");
+    }
+
+    qInfo("PASS: %d location presentation assertions (%d pending MTP specs)", checks, pendingMtpSpecs);
     return 0;
 }

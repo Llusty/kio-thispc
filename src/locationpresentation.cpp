@@ -27,6 +27,36 @@ QString searchTitle(const QUrl &url, bool emptyQueryHasGenericTitle)
         .arg(query);
 }
 
+bool isMtpUrl(const QUrl &url)
+{
+    return url.isValid()
+        && url.scheme().compare(QStringLiteral("mtp"), Qt::CaseInsensitive) == 0;
+}
+
+bool isMtpUdiUrl(const QUrl &url)
+{
+    return isMtpUrl(url) && url.path().startsWith(QStringLiteral("udi="));
+}
+
+QStringList mtpSegments(const QUrl &url)
+{
+    if (!isMtpUrl(url) || isMtpUdiUrl(url)) {
+        return {};
+    }
+    return url.path().split(QLatin1Char('/'), Qt::SkipEmptyParts);
+}
+
+bool isMtpDeviceRootUrl(const QUrl &url)
+{
+    if (!isMtpUrl(url)) {
+        return false;
+    }
+    if (isMtpUdiUrl(url)) {
+        return true;
+    }
+    return mtpSegments(url).size() <= 1;
+}
+
 bool matchingDrive(
     const QUrl &url,
     const QVector<DriveInfo> &drives,
@@ -34,6 +64,10 @@ bool matchingDrive(
 {
     for (const DriveInfo &drive : drives) {
         if (drive.isMounted && drive.targetUrl.isValid() && sameLocation(drive.targetUrl, url)) {
+            if (match) *match = drive;
+            return true;
+        }
+        if (isMtpUdiUrl(url) && drive.isMtpDevice() && urlBelongsToMtpDrive(url, drive)) {
             if (match) *match = drive;
             return true;
         }
@@ -49,6 +83,13 @@ QString primaryTitle(const QUrl &url, const QVector<DriveInfo> &drives)
 
     DriveInfo drive;
     if (matchingDrive(url, drives, &drive)) return drive.name;
+
+    if (isMtpUrl(url) && !isMtpUdiUrl(url)) {
+        const QStringList parts = mtpSegments(url);
+        if (!parts.isEmpty()) {
+            return parts.last();
+        }
+    }
 
     if (url.isLocalFile()) {
         const QString path = url.toLocalFile();
@@ -70,6 +111,13 @@ QString splitTitle(const QUrl &url)
     if (isSearchLocation(url)) return searchTitle(url, false);
     if (url.scheme() == QStringLiteral("remote")) return trLocal("Sieć", "Network");
     if (RemoteUrlHelper::isRemoteDiscoveryUrl(url)) return trLocal("Katalogi współdzielone (SMB)", "Shared Folders (SMB)");
+
+    if (isMtpUrl(url) && !isMtpUdiUrl(url)) {
+        const QStringList parts = mtpSegments(url);
+        if (!parts.isEmpty()) {
+            return parts.last();
+        }
+    }
 
     if (url.isLocalFile()) {
         const QString path = QDir::cleanPath(url.toLocalFile());
@@ -112,6 +160,14 @@ QString splitLocationText(const QUrl &url)
         return result;
     }
 
+    if (isMtpUrl(url) && !isMtpUdiUrl(url)) {
+        QString result = trLocal("Ten komputer", "This PC");
+        for (const QString &part : mtpSegments(url)) {
+            result += QStringLiteral("  ›  ") + part;
+        }
+        return result;
+    }
+
     if (isAdminUrl(url)) {
         QString result = trLocal("Administrator", "Administrator");
         for (const QString &part : url.path().split(QLatin1Char('/'), Qt::SkipEmptyParts)) {
@@ -142,6 +198,9 @@ QString iconName(const QUrl &url)
     if (isAdminUrl(url)) return QStringLiteral("security-high");
     if (url.scheme() == QStringLiteral("remote")) return QStringLiteral("network-workgroup");
     if (RemoteUrlHelper::isRemoteDiscoveryUrl(url)) return QStringLiteral("network-workgroup");
+    if (isMtpUrl(url)) {
+        return isMtpDeviceRootUrl(url) ? QStringLiteral("smartphone") : QStringLiteral("folder");
+    }
     if (url.isLocalFile()) {
         const QString path = QDir::cleanPath(url.toLocalFile());
         if (QDir::cleanPath(QStorageInfo(path).rootPath()) == path) {
@@ -254,6 +313,43 @@ QVector<Segment> remotePathSegments(const QUrl &url)
     return segments;
 }
 
+QVector<Segment> mtpPathSegments(const QUrl &url, const QVector<DriveInfo> &drives)
+{
+    QVector<Segment> segments;
+    if (!isMtpUrl(url)) {
+        return segments;
+    }
+    segments.append({trLocal("Ten komputer", "This PC"), kThisPcUrl, QStringLiteral("computer")});
+    if (isMtpUdiUrl(url)) {
+        DriveInfo drive;
+        const bool found = matchingDrive(url, drives, &drive);
+        const QString label = (found && !drive.name.isEmpty()) ? drive.name : url.path();
+        const QString icon = (found && !drive.iconName.isEmpty())
+            ? drive.iconName
+            : QStringLiteral("smartphone");
+        segments.append({label, url, icon});
+        return segments;
+    }
+    const QStringList parts = mtpSegments(url);
+    QString cumulative;
+    for (int i = 0; i < parts.size(); ++i) {
+        cumulative += QLatin1Char('/') + parts.at(i);
+        QUrl segUrl(QStringLiteral("mtp:/"));
+        segUrl.setPath(cumulative);
+        QString segIcon = (i == 0) ? QStringLiteral("smartphone") : QStringLiteral("folder");
+        if (i == 0) {
+            for (const DriveInfo &drive : drives) {
+                if (urlBelongsToMtpDrive(segUrl, drive) && !drive.iconName.isEmpty()) {
+                    segIcon = drive.iconName;
+                    break;
+                }
+            }
+        }
+        segments.append({parts.at(i), segUrl, segIcon});
+    }
+    return segments;
+}
+
 QUrl parentUrl(const QUrl &url, const QVector<DriveInfo> &drives, ParentProfile profile)
 {
     if ((profile == ParentProfile::Split && !url.isValid())
@@ -271,6 +367,16 @@ QUrl parentUrl(const QUrl &url, const QVector<DriveInfo> &drives, ParentProfile 
     if (isSearchLocation(url)) {
         const QUrl base = searchBaseFromUrl(url);
         return base.isValid() ? base : kThisPcUrl;
+    }
+    if (isMtpUrl(url)) {
+        if (isMtpDeviceRootUrl(url)) {
+            return kThisPcUrl;
+        }
+        QStringList parts = mtpSegments(url);
+        parts.removeLast();
+        QUrl parent(QStringLiteral("mtp:/"));
+        parent.setPath(QLatin1Char('/') + parts.join(QLatin1Char('/')));
+        return parent;
     }
     if (matchingDrive(url, drives)) return kThisPcUrl;
 

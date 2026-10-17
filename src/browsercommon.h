@@ -16,6 +16,7 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFileInfo>
+#include <QHash>
 #include <QIcon>
 #include <QList>
 #include <QLocale>
@@ -109,6 +110,11 @@ struct FileInfo
 };
 
 
+enum class DriveDeviceKind {
+    StorageVolume,
+    PortableMediaMtp
+};
+
 struct DriveInfo
 {
     QString name;
@@ -124,6 +130,76 @@ struct DriveInfo
     QString udi;
     bool isMounted = true;
     bool isRemovable = false;
+    DriveDeviceKind deviceKind = DriveDeviceKind::StorageVolume;
+
+    bool isMtpDevice() const
+    {
+        return deviceKind == DriveDeviceKind::PortableMediaMtp
+            || (targetUrl.isValid()
+                && targetUrl.scheme().compare(QStringLiteral("mtp"), Qt::CaseInsensitive) == 0);
+    }
+
+    bool canNavigate() const
+    {
+        if (isMtpDevice()) {
+            return targetUrl.isValid()
+                && targetUrl.scheme().compare(QStringLiteral("mtp"), Qt::CaseInsensitive) == 0;
+        }
+        return isMounted && targetUrl.isValid();
+    }
+
+    bool canMount() const
+    {
+        if (isMtpDevice()) {
+            return false;
+        }
+        return !isMounted && !udi.isEmpty();
+    }
+
+    bool canUnmount() const
+    {
+        if (isMtpDevice()) {
+            return false;
+        }
+        return isRemovable && isMounted && !udi.isEmpty();
+    }
+
+    bool canEject(bool solidCanEject) const
+    {
+        if (isMtpDevice()) {
+            return false;
+        }
+        return isRemovable && solidCanEject && !udi.isEmpty();
+    }
+
+    bool canSafelyRemove(bool solidCanSafelyRemove) const
+    {
+        if (isMtpDevice()) {
+            return false;
+        }
+        return isRemovable && solidCanSafelyRemove && !udi.isEmpty();
+    }
+
+    bool canCopyMountPoint() const
+    {
+        if (isMtpDevice()) {
+            return false;
+        }
+        return isMounted && !mountPoint.isEmpty();
+    }
+
+    bool hasCapacityInformation() const
+    {
+        if (isMtpDevice()) {
+            return !capacityText.isEmpty()
+                && capacityText != QStringLiteral("—")
+                && !freeText.isEmpty()
+                && freeText != QStringLiteral("—");
+        }
+        return isMounted
+            && !capacityText.isEmpty()
+            && capacityText != QStringLiteral("—");
+    }
 };
 
 inline bool operator==(const DriveInfo &a, const DriveInfo &b)
@@ -140,7 +216,8 @@ inline bool operator==(const DriveInfo &a, const DriveInfo &b)
         && a.usedPercent == b.usedPercent
         && a.udi == b.udi
         && a.isMounted == b.isMounted
-        && a.isRemovable == b.isRemovable;
+        && a.isRemovable == b.isRemovable
+        && a.deviceKind == b.deviceKind;
 }
 
 inline bool operator!=(const DriveInfo &a, const DriveInfo &b)
@@ -295,6 +372,160 @@ inline QUrl normalizedUrl(QUrl url)
 inline bool sameLocation(const QUrl &a, const QUrl &b)
 {
     return normalizedUrl(a) == normalizedUrl(b);
+}
+
+namespace MtpRedirectionRegistry {
+inline QHash<QString, QString> &udiToDeviceSegmentMap()
+{
+    static QHash<QString, QString> map;
+    return map;
+}
+
+inline QHash<QString, QString> &deviceSegmentToUdiMap()
+{
+    static QHash<QString, QString> map;
+    return map;
+}
+
+inline void recordRedirection(const QUrl &requestedUrl, const QUrl &redirectedUrl)
+{
+    if (!requestedUrl.isValid() || !redirectedUrl.isValid()) {
+        return;
+    }
+    if (requestedUrl.scheme().compare(QStringLiteral("mtp"), Qt::CaseInsensitive) != 0
+        || redirectedUrl.scheme().compare(QStringLiteral("mtp"), Qt::CaseInsensitive) != 0) {
+        return;
+    }
+    if (!requestedUrl.path().startsWith(QStringLiteral("udi="))) {
+        return;
+    }
+    const QString udi = requestedUrl.path().mid(4);
+    const QStringList segments = redirectedUrl.path().split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    if (!udi.isEmpty() && !segments.isEmpty()) {
+        const QString &segment = segments.first();
+        const QString previousSegment = udiToDeviceSegmentMap().value(udi);
+        if (!previousSegment.isEmpty() && previousSegment != segment
+            && deviceSegmentToUdiMap().value(previousSegment) == udi) {
+            deviceSegmentToUdiMap().remove(previousSegment);
+        }
+        const QString previousUdi = deviceSegmentToUdiMap().value(segment);
+        if (!previousUdi.isEmpty() && previousUdi != udi
+            && udiToDeviceSegmentMap().value(previousUdi) == segment) {
+            udiToDeviceSegmentMap().remove(previousUdi);
+        }
+        udiToDeviceSegmentMap().insert(udi, segment);
+        deviceSegmentToUdiMap().insert(segment, udi);
+    }
+}
+
+inline QString redirectedDeviceSegmentForUdi(const QString &udi)
+{
+    return udiToDeviceSegmentMap().value(udi);
+}
+
+inline QString udiForRedirectedDeviceSegment(const QString &segment)
+{
+    return deviceSegmentToUdiMap().value(segment);
+}
+
+inline void removeRedirectionForUdi(const QString &udi)
+{
+    if (udi.isEmpty()) {
+        return;
+    }
+    const QString segment = udiToDeviceSegmentMap().take(udi);
+    if (!segment.isEmpty() && deviceSegmentToUdiMap().value(segment) == udi) {
+        deviceSegmentToUdiMap().remove(segment);
+    }
+}
+
+inline void clear()
+{
+    udiToDeviceSegmentMap().clear();
+    deviceSegmentToUdiMap().clear();
+}
+} // namespace MtpRedirectionRegistry
+
+inline bool urlBelongsToMtpDrive(const QUrl &url, const DriveInfo &drive)
+{
+    if (!url.isValid() || !drive.isMtpDevice()
+        || url.scheme().compare(QStringLiteral("mtp"), Qt::CaseInsensitive) != 0) {
+        return false;
+    }
+    if (url.path().startsWith(QStringLiteral("udi="))) {
+        const QString udi = url.path().mid(4);
+        return (!drive.udi.isEmpty() && udi == drive.udi)
+            || sameLocation(url, drive.targetUrl);
+    }
+    const QStringList parts = url.path().split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    if (parts.isEmpty()) {
+        return false;
+    }
+    const QString &deviceSegment = parts.first();
+    const QString mappedUdi = MtpRedirectionRegistry::udiForRedirectedDeviceSegment(deviceSegment);
+    if (!mappedUdi.isEmpty() && !drive.udi.isEmpty()) {
+        return drive.udi == mappedUdi;
+    }
+    if (!drive.udi.isEmpty()) {
+        const QString mappedSegment = MtpRedirectionRegistry::redirectedDeviceSegmentForUdi(drive.udi);
+        if (!mappedSegment.isEmpty() && deviceSegment == mappedSegment) {
+            return true;
+        }
+    }
+    return !drive.name.isEmpty() && deviceSegment == drive.name;
+}
+
+inline QUrl resolveReconnectedMtpUrl(const QUrl &url, const QList<DriveInfo> &drives)
+{
+    if (!url.isValid() || url.scheme().compare(QStringLiteral("mtp"), Qt::CaseInsensitive) != 0) {
+        return url;
+    }
+    if (url.path().startsWith(QStringLiteral("udi="))) {
+        const QString oldUdi = url.path().mid(4);
+        for (const DriveInfo &d : drives) {
+            if (d.isMtpDevice() && d.udi == oldUdi) {
+                return url;
+            }
+        }
+        QList<DriveInfo> mtpDrives;
+        for (const DriveInfo &d : drives) {
+            if (d.isMtpDevice()) {
+                mtpDrives.push_back(d);
+            }
+        }
+        if (mtpDrives.size() == 1) {
+            return mtpDrives.first().targetUrl;
+        }
+        const QString oldSegment = MtpRedirectionRegistry::redirectedDeviceSegmentForUdi(oldUdi);
+        if (!oldSegment.isEmpty()) {
+            QList<DriveInfo> matchingNamed;
+            for (const DriveInfo &d : mtpDrives) {
+                if (d.name == oldSegment) {
+                    matchingNamed.push_back(d);
+                }
+            }
+            if (matchingNamed.size() == 1) {
+                return matchingNamed.first().targetUrl;
+            }
+        }
+        return url;
+    }
+    return url;
+}
+
+inline QString mtpErrorMessageForUrl(const QUrl &url, const QList<DriveInfo> &drives)
+{
+    bool stillConnected = false;
+    for (const DriveInfo &d : drives) {
+        if (urlBelongsToMtpDrive(url, d)) {
+            stillConnected = true;
+            break;
+        }
+    }
+    return stillConnected
+        ? trLocal("Nie można uzyskać dostępu do urządzenia. Sprawdź połączenie i odblokowanie telefonu.",
+                  "Could not access device. Check the connection and unlock the phone.")
+        : trLocal("Urządzenie MTP zostało odłączone.", "MTP device disconnected.");
 }
 
 

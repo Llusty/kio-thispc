@@ -53,6 +53,24 @@ void makePassive(QWidget *widget)
 
 QString driveTooltip(const DriveInfo &drive)
 {
+    if (drive.isMtpDevice()) {
+        QString tip = drive.name
+            + QStringLiteral("\n")
+            + trLocal("Urządzenie przenośne (MTP)", "Portable device (MTP)");
+        if (drive.hasCapacityInformation()) {
+            tip += QStringLiteral("\n")
+                + drive.freeText
+                + trLocal(" wolne z ", " free of ")
+                + drive.capacityText;
+        }
+        if (!drive.fileSystem.isEmpty()) {
+            tip += QStringLiteral("\n")
+                + trLocal("Protokół: ", "Protocol: ")
+                + drive.fileSystem;
+        }
+        return tip;
+    }
+
     if (!drive.isMounted) {
         QString tip = drive.name + QStringLiteral("\n") + trLocal("Niezamontowany", "Unmounted");
         if (!drive.capacityText.isEmpty() && drive.capacityText != QStringLiteral("—")) {
@@ -97,31 +115,40 @@ void populateDriveContextMenu(QMenu &menu,
     QAction *ejectAction = nullptr;
     QAction *propertiesAction = nullptr;
 
-    if (drive.isMounted) {
+    if (drive.canNavigate()) {
         openAction = menu.addAction(
             themedIcon(QStringLiteral("system-file-manager")),
             trLocal("Otwórz w Dolphinie", "Open in Dolphin"));
+    }
 
+    if (drive.canCopyMountPoint()) {
         copyPathAction = menu.addAction(
             themedIcon(QStringLiteral("edit-copy")),
             trLocal("Kopiuj punkt montowania", "Copy mount point"));
     }
 
-    if (drive.isRemovable) {
-        if (drive.isMounted) {
+    if (drive.isRemovable && !drive.isMtpDevice()) {
+        const bool showUnmount = drive.canUnmount();
+        const bool showSafelyRemove = drive.canSafelyRemove(canSafelyRemove);
+        const bool showEject = drive.canEject(canEject);
+
+        if (showUnmount || showSafelyRemove || showEject) {
             menu.addSeparator();
+        }
+
+        if (showUnmount) {
             unmountAction = menu.addAction(
                 themedIcon(QStringLiteral("media-eject")),
                 trLocal("Odmontuj", "Unmount"));
         }
 
-        if (canSafelyRemove) {
+        if (showSafelyRemove) {
             safelyRemoveAction = menu.addAction(
                 themedIcon(QStringLiteral("drive-removable-media")),
                 trLocal("Bezpiecznie usuń", "Safely remove"));
         }
 
-        if (canEject) {
+        if (showEject) {
             ejectAction = menu.addAction(
                 themedIcon(QStringLiteral("media-eject")),
                 trLocal("Wysuń", "Eject"));
@@ -452,12 +479,19 @@ DriveFrame *makeDriveCard(const DriveInfo &drive,
     icon->setObjectName(QStringLiteral("driveCardIcon"));
 
     QString themeIcon = QStringLiteral("drive-harddisk");
-    if (!drive.isMounted || drive.iconName.contains(QStringLiteral("removable"))) {
+    if (drive.isMtpDevice()) {
+        themeIcon = !drive.iconName.trimmed().isEmpty()
+            ? drive.iconName.trimmed()
+            : QStringLiteral("smartphone");
+    } else if (!drive.isMounted || drive.iconName.contains(QStringLiteral("removable"))) {
         themeIcon = QStringLiteral("drive-removable-media");
     }
 
     icon->setPixmap(
-        themedIcon(themeIcon, QStringLiteral("drive-harddisk")).pixmap(44, 44));
+        themedIcon(
+            themeIcon,
+            drive.isMtpDevice() ? QStringLiteral("smartphone") : QStringLiteral("drive-harddisk"))
+            .pixmap(44, 44));
     icon->setFixedSize(48, 48);
     icon->setAlignment(Qt::AlignCenter);
     makePassive(icon);
@@ -487,7 +521,16 @@ DriveFrame *makeDriveCard(const DriveInfo &drive,
     makePassive(progress);
 
     QString capacity;
-    if (drive.isMounted) {
+    if (drive.isMtpDevice()) {
+        if (drive.hasCapacityInformation()) {
+            capacity = drive.freeText
+                + trLocal(" wolne z ", " free of ")
+                + drive.capacityText;
+        } else {
+            progress->setVisible(false);
+            capacity = trLocal("Urządzenie MTP", "MTP Device");
+        }
+    } else if (drive.isMounted) {
         capacity = drive.freeText
             + trLocal(" wolne z ", " free of ")
             + drive.capacityText;

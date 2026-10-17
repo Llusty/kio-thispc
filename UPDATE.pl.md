@@ -1,5 +1,24 @@
 [English](UPDATE.md) | [Polski](UPDATE.pl.md)
 
+# Aktualizacja do 0.41.1
+
+```bash
+cd ~/Pobrane
+tar -xzf kio-thispc-0.41.1.tar.gz
+cd kio-thispc-0.41.1
+chmod +x install.sh
+./install.sh
+```
+
+- Automatyczne wykrywanie urządzeń Android/MTP i aparatów na stronie głównej oraz w panelu bocznym.
+- Przekierowania z technicznych identyfikatorów KIO `mtp:udi=...` na czytelne ścieżki `mtp:/<Nazwa Urządzenia>`.
+- Obsługa hotplug z zachowaniem historii i adresu URL, czyszczeniem odłączonej zawartości, dedykowanym komunikatem o odłączeniu („Urządzenie MTP zostało odłączone”) oraz przyciskiem „Połącz ponownie”.
+- Asynchroniczne obliczanie rozmiaru i alokacji blokowej folderów w oknie Właściwości bez blokowania interfejsu.
+- Precyzyjne liczniki plików i podfolderów z polską odmianą gramatyczną.
+- Bezpieczne trawersowanie ograniczone do systemów lokalnych, z ochroną dowiązań symbolicznych i natychmiastowym anulowaniem zadań w tle.
+
+---
+
 # Aktualizacja do 0.41.0
 
 ```bash

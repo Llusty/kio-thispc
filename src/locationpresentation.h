@@ -38,6 +38,9 @@ QVector<Segment> localPathSegments(
     const QVector<DriveInfo> &drives);
 QVector<Segment> adminPathSegments(const QUrl &url);
 QVector<Segment> remotePathSegments(const QUrl &url);
+QVector<Segment> mtpPathSegments(
+    const QUrl &url,
+    const QVector<DriveInfo> &drives = {});
 
 QUrl parentUrl(
     const QUrl &url,
