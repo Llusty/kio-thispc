@@ -120,17 +120,74 @@ QFrame#splitBreadcrumbFrame[active="true"] {
     border-color: palette(highlight);
     background: palette(alternate-base);
 }
+QFrame#searchPopoverFrame {
+    border: 1px solid palette(mid);
+    border-radius: 8px;
+    background: palette(window);
+}
+QToolButton#searchScopeButton,
+QToolButton#searchNameModeButton,
 QToolButton#searchFilterButton {
     border: 1px solid palette(mid);
     border-radius: 6px;
-    padding: 3px 6px;
+    padding: 6px 10px;
     background: palette(base);
 }
+QToolButton#searchScopeButton:hover,
+QToolButton#searchNameModeButton:hover,
 QToolButton#searchFilterButton:hover {
     background: palette(alternate-base);
 }
+QToolButton#searchScopeButton:focus,
+QToolButton#searchNameModeButton:focus,
+QToolButton#searchFilterButton:focus {
+    background: palette(alternate-base);
+    border-color: palette(highlight);
+}
+QToolButton#searchScopeButton:pressed,
+QToolButton#searchNameModeButton:pressed,
+QToolButton#searchFilterButton:pressed {
+    background: palette(alternate-base);
+    border-color: palette(highlight);
+}
+QToolButton#searchScopeButton:disabled,
+QToolButton#searchNameModeButton:disabled,
+QToolButton#searchFilterButton:disabled {
+    color: palette(disabled, text);
+    border-color: palette(disabled, mid);
+}
+QToolButton#searchFilterButton[activeFilters="true"] {
+    background: palette(highlight);
+    color: palette(highlighted-text);
+    border-color: palette(highlight);
+    font-weight: 600;
+}
+QToolButton#searchFilterButton[activeFilters="true"]:hover {
+    background: palette(highlight);
+    border-color: palette(highlight);
+}
+QToolButton#searchFilterButton[activeFilters="true"]:focus {
+    background: palette(highlight);
+    color: palette(highlighted-text);
+    border-color: palette(highlighted-text);
+}
 QFrame#searchProgressFrame {
     background: transparent;
+}
+QToolButton#searchClearButton,
+QToolButton#searchFilterIndicatorButton {
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    padding: 1px;
+}
+QToolButton#searchClearButton:hover,
+QToolButton#searchFilterIndicatorButton:hover {
+    background: palette(alternate-base);
+}
+QToolButton#searchClearButton:pressed,
+QToolButton#searchFilterIndicatorButton:pressed {
+    background: palette(midlight);
 }
 
 QFrame#adminBanner {
@@ -166,7 +223,6 @@ QToolBar#fileCommandToolbar {
 
 QLineEdit#searchEdit {
     min-width: 240px;
-    max-width: 260px;
     padding: 4px 7px;
 }
 

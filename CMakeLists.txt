@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(kio-thispc VERSION 0.40.1 LANGUAGES CXX)
+project(kio-thispc VERSION 0.41.0 LANGUAGES CXX)
 
 set(QT_MIN_VERSION "6.5.0")
 set(KF_MIN_VERSION "6.17.0")
@@ -175,9 +175,17 @@ add_executable(thispc-view
     src/previewpane.h
     src/quicklook.h
     src/sidebar.h
+    src/searchquery.h
+    src/searchmatcher.h
+    src/searchplan.h
     src/searchcontroller.h
     src/searchuicontroller.cpp
     src/searchuicontroller.h
+    src/searchpopover.cpp
+    src/searchpopover.h
+    src/searchprogressbar.h
+    src/advancedsearchfiltersdialog.cpp
+    src/advancedsearchfiltersdialog.h
     src/sessionmanager.h
     src/undocontroller.h
     src/splitbrowserpane.h
@@ -310,9 +318,17 @@ add_executable(thispc-view-stage3c1-test EXCLUDE_FROM_ALL
     src/previewpane.h
     src/quicklook.h
     src/sidebar.h
+    src/searchquery.h
+    src/searchmatcher.h
+    src/searchplan.h
     src/searchcontroller.h
     src/searchuicontroller.cpp
     src/searchuicontroller.h
+    src/searchpopover.cpp
+    src/searchpopover.h
+    src/searchprogressbar.h
+    src/advancedsearchfiltersdialog.cpp
+    src/advancedsearchfiltersdialog.h
     src/sessionmanager.h
     src/undocontroller.h
     src/splitbrowserpane.h

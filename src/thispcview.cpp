@@ -3,7 +3,7 @@
  * thispc-view - a lightweight KDE/Qt file browser with a Windows-like
  * "This PC" home page, backed by KIO.
  *
- * Version 0.40.1
+ * Version 0.41.0
  * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
@@ -84,6 +84,7 @@
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QIcon>
+#include <QIconEngine>
 #include <QImage>
 #include <QImageReader>
 #include <QInputDialog>
@@ -157,6 +158,9 @@
 #include "sessionmanager.h"
 #include "searchcontroller.h"
 #include "searchuicontroller.h"
+#include "searchpopover.h"
+#include "searchprogressbar.h"
+#include "advancedsearchfiltersdialog.h"
 #include "splitbrowserpane.h"
 #include "splitcomparedialog.h"
 #include "storagescandialog.h"
@@ -579,7 +583,8 @@ public:
             updateSearchStatusLabel();
         });
         connect(m_searchController, &SearchController::finished, this, [this] {
-            m_searchProgressFrame->hide();
+            updateSearchProgress();
+            updateSearchStatusLabel();
             updateSearchControls();
             if (m_activePane == PaneId::Primary)
                 statusBar()->showMessage(trLocal("Wyszukiwanie zakończone", "Search completed"), 4000);
@@ -591,14 +596,21 @@ public:
 
         m_searchUiController = std::make_unique<SearchUiController>(
             SearchUiController::Widgets{m_searchEdit, m_stopSearchAction,
-                m_searchScopeAction, m_searchFilterButton, m_searchScopeGroup,
-                m_searchTypeGroup, m_searchDateGroup, m_searchSizeGroup,
-                m_searchProgressFrame, m_searchProgressBar, m_directoryStatus},
+                m_searchScopeAction, m_searchScopeButton, m_searchFilterButton,
+                m_searchFilterIndicatorAction,
+                m_searchScopeGroup,
+                m_searchTypeGroup, m_searchTypeInfoAction,
+                m_searchDateGroup, m_searchDateInfoAction,
+                m_searchSizeGroup, m_searchSizeInfoAction,
+                m_searchProgressFrame, m_searchProgressBar, m_directoryStatus,
+                m_searchNameModeButton, m_searchNameModeGroup,
+                m_clearSearchAction},
             SearchUiController::Presentation{
                 [](const char *pl, const char *en) { return trLocal(pl, en); },
                 [this](const QUrl &url) { return displayNameForLocation(url); },
                 [this] { return searchScopeMenuIcon(); },
-                [] { return isPolish(); }});
+                [] { return isPolish(); },
+                [this](int count) { return searchFilterBadgeIcon(count); }});
 
         connect(
             QApplication::clipboard(),
@@ -837,14 +849,113 @@ private:
 
         m_searchEdit = new QLineEdit(toolbar);
         m_searchEdit->setObjectName(QStringLiteral("searchEdit"));
-        m_searchEdit->setClearButtonEnabled(true);
         m_searchEdit->setPlaceholderText(
-            trLocal("Szukaj w tym folderze", "Search this folder"));
-        m_searchEdit->setFixedWidth(255);
+            trLocal("Szukaj plików i folderów...", "Search files and folders..."));
+        m_searchEdit->setAccessibleName(
+            trLocal("Szukaj plików i folderów", "Search files and folders"));
+        m_searchEdit->setAccessibleDescription(m_searchEdit->placeholderText());
+        m_searchEdit->setFixedWidth(SearchPopover::kDefaultAnchorWidth);
 
-        // 0.13.1: the search scope lives under the magnifier inside the
-        // search box instead of consuming space between address and search.
-        m_searchScopeMenu = new QMenu(m_searchEdit);
+        // Leading normal magnifier icon (without drop-down arrow).
+        // Preserves m_searchScopeAction pointer for compatibility with tests.
+        m_searchScopeAction =
+            m_searchEdit->addAction(
+                themedIcon(QStringLiteral("edit-find")),
+                QLineEdit::LeadingPosition);
+        connect(
+            m_searchScopeAction,
+            &QAction::triggered,
+            this,
+            [this] {
+                if (m_searchPopover && m_searchEdit) {
+                    m_searchPopover->showUnder(m_searchEdit);
+                }
+            });
+
+        // 1. Clear search button (TrailingPosition, added first to remain at the far right edge).
+        QIcon clearIcon = themedIcon(QStringLiteral("edit-clear"));
+        if (clearIcon.isNull() && m_searchEdit->style()) {
+            clearIcon = m_searchEdit->style()->standardIcon(QStyle::SP_LineEditClearButton, nullptr, m_searchEdit);
+        }
+        m_clearSearchAction =
+            m_searchEdit->addAction(
+                clearIcon,
+                QLineEdit::TrailingPosition);
+        m_clearSearchAction->setVisible(false);
+        m_clearSearchAction->setText(trLocal("Wyczyść wyszukiwanie", "Clear search"));
+        m_clearSearchAction->setToolTip(trLocal("Wyczyść wyszukiwanie", "Clear search"));
+        connect(
+            m_clearSearchAction,
+            &QAction::triggered,
+            this,
+            [this] {
+                if (m_searchEdit) {
+                    m_searchEdit->clear();
+                    m_searchEdit->setFocus();
+                }
+            });
+
+        // 2. Filter indicator badge action (TrailingPosition, added second so it sits immediately left of clear button).
+        m_searchFilterIndicatorAction =
+            m_searchEdit->addAction(
+                themedIcon(QStringLiteral("view-filter")),
+                QLineEdit::TrailingPosition);
+        m_searchFilterIndicatorAction->setVisible(false);
+        m_searchFilterIndicatorAction->setToolTip(
+            trLocal("Filtry wyszukiwania", "Search filters"));
+        connect(
+            m_searchFilterIndicatorAction,
+            &QAction::triggered,
+            this,
+            [this] {
+                if (m_searchPopover && m_searchEdit) {
+                    m_searchPopover->showUnder(m_searchEdit);
+                }
+            });
+
+        // 3. Stop search action (TrailingPosition, added third so it sits left of filter indicator).
+        m_stopSearchAction =
+            m_searchEdit->addAction(
+                themedIcon(QStringLiteral("process-stop")),
+                QLineEdit::TrailingPosition);
+        m_stopSearchAction->setToolTip(
+            trLocal(
+                "Przerwij wyszukiwanie",
+                "Stop search"));
+        m_stopSearchAction->setVisible(false);
+
+        connect(
+            m_stopSearchAction,
+            &QAction::triggered,
+            this,
+            [this] {
+                cancelSearch(m_activePane, true);
+            });
+
+        for (QToolButton *btn : m_searchEdit->findChildren<QToolButton*>()) {
+            if (btn->defaultAction() == m_clearSearchAction) {
+                btn->setObjectName(QStringLiteral("searchClearButton"));
+                btn->setCursor(Qt::PointingHandCursor);
+                btn->setAutoRaise(true);
+            } else if (btn->defaultAction() == m_searchFilterIndicatorAction) {
+                btn->setObjectName(QStringLiteral("searchFilterIndicatorButton"));
+                btn->setCursor(Qt::PointingHandCursor);
+                btn->setAutoRaise(true);
+            }
+        }
+
+        toolbar->addWidget(m_searchEdit);
+
+        // Floating overlay popover directly under the search field
+        m_searchPopover = new SearchPopover(this);
+        m_searchScopeButton = m_searchPopover->scopeButton();
+        m_searchFilterButton = m_searchPopover->filterButton();
+
+        m_searchScopeButton->setIcon(themedIcon(QStringLiteral("folder")));
+        m_searchScopeButton->setText(trLocal("Bieżący folder i podfoldery", "Current folder and subfolders"));
+        m_searchScopeButton->setToolTip(trLocal("Zakres wyszukiwania", "Search scope"));
+
+        m_searchScopeMenu = new QMenu(m_searchScopeButton);
         m_searchScopeMenu->addSection(
             trLocal(
                 "Zakres wyszukiwania",
@@ -862,7 +973,7 @@ private:
         };
 
         const SearchScopeDef scopes[] = {
-            {0, "Bieżący folder", "Current folder", "folder"},
+            {0, "Bieżący folder i podfoldery", "Current folder and subfolders", "folder"},
             {1, "Bieżący dysk", "Current drive", "drive-harddisk"},
             {2, "Ten komputer", "This PC", "computer"},
         };
@@ -882,59 +993,65 @@ private:
                 [this, value = def.value] {
                     activeSearchState().scope = value;
                     updateSearchControls();
+                    if (m_searchEdit) {
+                        m_searchEdit->setFocus();
+                    }
                 });
         }
 
-        m_searchScopeAction =
-            m_searchEdit->addAction(
-                searchScopeMenuIcon(),
-                QLineEdit::LeadingPosition);
+        m_searchScopeButton->setMenu(m_searchScopeMenu);
 
-        connect(
-            m_searchScopeAction,
-            &QAction::triggered,
-            this,
-            [this] {
-                if (!m_searchScopeMenu
-                    || !m_searchScopeAction->isEnabled()) {
-                    return;
-                }
+        // Popover Name Mode button
+        m_searchNameModeButton = m_searchPopover->nameModeButton();
+        m_searchNameModeButton->setText(trLocal("Tryb: Auto", "Mode: Auto"));
+        m_searchNameModeButton->setToolTip(trLocal("Tryb dopasowania nazwy", "Name matching mode"));
 
-                const QPoint popupPoint =
-                    m_searchEdit->mapToGlobal(
-                        QPoint(0, m_searchEdit->height()));
-                m_searchScopeMenu->popup(popupPoint);
-            });
+        m_searchNameModeMenu = new QMenu(m_searchNameModeButton);
+        m_searchNameModeMenu->addSection(trLocal("Tryb dopasowania", "Matching mode"));
 
-        m_stopSearchAction =
-            m_searchEdit->addAction(
-                themedIcon(QStringLiteral("process-stop")),
-                QLineEdit::TrailingPosition);
-        m_stopSearchAction->setToolTip(
-            trLocal(
-                "Przerwij wyszukiwanie",
-                "Stop search"));
-        m_stopSearchAction->setVisible(false);
+        m_searchNameModeGroup = new QActionGroup(m_searchNameModeMenu);
+        m_searchNameModeGroup->setExclusive(true);
 
-        connect(
-            m_stopSearchAction,
-            &QAction::triggered,
-            this,
-            [this] {
-                cancelSearch(m_activePane, true);
-            });
+        struct SearchNameModeDef {
+            SearchQuery::NameMode mode;
+            const char *pl;
+            const char *en;
+        };
 
-        toolbar->addWidget(m_searchEdit);
+        const SearchNameModeDef nameModes[] = {
+            {SearchQuery::NameMode::Auto, "Auto (tekst lub maska)", "Auto (text or glob)"},
+            {SearchQuery::NameMode::Substring, "Tekst (zawiera fragment)", "Text (substring)"},
+            {SearchQuery::NameMode::Glob, "Maska glob (*, ?)", "Glob mask (*, ?)"},
+        };
 
-        m_searchFilterButton = new QToolButton(toolbar);
-        m_searchFilterButton->setObjectName(
-            QStringLiteral("searchFilterButton"));
-        m_searchFilterButton->setPopupMode(
-            QToolButton::InstantPopup);
-        m_searchFilterButton->setToolButtonStyle(
-            Qt::ToolButtonIconOnly);
+        for (const SearchNameModeDef &def : nameModes) {
+            QAction *action = m_searchNameModeMenu->addAction(trLocal(def.pl, def.en));
+            action->setCheckable(true);
+            action->setData(static_cast<int>(def.mode));
+            m_searchNameModeGroup->addAction(action);
+
+            connect(
+                action,
+                &QAction::triggered,
+                this,
+                [this, mode = def.mode] {
+                    activeSearchState().nameMode = mode;
+                    syncCurrentSearchFilters();
+                    updateSearchControls();
+                    renderActiveSearchItems();
+                    if (m_searchEdit) {
+                        m_searchEdit->setFocus();
+                    }
+                });
+        }
+
+        m_searchNameModeButton->setMenu(m_searchNameModeMenu);
+
+        // Popover Filters button
         m_searchFilterButton->setIcon(
             themedIcon(QStringLiteral("view-filter")));
+        m_searchFilterButton->setText(
+            trLocal("Filtry", "Filters"));
         m_searchFilterButton->setToolTip(
             trLocal("Filtry wyszukiwania", "Search filters"));
 
@@ -962,6 +1079,11 @@ private:
             {6, "Archiwa", "Archives"},
         };
 
+        m_searchTypeInfoAction = typeMenu->addAction(QString());
+        m_searchTypeInfoAction->setEnabled(false);
+        m_searchTypeInfoAction->setVisible(false);
+        typeMenu->addSeparator();
+
         for (const SearchFilterDef &def : types) {
             QAction *action =
                 typeMenu->addAction(
@@ -976,9 +1098,18 @@ private:
                 this,
                 [this, value = def.value] {
                     activeSearchState().type = value;
+                    if (value >= 2 && value <= 6) {
+                        activeSearchState().categories = {static_cast<SearchQuery::Category>(value)};
+                    } else {
+                        // "All" or "Folders" clears the category restriction
+                        activeSearchState().categories.clear();
+                    }
                     syncCurrentSearchFilters();
                     updateSearchControls();
                     renderActiveSearchItems();
+                    if (m_searchEdit) {
+                        m_searchEdit->setFocus();
+                    }
                 });
         }
 
@@ -987,6 +1118,10 @@ private:
                 trLocal("Data modyfikacji", "Date modified"));
         m_searchDateGroup = new QActionGroup(dateMenu);
         m_searchDateGroup->setExclusive(true);
+
+        m_searchDateInfoAction = dateMenu->addAction(QString());
+        m_searchDateInfoAction->setEnabled(false);
+        m_searchDateInfoAction->setVisible(false);
 
         const SearchFilterDef dates[] = {
             {0, "Dowolna", "Any time"},
@@ -1010,9 +1145,14 @@ private:
                 this,
                 [this, value = def.value] {
                     activeSearchState().date = value;
+                    activeSearchState().dateMin.reset();
+                    activeSearchState().dateMax.reset();
                     syncCurrentSearchFilters();
                     updateSearchControls();
                     renderActiveSearchItems();
+                    if (m_searchEdit) {
+                        m_searchEdit->setFocus();
+                    }
                 });
         }
 
@@ -1021,6 +1161,10 @@ private:
                 trLocal("Rozmiar", "Size"));
         m_searchSizeGroup = new QActionGroup(sizeMenu);
         m_searchSizeGroup->setExclusive(true);
+
+        m_searchSizeInfoAction = sizeMenu->addAction(QString());
+        m_searchSizeInfoAction->setEnabled(false);
+        m_searchSizeInfoAction->setVisible(false);
 
         const SearchFilterDef sizes[] = {
             {0, "Dowolny", "Any size"},
@@ -1044,11 +1188,31 @@ private:
                 this,
                 [this, value = def.value] {
                     activeSearchState().size = value;
+                    activeSearchState().sizeMin.reset();
+                    activeSearchState().sizeMax.reset();
                     syncCurrentSearchFilters();
                     updateSearchControls();
                     renderActiveSearchItems();
+                    if (m_searchEdit) {
+                        m_searchEdit->setFocus();
+                    }
                 });
         }
+
+        filterMenu->addSeparator();
+
+        QAction *advancedFiltersAction =
+            filterMenu->addAction(
+                themedIcon(QStringLiteral("configure")),
+                trLocal("Zaawansowane filtry...", "Advanced filters..."));
+
+        connect(
+            advancedFiltersAction,
+            &QAction::triggered,
+            this,
+            [this] {
+                showAdvancedFiltersDialog();
+            });
 
         filterMenu->addSeparator();
 
@@ -1065,20 +1229,39 @@ private:
                 activeSearchState().type = 0;
                 activeSearchState().date = 0;
                 activeSearchState().size = 0;
+                activeSearchState().nameMode = SearchQuery::NameMode::Auto;
+                activeSearchState().matchCase = false;
+                activeSearchState().extensions.clear();
+                activeSearchState().targetType = SearchQuery::TargetType::All;
+                activeSearchState().categories.clear();
+                activeSearchState().mimeTypes.clear();
+                activeSearchState().dateMin.reset();
+                activeSearchState().dateMax.reset();
+                activeSearchState().sizeMin.reset();
+                activeSearchState().sizeMax.reset();
                 syncCurrentSearchFilters();
                 updateSearchControls();
                 renderActiveSearchItems();
+                if (m_searchEdit) {
+                    m_searchEdit->setFocus();
+                }
             });
 
         m_searchFilterButton->setMenu(filterMenu);
-        toolbar->addWidget(m_searchFilterButton);
+
+        m_searchPopover->attachAnchor(m_searchEdit);
+        m_searchPopover->updateStableWidths([] { return isPolish(); });
 
         connect(
             m_searchEdit,
             &QLineEdit::textChanged,
             this,
             [this](const QString &text) {
+                if (m_clearSearchAction) {
+                    m_clearSearchAction->setVisible(!text.isEmpty());
+                }
                 activeSearchState().text = text;
+                updateSearchControls();
                 if (!isSearchLocation(activeLocation())) renderActiveSearchItems();
             });
 
@@ -1086,7 +1269,12 @@ private:
             m_searchEdit,
             &QLineEdit::returnPressed,
             this,
-            &ThisPcWindow::startSearchFromUi);
+            [this] {
+                if (m_searchPopover) {
+                    m_searchPopover->hidePopover();
+                }
+                startSearchFromUi();
+            });
 
         auto *findAction = new QAction(this);
         findAction->setShortcut(QKeySequence::Find);
@@ -1103,6 +1291,9 @@ private:
                 m_searchEdit->setFocus(
                     Qt::ShortcutFocusReason);
                 m_searchEdit->selectAll();
+                if (m_searchPopover) {
+                    m_searchPopover->showUnder(m_searchEdit);
+                }
             });
 
         auto *locationAction = new QAction(this);
@@ -2204,14 +2395,14 @@ private:
         statusBar()->setSizeGripEnabled(true);
 
         m_versionLabel = new QLabel(
-            QStringLiteral("v0.40.1"),
+            QStringLiteral("v0.41.0"),
             this);
         m_versionLabel->setObjectName(
             QStringLiteral("versionLabel"));
         m_versionLabel->setToolTip(
             trLocal(
-                "Wersja thispc-view 0.40.1",
-                "thispc-view version 0.40.1"));
+                "Wersja thispc-view 0.41.0",
+                "thispc-view version 0.41.0"));
         statusBar()->addPermanentWidget(m_versionLabel);
     }
 
@@ -2437,11 +2628,13 @@ private:
         searchProgressLayout->setSpacing(8);
 
         m_searchProgressBar =
-            new QProgressBar(m_searchProgressFrame);
+            new SearchProgressBar(m_searchProgressFrame);
         m_searchProgressBar->setRange(0, 100);
         m_searchProgressBar->setValue(0);
         m_searchProgressBar->setTextVisible(false);
         m_searchProgressBar->setMaximumHeight(7);
+        m_searchProgressBar->setAccessibleName(
+            trLocal("Postęp wyszukiwania", "Search progress"));
 
         m_cancelSearchButton =
             new QPushButton(
@@ -2453,6 +2646,12 @@ private:
             trLocal(
                 "Przerwij wyszukiwanie",
                 "Stop search"));
+        m_cancelSearchButton->setAccessibleName(
+            trLocal(
+                "Przerwij wyszukiwanie",
+                "Stop search"));
+        m_cancelSearchButton->setAccessibleDescription(
+            m_cancelSearchButton->toolTip());
 
         connect(
             m_cancelSearchButton,
@@ -2781,6 +2980,121 @@ private:
         return QIcon(pixmap);
     }
 
+    class FilterBadgeIconEngine : public QIconEngine
+    {
+    public:
+        explicit FilterBadgeIconEngine(int count, const QPalette &palette)
+            : m_count(count)
+            , m_palette(palette)
+        {
+        }
+
+        void paint(QPainter *painter, const QRect &rect, QIcon::Mode mode, QIcon::State state) override
+        {
+            if (!painter) {
+                return;
+            }
+
+            painter->save();
+            painter->setRenderHint(QPainter::Antialiasing, true);
+            painter->setRenderHint(QPainter::TextAntialiasing, true);
+            painter->setRenderHint(QPainter::SmoothPixmapTransform, true);
+
+            // Prominent 16-18 logic px funnel symbol aligned within target rect
+            const int funnelSize = std::max(16, std::min(rect.width(), rect.height()));
+            const int fx = rect.x() - (rect.width() <= 16 ? 1 : 0);
+            const int fy = rect.y() + (rect.height() - funnelSize) / 2;
+            const QRect funnelRect(fx, fy, funnelSize, funnelSize);
+
+            const QIcon baseIcon = themedIcon(QStringLiteral("view-filter"));
+            if (!baseIcon.isNull()) {
+                baseIcon.paint(painter, funnelRect, Qt::AlignCenter, mode, state);
+            }
+
+            if (m_count > 0) {
+                const QString text = QString::number(m_count);
+                QFont badgeFont = painter->font();
+                badgeFont.setPixelSize(funnelSize >= 20 ? 10 : 9);
+                badgeFont.setBold(true);
+                painter->setFont(badgeFont);
+
+                const QFontMetrics fm(badgeFont);
+                const int textWidth = fm.horizontalAdvance(text);
+                const qreal badgeHeight = (funnelSize >= 20) ? 12.0 : 11.0;
+                const qreal badgeWidth = std::max(badgeHeight, static_cast<qreal>(textWidth) + 5.0);
+
+                // Anchor badge pill to bottom-right corner of funnelRect
+                const qreal badgeX = fx + funnelSize - badgeWidth + 2.0;
+                const qreal badgeY = fy + funnelSize - badgeHeight + 1.0;
+                const QRectF badgeRect(badgeX, badgeY, badgeWidth, badgeHeight);
+                const QRectF haloRect(badgeX - 1.0, badgeY - 1.0, badgeWidth + 2.0, badgeHeight + 2.0);
+
+                // 1. Cutout halo matching QLineEdit base background for razor-sharp visual isolation
+                painter->setPen(Qt::NoPen);
+                painter->setBrush(m_palette.color(QPalette::Base));
+                painter->drawRoundedRect(haloRect, haloRect.height() / 2.0, haloRect.height() / 2.0);
+
+                // 2. High-contrast accent pill
+                const QColor pillColor = (mode == QIcon::Disabled)
+                    ? m_palette.color(QPalette::Disabled, QPalette::Highlight)
+                    : m_palette.color(QPalette::Active, QPalette::Highlight);
+                painter->setBrush(pillColor);
+                painter->drawRoundedRect(badgeRect, badgeHeight / 2.0, badgeHeight / 2.0);
+
+                // 3. Crisp counter text
+                const QColor textColor = (mode == QIcon::Disabled)
+                    ? m_palette.color(QPalette::Disabled, QPalette::HighlightedText)
+                    : m_palette.color(QPalette::Active, QPalette::HighlightedText);
+                painter->setPen(textColor);
+                painter->drawText(badgeRect, Qt::AlignCenter, text);
+            }
+
+            painter->restore();
+        }
+
+        QSize actualSize(const QSize &size, QIcon::Mode mode, QIcon::State state) override
+        {
+            Q_UNUSED(mode);
+            Q_UNUSED(state);
+            return size.isValid() ? size : QSize(20, 20);
+        }
+
+        QPixmap pixmap(const QSize &size, QIcon::Mode mode, QIcon::State state) override
+        {
+            const qreal dpr = qApp ? qApp->devicePixelRatio() : 1.0;
+            QPixmap pm(QSize(std::max(1, static_cast<int>(size.width() * dpr)),
+                             std::max(1, static_cast<int>(size.height() * dpr))));
+            pm.setDevicePixelRatio(dpr);
+            pm.fill(Qt::transparent);
+
+            QPainter painter(&pm);
+            paint(&painter, QRect(QPoint(0, 0), size), mode, state);
+            painter.end();
+            return pm;
+        }
+
+        QIconEngine *clone() const override
+        {
+            return new FilterBadgeIconEngine(m_count, m_palette);
+        }
+
+        QList<QSize> availableSizes(QIcon::Mode mode, QIcon::State state) override
+        {
+            Q_UNUSED(mode);
+            Q_UNUSED(state);
+            return {QSize(16, 16), QSize(18, 18), QSize(20, 20), QSize(22, 22), QSize(24, 24), QSize(32, 32)};
+        }
+
+    private:
+        int m_count = 0;
+        QPalette m_palette;
+    };
+
+    QIcon searchFilterBadgeIcon(int count) const
+    {
+        return QIcon(new FilterBadgeIconEngine(count, palette()));
+    }
+
     QUrl activeLocation() const
     {
         return m_activePane == PaneId::Split && m_splitPane && m_splitPane->isVisible()
@@ -2827,12 +3141,170 @@ private:
 
     void startSearchFromUi()
     {
+        if (m_searchPopover) {
+            m_searchPopover->hidePopover();
+        }
         if (!m_searchUiController) return;
         const auto request = m_searchUiController->requestFromUi(
             {activeLocation(), &activeSearchState(), nullptr}, searchDriveRoots(),
             QUrl::fromLocalFile(QDir::homePath()));
         if (request.isValid()) navigatePane(m_activePane,
             request.location(activeSearchState()));
+    }
+
+    void showAdvancedFiltersDialog()
+    {
+        if (m_searchPopover) {
+            m_searchPopover->hidePopover();
+        }
+        const PaneId targetPane = m_activePane;
+        const int targetTab = m_activeTab;
+
+        auto getTargetState = [this, targetPane]() -> PaneSearchState* {
+            if (targetPane == PaneId::Split) {
+                return (m_splitPane && m_splitPane->isVisible()) ? &m_splitPane->searchState() : nullptr;
+            }
+            return &m_primarySearch;
+        };
+
+        auto getTargetLocation = [this, targetPane]() -> QUrl {
+            if (targetPane == PaneId::Split) {
+                return (m_splitPane && m_splitPane->isVisible()) ? m_splitPane->currentUrl() : QUrl();
+            }
+            return m_navigation.currentUrl();
+        };
+
+        PaneSearchState *state = getTargetState();
+        if (!state) return;
+
+        const QUrl loc = getTargetLocation();
+        SearchQuery initialQuery = isSearchLocation(loc)
+            ? SearchQuery::fromUrl(loc)
+            : state->toQuery();
+
+        // Ensure pane's current state fields are reflected
+        initialQuery.setNameMode(state->nameMode);
+        initialQuery.setMatchCase(state->matchCase);
+        initialQuery.setExtensions(state->extensions);
+        initialQuery.setTargetType(state->targetType);
+        if (!state->categories.isEmpty()) {
+            initialQuery.setCategories(state->categories);
+        } else if (state->type >= 2 && state->type <= 6) {
+            initialQuery.setCategories({static_cast<SearchQuery::Category>(state->type)});
+        } else {
+            initialQuery.setCategories({});
+        }
+        initialQuery.setMimeTypes(state->mimeTypes);
+        initialQuery.setDateRange(state->dateMin, state->dateMax);
+        initialQuery.setSizeRange(state->sizeMin, state->sizeMax);
+        initialQuery.setLegacyDate(state->date);
+        initialQuery.setLegacySize(state->size);
+
+        if (m_advancedFiltersDialog) {
+            m_advancedFiltersPane = targetPane;
+            m_advancedFiltersTab = targetTab;
+            m_advancedFiltersDialog->setQuery(initialQuery);
+            m_advancedFiltersDialog->show();
+            m_advancedFiltersDialog->raise();
+            m_advancedFiltersDialog->activateWindow();
+            return;
+        }
+
+        m_advancedFiltersPane = targetPane;
+        m_advancedFiltersTab = targetTab;
+        m_advancedFiltersDialog = new AdvancedSearchFiltersDialog(initialQuery, this);
+
+        connect(m_advancedFiltersDialog, &AdvancedSearchFiltersDialog::filtersApplied, this,
+                [this](const SearchQuery &q) {
+            const PaneId currentTargetPane = m_advancedFiltersPane;
+            const int currentTargetTab = m_advancedFiltersTab;
+
+            // Guard: ensure original tab is still valid if primary pane
+            if (currentTargetPane == PaneId::Primary && (currentTargetTab < 0 || currentTargetTab >= m_tabs.size())) {
+                return;
+            }
+            // Guard: ensure split pane is still valid/visible if target was split pane
+            if (currentTargetPane == PaneId::Split && (!m_splitPane || !m_splitPane->isVisible())) {
+                return;
+            }
+
+            PaneSearchState &targetState = (currentTargetPane == PaneId::Split)
+                ? m_splitPane->searchState() : m_primarySearch;
+            const QUrl currentTargetUrl = (currentTargetPane == PaneId::Split)
+                ? m_splitPane->currentUrl() : m_navigation.currentUrl();
+
+            targetState.nameMode = q.nameMode();
+            targetState.matchCase = q.matchCase();
+            targetState.recursive = q.recursive();
+            targetState.extensions = q.extensions();
+            targetState.targetType = q.targetType();
+            targetState.categories = q.categories();
+            targetState.mimeTypes = q.mimeTypes();
+            targetState.dateMin = q.dateMin();
+            targetState.dateMax = q.dateMax();
+            targetState.sizeMin = q.sizeMin();
+            targetState.sizeMax = q.sizeMax();
+            targetState.size = q.legacySize();
+
+            // When custom date or size range is set, clear legacy preset
+            if (targetState.dateMin.has_value() || targetState.dateMax.has_value()) {
+                targetState.date = 0;
+            }
+            if (targetState.sizeMin.has_value() || targetState.sizeMax.has_value()) {
+                targetState.size = 0;
+            } else if (targetState.size > 0) {
+                targetState.sizeMin.reset();
+                targetState.sizeMax.reset();
+            }
+
+            // Keep quick type preset in sync with category selection:
+            if (targetState.categories.size() == 1) {
+                targetState.type = static_cast<int>(targetState.categories.first());
+            } else if (targetState.categories.size() > 1 || !targetState.mimeTypes.isEmpty()) {
+                if (targetState.type >= 2) {
+                    targetState.type = 0;
+                }
+            } else if (targetState.type >= 2) {
+                // If categories were cleared, also reset preset type if it was a category preset
+                targetState.type = 0;
+            }
+
+            if (isSearchLocation(currentTargetUrl)) {
+                const QUrl updated = m_searchUiController->locationWithSyncedFilters(
+                    {currentTargetUrl, &targetState, nullptr});
+                if (currentTargetPane == PaneId::Split) {
+                    m_splitPane->updateSearchFilters(updated);
+                } else {
+                    m_navigation.updateCurrent(updated, true);
+                    m_primarySearch.location = updated;
+                    rebuildBreadcrumbs();
+                    syncActiveTabState();
+                    updateActiveTabPresentation();
+                    renderDirectoryItems();
+                }
+            } else {
+                if (currentTargetPane == PaneId::Split) {
+                    m_splitPane->renderSearchItems();
+                } else {
+                    renderDirectoryItems();
+                }
+            }
+
+            if (m_activePane == currentTargetPane) {
+                updateSearchControls();
+            }
+        });
+
+        connect(m_advancedFiltersDialog, &QDialog::finished, this, [this](int) {
+            if (m_searchEdit) {
+                activateWindow();
+                m_searchEdit->setFocus();
+            }
+        });
+
+        m_advancedFiltersDialog->show();
+        m_advancedFiltersDialog->raise();
+        m_advancedFiltersDialog->activateWindow();
     }
 
     void syncCurrentSearchFilters()
@@ -2869,7 +3341,7 @@ private:
         }
 
         m_searchUiController->updateStatus(*m_searchController,
-            m_searchVisibleCount, m_primarySearch.scope);
+            m_searchVisibleCount, m_primarySearch.scope, m_primarySearch.recursive);
     }
 
     void cancelSearch(PaneId pane, bool userRequested)
@@ -2879,14 +3351,18 @@ private:
             updateSearchControls();
             return;
         }
-        if (!m_searchController->cancel()) return;
-        if (m_searchProgressFrame) m_searchProgressFrame->hide();
-        updateSearchControls();
+        if (!m_searchController->cancel(userRequested)) return;
+        updateSearchProgress();
         if (userRequested) {
             m_primaryPane->setFiles(m_searchController->files());
             renderDirectoryItems();
+            updateSearchStatusLabel();
             statusBar()->showMessage(trLocal("Wyszukiwanie anulowane", "Search canceled"), 4000);
+        } else {
+            m_searchVisibleCount = 0;
+            updateSearchStatusLabel();
         }
+        updateSearchControls();
     }
 
     void loadSearchLocation(const QUrl &url)
@@ -2919,10 +3395,9 @@ private:
             m_primarySearch, searchDriveRoots(), QUrl::fromLocalFile(QDir::homePath()));
 
         m_searchVisibleCount = 0;
-        m_searchProgressBar->setRange(0, 100);
-        m_searchProgressBar->setValue(0);
-        m_searchProgressFrame->show();
-        m_searchController->start(query, roots, m_showHiddenFiles);
+        m_searchController->startFromLocation(url, roots, m_showHiddenFiles);
+        updateSearchProgress();
+        updateSearchStatusLabel();
         updateSearchControls();
     }
 
@@ -3034,12 +3509,34 @@ private:
         const QUrl primary = m_navigation.currentUrl();
         const QUrl secondary = m_splitPane->currentUrl();
 
+        PaneSearchState primarySearch = m_primarySearch;
+        primarySearch.location = normalizedUrl(primary);
+        PaneSearchState secondarySearch = m_splitPane->searchState();
+        secondarySearch.location = normalizedUrl(secondary);
+
+        m_primarySearch = secondarySearch;
+        m_splitPane->searchState() = primarySearch;
+
         if (secondary.isValid()) {
             navigateTo(secondary, true);
         }
         if (primary.isValid()) {
             m_splitPane->setCurrentUrl(primary, true);
         }
+
+        m_primarySearch = secondarySearch;
+        m_primarySearch.location = normalizedUrl(secondary);
+        m_splitPane->searchState() = primarySearch;
+        m_splitPane->searchState().location = normalizedUrl(primary);
+
+        if (m_advancedFiltersDialog && m_advancedFiltersDialog->isVisible()
+            && m_advancedFiltersTab == m_activeTab) {
+            m_advancedFiltersPane = (m_advancedFiltersPane == PaneId::Primary)
+                ? PaneId::Split
+                : PaneId::Primary;
+        }
+
+        updateSearchControls();
         syncActiveTabState();
     }
 
@@ -3887,9 +4384,8 @@ private:
             return true;
         }
 
-        return file.name.contains(
-                m_primarySearch.text.trimmed(),
-                Qt::CaseInsensitive)
+        const SearchMatcher::Prepared matcher(m_primarySearch.toQuery());
+        return matcher.matchesName(file)
             || file.mimeType.contains(
                 m_primarySearch.text.trimmed(),
                 Qt::CaseInsensitive);
@@ -3912,10 +4408,11 @@ private:
         options.detailsActive = m_directoryViewMode == 2;
         options.acceptsFile = [this](const FileInfo &file, QMimeDatabase &mimeDb) {
             if (!fileMatchesSearch(file)) return false;
-            return !isSearchLocation(m_navigation.currentUrl())
-                || SearchController::matchesFile(
-                    file, mimeDb,
-                    {m_primarySearch.type, m_primarySearch.date, m_primarySearch.size});
+            if (!isSearchLocation(m_navigation.currentUrl())) return true;
+            const SearchRequest::LegacyFilters filters{
+                m_primarySearch.type, m_primarySearch.date, m_primarySearch.size};
+            return SearchRequest::fromLocation(m_navigation.currentUrl(), &filters)
+                .accepts(file, mimeDb);
         };
         options.updateStatus = [this](int visibleCount, int count) {
             if (isSearchLocation(m_navigation.currentUrl())) {
@@ -5956,15 +6453,28 @@ private:
     QHBoxLayout *m_breadcrumbLayout = nullptr;
     AddressLineEdit *m_addressEdit = nullptr;
     QAction *m_searchScopeAction = nullptr;
+    QAction *m_clearSearchAction = nullptr;
+    QAction *m_searchFilterIndicatorAction = nullptr;
+    SearchPopover *m_searchPopover = nullptr;
+    QToolButton *m_searchScopeButton = nullptr;
     QMenu *m_searchScopeMenu = nullptr;
+    QToolButton *m_searchNameModeButton = nullptr;
+    QMenu *m_searchNameModeMenu = nullptr;
     QToolButton *m_searchFilterButton = nullptr;
     QActionGroup *m_searchScopeGroup = nullptr;
+    QActionGroup *m_searchNameModeGroup = nullptr;
     QActionGroup *m_searchTypeGroup = nullptr;
+    QAction *m_searchTypeInfoAction = nullptr;
     QActionGroup *m_searchDateGroup = nullptr;
+    QAction *m_searchDateInfoAction = nullptr;
     QActionGroup *m_searchSizeGroup = nullptr;
+    QAction *m_searchSizeInfoAction = nullptr;
     QLineEdit *m_searchEdit = nullptr;
     QAction *m_stopSearchAction = nullptr;
     PaneSearchState m_primarySearch;
+    QPointer<AdvancedSearchFiltersDialog> m_advancedFiltersDialog;
+    PaneId m_advancedFiltersPane = PaneId::Primary;
+    int m_advancedFiltersTab = -1;
 
     SidebarPanel *m_sidebar = nullptr;
     QSplitter *m_sidebarSplitter = nullptr;
@@ -6011,7 +6521,7 @@ private:
     QLabel *m_directoryTitle = nullptr;
     QLabel *m_directoryStatus = nullptr;
     QFrame *m_searchProgressFrame = nullptr;
-    QProgressBar *m_searchProgressBar = nullptr;
+    SearchProgressBar *m_searchProgressBar = nullptr;
     QPushButton *m_cancelSearchButton = nullptr;
     QStackedWidget *m_directoryViewStack = nullptr;
     DirectoryListWidget *m_directoryList = nullptr;

@@ -1,12 +1,39 @@
 [English](README.md) | [Polski](README.pl.md)
 
-# kio-thispc (This PC) 0.40.1
+# kio-thispc (This PC) 0.41.0
 
 ThisPC is a native KDE/Qt file manager focused on a Windows Explorer-like workflow, dual-pane operation, KIO integration, safe local file operations, and native KDE/Linux device handling.
 
 - **Platform:** Linux / KDE Plasma 6
 - **Frameworks:** Qt 6 / KDE Frameworks 6
 - **License:** MIT License
+
+---
+
+## 0.41.0 — Advanced Search & Responsive Search UI
+
+- **Compact Search Bar & Responsive Popover (Variant A):**
+  - Non-expanding, compact 320 px search edit in the toolbar adapting flexibly in narrow window configurations.
+  - Dedicated `SearchPopover` providing separate, visible controls: `[ Scope | Mode | Filters ]`.
+  - HiDPI and Wayland support with unified Breeze palette integration.
+- **Advanced Filters Engine:**
+  - Multi-criteria filtering: Categories (Images, Documents, Audio, Video, Archives), MIME types, extension lists, item type (all, files only, folders only), modification date ranges, and file size thresholds.
+  - AND combination across distinct criteria, with within-filter OR alternatives (e.g. multiple extensions or categories).
+  - Lenient parser for `thispcsearch:/` URLs maintaining full backward compatibility.
+- **Name Matching Modes:**
+  - `Auto`: automatic detection of wildcard patterns and substrings.
+  - `Text`: literal substring matching with case-sensitivity toggle.
+  - `Glob`: explicit glob pattern matching (`*.png`, `file?.*`).
+- **Active Filter Indicator & Independent Clear Button:**
+  - Distinct funnel badge with numeric counter indicating active filter count.
+  - Independent `X` button for clearing query text without resetting configured filters.
+  - Dynamic positioning preventing widget overlap within the input line edit.
+- **Split View Integration & State Preservation:**
+  - Independent search controllers, jobs, queries, and filters per pane.
+  - Complete `PaneSearchState` transfer when swapping panes in Split View.
+- **Keyboard Navigation & Accessibility:**
+  - Keyboard access via `Ctrl+F` (focus search), `Down Arrow` (open popover), `Tab` / arrow navigation, `Enter` (execute), and `Esc` (dismiss popover / cancel).
+  - Accessible names and roles configured across all search UI elements.
 
 ---
 
@@ -309,8 +336,8 @@ Features from 0.15.4 — compact operations popup, dynamic height, task cancella
 
 ```bash
 cd ~/Downloads
-tar -xzf kio-thispc-0.40.0.tar.gz
-cd kio-thispc-0.40.0
+tar -xzf kio-thispc-0.41.0.tar.gz
+cd kio-thispc-0.41.0
 chmod +x install.sh
 ./install.sh
 ```

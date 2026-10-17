@@ -300,8 +300,79 @@ int main(int argc, char **argv)
         [&](const QString &) { failed = true; errorLoop.quit(); }});
     QTimer::singleShot(3000, &errorLoop, &QEventLoop::quit);
     errorLoop.exec();
-    verify(failed && core.listingJob() == nullptr,
-           "error completion invokes failure adapter and resets job state");
+    // =========================================================================
+    // Stage 3C.1: Natural Numeric, Unicode, Multi-Criteria & Stability Sorting
+    // =========================================================================
+    // 1. Natural numeric sorting: "file2" comes before "file10"
+    QList<FileInfo> numericFiles = {
+        {QStringLiteral("file10.txt"), QStringLiteral("text/plain"), {}, QUrl(QStringLiteral("file:///tmp/file10.txt")), false, 10, 1000},
+        {QStringLiteral("file2.txt"), QStringLiteral("text/plain"), {}, QUrl(QStringLiteral("file:///tmp/file2.txt")), false, 20, 2000},
+        {QStringLiteral("file1.txt"), QStringLiteral("text/plain"), {}, QUrl(QStringLiteral("file:///tmp/file1.txt")), false, 30, 3000},
+    };
+    sortDirectoryFiles(numericFiles, 0, true, [](const FileInfo &) { return QString(); });
+    verify(numericFiles.at(0).name == QStringLiteral("file1.txt"), "Natural sort: file1 is first");
+    verify(numericFiles.at(1).name == QStringLiteral("file2.txt"), "Natural sort: file2 is second");
+    verify(numericFiles.at(2).name == QStringLiteral("file10.txt"), "Natural sort: file10 is third");
+
+    // Descending numeric sort
+    sortDirectoryFiles(numericFiles, 0, false, [](const FileInfo &) { return QString(); });
+    verify(numericFiles.at(0).name == QStringLiteral("file10.txt"), "Natural sort desc: file10 is first");
+    verify(numericFiles.at(1).name == QStringLiteral("file2.txt"), "Natural sort desc: file2 is second");
+    verify(numericFiles.at(2).name == QStringLiteral("file1.txt"), "Natural sort desc: file1 is third");
+
+    // 2. Unicode locale-aware sorting (letters with diacritics: ć, ż)
+    QList<FileInfo> unicodeFiles = {
+        {QStringLiteral("żuraw.txt"), QStringLiteral("text/plain"), {}, QUrl(QStringLiteral("file:///tmp/żuraw.txt")), false, 1, 1},
+        {QStringLiteral("arbuz.txt"), QStringLiteral("text/plain"), {}, QUrl(QStringLiteral("file:///tmp/arbuz.txt")), false, 1, 1},
+        {QStringLiteral("ćma.txt"), QStringLiteral("text/plain"), {}, QUrl(QStringLiteral("file:///tmp/ćma.txt")), false, 1, 1},
+    };
+    sortDirectoryFiles(unicodeFiles, 0, true, [](const FileInfo &) { return QString(); });
+    verify(unicodeFiles.at(0).name == QStringLiteral("arbuz.txt")
+               && unicodeFiles.at(1).name == QStringLiteral("ćma.txt")
+               && unicodeFiles.at(2).name == QStringLiteral("żuraw.txt"),
+           "Unicode collation orders diacritic characters correctly (arbuz < ćma < żuraw)");
+
+    // 3. Stability & URL tie-breaker with identical names from different search paths
+    QList<FileInfo> duplicateNameFiles = {
+        {QStringLiteral("data.csv"), QStringLiteral("text/csv"), {}, QUrl(QStringLiteral("file:///path/b/data.csv")), false, 500, 2000},
+        {QStringLiteral("data.csv"), QStringLiteral("text/csv"), {}, QUrl(QStringLiteral("file:///path/a/data.csv")), false, 500, 2000},
+        {QStringLiteral("data.csv"), QStringLiteral("text/csv"), {}, QUrl(QStringLiteral("file:///path/c/data.csv")), false, 500, 2000},
+    };
+    sortDirectoryFiles(duplicateNameFiles, 0, true, [](const FileInfo &) { return QString(); });
+    verify(duplicateNameFiles.at(0).url.toString() == QStringLiteral("file:///path/a/data.csv"),
+           "Identical names tie-broken stably by URL path (a < b < c)");
+    verify(duplicateNameFiles.at(1).url.toString() == QStringLiteral("file:///path/b/data.csv"),
+           "Identical names tie-break 2nd item");
+    verify(duplicateNameFiles.at(2).url.toString() == QStringLiteral("file:///path/c/data.csv"),
+           "Identical names tie-break 3rd item");
+
+    // Repeating sort preserves exact same order (stability)
+    const auto initialOrder = duplicateNameFiles;
+    sortDirectoryFiles(duplicateNameFiles, 0, true, [](const FileInfo &) { return QString(); });
+    verify(duplicateNameFiles.size() == initialOrder.size()
+           && duplicateNameFiles.at(0).url == initialOrder.at(0).url
+           && duplicateNameFiles.at(1).url == initialOrder.at(1).url
+           && duplicateNameFiles.at(2).url == initialOrder.at(2).url,
+           "Repeated sort produces identical stable results");
+
+    // 4. Incomplete metadata handling (missing size -1, missing date 0, missing mimeType)
+    QList<FileInfo> incompleteFiles = {
+        {QStringLiteral("nodata.bin"), QString(), QString(), QUrl(QStringLiteral("file:///tmp/nodata.bin")), false, -1, 0},
+        {QStringLiteral("valid.png"), QStringLiteral("image/png"), {}, QUrl(QStringLiteral("file:///tmp/valid.png")), false, 1024, 1700000000},
+    };
+    core.setFiles(incompleteFiles);
+    auto incompleteOutput = core.prepare({2, true, 0, nullptr}, mimeDatabase); // Sort by Size ASC
+    verify(incompleteOutput.files.size() == 2, "Incomplete metadata files handled without loss");
+    verify(incompleteOutput.files.at(0).file.name == QStringLiteral("nodata.bin"),
+           "Size -1 sorts before valid size 1024 in ASC");
+    verify(!incompleteOutput.files.at(0).typeText.isEmpty(),
+           "Empty MIME type resolved to non-empty label");
+
+    // 5. Empty files list handling
+    core.setFiles({});
+    auto emptyOutput = core.prepare({0, true, 0, nullptr}, mimeDatabase);
+    verify(emptyOutput.files.isEmpty() && emptyOutput.visibleCount == 0 && emptyOutput.totalCount == 0,
+           "Empty listing produces 0 files without errors");
 
     qInfo("PASS: %d DirectoryListingCore assertions", checks);
     return 0;

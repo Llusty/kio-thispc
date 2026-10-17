@@ -2,6 +2,31 @@
 
 # Changelog
 
+## 0.41.0 — Advanced Search & Responsive Search UI
+
+- **Compact Search Bar & Responsive Popover (Variant A):**
+  - Non-expanding, compact 320 px search edit that adapts smoothly in narrow windows and Split View.
+  - Dedicated `SearchPopover` providing separate, visible controls: `[ Scope | Mode | Filters ]`.
+  - Full Wayland / HiDPI support and consistent styling matching the KDE Plasma 6 palette.
+- **Advanced Filters & Criteria Engine:**
+  - Multi-criteria filtering: Categories (Images, Documents, Audio, Video, Archives), custom MIME types, extension lists, target type (Files only / Folders only), calendar modification date ranges, and size thresholds.
+  - AND logic between distinct filters, with within-filter OR alternatives (e.g. multiple extensions or categories).
+  - Lenient parser supporting backward-compatible `thispcsearch:/` URLs.
+- **Name Matching Modes:**
+  - `Auto`: heuristic wildcard and substring detection.
+  - `Text`: literal substring matching with case-sensitivity options.
+  - `Glob`: explicit wildcard patterns (`*.png`, `doc?.*`).
+- **Active Filter Indicator & Distinct Clear Button:**
+  - High-visibility funnel badge displaying the number of active filters.
+  - Independent `X` button for instantly clearing query text without resetting applied filters.
+  - Dynamic positioning preventing widget collision within the search input.
+- **Split View Parity & State Swap:**
+  - Complete search independence between Primary and Split panes.
+  - Seamless state transfer (`PaneSearchState`) when executing "Swap Panes".
+- **Keyboard Navigation & Accessibility:**
+  - Full keyboard control (`Ctrl+F`, `Down Arrow`, `Tab`, `Esc`, `Enter`).
+  - Accessible names and roles configured across all search components.
+
 ## 0.40.1 — Multi-Selection Properties & Bulk Permissions
 
 - Added Multi-Selection Properties dialog for multiple selected files and directories across Primary View, Split View, and Search (`Alt+Enter` / context menu).

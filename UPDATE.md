@@ -1,5 +1,24 @@
 [English](UPDATE.md) | [Polski](UPDATE.pl.md)
 
+# Update to 0.41.0
+
+```bash
+cd ~/Pobrane
+tar -xzf kio-thispc-0.41.0.tar.gz
+cd kio-thispc-0.41.0
+chmod +x install.sh
+./install.sh
+```
+
+- Compact, non-expanding 320 px search edit with dedicated `SearchPopover` providing `[ Scope | Mode | Filters ]`.
+- Multi-criteria filtering by category, MIME types, extension lists, target type (files/folders), date range, and size thresholds.
+- Name matching modes: `Auto`, `Text` (literal substring), and `Glob` (wildcard masks).
+- High-visibility active filter indicator with separate query clear button `X`.
+- Independent search state per pane and full search state preservation during Split View swap.
+- Full keyboard navigation and accessibility integration.
+
+---
+
 # Update to 0.40.1
 
 ```bash

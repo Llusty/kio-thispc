@@ -19,7 +19,7 @@ class QActionGroup;
 class QFrame;
 class QLabel;
 class QLineEdit;
-class QProgressBar;
+class SearchProgressBar;
 class QToolButton;
 
 class SearchUiController final
@@ -29,14 +29,22 @@ public:
         QLineEdit *edit = nullptr;
         QAction *stopAction = nullptr;
         QAction *scopeAction = nullptr;
+        QToolButton *scopeButton = nullptr;
         QToolButton *filterButton = nullptr;
+        QAction *filterIndicatorAction = nullptr;
         QActionGroup *scopeGroup = nullptr;
         QActionGroup *typeGroup = nullptr;
+        QAction *typeInfoAction = nullptr;
         QActionGroup *dateGroup = nullptr;
+        QAction *dateInfoAction = nullptr;
         QActionGroup *sizeGroup = nullptr;
+        QAction *sizeInfoAction = nullptr;
         QFrame *progressFrame = nullptr;
-        QProgressBar *progressBar = nullptr;
+        SearchProgressBar *progressBar = nullptr;
         QLabel *statusLabel = nullptr;
+        QToolButton *nameModeButton = nullptr;
+        QActionGroup *nameModeGroup = nullptr;
+        QAction *clearAction = nullptr;
     };
 
     struct Presentation {
@@ -44,6 +52,7 @@ public:
         std::function<QString(const QUrl &)> displayName;
         std::function<QIcon()> scopeIcon;
         std::function<bool()> polish;
+        std::function<QIcon(int)> filterBadgeIcon;
     };
 
     struct Context {
@@ -65,8 +74,8 @@ public:
     SearchUiController(Widgets widgets, Presentation presentation);
 
     void updateControls(const Context &context) const;
-    void updateProgress(SearchController &backend) const;
-    void updateStatus(SearchController &backend, int visibleCount, int scope) const;
+    void updateProgress(const SearchController &backend) const;
+    void updateStatus(const SearchController &backend, int visibleCount, int scope, bool recursive = true) const;
 
     Request requestFromUi(const Context &context,
                           const QList<QUrl> &driveRoots,

@@ -48,6 +48,7 @@
 #include <QPalette>
 #include <QPoint>
 #include <QProgressBar>
+#include "searchprogressbar.h"
 #include <QPushButton>
 #include <QSettings>
 #include <QScrollBar>
@@ -475,14 +476,17 @@ public:
         m_searchProgressFrame->setObjectName(QStringLiteral("searchProgressFrame"));
         auto *progressLayout = new QHBoxLayout(m_searchProgressFrame);
         progressLayout->setContentsMargins(16, 0, 16, 8);
-        m_searchProgressBar = new QProgressBar(m_searchProgressFrame);
+        m_searchProgressBar = new SearchProgressBar(m_searchProgressFrame);
         m_searchProgressBar->setRange(0, 100);
         m_searchProgressBar->setTextVisible(false);
         m_searchProgressBar->setMaximumHeight(7);
+        m_searchProgressBar->setAccessibleName(trLocal("Postęp wyszukiwania", "Search progress"));
         m_cancelSearchButton = new QPushButton(themedIcon(QStringLiteral("process-stop")),
             trLocal("Stop", "Stop"), m_searchProgressFrame);
         m_cancelSearchButton->setFlat(true);
         m_cancelSearchButton->setToolTip(trLocal("Przerwij wyszukiwanie", "Stop search"));
+        m_cancelSearchButton->setAccessibleName(trLocal("Przerwij wyszukiwanie", "Stop search"));
+        m_cancelSearchButton->setAccessibleDescription(m_cancelSearchButton->toolTip());
         progressLayout->addWidget(m_searchProgressBar, 1);
         progressLayout->addWidget(m_cancelSearchButton);
         directoryLayout->addWidget(m_searchProgressFrame);
@@ -674,6 +678,9 @@ public:
     void setHomePage(QWidget *page) { m_homePage = page; }
     PaneSearchState &searchState() { return m_searchState; }
     SearchController *searchController() const { return m_searchController; }
+    QFrame *searchProgressFrame() const { return m_searchProgressFrame; }
+    SearchProgressBar *searchProgressBar() const { return m_searchProgressBar; }
+    QLabel *statusLabel() const { return m_status; }
     void setSearchRootsProvider(std::function<QList<QUrl>()> provider)
     {
         m_searchRootsProvider = std::move(provider);
@@ -700,10 +707,12 @@ public:
     }
     void cancelSearch(bool userRequested)
     {
-        if (!m_searchController->cancel()) return;
+        if (!m_searchController->cancel(userRequested)) return;
         if (userRequested) {
             m_listingCore.setFiles(m_searchController->files());
             renderItems();
+        } else {
+            m_searchVisibleCount = 0;
         }
         updateSearchProgress();
         if (userRequested) Q_EMIT searchCanceled();
@@ -1335,13 +1344,14 @@ private:
             return;
         }
         if (search) {
+            m_searchVisibleCount = 0;
             QList<QUrl> roots;
             if (m_searchState.scope == 2 && m_searchRootsProvider) roots = m_searchRootsProvider();
             else {
                 const QUrl base = searchBaseFromUrl(url);
                 roots.push_back(base.isValid() ? base : QUrl::fromLocalFile(QDir::homePath()));
             }
-            m_searchController->start(searchQueryFromUrl(url), roots, m_showHiddenFiles);
+            m_searchController->startFromLocation(url, roots, m_showHiddenFiles);
             updateSearchProgress();
             return;
         }
@@ -1376,7 +1386,6 @@ private:
             selection.currentUrl = m_pendingSelection.currentUrl;
         m_pendingSelection = {};
         QMimeDatabase database;
-
         m_list->clear();
         m_details->clear();
         DirectoryListingCore::RenderOptions options;
@@ -1385,11 +1394,14 @@ private:
         options.groupMode = m_groupMode;
         options.acceptsFile = [this](const FileInfo &file, QMimeDatabase &database) {
             if (isSearchLocation(m_currentUrl)) {
-                return SearchController::matchesFile(file, database,
-                    {m_searchState.type, m_searchState.date, m_searchState.size});
+                const SearchRequest::LegacyFilters filters{
+                    m_searchState.type, m_searchState.date, m_searchState.size};
+                return SearchRequest::fromLocation(m_currentUrl, &filters).accepts(file, database);
             }
             const QString query = m_searchState.text.trimmed();
-            return query.isEmpty() || file.name.contains(query, Qt::CaseInsensitive)
+            if (query.isEmpty()) return true;
+            const SearchMatcher::Prepared matcher(m_searchState.toQuery());
+            return matcher.matchesName(file)
                 || file.mimeType.contains(query, Qt::CaseInsensitive);
         };
         const auto prepared = m_listingCore.prepare(options, database);
@@ -1438,7 +1450,8 @@ private:
         restoreDirectorySelection(m_list, m_details, selection);
 
         if (isSearchLocation(m_currentUrl)) {
-            m_status->setText(m_searchController->statusText(prepared.visibleCount, m_searchState.scope));
+            m_searchVisibleCount = prepared.visibleCount;
+            m_status->setText(m_searchController->statusText(prepared.visibleCount, m_searchState.scope, m_searchState.recursive));
         } else if (m_searchState.text.trimmed().isEmpty()) {
             m_status->setText(directory_view_detail::itemCountText(
                 prepared.visibleCount, prepared.totalCount, false));
@@ -1463,9 +1476,20 @@ private:
     {
         const bool running = m_searchController->isRunning();
         m_searchProgressFrame->setVisible(running);
-        m_searchProgressBar->setValue(m_searchController->progressPercent());
+        m_searchProgressBar->setVisible(running);
+        if (running) {
+            if (m_searchController->isDeterminateProgress()) {
+                m_searchProgressBar->setRange(0, 100);
+                m_searchProgressBar->setValue(m_searchController->progressPercent());
+            } else {
+                m_searchProgressBar->setRange(0, 0);
+            }
+        } else {
+            m_searchProgressBar->setRange(0, 100);
+            m_searchProgressBar->setValue(m_searchController->progressPercent());
+        }
         if (isSearchLocation(m_currentUrl))
-            m_status->setText(m_searchController->statusText(m_list->count(), m_searchState.scope));
+            m_status->setText(m_searchController->statusText(m_searchVisibleCount, m_searchState.scope, m_searchState.recursive));
         Q_EMIT searchUiChanged();
     }
 
@@ -1605,9 +1629,10 @@ private:
     QWidget *m_homePage = nullptr;
     QToolButton *m_thisPcCrumb = nullptr;
     PaneSearchState m_searchState;
+    int m_searchVisibleCount = 0;
     SearchController *m_searchController = nullptr;
     QFrame *m_searchProgressFrame = nullptr;
-    QProgressBar *m_searchProgressBar = nullptr;
+    SearchProgressBar *m_searchProgressBar = nullptr;
     QPushButton *m_cancelSearchButton = nullptr;
     std::function<QList<QUrl>()> m_searchRootsProvider;
     QList<DriveInfo> m_drives;

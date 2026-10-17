@@ -12,6 +12,7 @@
 #include <KIO/UDSEntry>
 #include "remoteurlhelper.h"
 
+#include <QCollator>
 #include <QDateTime>
 #include <QDir>
 #include <QFileInfo>
@@ -436,10 +437,17 @@ inline void sortDirectoryFiles(
     bool ascending,
     const std::function<QString(const FileInfo &)> &typeKey)
 {
-    std::sort(
+    QLocale locale;
+    if (locale.language() == QLocale::C) {
+        locale = QLocale(QLocale::English);
+    }
+    QCollator collator(locale);
+    collator.setNumericMode(true);
+
+    std::stable_sort(
         files.begin(),
         files.end(),
-        [sortKey, ascending, &typeKey](
+        [sortKey, ascending, &typeKey, &collator](
             const FileInfo &a,
             const FileInfo &b) {
         // Keep folders together before files, like Explorer/Dolphin.
@@ -451,8 +459,9 @@ inline void sortDirectoryFiles(
 
         switch (sortKey) {
         case 1:
-            comparison =
-                typeKey(a).localeAwareCompare(typeKey(b));
+            if (typeKey) {
+                comparison = collator.compare(typeKey(a), typeKey(b));
+            }
             break;
         case 2:
             if (a.size < b.size) {
@@ -470,12 +479,16 @@ inline void sortDirectoryFiles(
             break;
         case 0:
         default:
-            comparison = a.name.localeAwareCompare(b.name);
+            comparison = collator.compare(a.name, b.name);
             break;
         }
 
         if (comparison == 0) {
-            comparison = a.name.localeAwareCompare(b.name);
+            comparison = collator.compare(a.name, b.name);
+        }
+
+        if (comparison == 0) {
+            comparison = collator.compare(a.url.toString(), b.url.toString());
         }
 
         return ascending

@@ -181,6 +181,8 @@ This ordering prioritizes core file-manager correctness, safety, and maintainabi
 
 ## Planned Releases
 
+**Planned:** accepted work assigned to a version. Completed entries below retain their historical status and evidence.
+
 ### 0.36.0 — Network & Remote Locations ✅ completed, released (v0.36.0)
 - SMB, SFTP, FTP, and WebDAV via KIO where appropriate;
 - Saved remote locations;
@@ -364,11 +366,43 @@ Release intent: Advanced Properties Follow-up without expanding the project into
 Out of scope: SELinux labels; chattr/immutable; Linux file capabilities; larger ACL redesign; admin:// retry.
 
 ### 0.41.0 — Advanced Search
-- Type, filename, extension, date, and size filters;
-- Files-only and folders-only toggles;
-- Saved search queries;
-- Baloo acceleration when available, falling back to current worker search;
-- Quick in-place folder filter if semantics remain coherent with search.
+
+**Planned scope:**
+- Required filename, MIME type, extension, date, and size filters; files-only / folders-only selection;
+- Explicit search scope: current folder only, folder + subfolders, or a chosen location/volume; never automatically scan all drives;
+- Active filters combine with AND; alternative values within one filter combine with OR (e.g. jpg/png). Inactive filters impose no restriction. Stage 1 must define name matching/case rules, MIME matching, extension normalization, date field/time zone/range boundaries, size units/range boundaries, and folder applicability before implementation;
+- Sortable results and consistent Primary/Split/Search integration, preserving independent pane queries and jobs;
+- Saved searches preserving query, filters, scope, and sorting; rerun explicitly and handle unavailable locations;
+- Asynchronous execution, Cancel, stale-result protection after query/navigation changes, and safe handling of mount loss;
+- A working independent fallback using the current search worker is required, including unindexed locations, removable volumes, and NTFS;
+- Baloo is only a conditional optimization when index coverage, scope, and completeness are trustworthy; otherwise use the worker fallback. No incomplete indexed results presented as a complete search.
+
+**Staged plan (in progress — Stages 1–3 accepted; Stage 3 fully accepted with Stage 3D.4 final polish; Stages 4–6 not started):** Every stage requires modular architecture, relevant automated tests, and manual user acceptance before being considered complete.
+
+1. **Stage 1 — Search Query Model & Architecture (FULL PASS):** Define the query/scope/filter contract and semantics above; separate query model, execution backend, and UI coordination, reusing existing search infrastructure. Automated model/validation/backend-contract tests; manual user acceptance of semantics and architecture plan.
+2. **Stage 2 — Advanced Filters (FULL PASS):** Implement required filters and AND / within-filter alternatives in the independent worker path. Automated matching, boundary, files/folders, and scope tests; manual acceptance on representative files and folders.
+3. **Stage 3 — Search UI/Results Integration (FULL PASS — Stage 3A–3D.4 accepted):** Replace the less visible magnifier drop-down menu with a clear layout: compact non-expanding **Search** bar + responsive **SearchPopover (`Scope | Mode | Filters`)** (separate, visible Scope, Name Mode (`Auto / Text / Glob`), and Filters controls; distinct indication of active filters; precise "Current folder and subfolders" label; responsiveness in narrower windows and HiDPI; keyboard navigation and accessibility; identical behavior in Primary/Split; filter indicator and distinct clear button). Add scope/filter controls, sorting, progress/Cancel, and independent Primary/Split/Search state through shared UI/result modules. Automated pane routing, sorting, cancellation, stale-result, and keyboard/accessibility tests; manual acceptance in both panes and Search.
+4. **Stage 4 — Saved Searches:** Add a separate persistence module for validated query/scope/sort data and explicit reruns. Automated round-trip, invalid-data, and unavailable-location tests; manual acceptance of save/load/rerun behavior.
+5. **Stage 5 — Optional Baloo Integration (conditional):** Evaluate a separate backend adapter against worker semantics, index coverage/completeness, and measurable benefit. Automated backend parity and fallback tests; manual acceptance on indexed/unindexed locations, removable volumes, and NTFS. Defer this stage if safety or benefit cannot be demonstrated; it does not block worker-based 0.41.
+6. **Stage 6 — Performance/Safety/Regression:** Review module boundaries, responsiveness, resource limits, cancellation, mount loss, and lifetime. Automated full regression and stress/safety tests; manual user acceptance on large folders, removable volumes, and ext4/Btrfs/NTFS before any separate release decision.
+
+Quick in-place folder filtering, content search, and advanced AND/OR/NOT query logic remain outside 0.41; see Unassigned Backlog.
+
+### 0.41.1 — MTP Device Detection & Folder Size in Properties
+
+Planned follow-up release focusing on device detection and directory size metrics:
+
+- **Stage 1 — MTP Device Detection Fix:**
+  - Automatic detection of MTP devices, integration with This PC, hotplug monitoring, KIO MTP worker integration, and full Primary/Split pane compatibility.
+- **Stage 2 — Folder Size & Disk Usage in Properties:**
+  - Recursive folder size and disk usage calculation in Properties dialogs (focusing on Btrfs and NTFS).
+  - Cumulative logical file size calculation.
+  - Reported filesystem disk allocation (`st_blocks`) with clear indication of accuracy limits (particularly for Btrfs compression, deduplication, and reflinks).
+  - Accurate counts of files and subdirectories.
+  - Asynchronous background calculation without UI freezing.
+  - Progressive progress updates and cancellation support.
+  - Robust handling of symbolic links, unreadable directories, and permission errors.
+  - Performance optimization for large directory trees and complete Primary/Split view independence.
 
 ### 0.42.0 — Administrator Fallback for Failed Operations
 When standard operations receive permission denied errors, provide targeted `admin://` retry prompts instead of requiring entire windows to run elevated.
@@ -413,6 +447,13 @@ When standard operations receive permission denied errors, provide targeted `adm
 
 ## Unassigned Backlog
 
+Valuable features to consider, with no assigned version or delivery date.
+
+### Search Follow-up — No Assigned Version
+- Quick in-place filtering of the current folder: a valuable separate mechanism, not recursive search; define its own view/filter semantics.
+- Search by file content: a separate capability requiring format/backend, performance, and safety review.
+- Advanced query logic AND/OR/NOT: separate from the simple AND between active filters and alternatives within one filter required in 0.41.
+
 ### Ark → ThisPC Drag & Drop Interoperability
 - Accept external Drag & Drop from Ark / KDE archive views into standard ThisPC folders for single- and multi-item selections;
 - Investigate actual Ark/KIO MIME, URI, and temporary extraction contracts first; avoid assuming local `file://` URLs or promising naive copy-based implementation;
@@ -434,19 +475,20 @@ When standard operations receive permission denied errors, provide targeted `adm
 - Copy Path / Copy Filename;
 - Recent Files extending Recent Locations;
 - Enhanced Trash with Original Location and Deletion Date;
-- Video thumbnails via KDE/KIO thumbnail infrastructure and `ffmpegthumbs`, asynchronous with caching and remote KIO fallback;
+- Video thumbnail extensions only: the KDE/KIO + `ffmpegthumbs` baseline, asynchronous scheduling, caching, and fallback already shipped in 0.39; any further format/backend or remote KIO refinements remain unassigned candidates;
 - Status bar details (item count, selected count, selected size, free disk space).
 
 ---
 
 ## Future Ideas for Consideration
 
-Items in this section do not represent commitments or assignments to specific versions. Re-evaluate their utility during future roadmap reviews:
+Loose, non-binding candidates that may never be implemented. Items in this section do not represent commitments or assignments to specific versions. Re-evaluate their utility during future roadmap reviews:
 
 - Appearance candidate: adjustable dimming level for visible hidden items (current default: 0.40). Prefer simple presets over menu sliders if implemented.
 - Optional action and event sound effects candidate: unobtrusive audio cues for long-running jobs, errors, or operation finishes (strictly non-committal future candidate).
 - System integration candidate: allow ThisPC to become the default handler/file manager for inode/directory, using standard XDG/KDE mechanisms; detect the current handler and provide a safe way to restore the previous one.
-- Storage visualization candidate: interactive Treemap space usage view (deferred from 0.38 core scope as a non-blocking future candidate).
+- Storage visualization extensions only: the interactive Treemap baseline shipped in 0.38; further visualization refinements remain non-binding candidates.
+- A custom search index only if Baloo and the independent worker fallback prove insufficient; no implementation commitment or assigned version.
 
 ---
 

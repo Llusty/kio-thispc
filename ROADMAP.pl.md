@@ -358,6 +358,8 @@ zainstalowana i ręcznie potwierdzona przez użytkownika. Pełna regresja wydani
 
 ## Planowane wydania
 
+**Zaplanowane:** przyjęte prace przypisane do wersji. Ukończone wpisy poniżej zachowują historyczny status i dowody odbioru.
+
 ### 0.36.0 — Network & Remote Locations ✅ ukończone, wydane (v0.36.0)
 - SMB, SFTP, FTP, WebDAV via KIO where appropriate;
 - saved remote locations;
@@ -541,13 +543,44 @@ Intencja wydania: Advanced Properties Follow-up bez rozszerzania projektu na adm
 
 Poza zakresem: SELinux labels; chattr/immutable; Linux file capabilities; większy redesign ACL; admin:// retry.
 
-### 0.41.0 — Advanced Search
-- type/name/extension/date/size filters;
-- files-only/folders-only;
-- saved searches;
-- Baloo acceleration when available, current search fallback otherwise;
-- szybki filtr bieżącego folderu jako lekkie rozszerzenie in-place, jeśli jego
-  semantyka pozostanie spójna z wyszukiwaniem.
+### 0.41.0 — Wyszukiwanie zaawansowane (Advanced Search)
+
+**Zaplanowany zakres:**
+- Obowiązkowe filtry nazwy pliku, typu MIME, rozszerzenia, daty i rozmiaru; wybór tylko pliki / tylko foldery;
+- Jawny zakres wyszukiwania: tylko bieżący folder, folder + podfoldery lub wybrana lokalizacja/wolumin; bez automatycznego skanowania wszystkich dysków;
+- Aktywne filtry łączone przez AND; alternatywne wartości jednego filtra przez OR (np. jpg/png). Nieaktywny filtr nie ogranicza wyników. Stage 1 musi zdefiniować dopasowanie nazw/wielkość liter, dopasowanie MIME, normalizację rozszerzeń, pole daty/strefę czasową/granice przedziałów, jednostki rozmiaru/granice przedziałów i zastosowanie do folderów przed implementacją;
+- Sortowanie wyników i spójna integracja Primary/Split/Search, z niezależnymi zapytaniami i zadaniami paneli;
+- Zapisane wyszukiwania zachowujące zapytanie, filtry, zakres i sortowanie; jawne ponowne uruchamianie i obsługa niedostępnych lokalizacji;
+- Asynchroniczność, Cancel, ochrona przed nieaktualnymi wynikami po zmianie zapytania/nawigacji i bezpieczna obsługa utraty montowania;
+- Wymagany sprawny, niezależny fallback obecnym workerem wyszukiwania, także dla nieindeksowanych lokalizacji, wymiennych woluminów i NTFS;
+- Baloo wyłącznie jako warunkowa optymalizacja przy wiarygodnym pokryciu indeksu, zakresie i kompletności; w przeciwnym razie fallback workerem. Niekompletne wyniki indeksu nie mogą być przedstawiane jako pełne wyszukiwanie.
+
+**Plan etapowy (w trakcie — Stage 1–3 zaakceptowane; Stage 3 w pełni zaakceptowany z finalnymi poprawkami Stage 3D.4; Stage 4–6 nierozpoczęte):** Każdy etap wymaga modułowej architektury, odpowiednich testów automatycznych i manualnego odbioru użytkownika przed uznaniem go za ukończony.
+
+1. **Stage 1 — Search Query Model & Architecture (model zapytania i architektura — FULL PASS):** Zdefiniować kontrakt zapytania/zakresu/filtrów i powyższe semantyki; rozdzielić model zapytania, backend wykonania i koordynację UI, wykorzystując obecną infrastrukturę wyszukiwania. Automatyczne testy modelu/walidacji/kontraktu backendu; manualny odbiór semantyki i planu architektury przez użytkownika.
+2. **Stage 2 — Advanced Filters (filtry zaawansowane — FULL PASS):** Wdrożyć obowiązkowe filtry oraz AND / alternatywy wewnątrz filtra w niezależnej ścieżce workera. Automatyczne testy dopasowania, granic, plików/folderów i zakresu; manualny odbiór na reprezentatywnych plikach i folderach.
+3. **Stage 3 — Search UI/Results Integration (integracja UI i wyników — FULL PASS, Stage 3A–3D.4 zaakceptowane):** Zastąpienie mało widocznego rozwijania menu przy lupie czytelnym układem: kompaktowe nierozszerzające się pole **Szukaj** + responsywny **SearchPopover (`Zakres | Tryb | Filtry`)** (osobne, widoczne przyciski zakresu, trybu dopasowania nazwy (`Auto / Tekst / Maska glob`) i filtrów; wyraźne oznaczanie aktywnych filtrów; dokładne określenie „Bieżący folder i podfoldery”; responsywność w węższym oknie i HiDPI; pełna obsługa klawiatury i dostępności; identyczne zachowanie w Primary/Split; wskaźnik aktywnych filtrów i osobny przycisk czyszczenia X). Dodać kontrolki zakresu/filtrów, sortowanie, postęp/Cancel i niezależny stan Primary/Split/Search przez wspólne moduły UI/wyników. Automatyczne testy routingu paneli, sortowania, anulowania, nieaktualnych wyników oraz klawiatury/dostępności; manualny odbiór w obu panelach i Search.
+4. **Stage 4 — Saved Searches (zapisane wyszukiwania):** Dodać osobny moduł zapisu zwalidowanych danych zapytania/zakresu/sortowania i jawnych ponownych uruchomień. Automatyczne testy zapisu/odczytu, błędnych danych i niedostępnych lokalizacji; manualny odbiór zapisu/odczytu/ponownego uruchomienia.
+5. **Stage 5 — Optional Baloo Integration (warunkowa integracja Baloo):** Ocenić osobny adapter backendu względem semantyki workera, pokrycia/kompletności indeksu i mierzalnej korzyści. Automatyczne testy parytetu backendów i fallbacku; manualny odbiór dla lokalizacji indeksowanych/nieindeksowanych, wymiennych woluminów i NTFS. Odłożyć etap, jeśli nie można wykazać bezpieczeństwa lub korzyści; nie blokuje 0.41 opartego na workerze.
+6. **Stage 6 — Performance/Safety/Regression (wydajność, bezpieczeństwo i regresja):** Sprawdzić granice modułów, responsywność, limity zasobów, anulowanie, utratę montowania i cykl życia. Pełna automatyczna regresja oraz testy obciążenia/bezpieczeństwa; manualny odbiór użytkownika dla dużych folderów, wymiennych woluminów i ext4/Btrfs/NTFS przed osobną decyzją o wydaniu.
+
+Szybki filtr folderu in-place, wyszukiwanie zawartości i zaawansowana logika zapytań AND/OR/NOT pozostają poza 0.41; zobacz Backlog bez przypisanej wersji.
+
+### 0.41.1 — Wykrywanie urządzeń MTP i rozmiary folderów we Właściwościach
+
+Planowane wydanie uzupełniające skupiające się na wykrywaniu urządzeń i metrykach rozmiaru katalogów:
+
+- **Stage 1 — MTP Device Detection Fix:**
+  - Automatyczne wykrywanie urządzeń MTP, integracja z Ten komputer, obsługa podłączania na gorąco (hotplug), integracja z KIO MTP oraz pełna zgodność z widokiem Primary/Split.
+- **Stage 2 — Folder Size & Disk Usage in Properties:**
+  - Rekurencyjne obliczanie rozmiarów folderów i zajętości dysku w oknie Właściwości (ze szczególnym uwzględnieniem Btrfs i NTFS).
+  - Suma logicznych rozmiarów plików.
+  - Raportowana zajętość na dysku (`st_blocks`) z czytelnym oznaczaniem ograniczeń dokładności (szczególnie przy kompresji, deduplikacji i reflinkach Btrfs).
+  - Liczba plików i podfolderów.
+  - Asynchroniczne obliczanie w tle bez blokowania interfejsu użytkownika.
+  - Progresywna aktualizacja postępu i bezpieczne anulowanie.
+  - Bezpieczna obsługa dowiązań symbolicznych, nieczytelnych katalogów i błędów uprawnień.
+  - Optymalizacja dla dużych drzew katalogów oraz pełna niezależność paneli Primary/Split.
 
 ### 0.42.0 — Administrator fallback for failed operations
 When a normal operation receives permission denied, offer a targeted `admin://` retry instead of requiring an entire window to run elevated.
@@ -605,6 +638,13 @@ When a normal operation receives permission denied, offer a targeted `admin://` 
 
 ## Backlog bez przypisanej wersji
 
+Wartościowe funkcje do rozważenia, bez przypisanej wersji ani ustalonego terminu.
+
+### Dalszy rozwój wyszukiwania — bez przypisanej wersji
+- Szybki filtr bieżącego folderu in-place: wartościowy osobny mechanizm, bez wyszukiwania rekurencyjnego; wymaga własnej semantyki widoku/filtrowania.
+- Wyszukiwanie po zawartości plików: osobna funkcja wymagająca przeglądu formatów/backendów, wydajności i bezpieczeństwa.
+- Zaawansowana logika zapytań AND/OR/NOT: osobna od prostego AND między aktywnymi filtrami i alternatyw wewnątrz jednego filtra wymaganych w 0.41.
+
 ### Ark → ThisPC Drag & Drop interoperability — audyt i plan
 - przyjmować external Drag & Drop z Ark/KDE archive views do zwykłego folderu
   w ThisPC dla plików i folderów, zarówno single-, jak i multi-selection;
@@ -643,14 +683,15 @@ When a normal operation receives permission denied, offer a targeted `admin://` 
 - Copy Path / Copy Filename;
 - Recent Files jako rozszerzenie Recent Locations;
 - lepszy Trash z Original location i Deletion date;
-- video thumbnails przez infrastrukturę KDE/KIO thumbnail i `ffmpegthumbs`,
-  asynchronicznie, z cache i fallbackiem, bez blokowania UI oraz z ostrożnym
-  zachowaniem dla remote KIO;
+- wyłącznie rozszerzenia miniatur wideo: bazowa obsługa KDE/KIO + `ffmpegthumbs`,
+  asynchroniczne zadania, cache i fallback zostały wydane w 0.39; dalsze
+  usprawnienia formatów/backendów lub remote KIO pozostają kandydatami bez wersji;
 - status bar details (liczba elementów/zaznaczonych, suma rozmiaru zaznaczenia,
   wolne miejsce), jeśli candidate nie wejdzie do 0.34.0.
 
 ## Pomysły do rozważenia w przyszłości / Future ideas
 
+Luźne, niewiążące kandydaty, które mogą nigdy nie powstać.
 Punkty w tej sekcji nie są zobowiązaniem do implementacji ani przypisaniem do
 wersji. Przy każdym kolejnym przeglądzie roadmapy należy ponownie ocenić ich
 sens i usunąć je, jeśli przestaną być użyteczne.
@@ -661,7 +702,8 @@ sens i usunąć je, jeśli przestaną być użyteczne.
   preferencję wyglądu lub kilka presetów zamiast suwaka w menu Widok.
 - opcjonalne dźwięki akcji/zdarzeń: dyskretne sygnały dźwiękowe dla długich zadań, błędów lub zakończenia operacji (wyłącznie niezobowiązujący kandydat w przyszłości).
 - Kandydat integracji systemowej: możliwość ustawienia ThisPC jako domyślnego programu/menedżera do otwierania katalogów (inode/directory) przez standardowe mechanizmy XDG/KDE, z wykrywaniem obecnego handlera i możliwością bezpiecznego przywrócenia poprzedniego.
-- Kandydat wizualizacji pamięci masowej: interaktywny widok mapy drzewa (treemap) do analizy zajętości dysku (odłożony poza podstawowy zakres 0.38 jako nieblokujący kandydat na przyszłość).
+- Wyłącznie rozszerzenia wizualizacji pamięci masowej: bazowy interaktywny treemap wydano w 0.38; dalsze usprawnienia wizualizacji pozostają niewiążącymi kandydatami.
+- Własny indeks wyszukiwania tylko wtedy, gdy Baloo i niezależny fallback workerem okażą się niewystarczające; bez zobowiązania do implementacji i bez przypisanej wersji.
 
 ## Before 1.0
 Stability-focused cycle covering:

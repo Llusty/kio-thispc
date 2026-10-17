@@ -1,5 +1,24 @@
 [English](UPDATE.md) | [Polski](UPDATE.pl.md)
 
+# Aktualizacja do 0.41.0
+
+```bash
+cd ~/Pobrane
+tar -xzf kio-thispc-0.41.0.tar.gz
+cd kio-thispc-0.41.0
+chmod +x install.sh
+./install.sh
+```
+
+- Kompaktowe, stałe pole wyszukiwania 320 px oraz dedykowany panel `SearchPopover` z kontrolkami `[ Zakres | Tryb | Filtry ]`.
+- Filtrowanie wielokryterialne według kategorii, typów MIME, rozszerzeń, typu elementu (pliki/foldery), zakresu dat i rozmiaru.
+- Tryby dopasowania nazwy: `Auto`, `Tekst` (literalny podciąg) oraz `Maska glob` (wzorce wieloznaczne).
+- Czytelny wskaźnik aktywnych filtrów z osobnym przyciskiem czyszczenia tekstu `X`.
+- Niezależny stan wyszukiwania dla każdego panelu i zachowanie stanu przy zamianie paneli w Split View.
+- Pełna integracja ze skrótami klawiaturowymi i czytnikami ekranu.
+
+---
+
 # Aktualizacja do 0.40.1
 
 ```bash

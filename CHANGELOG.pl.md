@@ -2,6 +2,31 @@
 
 # Changelog
 
+## 0.41.0 — Zaawansowane wyszukiwanie i responsywny interfejs
+
+- **Kompaktowe pole wyszukiwania i responsywny popover (Wariant A):**
+  - Nierozszerzające się pole wyszukiwania o bazowej szerokości 320 px na pasku narzędzi, płynnie dopasowujące się do węższych okien i Split View.
+  - Dedykowany panel `SearchPopover` udostępniający trzy czytelne przyciski: `[ Zakres | Tryb | Filtry ]`.
+  - Pełne wsparcie dla Wayland i skalowania HiDPI, spójne z paletą KDE Plasma 6.
+- **Zaawansowane filtry i silnik dopasowywania:**
+  - Filtrowanie według kategorii (Obrazy, Dokumenty, Dźwięk, Wideo, Archiwa), typów MIME, rozszerzeń, typu elementu (pliki/foldery), zakresów dat modyfikacji oraz progów rozmiaru.
+  - Łączenie filtrów regułą AND oraz alternatywy OR wewnątrz pojedynczego filtra (np. wiele rozszerzeń lub kategorii).
+  - Elastyczny parser URL `thispcsearch:/` zachowujący 100% kompatybilności wstecznej.
+- **Tryby dopasowania nazwy:**
+  - `Auto`: automatyczne rozpoznawanie masek i tekstu.
+  - `Tekst`: dopasowanie podciągu z opcjonalnym uwzględnianiem wielkości liter.
+  - `Maska glob`: jawne wzorce wieloznaczne (`*.png`, `dokument?.*`).
+- **Wskaźnik aktywnych filtrów i niezależny przycisk czyszczenia X:**
+  - Czytelna odznaka lejka z licznikiem aktywnych filtrów.
+  - Osobny przycisk `X` do czyszczenia tekstu bez usuwania aktywnych filtrów.
+  - Prawidłowe rozmieszczenie kontrolek eliminujące kolizje wewnątrz pola tekstowego.
+- **Integracja ze Split View:**
+  - Pełna niezależność wyszukiwania i filtrów w lewym i prawym panelu.
+  - Przenoszenie kompletnego stanu wyszukiwania (`PaneSearchState`) podczas operacji „Zamień panele”.
+- **Dostępność i obsługa klawiatury:**
+  - Obsługa skrótów `Ctrl+F` (fokus na wyszukiwarce), `Strzałka w dół` (otwarcie popovera), `Tab` i strzałki (nawigacja), `Enter` (uruchomienie) oraz `Esc` (zamknięcie popovera / anulowanie).
+  - Pełna konfiguracja etykiet dostępności (`accessibleName`, `accessibleDescription`) dla czytników ekranu.
+
 ## 0.40.1 — Właściwości wielu elementów i zbiorcze uprawnienia
 
 - Dodano okno zbiorczych Właściwości dla wielu zaznaczonych plików i folderów w panelu głównym, Split View oraz wynikach wyszukiwania (`Alt+Enter` / menu podręczne).

@@ -1,6 +1,33 @@
 [English](README.md) | [Polski](README.pl.md)
 
-# kio-thispc 0.40.1
+# kio-thispc 0.41.0
+
+## 0.41.0 — Zaawansowane wyszukiwanie i responsywny interfejs
+
+- **Kompaktowe pole wyszukiwania i responsywny popover (Wariant A):**
+  - Nierozszerzające się, kompaktowe pole wyszukiwania 320 px na pasku narzędzi, elastycznie dopasowujące się do wąskich okien i Split View.
+  - Osobny panel `SearchPopover` z trzema wyraźnymi przyciskami: `[ Zakres | Tryb | Filtry ]`.
+  - Pełne wsparcie dla Wayland i skalowania HiDPI, spójne z paletą KDE Plasma 6.
+- **Zaawansowane filtry i silnik dopasowywania:**
+  - Filtrowanie wielokryterialne: kategorie (Obrazy, Dokumenty, Dźwięk, Wideo, Archiwa), typy MIME, rozszerzenia, typ elementu (wszystko, pliki, foldery), zakresy dat modyfikacji oraz progi rozmiaru.
+  - Łączenie filtrów regułą AND oraz alternatywy OR wewnątrz pojedynczego filtra (np. wiele rozszerzeń lub kategorii).
+  - Elastyczny parser URL `thispcsearch:/` zachowujący 100% kompatybilności wstecznej.
+- **Tryby dopasowania nazwy:**
+  - `Auto`: automatyczne rozpoznawanie masek i tekstu.
+  - `Tekst`: dopasowanie podciągu z opcjonalnym uwzględnianiem wielkości liter.
+  - `Maska glob`: jawne wzorce wieloznaczne (`*.png`, `dokument?.*`).
+- **Wskaźnik aktywnych filtrów i niezależny przycisk czyszczenia X:**
+  - Wyraźna ikona lejka z cyfrowym licznikiem aktywnych filtrów.
+  - Niezależny przycisk `X` do czyszczenia tekstu bez resetowania ustawionych filtrów.
+  - Prawidłowe rozmieszczenie zapobiegające kolizjom kontrolek wewnątrz pola tekstowego.
+- **Integracja ze Split View:**
+  - Pełna niezależność kontrolerów, zapytań i filtrów w lewym i prawym panelu.
+  - Przenoszenie kompletnego stanu wyszukiwania (`PaneSearchState`) podczas operacji „Zamień panele”.
+- **Dostępność i obsługa klawiatury:**
+  - Skróty klawiszowe: `Ctrl+F` (fokus na wyszukiwarce), `Strzałka w dół` (otwarcie popovera), `Tab` i strzałki (nawigacja), `Enter` (uruchomienie) oraz `Esc` (zamknięcie popovera / anulowanie).
+  - Pełna konfiguracja etykiet dostępności (`accessibleName`, `accessibleDescription`) dla czytników ekranu.
+
+---
 
 ## 0.40.1 — Właściwości wielu elementów i zbiorcze uprawnienia
 
@@ -324,8 +351,8 @@ Funkcje z 0.15.4 — kompaktowy popup operacji, dynamiczna wysokość, anulowani
 
 ```bash
 cd ~/Pobrane
-tar -xzf kio-thispc-0.40.0.tar.gz
-cd kio-thispc-0.40.0
+tar -xzf kio-thispc-0.41.0.tar.gz
+cd kio-thispc-0.41.0
 chmod +x install.sh
 ./install.sh
 ```
