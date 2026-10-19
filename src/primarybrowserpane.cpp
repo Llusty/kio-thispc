@@ -70,17 +70,23 @@ KIO::ListJob *PrimaryBrowserPane::listingJob() const
 
 void PrimaryBrowserPane::loadDirectory(const QUrl &url, bool preserveStatusMessage,
     bool showHiddenFiles, bool detailsActive, const std::function<void(bool)> &render,
-    const std::function<void(const QString &)> &reportError)
+    const std::function<void(const QString &)> &reportError,
+    DirectoryReloadMode reloadMode)
 {
     cancelListing();
-    m_pendingSelection = sameLocation(m_currentUrl, url)
-        ? captureDirectorySelection(m_directoryList, m_directoryDetails, detailsActive)
-        : DirectorySelectionSnapshot{};
-    m_currentUrl = url;
-    m_directoryList->clear(); m_directoryDetails->clear();
-    m_directoryList->setDropDirectory(url); m_directoryDetails->setDropDirectory(url);
-    m_directoryTitle->setText(LocationPresentation::contentHeaderText(url));
-    m_directoryStatus->setText(trLocal("Wczytywanie…", "Loading…"));
+    const bool isQuietRefresh = (reloadMode == DirectoryReloadMode::QuietRefresh);
+
+    if (isQuietRefresh) {
+        m_pendingViewState = captureDirectoryViewState(m_directoryList, m_directoryDetails, detailsActive);
+    } else {
+        m_pendingViewState.reset();
+        m_pendingSelection = {};
+        m_currentUrl = url;
+        m_directoryList->clear(); m_directoryDetails->clear();
+        m_directoryList->setDropDirectory(url); m_directoryDetails->setDropDirectory(url);
+        m_directoryTitle->setText(LocationPresentation::contentHeaderText(url));
+        m_directoryStatus->setText(trLocal("Wczytywanie…", "Loading…"));
+    }
     Q_EMIT listingStarted(url);
     DirectoryListingCore::ListingOptions options;
     options.showHiddenFiles = showHiddenFiles;
@@ -102,7 +108,11 @@ void PrimaryBrowserPane::loadDirectory(const QUrl &url, bool preserveStatusMessa
             render(job ? job->property("thispcPreserveStatusMessage").toBool() : false);
             Q_EMIT listingFinished(effectiveUrl, true);
         },
-        [this, url, reportError](const QString &error) {
+        [this, url, reportError, isQuietRefresh](const QString &error) {
+            if (isQuietRefresh) {
+                m_directoryList->clear();
+                m_directoryDetails->clear();
+            }
             m_directoryStatus->setText(trLocal("Nie udało się otworzyć tej lokalizacji.",
                                                 "Could not open this location."));
             reportError(error);
@@ -115,27 +125,44 @@ void PrimaryBrowserPane::loadDirectory(const QUrl &url, bool preserveStatusMessa
 
 void PrimaryBrowserPane::loadRemoteDirectory(const QUrl &url,
     bool showHiddenFiles, bool detailsActive, const std::function<void(bool)> &render,
-    const std::function<void(const QString &)> &reportError)
+    const std::function<void(const QString &)> &reportError,
+    DirectoryReloadMode reloadMode)
 {
     cancelListing();
-    m_directoryStatus->setText(trLocal("Wczytywanie…", "Loading…"));
+    const bool isQuietRefresh = (reloadMode == DirectoryReloadMode::QuietRefresh);
+
+    if (isQuietRefresh) {
+        m_pendingViewState = captureDirectoryViewState(m_directoryList, m_directoryDetails, detailsActive);
+    } else {
+        m_pendingViewState.reset();
+        m_pendingSelection = {};
+        m_directoryStatus->setText(trLocal("Wczytywanie…", "Loading…"));
+    }
     Q_EMIT listingStarted(url);
     DirectoryListingCore::ListingOptions options;
     options.showHiddenFiles = showHiddenFiles;
     options.emptyNamePolicy = DirectoryListingCore::EmptyNamePolicy::DisplayName;
     m_listingCore.startListing(url, options, {
-        [this, url, render, detailsActive](KIO::ListJob *job) {
-            m_pendingSelection = sameLocation(m_currentUrl, url)
-                ? captureDirectorySelection(m_directoryList, m_directoryDetails, detailsActive)
-                : DirectorySelectionSnapshot{};
-            m_currentUrl = url;
-            m_directoryList->clear(); m_directoryDetails->clear();
-            m_directoryList->setDropDirectory(url); m_directoryDetails->setDropDirectory(url);
-            m_directoryTitle->setText(LocationPresentation::contentHeaderText(url));
+        [this, url, render, detailsActive, isQuietRefresh](KIO::ListJob *job) {
+            if (!isQuietRefresh) {
+                m_pendingSelection = sameLocation(m_currentUrl, url)
+                    ? captureDirectorySelection(m_directoryList, m_directoryDetails, detailsActive)
+                    : DirectorySelectionSnapshot{};
+                m_currentUrl = url;
+                m_directoryList->clear(); m_directoryDetails->clear();
+                m_directoryList->setDropDirectory(url); m_directoryDetails->setDropDirectory(url);
+                m_directoryTitle->setText(LocationPresentation::contentHeaderText(url));
+            } else {
+                m_currentUrl = url;
+            }
             render(job ? job->property("thispcPreserveStatusMessage").toBool() : false);
             Q_EMIT listingFinished(url, true);
         },
-        [this, url, reportError](const QString &error) {
+        [this, url, reportError, isQuietRefresh](const QString &error) {
+            if (isQuietRefresh) {
+                m_directoryList->clear();
+                m_directoryDetails->clear();
+            }
             const QString sanitized = RemoteUrlHelper::sanitizeErrorMessage(error, url);
             if (m_directoryStatus) {
                 m_directoryStatus->setText(sanitized);
@@ -154,13 +181,31 @@ QIcon PrimaryBrowserPane::iconForFile(const FileInfo &file,
 
 void PrimaryBrowserPane::renderDirectoryItems(const RenderOptions &options)
 {
-    DirectorySelectionSnapshot selection =
-        captureDirectorySelection(
-            m_directoryList, m_directoryDetails, options.detailsActive);
-    selection.urls.unite(m_pendingSelection.urls);
-    if (selection.currentUrl.isEmpty())
-        selection.currentUrl = m_pendingSelection.currentUrl;
-    m_pendingSelection = {};
+    DirectoryViewStateSnapshot viewState;
+    if (m_pendingViewState.has_value()) {
+        viewState = m_pendingViewState.value();
+        m_pendingViewState.reset();
+        const DirectoryViewStateSnapshot liveState =
+            captureDirectoryViewState(m_directoryList, m_directoryDetails, options.detailsActive);
+        viewState.selection.urls.unite(liveState.selection.urls);
+        if (liveState.listVScroll > 0) viewState.listVScroll = liveState.listVScroll;
+        if (liveState.listHScroll > 0) viewState.listHScroll = liveState.listHScroll;
+        if (liveState.detailsVScroll > 0) viewState.detailsVScroll = liveState.detailsVScroll;
+        if (liveState.detailsHScroll > 0) viewState.detailsHScroll = liveState.detailsHScroll;
+        if (!liveState.currentUrl.isEmpty()) viewState.currentUrl = liveState.currentUrl;
+    } else {
+        viewState = captureDirectoryViewState(m_directoryList, m_directoryDetails, options.detailsActive);
+        viewState.selection.urls.unite(m_pendingSelection.urls);
+        if (viewState.currentUrl.isEmpty())
+            viewState.currentUrl = m_pendingSelection.currentUrl;
+        m_pendingSelection = {};
+    }
+
+    const bool listUpdates = m_directoryList ? m_directoryList->updatesEnabled() : true;
+    const bool detailsUpdates = m_directoryDetails ? m_directoryDetails->updatesEnabled() : true;
+    if (m_directoryList) m_directoryList->setUpdatesEnabled(false);
+    if (m_directoryDetails) m_directoryDetails->setUpdatesEnabled(false);
+
     m_directoryList->clear(); m_directoryDetails->clear();
     QMimeDatabase mimeDb;
     DirectoryListingCore::RenderOptions coreOptions;
@@ -185,7 +230,11 @@ void PrimaryBrowserPane::renderDirectoryItems(const RenderOptions &options)
             options.groupMode != DirectoryViewSettings::NoGrouping ? entry.categoryDisplay : QString(),
             options.groupMode != DirectoryViewSettings::NoGrouping ? QVariant(entry.categorySort) : QVariant());
     }
-    restoreDirectorySelection(m_directoryList, m_directoryDetails, selection);
+    restoreDirectoryViewState(m_directoryList, m_directoryDetails, viewState);
+
+    if (m_directoryList) m_directoryList->setUpdatesEnabled(listUpdates);
+    if (m_directoryDetails) m_directoryDetails->setUpdatesEnabled(detailsUpdates);
+
     if (options.updateStatus) options.updateStatus(prepared.visibleCount, prepared.totalCount);
     if (m_previewAdapter) m_previewAdapter->scheduleUpdate();
 }

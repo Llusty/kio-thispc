@@ -13,6 +13,7 @@
 #include "localfilecopyjob.h"
 #include "localfilemovejob.h"
 #include "undocontroller.h"
+#include <KIO/DeleteJob>
 #include <KIO/EmptyTrashJob>
 #include <KIO/JobUiDelegateFactory>
 #include <KIO/ListJob>
@@ -43,7 +44,8 @@ class FileActions final : public QObject
 {
 public:
     using RefreshViews = std::function<void()>;
-    using WatchOperation = std::function<void(KJob *, const QString &, bool, const QString &, const RefreshViews &)>;
+    using WatchOperation = std::function<void(KJob *, const QString &, bool, const QString &, const RefreshViews &, const FileOperationContext &)>;
+    using WatchOperationLegacy = std::function<void(KJob *, const QString &, bool, const QString &, const RefreshViews &)>;
     struct DirectorySnapshot {
         int error = 0;
         QString errorText;
@@ -62,6 +64,19 @@ public:
         , m_watchOperation(std::move(watchOperation))
         , m_showRecoveryFence(std::move(showRecoveryFence))
         , m_startDirectorySnapshot(std::move(startDirectorySnapshot))
+    {
+    }
+
+    FileActions(QWidget *parentWidget, UndoController *undoController, WatchOperationLegacy watchOperation,
+                std::function<void(const QString &)> showRecoveryFence = {},
+                StartDirectorySnapshot startDirectorySnapshot = {})
+        : FileActions(parentWidget, undoController,
+                      [op = std::move(watchOperation)](KJob *job, const QString &msg, bool clearClip, const QString &title,
+                                                       const RefreshViews &rv, const FileOperationContext &) {
+                          if (op) op(job, msg, clearClip, title, rv);
+                      },
+                      std::move(showRecoveryFence),
+                      std::move(startDirectorySnapshot))
     {
     }
 
@@ -104,6 +119,10 @@ public:
 
         if (!mutationAllowed()) return;
 
+        const FileOperationContext context = FileOperationContext::create(
+            cut ? FileOperationType::Move : FileOperationType::Copy,
+            urls, destination);
+
         if (startNativeSingleFileTransfer(
                 urls, destination, cut, cut,
                 cut
@@ -111,7 +130,8 @@ public:
                     : trLocal("Kopiowanie zakończone", "Copy completed"),
                 cut
                     ? trLocal("Przenoszenie", "Moving")
-                    : trLocal("Kopiowanie", "Copying"))) {
+                    : trLocal("Kopiowanie", "Copying"),
+                context)) {
             return;
         }
 
@@ -141,7 +161,9 @@ public:
             cut,
             cut
                 ? trLocal("Przenoszenie", "Moving")
-                : trLocal("Kopiowanie", "Copying"));
+                : trLocal("Kopiowanie", "Copying"),
+            {},
+            context);
     }
 
     void copySelectionToDirectory(
@@ -167,9 +189,13 @@ public:
             return;
         }
 
+        const FileOperationContext context = FileOperationContext::create(
+            FileOperationType::Copy, urls, QUrl::fromLocalFile(directory));
+
         if (startNativeSingleFileTransfer(
                 urls, QUrl::fromLocalFile(directory), false, false,
-                successMessage, trLocal("Kopiowanie", "Copying"))) {
+                successMessage, trLocal("Kopiowanie", "Copying"),
+                context)) {
             return;
         }
 
@@ -190,7 +216,9 @@ public:
             job,
             successMessage,
             false,
-            trLocal("Kopiowanie", "Copying"));
+            trLocal("Kopiowanie", "Copying"),
+            {},
+            context);
     }
 
     void createNewFile(
@@ -317,11 +345,20 @@ public:
             m_undoController->recordCopyJob(job);
         }
 
+        FileOperationContext context;
+        context.type = FileOperationType::Rename;
+        context.sources = {source};
+        context.sourceParentDirectories.insert(normalizedUrl(parentDirectoryUrl(source)));
+        context.destinationDirectory = parentDirectoryUrl(destination);
+        context.destinationUrls = {destination};
+
         watchFileOperation(
             job,
             trLocal("Zmieniono nazwę", "Renamed"),
             false,
-            trLocal("Zmiana nazwy", "Renaming"));
+            trLocal("Zmiana nazwy", "Renaming"),
+            {},
+            context);
     }
 
     void batchRenameSelected(const QList<QUrl> &urls)
@@ -897,8 +934,15 @@ public:
                 }
                 (*state->runner)();
             });
+            FileOperationContext context;
+            context.type = FileOperationType::Rename;
+            context.sources = {entry.source};
+            context.sourceParentDirectories.insert(normalizedUrl(parentDirectoryUrl(entry.source)));
+            context.destinationDirectory = parentDirectoryUrl(entry.destination);
+            context.destinationUrls = {entry.destination};
             watchFileOperation(job, trLocal("Zmieniono nazwę", "Renamed"), false,
-                               trLocal("Zbiorcza zmiana nazw", "Batch renaming"));
+                               trLocal("Zbiorcza zmiana nazw", "Batch renaming"),
+                               {}, context);
         };
         connect(state->progress, &QProgressDialog::canceled, this, [state] {
             // An in-flight KIO move may already have renamed its source when
@@ -918,16 +962,150 @@ public:
             return;
         }
 
+        // 1. Validate all URLs for basic validity, virtual roots, and protected roots
         for (const QUrl &url : urls) {
-            if (!url.isLocalFile()) {
-                QMessageBox::information(
+            if (isProtectedRootUrl(url)) {
+                QMessageBox::warning(
                     m_parentWidget,
-                    trLocal("Kosz", "Trash"),
-                    trLocal(
-                        "W tej wersji usuwanie do Kosza jest dostępne tylko dla lokalnych plików i folderów.",
-                        "In this version, moving to Trash is available only for local files and folders."));
+                    trLocal("Nie można przenieść do Kosza", "Cannot move to Trash"),
+                    trLocal("Zaznaczenie zawiera chroniony korzeń, lokalizację wirtualną lub nieprawidłowy element.",
+                            "The selection contains a protected root, virtual location, or invalid item."));
                 return;
             }
+        }
+
+        // 2. Classify protocol uniformity
+        bool hasLocal = false;
+        bool hasNonLocal = false;
+        bool allMtp = true;
+        bool mixedSchemes = false;
+        const QString firstScheme = urls.first().scheme().toLower();
+
+        for (const QUrl &url : urls) {
+            if (url.isLocalFile()) {
+                hasLocal = true;
+            } else {
+                hasNonLocal = true;
+            }
+            if (url.scheme().compare(QStringLiteral("mtp"), Qt::CaseInsensitive) != 0) {
+                allMtp = false;
+            }
+            if (url.scheme().toLower() != firstScheme) {
+                mixedSchemes = true;
+            }
+        }
+
+        const bool allLocal = hasLocal && !hasNonLocal;
+
+        // Case A: Mixed selection (e.g. local + MTP, or multiple different schemes)
+        // Never allow a mixed selection to route to permanent delete!
+        if (mixedSchemes || (hasLocal && hasNonLocal)) {
+            QMessageBox::warning(
+                m_parentWidget,
+                trLocal("Nie można wykonać operacji", "Cannot perform operation"),
+                trLocal("Zaznaczenie zawiera elementy z różnych protokołów lub lokalizacji o różnych możliwościach obsługi Kosza. "
+                        "Wybierz elementy z jednej spójnej lokalizacji.",
+                        "The selection contains items from different protocols or locations with different Trash capabilities. "
+                        "Select items from a single consistent location."));
+            return;
+        }
+
+        // Case B: All items are MTP files/folders inside device storage
+        if (allMtp) {
+            bool hasFolders = false;
+            for (const QUrl &url : urls) {
+                if (url.isLocalFile() && QFileInfo(url.toLocalFile()).isDir()) {
+                    hasFolders = true;
+                    break;
+                }
+            }
+
+            QString question;
+            if (urls.size() == 1) {
+                const QString name = urls.first().fileName();
+                if (hasFolders) {
+                    question = isPolish()
+                        ? QStringLiteral("Ta lokalizacja nie obsługuje przenoszenia plików do Kosza.\n\nCzy zamiast tego chcesz trwale usunąć folder «%1» wraz z całą jego zawartością?\n\nTej operacji nie można cofnąć.").arg(name)
+                        : QStringLiteral("This location does not support moving files to Trash.\n\nDo you want to permanently delete the folder \"%1\" and all its contents instead?\n\nThis operation cannot be undone.").arg(name);
+                } else {
+                    question = isPolish()
+                        ? QStringLiteral("Ta lokalizacja nie obsługuje przenoszenia plików do Kosza.\n\nCzy zamiast tego chcesz trwale usunąć plik «%1»?\n\nTej operacji nie można cofnąć.").arg(name)
+                        : QStringLiteral("This location does not support moving files to Trash.\n\nDo you want to permanently delete the file \"%1\" instead?\n\nThis operation cannot be undone.").arg(name);
+                }
+            } else {
+                if (hasFolders) {
+                    question = isPolish()
+                        ? QStringLiteral("Ta lokalizacja nie obsługuje przenoszenia plików do Kosza.\n\nCzy zamiast tego chcesz trwale usunąć zaznaczone elementy (%1)?\n\nWszystkie zawarte w nich pliki i foldery zostaną trwale skasowane.\n\nTej operacji nie można cofnąć.").arg(urls.size())
+                        : QStringLiteral("This location does not support moving files to Trash.\n\nDo you want to permanently delete the selected items (%1)?\n\nAll files and folders contained within will be permanently destroyed.\n\nThis operation cannot be undone.").arg(urls.size());
+                } else {
+                    question = isPolish()
+                        ? QStringLiteral("Ta lokalizacja nie obsługuje przenoszenia plików do Kosza.\n\nCzy zamiast tego chcesz trwale usunąć zaznaczone elementy (%1)?\n\nTej operacji nie można cofnąć.").arg(urls.size())
+                        : QStringLiteral("This location does not support moving files to Trash.\n\nDo you want to permanently delete the selected items (%1)?\n\nThis operation cannot be undone.").arg(urls.size());
+                }
+            }
+
+            QMessageBox dialog(
+                QMessageBox::Warning,
+                trLocal("Nie można przenieść do Kosza", "Cannot move to Trash"),
+                question,
+                QMessageBox::NoButton,
+                m_parentWidget);
+
+            QPushButton *deleteBtn = dialog.addButton(
+                trLocal("Usuń trwale", "Delete Permanently"),
+                QMessageBox::AcceptRole);
+            QPushButton *cancelBtn = dialog.addButton(
+                trLocal("Anuluj", "Cancel"),
+                QMessageBox::RejectRole);
+
+            dialog.setDefaultButton(cancelBtn);
+            dialog.setEscapeButton(cancelBtn);
+
+            dialog.exec();
+            if (dialog.clickedButton() != deleteBtn) {
+                return;
+            }
+
+            // Re-validate URLs after dialog closure and before job creation
+            if (!mutationAllowed()) return;
+            QList<QUrl> revalidatedUrls;
+            for (const QUrl &u : urls) {
+                if (!u.isValid() || u.isEmpty() || u.scheme().compare(QStringLiteral("mtp"), Qt::CaseInsensitive) != 0) {
+                    QMessageBox::warning(m_parentWidget,
+                        trLocal("Błąd usuwania", "Delete Error"),
+                        trLocal("Stan elementów lub urządzenia zmienił się przed wykonaniem operacji.",
+                                "Item or device state changed before executing the operation."));
+                    return;
+                }
+                const QStringList parts = u.path().split(QLatin1Char('/'), Qt::SkipEmptyParts);
+                if (parts.size() < 3) {
+                    QMessageBox::warning(m_parentWidget,
+                        trLocal("Błąd usuwania", "Delete Error"),
+                        trLocal("Wykryto chroniony korzeń pamięci. Operacja została przerwana.",
+                                "Protected storage root detected. Operation aborted."));
+                    return;
+                }
+                revalidatedUrls.append(u);
+            }
+            if (revalidatedUrls.isEmpty()) return;
+
+            deleteUrls(revalidatedUrls);
+            return;
+        }
+
+        // Case C: Other remote / non-local protocols (e.g. sftp, smb, ftp, webdav, etc.)
+        // Do NOT automatically fallback to permanent delete!
+        // Display an informative message that Trash is not available for this protocol/location,
+        // without automatically deleting.
+        if (!allLocal) {
+            QMessageBox::information(
+                m_parentWidget,
+                trLocal("Kosz niedostępny", "Trash unavailable"),
+                trLocal("Ta lokalizacja nie obsługuje przenoszenia plików do Kosza.\n\n"
+                        "Aby trwale usunąć te elementy, użyj skrótu Shift+Delete lub opcji «Usuń trwale…» z menu kontekstowego.",
+                        "This location does not support moving files to Trash.\n\n"
+                        "To permanently delete these items, use Shift+Delete or the “Delete Permanently…” option from the context menu."));
+            return;
         }
 
         const QString question =
@@ -963,13 +1141,18 @@ public:
                 job);
         }
 
+        const FileOperationContext context = FileOperationContext::create(
+            FileOperationType::Trash, urls, QUrl(QStringLiteral("trash:/")));
+
         watchFileOperation(
             job,
             trLocal(
                 "Przeniesiono do Kosza",
                 "Moved to Trash"),
             false,
-            trLocal("Przenoszenie do Kosza", "Moving to Trash"));
+            trLocal("Przenoszenie do Kosza", "Moving to Trash"),
+            {},
+            context);
     }
 
     void trashUrls(const QList<QUrl> &urls, const std::function<void(KJob *)> &onFinished = {})
@@ -1003,11 +1186,137 @@ public:
             });
         }
 
+        const FileOperationContext context = FileOperationContext::create(
+            FileOperationType::Trash, urls, QUrl(QStringLiteral("trash:/")));
+
         watchFileOperation(
             job,
             trLocal("Przeniesiono do Kosza", "Moved to Trash"),
             false,
-            trLocal("Przenoszenie do Kosza", "Moving to Trash"));
+            trLocal("Przenoszenie do Kosza", "Moving to Trash"),
+            {},
+            context);
+    }
+
+    void deleteUrls(const QList<QUrl> &urls, const std::function<void(KJob *)> &onFinished = {})
+    {
+        if (!mutationAllowed()) {
+            if (onFinished) onFinished(nullptr);
+            return;
+        }
+
+        if (urls.isEmpty()) {
+            if (onFinished) onFinished(nullptr);
+            return;
+        }
+
+        for (const QUrl &url : urls) {
+            if (isProtectedRootUrl(url)) {
+                if (onFinished) onFinished(nullptr);
+                return;
+            }
+        }
+
+        KIO::DeleteJob *job = KIO::del(urls, KIO::HideProgressInfo);
+        job->setUiDelegate(nullptr);
+
+        if (onFinished) {
+            connect(job, &KJob::result, this, [onFinished](KJob *j) {
+                onFinished(j);
+            });
+        }
+
+        const FileOperationContext context = FileOperationContext::create(
+            FileOperationType::Delete, urls, QUrl());
+
+        watchFileOperation(
+            job,
+            trLocal("Trwale usunięto", "Permanently deleted"),
+            false,
+            trLocal("Trwałe usuwanie", "Deleting permanently"),
+            {},
+            context);
+    }
+
+    void deleteSelectedPermanently(const QList<QUrl> &urls, const std::function<void(KJob *)> &onFinished = {})
+    {
+        if (!mutationAllowed()) {
+            if (onFinished) onFinished(nullptr);
+            return;
+        }
+
+        if (urls.isEmpty()) {
+            if (onFinished) onFinished(nullptr);
+            return;
+        }
+
+        for (const QUrl &url : urls) {
+            if (isProtectedRootUrl(url)) {
+                QMessageBox::warning(
+                    m_parentWidget,
+                    trLocal("Usuń trwale", "Delete Permanently"),
+                    trLocal("Nie można usunąć chronionego korzenia, nośnika ani lokalizacji systemowej.",
+                            "Cannot delete a protected root, storage device, or system location."));
+                return;
+            }
+        }
+
+        bool hasFolders = false;
+        for (const QUrl &url : urls) {
+            if (url.isLocalFile() && QFileInfo(url.toLocalFile()).isDir()) {
+                hasFolders = true;
+                break;
+            }
+        }
+
+        QString question;
+        if (urls.size() == 1) {
+            const QString name = urls.first().fileName();
+            if (hasFolders) {
+                question = isPolish()
+                    ? QStringLiteral("Czy na pewno chcesz nieodwracalnie usunąć folder «%1» wraz z całą jego zawartością?\n\nTej operacji nie można cofnąć.").arg(name)
+                    : QStringLiteral("Are you sure you want to permanently delete the folder \"%1\" and all its contents?\n\nThis operation cannot be undone.").arg(name);
+            } else {
+                question = isPolish()
+                    ? QStringLiteral("Czy na pewno chcesz nieodwracalnie usunąć plik «%1»?\n\nTej operacji nie można cofnąć.").arg(name)
+                    : QStringLiteral("Are you sure you want to permanently delete the file \"%1\"?\n\nThis operation cannot be undone.").arg(name);
+            }
+        } else {
+            if (hasFolders) {
+                question = isPolish()
+                    ? QStringLiteral("Czy na pewno chcesz nieodwracalnie usunąć zaznaczone elementy (%1)?\n\nWszystkie zawarte w nich pliki i foldery zostaną trwale skasowane.\n\nTej operacji nie można cofnąć.").arg(urls.size())
+                    : QStringLiteral("Are you sure you want to permanently delete the selected items (%1)?\n\nAll files and folders contained within will be permanently destroyed.\n\nThis operation cannot be undone.").arg(urls.size());
+            } else {
+                question = isPolish()
+                    ? QStringLiteral("Czy na pewno chcesz nieodwracalnie usunąć zaznaczone elementy (%1)?\n\nTej operacji nie można cofnąć.").arg(urls.size())
+                    : QStringLiteral("Are you sure you want to permanently delete the selected items (%1)?\n\nThis operation cannot be undone.").arg(urls.size());
+            }
+        }
+
+        QMessageBox dialog(
+            QMessageBox::Warning,
+            trLocal("Usuń trwale", "Delete Permanently"),
+            question,
+            QMessageBox::NoButton,
+            m_parentWidget);
+
+        QPushButton *deleteBtn = dialog.addButton(
+            trLocal("Usuń trwale", "Delete Permanently"),
+            QMessageBox::AcceptRole);
+        QPushButton *cancelBtn = dialog.addButton(
+            trLocal("Anuluj", "Cancel"),
+            QMessageBox::RejectRole);
+
+        dialog.setDefaultButton(cancelBtn);
+        dialog.setEscapeButton(cancelBtn);
+
+        dialog.exec();
+        if (dialog.clickedButton() != deleteBtn) {
+            if (onFinished) onFinished(nullptr);
+            return;
+        }
+
+        deleteUrls(urls, onFinished);
     }
 
     static bool isTrashRoot(const QUrl &directory)
@@ -1047,9 +1356,15 @@ public:
         m_emptyTrashJob = job;
         connect(job, &KJob::result, this, [this] { m_emptyTrashJob = nullptr; });
         // Emptying Trash is irreversible; do not record it as an undoable job.
+        FileOperationContext context;
+        context.type = FileOperationType::EmptyTrash;
+        context.sourceParentDirectories.insert(QUrl(QStringLiteral("trash:/")));
+        context.destinationDirectory = QUrl(QStringLiteral("trash:/"));
+
         watchFileOperation(job,
             trLocal("Kosz został opróżniony", "Trash emptied"), false,
-            trLocal("Opróżnianie kosza", "Emptying Trash"), refreshViews);
+            trLocal("Opróżnianie kosza", "Emptying Trash"), refreshViews,
+            context);
     }
 
     void transfer(const QList<QUrl> &urls, const QUrl &destination, Qt::DropAction action)
@@ -1058,6 +1373,10 @@ public:
         if (urls.isEmpty() || !destination.isValid()) return;
         if (!mutationAllowed()) return;
         const bool move = action == Qt::MoveAction;
+        const FileOperationContext context = FileOperationContext::create(
+            action == Qt::MoveAction ? FileOperationType::Move : FileOperationType::Copy,
+            urls, destination);
+
         if (startNativeSingleFileTransfer(
                 urls, destination, move, false,
                 move
@@ -1065,7 +1384,8 @@ public:
                     : trLocal("Kopiowanie zakończone", "Copy completed"),
                 move
                     ? trLocal("Przenoszenie", "Moving")
-                    : trLocal("Kopiowanie", "Copying"))) {
+                    : trLocal("Kopiowanie", "Copying"),
+                context)) {
             return;
         }
         if (!mutationAllowed()) return;
@@ -1093,7 +1413,9 @@ public:
             false,
             action == Qt::MoveAction
                 ? trLocal("Przenoszenie", "Moving")
-                : trLocal("Kopiowanie", "Copying"));
+                : trLocal("Kopiowanie", "Copying"),
+            {},
+            context);
     }
 
     void transferUrls(const QList<QUrl> &urls, const QUrl &destination, Qt::DropAction action,
@@ -1129,6 +1451,10 @@ public:
             });
         }
 
+        const FileOperationContext context = FileOperationContext::create(
+            action == Qt::MoveAction ? FileOperationType::Move : FileOperationType::Copy,
+            urls, destination);
+
         watchFileOperation(
             job,
             action == Qt::MoveAction
@@ -1137,7 +1463,9 @@ public:
             false,
             action == Qt::MoveAction
                 ? trLocal("Przenoszenie", "Moving")
-                : trLocal("Kopiowanie", "Copying"));
+                : trLocal("Kopiowanie", "Copying"),
+            {},
+            context);
     }
 
 private:
@@ -1296,10 +1624,15 @@ private:
         KIO::StoredTransferJob *job = KIO::storedPut(
             contents, destination, -1, KIO::HideProgressInfo);
         job->setUiDelegate(nullptr);
-        if (m_undoController) m_undoController->recordPutJob(destination, job);
+        FileOperationContext context;
+        context.type = FileOperationType::CreateFile;
+        context.destinationDirectory = directory;
+        context.destinationUrls = {destination};
+
         watchFileOperation(job,
             trLocal("Utworzono plik", "File created"), false,
-            trLocal("Tworzenie pliku", "Creating file"));
+            trLocal("Tworzenie pliku", "Creating file"),
+            {}, context);
     }
 
     void createFromTemplateWithName(
@@ -1323,9 +1656,15 @@ private:
         KIO::CopyJob *job = KIO::copyAs(source, destination, KIO::HideProgressInfo);
         job->setUiDelegate(nullptr);
         if (m_undoController) m_undoController->recordCopyJob(job);
+        FileOperationContext context;
+        context.type = FileOperationType::CreateFile;
+        context.destinationDirectory = directory;
+        context.destinationUrls = {destination};
+
         watchFileOperation(job,
             trLocal("Utworzono plik", "File created"), false,
-            trLocal("Tworzenie pliku", "Creating file"));
+            trLocal("Tworzenie pliku", "Creating file"),
+            {}, context);
     }
 
     void createNewFolderWithName(const QUrl &directory, const QString &name)
@@ -1338,9 +1677,15 @@ private:
         KIO::MkdirJob *job = KIO::mkdir(destination);
         job->setUiDelegate(nullptr);
         if (m_undoController) m_undoController->recordMkdirJob(destination, job);
+        FileOperationContext context;
+        context.type = FileOperationType::CreateFolder;
+        context.destinationDirectory = directory;
+        context.destinationUrls = {destination};
+
         watchFileOperation(job,
             trLocal("Utworzono folder", "Folder created"), false,
-            trLocal("Tworzenie folderu", "Creating folder"));
+            trLocal("Tworzenie folderu", "Creating folder"),
+            {}, context);
     }
 
     static bool localEntryExists(const QUrl &url)
@@ -1434,7 +1779,8 @@ private:
         bool move,
         bool clearClipboard,
         const QString &successMessage,
-        const QString &title)
+        const QString &title,
+        const FileOperationContext &opContext = {})
     {
         if (!mutationAllowed()) return true;
         if (sources.isEmpty() || !destinationDirectory.isLocalFile()) {
@@ -1457,7 +1803,9 @@ private:
                 return fallback;
             });
             if (m_undoController) m_undoController->recordNativeTransfer(job, move);
-            watchFileOperation(job, successMessage, clearClipboard, title);
+            const FileOperationContext jobCtx = opContext.type != FileOperationType::Custom ? opContext
+                : FileOperationContext::create(move ? FileOperationType::Move : FileOperationType::Copy, sources, destinationDirectory);
+            watchFileOperation(job, successMessage, clearClipboard, title, {}, jobCtx);
             job->start();
             return true;
         }
@@ -1484,7 +1832,10 @@ private:
                     : KIO::copyAs(sources.first(), destination, KIO::HideProgressInfo);
                 configureInteractiveCopyJob(job);
                 if (m_undoController) m_undoController->recordCopyJob(job);
-                watchFileOperation(job, successMessage, clearClipboard, title);
+                FileOperationContext jobCtx = opContext.type != FileOperationType::Custom ? opContext
+                    : FileOperationContext::create(move ? FileOperationType::Move : FileOperationType::Copy, sources, destinationDirectory);
+                jobCtx.destinationUrls = {destination};
+                watchFileOperation(job, successMessage, clearClipboard, title, {}, jobCtx);
                 return true;
             }
             originalDestination = LocalFileIdentity::read(destination.toLocalFile());
@@ -1526,7 +1877,10 @@ private:
             m_undoController->recordNativeTransfer(
                 job, move);
         }
-        watchFileOperation(job, successMessage, clearClipboard, title);
+        FileOperationContext jobCtx = opContext.type != FileOperationType::Custom ? opContext
+            : FileOperationContext::create(move ? FileOperationType::Move : FileOperationType::Copy, sources, destinationDirectory);
+        jobCtx.destinationUrls = {destination};
+        watchFileOperation(job, successMessage, clearClipboard, title, {}, jobCtx);
         job->start();
         return true;
     }
@@ -1550,9 +1904,10 @@ private:
     }
 
     void watchFileOperation(KJob *job, const QString &message, bool clearClipboard, const QString &title,
-                            const RefreshViews &refreshViews = {})
+                            const RefreshViews &refreshViews = {},
+                            const FileOperationContext &context = {})
     {
-        m_watchOperation(job, message, clearClipboard, title, refreshViews);
+        m_watchOperation(job, message, clearClipboard, title, refreshViews, context);
     }
 
     QWidget *m_parentWidget = nullptr;

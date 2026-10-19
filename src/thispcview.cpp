@@ -3,7 +3,7 @@
  * thispc-view - a lightweight KDE/Qt file browser with a Windows-like
  * "This PC" home page, backed by KIO.
  *
- * Version 0.41.1
+ * Version 0.41.2
  * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
@@ -16,6 +16,7 @@
 #include "appwidgets.h"
 #include "devicemountcontroller.h"
 #include "deviceremovalcontroller.h"
+#include "directorywatchcontroller.h"
 #include "drivehomecoordinator.h"
 #include "soliddevicemonitor.h"
 #include "locationpresentation.h"
@@ -48,6 +49,9 @@
 #include <KFileItemListProperties>
 #include <KProtocolInfo>
 #include <KProtocolManager>
+#ifdef QT_DBUS_LIB
+#include <KDirNotify>
+#endif
 
 #include <QAction>
 #include <QActionGroup>
@@ -521,8 +525,9 @@ public:
 
         m_fileActions = new FileActions(this, m_undoController,
             [this](KJob *job, const QString &message, bool clearClipboard, const QString &title,
-                   const FileActions::RefreshViews &refreshViews) {
-                watchFileOperation(job, message, clearClipboard, title, refreshViews);
+                   const FileActions::RefreshViews &refreshViews,
+                   const FileOperationContext &context) {
+                watchFileOperation(job, message, clearClipboard, title, refreshViews, context);
             }, [this](const QString &message) { statusBar()->showMessage(message, 0); });
 
         auto &recoveryGate = BatchRenameRecoveryGate::instance();
@@ -692,6 +697,14 @@ public:
         connect(&m_solidMonitor, &SolidDeviceMonitor::devicesChanged,
                 this, &ThisPcWindow::reloadDrives);
 
+        m_watchController = new DirectoryWatchController(this);
+        connect(m_watchController, &DirectoryWatchController::directoryChanged,
+                this, &ThisPcWindow::handleWatchedDirectoryChanged);
+        connect(m_watchController, &DirectoryWatchController::directoryDeleted,
+                this, &ThisPcWindow::handleWatchedDirectoryDeleted);
+        connect(m_watchController, &DirectoryWatchController::directoryRenamed,
+                this, &ThisPcWindow::handleWatchedDirectoryRenamed);
+
         reloadDrives();
 
         const bool restored =
@@ -707,6 +720,7 @@ public:
 
 #ifdef THISPC_TEST_HARNESS
 public:
+    DirectoryWatchController *watchControllerForTesting() const { return m_watchController; }
 #else
 protected:
 #endif
@@ -2316,6 +2330,13 @@ private:
             });
         connect(
             m_splitPane,
+            &SplitBrowserPane::locationChanged,
+            this,
+            [this](const QUrl &) {
+                updateDirectoryWatchSubscriptions();
+            });
+        connect(
+            m_splitPane,
             &SplitBrowserPane::urlsDropped,
             this,
             &ThisPcWindow::handleDroppedUrls);
@@ -2436,14 +2457,14 @@ private:
         statusBar()->setSizeGripEnabled(true);
 
         m_versionLabel = new QLabel(
-            QStringLiteral("v0.41.1"),
+            QStringLiteral("v0.41.2"),
             this);
         m_versionLabel->setObjectName(
             QStringLiteral("versionLabel"));
         m_versionLabel->setToolTip(
             trLocal(
-                "Wersja thispc-view 0.41.1",
-                "thispc-view version 0.41.1"));
+                "Wersja thispc-view 0.41.2",
+                "thispc-view version 0.41.2"));
         statusBar()->addPermanentWidget(m_versionLabel);
     }
 
@@ -2841,6 +2862,10 @@ private:
         addViewShortcut(
             QKeySequence(Qt::Key_Delete),
             [this] { trashSelected(); });
+
+        addViewShortcut(
+            QKeySequence(Qt::SHIFT | Qt::Key_Delete),
+            [this] { deletePermanentlySelected(); });
 
         addViewShortcut(
             QKeySequence::SelectAll,
@@ -3529,6 +3554,7 @@ private:
         if (!m_tabRestoreInProgress) {
             syncActiveTabState();
         }
+        updateDirectoryWatchSubscriptions();
     }
 
     void openInSplitPane(const QUrl &rawUrl)
@@ -3579,6 +3605,7 @@ private:
 
         updateSearchControls();
         syncActiveTabState();
+        updateDirectoryWatchSubscriptions();
     }
 
     void compareSplitPanes()
@@ -4037,8 +4064,19 @@ private:
             m_splitPane->hide();
             setActivePane(PaneId::Primary);
         }
+        const QString primaryKey = normalizedUrl(state.currentUrl).toString();
+        const bool primaryWasDirty = m_dirtyTabLocations.remove(primaryKey);
+        const bool splitWasDirty = state.splitEnabled
+            && m_dirtyTabLocations.remove(normalizedUrl(state.splitUrl).toString());
+
         loadLocation(m_navigation.currentUrl(),
-                     !sameLocation(previousPrimaryUrl, m_navigation.currentUrl()));
+                     primaryWasDirty || !sameLocation(previousPrimaryUrl, m_navigation.currentUrl()));
+        if (primaryWasDirty && sameLocation(previousPrimaryUrl, m_navigation.currentUrl())) {
+            refreshCurrent(true);
+        }
+        if (splitWasDirty && m_splitPane && m_splitPane->isVisible()) {
+            m_splitPane->refresh();
+        }
         if (RemoteUrlHelper::isRemoteUrl(state.currentUrl)) {
             navigateTo(state.currentUrl, false);
             m_remoteHistoryOnSuccess = restoredNavigation;
@@ -4046,6 +4084,7 @@ private:
         }
         m_tabRestoreInProgress = false;
         syncActiveTabState();
+        updateDirectoryWatchSubscriptions();
     }
 
     void closeTab(int index)
@@ -4078,6 +4117,7 @@ private:
             m_tabBar->setCurrentIndex(m_activeTab);
             m_tabChangeInProgress = false;
             updateActiveTabPresentation();
+            updateDirectoryWatchSubscriptions();
         }
     }
 
@@ -4428,9 +4468,11 @@ private:
         updateFileActionStates();
         syncActiveTabState();
         updateActiveTabPresentation();
+        updateDirectoryWatchSubscriptions();
     }
 
-    void loadDirectory(const QUrl &url, bool preserveStatusMessage = false)
+    void loadDirectory(const QUrl &url, bool preserveStatusMessage = false,
+                       DirectoryReloadMode reloadMode = DirectoryReloadMode::Navigation)
     {
         if (RemoteUrlHelper::isRemoteUrl(url)) {
             navigateTo(url, false);
@@ -4466,7 +4508,8 @@ private:
                     return;
                 }
                 statusBar()->showMessage(error, 6000);
-            });
+            },
+            reloadMode);
     }
 
     bool fileMatchesSearch(const FileInfo &file) const
@@ -5182,6 +5225,7 @@ public:
              [this] { renameSelected(); },
              [this] { batchRenameSelected(); },
              [this] { trashSelected(); },
+             [this] { deletePermanentlySelected(); },
              [this, url] { pasteClipboardInto(url); },
              [url] { QGuiApplication::clipboard()->setText(urlForDisplay(url)); },
              [this, clicked] {
@@ -5463,7 +5507,18 @@ public:
 
     void trashSelected()
     {
-        m_fileActions->trashSelected(selectedUrls());
+        if (KeyboardNavigationRouter::isTextInput(QApplication::focusWidget())) {
+            return;
+        }
+        if (m_fileActions) m_fileActions->trashSelected(selectedUrls());
+    }
+
+    void deletePermanentlySelected()
+    {
+        if (KeyboardNavigationRouter::isTextInput(QApplication::focusWidget())) {
+            return;
+        }
+        if (m_fileActions) m_fileActions->deleteSelectedPermanently(selectedUrls());
     }
 
     void emptyTrashAt(const QUrl &directory)
@@ -5491,22 +5546,124 @@ public:
         }
     }
 
+    void refreshAffectedDirectories(const FileOperationContext &context)
+    {
+        QSet<QUrl> affectedDirs;
+        if (context.destinationDirectory.isValid()) {
+            affectedDirs.insert(normalizedUrl(context.destinationDirectory));
+        }
+        for (const QUrl &srcParent : context.sourceParentDirectories) {
+            if (srcParent.isValid()) {
+                affectedDirs.insert(normalizedUrl(srcParent));
+            }
+        }
+        for (const QUrl &src : context.sources) {
+            if (src.isValid()) {
+                const QUrl parent = parentDirectoryUrl(src);
+                if (parent.isValid()) {
+                    affectedDirs.insert(normalizedUrl(parent));
+                }
+            }
+        }
+        for (const QUrl &dst : context.destinationUrls) {
+            if (dst.isValid()) {
+                const QUrl parent = parentDirectoryUrl(dst);
+                if (parent.isValid()) {
+                    affectedDirs.insert(normalizedUrl(parent));
+                }
+            }
+        }
+
+        if (affectedDirs.isEmpty()) {
+            refreshCurrent(true);
+            if (m_splitPane && m_splitPane->isVisible()) {
+                m_splitPane->refresh();
+            }
+            return;
+        }
+
+        for (const QUrl &dirUrl : affectedDirs) {
+            if (m_watchController && m_watchController->isWatched(dirUrl)) {
+                m_watchController->scheduleRefresh(dirUrl);
+            } else {
+                if (sameLocation(m_navigation.currentUrl(), dirUrl)) {
+                    refreshCurrent(true);
+                }
+                if (m_splitPane && m_splitPane->isVisible() && sameLocation(m_splitPane->currentUrl(), dirUrl)) {
+                    m_splitPane->refresh();
+                }
+                for (int i = 0; i < m_tabs.size(); ++i) {
+                    if (i == m_activeTab) continue;
+                    if (sameLocation(m_tabs.at(i).currentUrl, dirUrl)) {
+                        m_dirtyTabLocations.insert(normalizedUrl(m_tabs.at(i).currentUrl).toString());
+                    }
+                    if (m_tabs.at(i).splitEnabled && sameLocation(m_tabs.at(i).splitUrl, dirUrl)) {
+                        m_dirtyTabLocations.insert(normalizedUrl(m_tabs.at(i).splitUrl).toString());
+                    }
+                }
+            }
+        }
+    }
+
+    void broadcastExternalDirNotify(const FileOperationContext &context)
+    {
+#ifdef QT_DBUS_LIB
+        switch (context.type) {
+        case FileOperationType::Move:
+            for (const QUrl &src : context.sources) {
+                if (context.destinationUrls.size() == context.sources.size()) {
+                    const int idx = context.sources.indexOf(src);
+                    org::kde::KDirNotify::emitFileMoved(src, context.destinationUrls.at(idx));
+                } else if (context.destinationDirectory.isValid()) {
+                    const QUrl dst = childUrlWithName(context.destinationDirectory, src.fileName());
+                    org::kde::KDirNotify::emitFileMoved(src, dst);
+                }
+            }
+            if (context.destinationDirectory.isValid()) {
+                org::kde::KDirNotify::emitFilesAdded(context.destinationDirectory);
+            }
+            for (const QUrl &srcParent : context.sourceParentDirectories) {
+                if (srcParent.isValid()) {
+                    org::kde::KDirNotify::emitFilesChanged({srcParent});
+                }
+            }
+            break;
+        case FileOperationType::Copy:
+        case FileOperationType::CreateFolder:
+        case FileOperationType::CreateFile:
+            if (context.destinationDirectory.isValid()) {
+                org::kde::KDirNotify::emitFilesAdded(context.destinationDirectory);
+            }
+            break;
+        case FileOperationType::Trash:
+        case FileOperationType::Delete:
+            if (!context.sources.isEmpty()) {
+                org::kde::KDirNotify::emitFilesRemoved(context.sources);
+            }
+            break;
+        case FileOperationType::Rename:
+            if (context.sources.size() == 1 && context.destinationUrls.size() == 1) {
+                org::kde::KDirNotify::emitFileRenamed(context.sources.first(), context.destinationUrls.first());
+            }
+            break;
+        default:
+            break;
+        }
+#else
+        Q_UNUSED(context);
+#endif
+    }
+
     void watchFileOperation(
         KJob *job,
         const QString &successMessage,
         bool clearClipboardOnSuccess = false,
         const QString &operationTitle = QString(),
-        FileActions::RefreshViews refreshViews = {})
+        FileActions::RefreshViews refreshViews = {},
+        const FileOperationContext &context = {})
     {
         if (!job) {
             return;
-        }
-
-        if (!refreshViews) {
-            refreshViews = [this] {
-                refreshCurrent();
-                if (m_splitPane && m_splitPane->isVisible()) m_splitPane->refresh();
-            };
         }
 
         if (m_operationManager) {
@@ -5524,7 +5681,7 @@ public:
             job,
             &KJob::result,
             this,
-            [this, job, successMessage, clearClipboardOnSuccess, refreshViews](KJob *) {
+            [this, job, successMessage, clearClipboardOnSuccess, refreshViews, context](KJob *) {
             const bool cancelled =
                 (m_operationManager
                     && m_operationManager->cancelRequested(job))
@@ -5547,7 +5704,10 @@ public:
                     trLocal("Operacja anulowana", "Operation cancelled"),
                     4000);
 
-                refreshViews();
+                refreshAffectedDirectories(context);
+                if (refreshViews) {
+                    refreshViews();
+                }
                 updateFileActionStates();
                 return;
             }
@@ -5562,7 +5722,10 @@ public:
                     trLocal("Operacja nie powiodła się", "Operation failed"),
                     job->errorString());
 
-                refreshViews();
+                refreshAffectedDirectories(context);
+                if (refreshViews) {
+                    refreshViews();
+                }
                 updateFileActionStates();
                 return;
             }
@@ -5575,7 +5738,11 @@ public:
                 successMessage,
                 4000);
 
-            refreshViews();
+            broadcastExternalDirNotify(context);
+            refreshAffectedDirectories(context);
+            if (refreshViews) {
+                refreshViews();
+            }
             updateFileActionStates();
         });
     }
@@ -6146,7 +6313,91 @@ private Q_SLOTS:
             }
             scheduleDateGroupingRefresh();
             applyDirectoryViewMode(false);
-            loadDirectory(m_navigation.currentUrl(), preserveStatusMessage);
+            loadDirectory(m_navigation.currentUrl(), preserveStatusMessage, DirectoryReloadMode::QuietRefresh);
+        }
+    }
+
+    void updateDirectoryWatchSubscriptions()
+    {
+        if (!m_watchController) {
+            return;
+        }
+
+        m_watchController->setWatchedUrl(m_primaryPane, m_navigation.currentUrl());
+
+        if (m_splitPane && m_splitPane->isVisible()) {
+            m_watchController->setWatchedUrl(m_splitPane, m_splitPane->currentUrl());
+        } else {
+            m_watchController->removeConsumer(m_splitPane);
+        }
+
+        QList<QUrl> backgroundTabUrls;
+        for (int i = 0; i < m_tabs.size(); ++i) {
+            if (i != m_activeTab) {
+                if (m_tabs.at(i).currentUrl.isValid()) {
+                    backgroundTabUrls.append(m_tabs.at(i).currentUrl);
+                }
+                if (m_tabs.at(i).splitEnabled && m_tabs.at(i).splitUrl.isValid()) {
+                    backgroundTabUrls.append(m_tabs.at(i).splitUrl);
+                }
+            }
+        }
+        m_watchController->updateTabSubscriptions(backgroundTabUrls);
+    }
+
+    void handleWatchedDirectoryChanged(const QUrl &url)
+    {
+        if (sameLocation(url, kThisPcUrl)) {
+            return;
+        }
+
+        // Check primary pane
+        if (sameLocation(m_navigation.currentUrl(), url)) {
+            refreshCurrent(true);
+        }
+
+        // Check split pane
+        if (m_splitPane && m_splitPane->isVisible() && sameLocation(m_splitPane->currentUrl(), url)) {
+            m_splitPane->refresh();
+        }
+
+        // Check background tabs: mark location dirty without running costly background listings
+        for (int i = 0; i < m_tabs.size(); ++i) {
+            if (i == m_activeTab) {
+                continue;
+            }
+            if (sameLocation(m_tabs.at(i).currentUrl, url)) {
+                m_dirtyTabLocations.insert(normalizedUrl(m_tabs.at(i).currentUrl).toString());
+            }
+            if (m_tabs.at(i).splitEnabled && sameLocation(m_tabs.at(i).splitUrl, url)) {
+                m_dirtyTabLocations.insert(normalizedUrl(m_tabs.at(i).splitUrl).toString());
+            }
+        }
+    }
+
+    void handleWatchedDirectoryDeleted(const QUrl &url)
+    {
+        if (sameLocation(m_navigation.currentUrl(), url)) {
+            const QUrl parent = m_navigation.parentUrl(m_driveHomeCoordinator.drives());
+            if (parent.isValid() && parent.isLocalFile() && QFileInfo::exists(parent.toLocalFile())) {
+                navigateTo(parent, true);
+            } else {
+                navigateTo(kThisPcUrl, true);
+            }
+        }
+
+        if (m_splitPane && m_splitPane->isVisible() && sameLocation(m_splitPane->currentUrl(), url)) {
+            m_splitPane->setCurrentUrl(kThisPcUrl, true);
+        }
+    }
+
+    void handleWatchedDirectoryRenamed(const QUrl &oldUrl, const QUrl &newUrl)
+    {
+        if (sameLocation(m_navigation.currentUrl(), oldUrl)) {
+            navigateTo(newUrl, false);
+        }
+        if (m_splitPane && m_splitPane->isVisible() && sameLocation(m_splitPane->currentUrl(), oldUrl)) {
+            m_splitPane->setCurrentUrl(newUrl, false);
         }
     }
 
@@ -6708,6 +6959,8 @@ private:
     QByteArray m_splitterState;
     PrimaryBrowserPane *m_primaryPane = nullptr;
     SplitBrowserPane *m_splitPane = nullptr;
+    DirectoryWatchController *m_watchController = nullptr;
+    QSet<QString> m_dirtyTabLocations;
     QStackedWidget *m_contentStack = nullptr;
 
     OperationManager *m_operationManager = nullptr;

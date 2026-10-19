@@ -70,6 +70,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <optional>
 #include <utility>
 
 class SplitBrowserPane : public QFrame
@@ -937,7 +938,7 @@ public:
     {
         if (m_previewAdapter) m_previewAdapter->invalidatePreviews();
         if (RemoteUrlHelper::isRemoteUrl(m_currentUrl)) navigateTo(m_currentUrl, false);
-        else loadDirectory(m_currentUrl);
+        else loadDirectory(m_currentUrl, DirectoryReloadMode::QuietRefresh);
     }
 
     NavigationHistory::Snapshot navigationSnapshot() const
@@ -1197,17 +1198,24 @@ private:
             m_reconnect->hide();
             m_pendingRemoteUrl = targetUrl;
             m_pendingRemoteAddHistory = addHistory;
-            const QString hostOrLabel = targetUrl.host().isEmpty()
-                ? trLocal("Katalogi współdzielone (SMB)", "Shared Folders (SMB)")
-                : targetUrl.host();
-            m_status->setText(
-                trLocal("Łączenie z %1…", "Connecting to %1…").arg(hostOrLabel));
+            const bool isQuietRefresh = sameLocation(m_currentUrl, targetUrl);
+            if (isQuietRefresh) {
+                m_pendingViewState = captureDirectoryViewState(m_list, m_details, m_viewMode == 2);
+            } else {
+                m_pendingViewState.reset();
+                m_pendingSelection = {};
+                const QString hostOrLabel = targetUrl.host().isEmpty()
+                    ? trLocal("Katalogi współdzielone (SMB)", "Shared Folders (SMB)")
+                    : targetUrl.host();
+                m_status->setText(
+                    trLocal("Łączenie z %1…", "Connecting to %1…").arg(hostOrLabel));
+            }
 
             DirectoryListingCore::ListingOptions options;
             options.showHiddenFiles = m_showHiddenFiles;
             options.emptyNamePolicy = DirectoryListingCore::EmptyNamePolicy::RawName;
             m_listingCore.startListing(targetUrl, options, {
-                [this, targetUrl](KIO::ListJob *) {
+                [this, targetUrl, isQuietRefresh](KIO::ListJob *) {
                     if (m_pendingRemoteUrl != targetUrl) return;
                     const bool addHist = m_pendingRemoteAddHistory;
                     m_pendingRemoteUrl.clear();
@@ -1234,15 +1242,17 @@ private:
                     m_currentUrl = targetUrl;
                     m_searchState.loadLocation(targetUrl);
 
-                    const DirectoryViewProfile profile = DirectoryViewSettings::resolveProfile(targetUrl);
-                    m_viewMode = profile.viewMode;
-                    m_iconSizeStep = profile.iconSizeStep;
-                    m_groupMode = profile.groupMode;
-                    m_thumbnailsEnabled = profile.previewsEnabled;
-                    if (m_previewAdapter) m_previewAdapter->setEnabled(m_thumbnailsEnabled);
-                    setSortState(profile.sortKey, profile.sortAscending, false);
-                    scheduleDateGroupingRefresh();
-                    applyViewMode();
+                    if (!isQuietRefresh) {
+                        const DirectoryViewProfile profile = DirectoryViewSettings::resolveProfile(targetUrl);
+                        m_viewMode = profile.viewMode;
+                        m_iconSizeStep = profile.iconSizeStep;
+                        m_groupMode = profile.groupMode;
+                        m_thumbnailsEnabled = profile.previewsEnabled;
+                        if (m_previewAdapter) m_previewAdapter->setEnabled(m_thumbnailsEnabled);
+                        setSortState(profile.sortKey, profile.sortAscending, false);
+                        scheduleDateGroupingRefresh();
+                        applyViewMode();
+                    }
 
                     m_list->setDropDirectory(targetUrl);
                     m_details->setDropDirectory(targetUrl);
@@ -1258,9 +1268,13 @@ private:
                     Q_EMIT listingSucceeded(m_currentUrl);
                     Q_EMIT stateChanged();
                 },
-                [this, targetUrl](const QString &error) {
+                [this, targetUrl, isQuietRefresh](const QString &error) {
                     if (m_pendingRemoteUrl != targetUrl) return;
                     m_pendingRemoteUrl.clear();
+                    if (isQuietRefresh) {
+                        m_list->clear();
+                        m_details->clear();
+                    }
                     const QString sanitized = targetUrl.scheme().compare(QStringLiteral("mtp"), Qt::CaseInsensitive) == 0
                         ? mtpErrorMessageForUrl(targetUrl, m_drives)
                         : RemoteUrlHelper::sanitizeErrorMessage(error, targetUrl);
@@ -1383,7 +1397,8 @@ private:
     }
 
     void loadDirectory(
-        const QUrl &url)
+        const QUrl &url,
+        DirectoryReloadMode reloadMode = DirectoryReloadMode::Navigation)
     {
         if (RemoteUrlHelper::isRemoteUrl(url)) {
             navigateTo(url, false);
@@ -1397,14 +1412,18 @@ private:
         }
         m_reconnect->hide();
 
-        m_pendingSelection = sameLocation(m_currentUrl, url)
-            ? captureDirectorySelection(m_list, m_details, m_viewMode == 2)
-            : DirectorySelectionSnapshot{};
+        const bool isQuietRefresh = (reloadMode == DirectoryReloadMode::QuietRefresh);
 
-        cancelSearch(false);
+        if (isQuietRefresh) {
+            m_pendingViewState = captureDirectoryViewState(m_list, m_details, m_viewMode == 2);
+        } else {
+            m_pendingViewState.reset();
+            m_pendingSelection = {};
+            cancelSearch(false);
+            m_list->clear();
+            m_details->clear();
+        }
         m_searchState.loadLocation(url);
-        m_list->clear();
-        m_details->clear();
         m_currentUrl = url;
         if (m_previewAdapter) {
             m_previewAdapter->setCurrentDirectoryUrl(url);
@@ -1443,7 +1462,9 @@ private:
             return;
         }
         Q_EMIT searchUiChanged();
-        m_status->setText(trLocal("Wczytywanie…", "Loading…"));
+        if (!isQuietRefresh) {
+            m_status->setText(trLocal("Wczytywanie…", "Loading…"));
+        }
 
         DirectoryListingCore::ListingOptions options;
         options.showHiddenFiles = m_showHiddenFiles;
@@ -1472,7 +1493,11 @@ private:
                 renderItems();
                 Q_EMIT listingSucceeded(m_currentUrl);
             },
-            [this, url](const QString &error) {
+            [this, url, isQuietRefresh](const QString &error) {
+                if (isQuietRefresh) {
+                    m_list->clear();
+                    m_details->clear();
+                }
                 if (url.scheme().compare(QStringLiteral("mtp"), Qt::CaseInsensitive) == 0 && m_reconnect) {
                     const QString sanitized = mtpErrorMessageForUrl(url, m_drives);
                     m_status->setText(sanitized);
@@ -1494,12 +1519,31 @@ private:
 
     void renderItems()
     {
-        DirectorySelectionSnapshot selection =
-            captureDirectorySelection(m_list, m_details, m_viewMode == 2);
-        selection.urls.unite(m_pendingSelection.urls);
-        if (selection.currentUrl.isEmpty())
-            selection.currentUrl = m_pendingSelection.currentUrl;
-        m_pendingSelection = {};
+        DirectoryViewStateSnapshot viewState;
+        if (m_pendingViewState.has_value()) {
+            viewState = m_pendingViewState.value();
+            m_pendingViewState.reset();
+            const DirectoryViewStateSnapshot liveState =
+                captureDirectoryViewState(m_list, m_details, m_viewMode == 2);
+            viewState.selection.urls.unite(liveState.selection.urls);
+            if (liveState.listVScroll > 0) viewState.listVScroll = liveState.listVScroll;
+            if (liveState.listHScroll > 0) viewState.listHScroll = liveState.listHScroll;
+            if (liveState.detailsVScroll > 0) viewState.detailsVScroll = liveState.detailsVScroll;
+            if (liveState.detailsHScroll > 0) viewState.detailsHScroll = liveState.detailsHScroll;
+            if (!liveState.currentUrl.isEmpty()) viewState.currentUrl = liveState.currentUrl;
+        } else {
+            viewState = captureDirectoryViewState(m_list, m_details, m_viewMode == 2);
+            viewState.selection.urls.unite(m_pendingSelection.urls);
+            if (viewState.currentUrl.isEmpty())
+                viewState.currentUrl = m_pendingSelection.currentUrl;
+            m_pendingSelection = {};
+        }
+
+        const bool listUpdates = m_list ? m_list->updatesEnabled() : true;
+        const bool detailsUpdates = m_details ? m_details->updatesEnabled() : true;
+        if (m_list) m_list->setUpdatesEnabled(false);
+        if (m_details) m_details->setUpdatesEnabled(false);
+
         QMimeDatabase database;
         m_list->clear();
         m_details->clear();
@@ -1562,7 +1606,10 @@ private:
                 m_groupMode != DirectoryViewSettings::NoGrouping
                     ? QVariant(renderedFile.categorySort) : QVariant());
         }
-        restoreDirectorySelection(m_list, m_details, selection);
+        restoreDirectoryViewState(m_list, m_details, viewState);
+
+        if (m_list) m_list->setUpdatesEnabled(listUpdates);
+        if (m_details) m_details->setUpdatesEnabled(detailsUpdates);
 
         if (isSearchLocation(m_currentUrl)) {
             m_searchVisibleCount = prepared.visibleCount;
@@ -1798,5 +1845,6 @@ private:
 
     DirectoryListingCore m_listingCore;
     DirectorySelectionSnapshot m_pendingSelection;
+    std::optional<DirectoryViewStateSnapshot> m_pendingViewState;
     std::function<void(const QUrl &)> m_launchHandler;
 };

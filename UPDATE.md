@@ -1,5 +1,27 @@
 [English](UPDATE.md) | [Polski](UPDATE.pl.md)
 
+# Update to 0.41.2
+
+```bash
+cd ~/Pobrane
+tar -xzf kio-thispc-0.41.2.tar.gz
+cd kio-thispc-0.41.2
+chmod +x install.sh
+./install.sh
+```
+
+- Automatic directory monitoring via `KDirWatch` (local files) and `org.kde.KDirNotify` (D-Bus KDE Plasma).
+- Quiet, in-place view refresh preserving selection, scroll position, focused item, and search filters without UI flicker.
+- Internal operation guarantees: Cut/Copy/Paste, Drag & Drop, Delete, Rename, Trash, and Restore automatically trigger source and destination folder refreshes without pressing F5.
+- Debounced event queue with a 150 ms nominal window and a 500 ms hard starvation deadline.
+- Dedicated "Usuń trwale…" / "Delete Permanently…" action and `Shift+Delete` shortcut for Android/camera devices (`mtp:/`) and remote KIO locations lacking Trash support.
+- Smart Delete Fallback: pressing regular `Delete` when all selected items are on MTP device storage offers a direct, clear single-dialog permanent deletion confirmation defaulting to "Cancel". Other remote protocols (SFTP, SMB, FTP, WebDAV) display an informative notice that Trash is unavailable.
+- Hardened deletion boundaries: root folders (`/`, `file:///`, `smb:/`), device root, and phone storage top-levels (`mtp:/`, `mtp:/<Device>`, `mtp:/<Device>/<Storage>`) are strictly protected from deletion; MTP operations require normalized path depth >= 3.
+- Sequential asynchronous deletion via `KIO::del()` (without atomic transaction guarantees).
+- Local filesystem files continue using KDE Trash with full Undo/Redo support via `KIO::FileUndoManager`.
+
+---
+
 # Update to 0.41.1
 
 ```bash

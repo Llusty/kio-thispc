@@ -5,6 +5,7 @@
  */
 
 #include "actionstatecontroller.h"
+#include "browsercommon.h"
 
 ActionAvailability ActionStateController::compute(const ActionStateInput &input)
 {
@@ -35,6 +36,20 @@ ActionAvailability ActionStateController::compute(const ActionStateInput &input)
     state.propertiesEnabled = hasSelection && input.selection.first().isValid()
         && !input.selection.first().isEmpty();
     state.trashEnabled = input.recoverySafe && allLocal;
+
+    bool allDeletable = hasSelection && input.recoverySafe;
+    if (input.isThisPcLocation || input.isTrashRoot) {
+        allDeletable = false;
+    }
+    if (allDeletable) {
+        for (const QUrl &url : input.selection) {
+            if (isProtectedRootUrl(url)) {
+                allDeletable = false;
+                break;
+            }
+        }
+    }
+    state.permanentDeleteEnabled = allDeletable;
     state.emptyTrashVisible = input.isTrashRoot;
     state.emptyTrashEnabled = input.recoverySafe
         && input.isTrashRoot

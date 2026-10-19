@@ -2,6 +2,26 @@
 
 # Changelog
 
+## 0.41.2 — Automatyczne odświeżanie katalogów i trwałe usuwanie na MTP
+
+- **Automatyczne monitorowanie katalogów i ciche odświeżanie (Quiet Refresh):**
+  - Dwuwarstwowy mechanizm monitorowania zmian: integracja `KDirWatch` dla lokalnych systemów plików (`dirty`, `created`, `deleted`) oraz nasłuchiwanie powiadomień D-Bus `org.kde.KDirNotify` z całego środowiska KDE Plasma (`FilesAdded`, `FilesRemoved`, `FilesChanged`, `FileMoved`, `FileRenamed`, `FileRenamedWithLocalPath`).
+  - Ciche, bezmigotliwe odświeżanie widoku z zachowaniem pełnego stanu pracy: zaznaczenia wielu elementów, aktywnego elementu (focus), pozycji przewinięcia (scroll) oraz filtra wyszukiwania w bieżącym katalogu.
+  - Gwarantowane odświeżanie po operacjach wewnętrznych: operacje plikowe wewnątrz ThisPC (Wytnij/Kopiuj/Wklej, Przeciągnij i upuść, Usuń, Zmień nazwę, Kosz, Przywróć) natychmiast i bezwarunkowo wyzwalają odświeżenie katalogów źródłowych i docelowych w widoku pojedynczym, Split View oraz na pulpicie KDE Plasma bez konieczności naciśnięcia F5.
+  - Kolejka buforowania zdarzeń (debouncing): nominalne okno 150 ms z twardym limitem maksymalnym 500 ms chroniącym przed zagłodzeniem powiadomień przy intensywnych seriach zmian w systemie plików.
+  - Ochrona aktywnej edycji: trwająca zmiana nazwy w widoku (`EditingState`) jest zabezpieczona przed resetowaniem edytora i utratą wpisywanego tekstu podczas odświeżeń w tle.
+  - Optymalizacja kart w tle: nieaktywne karty oznaczają zmienione foldery jako wymagające przeładowania bez kosztownego listowania w tle, odświeżając widok dopiero po przełączeniu karty.
+- **Trwałe usuwanie i inteligentny fallback (Smart Delete Fallback) dla MTP i KIO:**
+  - Dedykowana akcja „Usuń trwale…” w menu podręcznym oraz skrót klawiszowy `Shift+Delete` dla urządzeń Android / aparatów (`mtp:/`) i zdalnych lokalizacji KIO bez obsługi Kosza.
+  - Inteligentny fallback klawisza `Delete`: naciśnięcie pojedynczego klawisza `Delete`, gdy wszystkie zaznaczone elementy znajdują się w pamięci urządzenia MTP, wyświetla czytelne wyjaśnienie i jeden bezpośredni dialog z pytaniem o trwałe usunięcie z domyślnym fokusem na „Anuluj”.
+  - Bezpieczna blokada protokołów zdalnych: dla innych lokalizacji nielokalnych (SFTP, SMB, FTP, WebDAV) naciśnięcie `Delete` nie usuwa automatycznie plików, lecz wyświetla komunikat informacyjny o braku Kosza i kieruje do użycia `Shift+Delete` lub menu kontekstowego. Zaznaczenia mieszane (lokalne + zdalne lub z różnych protokołów) są bezwzględnie blokowane ostrzeżeniem.
+  - Ochrona korzeni i magazynów: zabezpieczenie przed usunięciem katalogów głównych (`/`, `file:///`, `smb:/`), korzeni urządzeń oraz głównych partycji telefonu (`mtp:/`, `mtp:/<Urządzenie>`, `mtp:/<Urządzenie>/<Pamięć>`); wymagana znormalizowana głębokość ścieżki MTP >= 3.
+  - Asynchroniczne usuwanie przez `KIO::del()` (dla wielu plików wykonywane sekwencyjnie przez workera KIO, bez gwarancji transakcyjnej atomowości) z automatycznym odświeżeniem katalogu MTP po zakończeniu operacji i czytelną obsługą ewentualnych błędów.
+  - Pliki lokalne niezmiennie korzystają z Kosza KDE z pełną obsługą Cofnij/Ponów (`Ctrl+Z` / `Ctrl+Y`) przez `KIO::FileUndoManager`.
+- **Znane ograniczenia i granice testów:**
+  - Wirtualny widok wyszukiwania (`thispc-search:`) zachowuje spójny zrzut wyników z momentu zapytania i nie wstrzykuje na żywo zmian zewnętrznych podczas przeglądania wyników (DR-062).
+  - Fizyczne rozłączenie kabla USB podczas trwającego usuwania (PD-019, PD-020) pozostaje sklasyfikowane jako NOT RUN (granica sprzętowa wymagająca destrukcyjnego przerwania połączenia).
+
 ## 0.41.1 — Integracja urządzeń MTP i kalkulator rozmiaru folderów
 
 - **Wykrywanie i obsługa urządzeń MTP (Android / aparaty):**

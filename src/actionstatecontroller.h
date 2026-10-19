@@ -31,6 +31,7 @@ struct ActionAvailability {
     bool batchRenameEnabled = false;
     bool propertiesEnabled = false;
     bool trashEnabled = false;
+    bool permanentDeleteEnabled = false;
     bool emptyTrashVisible = false;
     bool emptyTrashEnabled = false;
     bool createEnabled = false;

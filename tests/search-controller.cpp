@@ -1149,7 +1149,7 @@ int main(int argc, char **argv)
 
     // Verify exact SearchMatcher semantics: size < 1 MiB (strict inequality, not <= 1 MiB)
     QMimeDatabase db;
-    const qint64 testModTime = QDateTime(QDate(2026, 10, 18), QTime(12, 0, 0), QTimeZone::systemTimeZone()).toSecsSinceEpoch();
+    const qint64 testModTime = QDateTime::currentSecsSinceEpoch();
     FileInfo fZero; fZero.name = "needle_zero.bin"; fZero.size = 0; fZero.modificationTime = testModTime;
     FileInfo f999; f999.name = "needle_start.bin"; f999.size = 1000; f999.modificationTime = testModTime;
     FileInfo fJustBelow; fJustBelow.name = "needle_end.bin"; fJustBelow.size = 1024LL * 1024LL - 1; fJustBelow.modificationTime = testModTime;

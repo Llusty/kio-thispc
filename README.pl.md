@@ -1,6 +1,27 @@
 [English](README.md) | [Polski](README.pl.md)
 
-# kio-thispc 0.41.1
+# kio-thispc 0.41.2
+
+## 0.41.2 — Automatyczne odświeżanie katalogów i trwałe usuwanie na MTP
+
+- **Automatyczne monitorowanie katalogów i ciche odświeżanie (Quiet Refresh):**
+  - Dwuwarstwowy mechanizm monitorowania zmian: integracja `KDirWatch` dla lokalnych systemów plików (`dirty`, `created`, `deleted`) oraz nasłuchiwanie powiadomień D-Bus `org.kde.KDirNotify` z całego środowiska KDE Plasma (`FilesAdded`, `FilesRemoved`, `FilesChanged`, `FileMoved`, `FileRenamed`, `FileRenamedWithLocalPath`).
+  - Ciche, bezmigotliwe odświeżanie widoku z zachowaniem stanu zaznaczenia, fokusu, pozycji przewinięcia oraz aktywnego filtra wyszukiwania.
+  - Gwarantowane odświeżanie po operacjach wewnętrznych: operacje Wytnij/Kopiuj/Wklej, Przeciągnij i upuść, Usuń, Zmień nazwę, Kosz i Przywróć natychmiast wyzwalają odświeżenie folderów źródłowych i docelowych w widoku pojedynczym, Split View oraz na pulpicie KDE Plasma bez F5.
+  - Kolejka buforowania zdarzeń (debouncing): nominalne okno 150 ms z limitem maksymalnym 500 ms chroniącym przed zagłodzeniem powiadomień.
+  - Ochrona aktywnej edycji: trwająca edycja nazwy w widoku (`EditingState`) jest zabezpieczona przed przerwaniem i utratą tekstu podczas odświeżeń w tle.
+- **Trwałe usuwanie i inteligentny fallback (Smart Delete Fallback) dla MTP i KIO:**
+  - Dedykowana akcja „Usuń trwale…” w menu podręcznym oraz skrót klawiszowy `Shift+Delete` dla urządzeń Android / aparatów (`mtp:/`) i zdalnych lokalizacji KIO bez obsługi Kosza.
+  - Inteligentny fallback klawisza `Delete`: naciśnięcie pojedynczego klawisza `Delete`, gdy wszystkie zaznaczone elementy znajdują się w pamięci urządzenia MTP, wyświetla czytelne wyjaśnienie i jeden bezpośredni dialog potwierdzenia z domyślnym wyborem „Anuluj”.
+  - Ochrona protokołów zdalnych: inne lokalizacje nielokalne (SFTP, SMB, FTP, WebDAV) wyświetlają komunikat informacyjny o braku Kosza bez automatycznego usuwania plików. Zaznaczenia mieszane są bezwzględnie blokowane ostrzeżeniem.
+  - Ochrona korzeni i magazynów: zabezpieczenie przed usunięciem katalogów głównych (`/`, `file:///`, `smb:/`), korzeni urządzeń oraz głównych partycji telefonu (`mtp:/`, `mtp:/<Urządzenie>`, `mtp:/<Urządzenie>/<Pamięć>`); wymagana znormalizowana głębokość ścieżki MTP >= 3.
+  - Asynchroniczne usuwanie przez `KIO::del()` (sekwencyjne wykonanie przez workera KIO, bez transakcyjnej atomowości) z automatycznym odświeżeniem katalogu MTP po zakończeniu operacji.
+  - Pliki lokalne niezmiennie korzystają z Kosza KDE z pełną obsługą Cofnij/Ponów (`Ctrl+Z` / `Ctrl+Y`) przez `KIO::FileUndoManager`.
+- **Znane ograniczenia i granice testów:**
+  - Wirtualny widok wyszukiwania (`thispc-search:`) zachowuje spójny zrzut wyników z momentu zapytania i nie wstrzykuje na żywo zmian zewnętrznych podczas przeglądania wyników (DR-062).
+  - Fizyczne rozłączenie kabla USB podczas trwającego usuwania (PD-019, PD-020) pozostaje sklasyfikowane jako NOT RUN (granica sprzętowa).
+
+---
 
 ## 0.41.1 — Integracja urządzeń MTP i kalkulator rozmiaru folderów
 
@@ -374,8 +395,8 @@ Funkcje z 0.15.4 — kompaktowy popup operacji, dynamiczna wysokość, anulowani
 
 ```bash
 cd ~/Pobrane
-tar -xzf kio-thispc-0.41.1.tar.gz
-cd kio-thispc-0.41.1
+tar -xzf kio-thispc-0.41.2.tar.gz
+cd kio-thispc-0.41.2
 chmod +x install.sh
 ./install.sh
 ```

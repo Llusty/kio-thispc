@@ -1,12 +1,33 @@
 [English](README.md) | [Polski](README.pl.md)
 
-# kio-thispc (This PC) 0.41.1
+# kio-thispc (This PC) 0.41.2
 
 ThisPC is a native KDE/Qt file manager focused on a Windows Explorer-like workflow, dual-pane operation, KIO integration, safe local file operations, and native KDE/Linux device handling.
 
 - **Platform:** Linux / KDE Plasma 6
 - **Frameworks:** Qt 6 / KDE Frameworks 6
 - **License:** MIT License
+
+---
+
+## 0.41.2 — Automatic Directory Refresh & MTP Permanent Delete
+
+- **Automatic Directory Monitoring & Quiet Refresh:**
+  - Dual-engine filesystem monitoring using `KDirWatch` for local files (`dirty`, `created`, `deleted`) and `org.kde.KDirNotify` (D-Bus) across KDE Plasma (`FilesAdded`, `FilesRemoved`, `FilesChanged`, `FileMoved`, `FileRenamed`, `FileRenamedWithLocalPath`).
+  - Quiet in-place refresh preserving selection, focused item, scroll position, and search filter without UI flicker.
+  - Internal operation guarantees: Cut/Copy/Paste, Drag & Drop, Delete, Rename, Trash, and Restore immediately trigger source and target folder refreshes across Primary View, Split View, and KDE Plasma Desktop without pressing F5.
+  - Debounced event queue with a 150 ms nominal window and a 500 ms hard starvation deadline coalescing rapid filesystem updates.
+  - Non-intrusive editing protection: active inline rename sessions (`EditingState`) are shielded from reset or text loss during background directory updates.
+- **Permanent Delete & Smart Delete Fallback for MTP & KIO:**
+  - Dedicated "Usuń trwale…" / "Delete Permanently…" action and `Shift+Delete` shortcut for Android/camera devices (`mtp:/`) and remote KIO protocols lacking Trash support.
+  - Smart Delete Fallback: pressing regular `Delete` when all selected items are on MTP device storage displays a clear explanation dialog and offers a direct, single-dialog permanent deletion confirmation defaulting to "Cancel".
+  - Remote protocol safety: other remote/non-local protocols (SFTP, SMB, FTP, WebDAV) display an informational notice that Trash is unavailable without automatically deleting, directing users to `Shift+Delete` or context menu. Mixed selections are strictly blocked with an explanatory warning.
+  - Hardened deletion boundaries: root folders (`/`, `file:///`, `smb:/`), device root, and phone storage top-levels (`mtp:/`, `mtp:/<Device>`, `mtp:/<Device>/<Storage>`) are strictly protected; MTP operations require normalized path depth >= 3.
+  - Asynchronous execution via `KIO::del()` (sequential worker deletion without atomic transaction guarantees) with post-deletion directory refresh.
+  - Local files continue using KDE Trash with full Undo/Redo support via `KIO::FileUndoManager`.
+- **Known Limitations & Test Boundaries:**
+  - Virtual search view (`thispc-search:`) provides an accurate point-in-time snapshot and does not dynamically inject background filesystem mutations during query inspection (DR-062).
+  - Physical USB cable disconnection during active deletion (PD-019, PD-020) remains classified as NOT RUN (hardware boundary).
 
 ---
 
@@ -359,8 +380,8 @@ Features from 0.15.4 — compact operations popup, dynamic height, task cancella
 
 ```bash
 cd ~/Downloads
-tar -xzf kio-thispc-0.41.1.tar.gz
-cd kio-thispc-0.41.1
+tar -xzf kio-thispc-0.41.2.tar.gz
+cd kio-thispc-0.41.2
 chmod +x install.sh
 ./install.sh
 ```

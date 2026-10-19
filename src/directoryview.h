@@ -40,6 +40,7 @@
 #include <QResizeEvent>
 #include <QShowEvent>
 #include <QSet>
+#include <QScrollBar>
 #include <QStackedWidget>
 #include <QStorageInfo>
 #include <QStyledItemDelegate>
@@ -2121,39 +2122,42 @@ inline void restoreDirectorySelection(
     // becoming current while its layout and current index settle.  Starting
     // from that state with Select/setSelected(true) made repeated restores
     // non-idempotent and could retain rows outside the snapshot.
-    list->clearSelection();
-    details->clearSelection();
-
-    QModelIndex firstListSelection;
-    QModelIndex currentListSelection;
-    for (int row = 0; row < list->count(); ++row) {
-        const QModelIndex index = list->item(row);
-        const QString url = index.data(directory_view_detail::UrlRole).toString();
-        if (!snapshot.urls.contains(url)) continue;
-        list->setRowSelected(row, true);
-        if (!firstListSelection.isValid()) firstListSelection = index;
-        if (url == snapshot.currentUrl) currentListSelection = index;
+    if (list) {
+        list->clearSelection();
+        QModelIndex firstListSelection;
+        QModelIndex currentListSelection;
+        for (int row = 0; row < list->count(); ++row) {
+            const QModelIndex index = list->item(row);
+            const QString url = index.data(directory_view_detail::UrlRole).toString();
+            if (!snapshot.urls.contains(url)) continue;
+            list->setRowSelected(row, true);
+            if (!firstListSelection.isValid()) firstListSelection = index;
+            if (url == snapshot.currentUrl) currentListSelection = index;
+        }
+        if (!currentListSelection.isValid()) currentListSelection = firstListSelection;
+        if (currentListSelection.isValid())
+            list->selectionModel()->setCurrentIndex(
+                currentListSelection, QItemSelectionModel::NoUpdate);
     }
-    if (!currentListSelection.isValid()) currentListSelection = firstListSelection;
-    if (currentListSelection.isValid())
-        list->selectionModel()->setCurrentIndex(
-            currentListSelection, QItemSelectionModel::NoUpdate);
 
-    QTreeWidgetItem *firstDetailsSelection = nullptr;
-    QTreeWidgetItem *currentDetailsSelection = nullptr;
-    for (int row = 0; row < details->topLevelItemCount(); ++row) {
-        QTreeWidgetItem *item = details->topLevelItem(row);
-        const QString url = item->data(0, Qt::UserRole).toString();
-        if (!item->data(0, directory_view_detail::FileItemRole).toBool()
-            || !snapshot.urls.contains(url)) continue;
-        item->setSelected(true);
-        if (!firstDetailsSelection) firstDetailsSelection = item;
-        if (url == snapshot.currentUrl) currentDetailsSelection = item;
+    if (details) {
+        details->clearSelection();
+        QTreeWidgetItem *firstDetailsSelection = nullptr;
+        QTreeWidgetItem *currentDetailsSelection = nullptr;
+        for (int row = 0; row < details->topLevelItemCount(); ++row) {
+            QTreeWidgetItem *item = details->topLevelItem(row);
+            const QString url = item->data(0, Qt::UserRole).toString();
+            if (!item->data(0, directory_view_detail::FileItemRole).toBool()
+                || !snapshot.urls.contains(url)) continue;
+            item->setSelected(true);
+            if (!firstDetailsSelection) firstDetailsSelection = item;
+            if (url == snapshot.currentUrl) currentDetailsSelection = item;
+        }
+        if (!currentDetailsSelection) currentDetailsSelection = firstDetailsSelection;
+        if (currentDetailsSelection)
+            details->setCurrentItem(currentDetailsSelection, 0,
+                                    QItemSelectionModel::NoUpdate);
     }
-    if (!currentDetailsSelection) currentDetailsSelection = firstDetailsSelection;
-    if (currentDetailsSelection)
-        details->setCurrentItem(currentDetailsSelection, 0,
-                                QItemSelectionModel::NoUpdate);
 }
 
 inline void restoreDirectorySelections(
@@ -2164,4 +2168,80 @@ inline void restoreDirectorySelections(
     snapshot.urls = listUrls;
     snapshot.urls.unite(detailsUrls);
     restoreDirectorySelection(list, details, snapshot);
+}
+
+struct DirectoryViewStateSnapshot {
+    DirectorySelectionSnapshot selection;
+    int listVScroll = 0;
+    int listHScroll = 0;
+    int detailsVScroll = 0;
+    int detailsHScroll = 0;
+    QString currentUrl;
+};
+
+inline DirectoryViewStateSnapshot captureDirectoryViewState(
+    const DirectoryListWidget *list, const DirectoryTreeWidget *details,
+    bool detailsActive)
+{
+    DirectoryViewStateSnapshot snapshot;
+    snapshot.selection = captureDirectorySelection(list, details, detailsActive);
+    snapshot.currentUrl = snapshot.selection.currentUrl;
+    if (list) {
+        if (const auto *vsb = list->verticalScrollBar()) snapshot.listVScroll = vsb->value();
+        if (const auto *hsb = list->horizontalScrollBar()) snapshot.listHScroll = hsb->value();
+        if (snapshot.currentUrl.isEmpty()) {
+            const QModelIndex idx = list->currentIndex();
+            if (idx.isValid()) {
+                snapshot.currentUrl = idx.data(directory_view_detail::UrlRole).toString();
+            }
+        }
+    }
+    if (details) {
+        if (const auto *vsb = details->verticalScrollBar()) snapshot.detailsVScroll = vsb->value();
+        if (const auto *hsb = details->horizontalScrollBar()) snapshot.detailsHScroll = hsb->value();
+        if (snapshot.currentUrl.isEmpty()) {
+            if (const QTreeWidgetItem *cur = details->currentItem()) {
+                snapshot.currentUrl = cur->data(0, Qt::UserRole).toString();
+            }
+        }
+    }
+    return snapshot;
+}
+
+inline void restoreDirectoryViewState(
+    DirectoryListWidget *list, DirectoryTreeWidget *details,
+    const DirectoryViewStateSnapshot &snapshot)
+{
+    restoreDirectorySelection(list, details, snapshot.selection);
+
+    if (!snapshot.currentUrl.isEmpty()) {
+        if (list && (!list->currentIndex().isValid() || list->currentIndex().data(directory_view_detail::UrlRole).toString() != snapshot.currentUrl)) {
+            for (int row = 0; row < list->count(); ++row) {
+                const QModelIndex index = list->item(row);
+                if (index.data(directory_view_detail::UrlRole).toString() == snapshot.currentUrl) {
+                    list->selectionModel()->setCurrentIndex(index, QItemSelectionModel::NoUpdate);
+                    break;
+                }
+            }
+        }
+        if (details && (!details->currentItem() || details->currentItem()->data(0, Qt::UserRole).toString() != snapshot.currentUrl)) {
+            for (int row = 0; row < details->topLevelItemCount(); ++row) {
+                QTreeWidgetItem *item = details->topLevelItem(row);
+                if (item->data(0, directory_view_detail::FileItemRole).toBool()
+                    && item->data(0, Qt::UserRole).toString() == snapshot.currentUrl) {
+                    details->setCurrentItem(item, 0, QItemSelectionModel::NoUpdate);
+                    break;
+                }
+            }
+        }
+    }
+
+    if (list) {
+        if (auto *vsb = list->verticalScrollBar()) vsb->setValue(snapshot.listVScroll);
+        if (auto *hsb = list->horizontalScrollBar()) hsb->setValue(snapshot.listHScroll);
+    }
+    if (details) {
+        if (auto *vsb = details->verticalScrollBar()) vsb->setValue(snapshot.detailsVScroll);
+        if (auto *hsb = details->horizontalScrollBar()) hsb->setValue(snapshot.detailsHScroll);
+    }
 }

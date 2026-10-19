@@ -158,7 +158,7 @@ with tempfile.TemporaryDirectory(prefix='thispc-pane-tests-', delete=not options
         (tmp / 'src' / header.name).write_text(contents)
     for test_header in (root / 'tests').glob('*.h'):
         (tmp / 'src' / test_header.name).write_text(test_header.read_text())
-    for implementation in ('actionstatecontroller.cpp', 'appwidgets.cpp', 'applicationstyle.cpp', 'directorylistingcore.cpp', 'drivehomecoordinator.cpp', 'soliddevicemonitor.cpp', 'devicemountcontroller.cpp', 'deviceremovalcontroller.cpp', 'keyboardnavigation.cpp', 'locationpresentation.cpp', 'navigationhistory.cpp', 'paneadapter.cpp', 'panemenucontroller.cpp', 'primarybrowserpane.cpp', 'previewcoordinator.cpp', 'previewcontroller.cpp', 'directorypreviewadapter.cpp', 'tabcontroller.cpp', 'searchuicontroller.cpp', 'searchpopover.cpp', 'advancedsearchfiltersdialog.cpp', 'selectionmenucontroller.cpp', 'remoteurlhelper.cpp', 'savedremotelocation.cpp', 'savedremotelocationdialog.cpp'):
+    for implementation in ('actionstatecontroller.cpp', 'appwidgets.cpp', 'applicationstyle.cpp', 'directorylistingcore.cpp', 'directorywatchcontroller.cpp', 'drivehomecoordinator.cpp', 'soliddevicemonitor.cpp', 'devicemountcontroller.cpp', 'deviceremovalcontroller.cpp', 'keyboardnavigation.cpp', 'locationpresentation.cpp', 'navigationhistory.cpp', 'paneadapter.cpp', 'panemenucontroller.cpp', 'primarybrowserpane.cpp', 'previewcoordinator.cpp', 'previewcontroller.cpp', 'directorypreviewadapter.cpp', 'tabcontroller.cpp', 'searchuicontroller.cpp', 'searchpopover.cpp', 'advancedsearchfiltersdialog.cpp', 'selectionmenucontroller.cpp', 'remoteurlhelper.cpp', 'savedremotelocation.cpp', 'savedremotelocationdialog.cpp'):
         (tmp / 'src' / implementation).write_text((root / 'src' / implementation).read_text())
     suites = {'trash': 'empty-trash.cpp', 'panes': 'pane-actions.cpp', 'templates': 'template-menu.cpp', 'tabs': 'tab-drag-drop.cpp', 'sidebar_dnd': 'sidebar-drag-drop.cpp', 'sidebar_layout': 'sidebar-layout.cpp', 'properties': 'properties-dialog.cpp', 'search': 'search-controller.cpp', 'actions': 'file-actions.cpp', 'action_state': 'action-state-controller.cpp', 'operations': 'operation-manager.cpp', 'local_transfer': 'local-file-copy-job.cpp', 'transfer_plan': 'local-transfer-plan.cpp', 'local_move': 'local-file-move-job.cpp', 'local_tree': 'local-transfer-job.cpp', 'tree_history': 'local-tree-history.cpp', 'archive': 'archive-detection.cpp', 'archive_jobs': 'archive-extraction.cpp', 'archive_menu': 'archive-menu.cpp', 'archive_creation': 'archive-creation.cpp'}
     suites['split_layout'] = 'split-layout.cpp'
@@ -242,6 +242,7 @@ find_package(KF6ItemViews REQUIRED)
 find_package(KF6Solid REQUIRED)
 find_package(KF6FileMetaData REQUIRED)
 find_package(KF6Config REQUIRED)
+find_package(KF6CoreAddons REQUIRED)
 find_package(LibArchive REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(TagLib REQUIRED)
@@ -249,10 +250,10 @@ find_package(exiv2 REQUIRED CONFIG)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBACL REQUIRED IMPORTED_TARGET libacl)
 file(GLOB TEST_HEADERS CONFIGURE_DEPENDS src/*.h)
-add_executable(pane-test src/thispcview.cpp src/actionstatecontroller.cpp src/appwidgets.cpp src/applicationstyle.cpp src/directorylistingcore.cpp src/drivehomecoordinator.cpp src/soliddevicemonitor.cpp src/devicemountcontroller.cpp src/deviceremovalcontroller.cpp src/keyboardnavigation.cpp src/locationpresentation.cpp src/navigationhistory.cpp src/paneadapter.cpp src/panemenucontroller.cpp src/primarybrowserpane.cpp src/previewcoordinator.cpp src/previewcontroller.cpp src/directorypreviewadapter.cpp src/tabcontroller.cpp src/searchuicontroller.cpp src/searchpopover.cpp src/advancedsearchfiltersdialog.cpp src/selectionmenucontroller.cpp src/remoteurlhelper.cpp src/savedremotelocation.cpp src/savedremotelocationdialog.cpp ${TEST_HEADERS})
+add_executable(pane-test src/thispcview.cpp src/actionstatecontroller.cpp src/appwidgets.cpp src/applicationstyle.cpp src/directorylistingcore.cpp src/directorywatchcontroller.cpp src/drivehomecoordinator.cpp src/soliddevicemonitor.cpp src/devicemountcontroller.cpp src/deviceremovalcontroller.cpp src/keyboardnavigation.cpp src/locationpresentation.cpp src/navigationhistory.cpp src/paneadapter.cpp src/panemenucontroller.cpp src/primarybrowserpane.cpp src/previewcoordinator.cpp src/previewcontroller.cpp src/directorypreviewadapter.cpp src/tabcontroller.cpp src/searchuicontroller.cpp src/searchpopover.cpp src/advancedsearchfiltersdialog.cpp src/selectionmenucontroller.cpp src/remoteurlhelper.cpp src/savedremotelocation.cpp src/savedremotelocationdialog.cpp ${TEST_HEADERS})
 target_compile_options(pane-test PRIVATE -g3 -O0 -fno-omit-frame-pointer -Wno-unused-function -Wno-unused-variable)
 target_include_directories(pane-test PRIVATE ${LibArchive_INCLUDE_DIRS})
-target_link_libraries(pane-test PRIVATE Qt6::Core Qt6::Concurrent Qt6::Gui Qt6::Widgets Qt6::PrintSupport Qt6::Pdf Qt6::DBus Qt6::Test KF6::KIOCore KF6::KIOGui KF6::KIOWidgets KF6::ItemViews KF6::Solid KF6::FileMetaData KF6::ConfigCore ${LibArchive_LIBRARIES} ZLIB::ZLIB TagLib::TagLib Exiv2::exiv2lib PkgConfig::LIBACL)
+target_link_libraries(pane-test PRIVATE Qt6::Core Qt6::Concurrent Qt6::Gui Qt6::Widgets Qt6::PrintSupport Qt6::Pdf Qt6::DBus Qt6::Test KF6::KIOCore KF6::KIOGui KF6::KIOWidgets KF6::ItemViews KF6::Solid KF6::FileMetaData KF6::ConfigCore KF6::CoreAddons ${LibArchive_LIBRARIES} ZLIB::ZLIB TagLib::TagLib Exiv2::exiv2lib PkgConfig::LIBACL)
 target_compile_definitions(pane-test PRIVATE THISPC_BATCH_RENAME_TEST_HOOKS=1 THISPC_TEST_HARNESS=1)
 '''
     (tmp / 'CMakeLists.txt').write_text(cmake)

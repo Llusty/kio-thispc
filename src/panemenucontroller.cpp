@@ -282,6 +282,9 @@ void PaneMenuController::buildItemMenu(
     addAction(menu, QStringLiteral("item.trash"), themedIcon(QStringLiteral("user-trash")),
               trLocal("Do Kosza", "Trash"), state.availability.trashEnabled,
               callbacks.trash);
+    addAction(menu, QStringLiteral("item.deletePermanently"), themedIcon(QStringLiteral("edit-delete")),
+              trLocal("Usuń trwale…", "Delete Permanently…"), state.availability.permanentDeleteEnabled,
+              callbacks.permanentDelete);
     addAction(menu, QStringLiteral("item.pasteInto"), themedIcon(QStringLiteral("edit-paste")),
               trLocal("Wklej do tego folderu", "Paste into this folder"),
               state.pasteIntoEnabled, callbacks.pasteInto);

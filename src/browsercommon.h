@@ -22,6 +22,7 @@
 #include <QLocale>
 #include <QMimeDatabase>
 #include <QMimeType>
+#include <QSet>
 #include <QString>
 #include <QUrl>
 
@@ -38,6 +39,11 @@ inline bool isAdminUrl(const QUrl &url)
 {
     return url.scheme() == QStringLiteral("admin");
 }
+
+enum class DirectoryReloadMode {
+    Navigation,   // Navigating to a new directory: clears previous view and displays loading status
+    QuietRefresh  // Refreshing current directory: retains current items until new data arrives
+};
 
 
 inline QString localPathForFileOrAdmin(const QUrl &url)
@@ -373,6 +379,85 @@ inline bool sameLocation(const QUrl &a, const QUrl &b)
 {
     return normalizedUrl(a) == normalizedUrl(b);
 }
+
+inline bool isDeletableMtpUrl(const QUrl &url)
+{
+    if (url.scheme().compare(QStringLiteral("mtp"), Qt::CaseInsensitive) != 0) {
+        return false;
+    }
+    const QString clean = QDir::cleanPath(url.path());
+    QStringList parts = clean.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    if (!url.host().isEmpty()) {
+        parts.prepend(url.host());
+    }
+    return parts.size() >= 3;
+}
+
+inline bool isProtectedRootUrl(const QUrl &url)
+{
+    if (!url.isValid() || url.isEmpty() || sameLocation(url, kThisPcUrl)) {
+        return true;
+    }
+    if (url.scheme().compare(QStringLiteral("mtp"), Qt::CaseInsensitive) == 0) {
+        return !isDeletableMtpUrl(url);
+    }
+    if (url.isLocalFile()) {
+        const QString path = QDir::cleanPath(url.toLocalFile());
+        return path.isEmpty() || path == QStringLiteral("/");
+    }
+    const QString path = QDir::cleanPath(url.path());
+    return path.isEmpty() || path == QStringLiteral("/");
+}
+
+inline QUrl parentDirectoryUrl(const QUrl &url)
+{
+    const QUrl norm = normalizedUrl(url);
+    if (norm.isLocalFile()) {
+        const QString path = norm.toLocalFile();
+        const QString parentPath = QFileInfo(path).path();
+        return QUrl::fromLocalFile(parentPath);
+    }
+    return norm.adjusted(QUrl::RemoveFilename | QUrl::StripTrailingSlash);
+}
+
+enum class FileOperationType {
+    Copy,
+    Move,
+    Rename,
+    Trash,
+    Restore,
+    CreateFolder,
+    CreateFile,
+    EmptyTrash,
+    Delete,
+    Custom
+};
+
+struct FileOperationContext {
+    FileOperationType type = FileOperationType::Custom;
+    QList<QUrl> sources;
+    QSet<QUrl> sourceParentDirectories;
+    QUrl destinationDirectory;
+    QList<QUrl> destinationUrls;
+
+    static FileOperationContext create(FileOperationType opType,
+                                       const QList<QUrl> &srcs,
+                                       const QUrl &destDir = QUrl())
+    {
+        FileOperationContext ctx;
+        ctx.type = opType;
+        ctx.sources = srcs;
+        ctx.destinationDirectory = destDir;
+        for (const QUrl &u : srcs) {
+            if (!u.isValid()) continue;
+            const QUrl parent = parentDirectoryUrl(u);
+            if (parent.isValid()) {
+                ctx.sourceParentDirectories.insert(normalizedUrl(parent));
+            }
+        }
+        return ctx;
+    }
+};
 
 namespace MtpRedirectionRegistry {
 inline QHash<QString, QString> &udiToDeviceSegmentMap()

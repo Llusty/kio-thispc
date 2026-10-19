@@ -10,6 +10,7 @@
 #include "directoryview.h"
 #include <QFrame>
 #include <functional>
+#include <optional>
 
 class DirectoryListWidget;
 class DirectoryTreeWidget;
@@ -47,10 +48,19 @@ public:
     void clearThumbnailCache() { m_listingCore.clearThumbnailCache(); }
     void loadDirectory(const QUrl &, bool, bool, bool,
                        const std::function<void(bool)> &,
-                       const std::function<void(const QString &)> &);
+                       const std::function<void(const QString &)> &,
+                       DirectoryReloadMode reloadMode = DirectoryReloadMode::Navigation);
     void loadRemoteDirectory(const QUrl &, bool, bool,
                              const std::function<void(bool)> &,
-                             const std::function<void(const QString &)> &);
+                             const std::function<void(const QString &)> &,
+                             DirectoryReloadMode reloadMode = DirectoryReloadMode::Navigation);
+    void refreshDirectory(bool preserveStatusMessage, bool showHiddenFiles, bool detailsActive,
+                          const std::function<void(bool)> &render,
+                          const std::function<void(const QString &)> &reportError)
+    {
+        loadDirectory(m_currentUrl, preserveStatusMessage, showHiddenFiles, detailsActive,
+                      render, reportError, DirectoryReloadMode::QuietRefresh);
+    }
     void renderDirectoryItems(const RenderOptions &);
     QIcon iconForFile(const FileInfo &, QMimeDatabase &, bool);
     void cancelListing();
@@ -75,5 +85,6 @@ private:
     QUrl m_currentUrl = kThisPcUrl;
     DirectoryListingCore m_listingCore;
     DirectorySelectionSnapshot m_pendingSelection;
+    std::optional<DirectoryViewStateSnapshot> m_pendingViewState;
     DirectoryPreviewAdapter *m_previewAdapter = nullptr;
 };

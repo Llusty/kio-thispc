@@ -2,6 +2,26 @@
 
 # Changelog
 
+## 0.41.2 — Automatic Directory Refresh & MTP Permanent Delete
+
+- **Automatic Directory Monitoring & Quiet Refresh:**
+  - Integrated dual-layer directory monitoring using `KDirWatch` for local filesystems (`dirty`, `created`, `deleted`) and `org.kde.KDirNotify` (D-Bus) across KDE Plasma (`FilesAdded`, `FilesRemoved`, `FilesChanged`, `FileMoved`, `FileRenamed`, `FileRenamedWithLocalPath`).
+  - Quiet, flicker-free model refresh preserving user view state: active multi-item selection, current focused index, viewport scroll offset, and search text filter.
+  - Internal operation refresh guarantees: file operations executed within ThisPC (Cut/Copy/Paste, Drag & Drop, Delete, Rename, Trash, Restore) immediately and reliably trigger source and destination folder refreshes across Primary View, Split View, and the KDE Plasma desktop without manual F5.
+  - Debounced event queue with a 150 ms nominal window and a 500 ms maximum starvation prevention deadline to smoothly coalesce rapid filesystem notifications.
+  - Non-intrusive view protection: active inline name editing sessions (`EditingState`) are protected against disruptive model resets during background updates.
+  - Background tab optimization: background tabs mark changed locations as dirty without triggering costly hidden listings, reloading only upon user activation.
+- **Permanent Delete & Smart Delete Fallback for MTP & KIO:**
+  - Dedicated "Usuń trwale…" / "Delete Permanently…" context action and `Shift+Delete` shortcut for Android/camera devices (`mtp:/`) and remote KIO protocols lacking Trash capabilities.
+  - Smart Delete Fallback: pressing regular `Delete` when all selected items are on MTP device storage triggers a clear explanation dialog and offers a direct, single-step permanent deletion confirmation dialog with default focus on "Cancel".
+  - Protocol safety boundaries: for other remote/non-local protocols (SFTP, SMB, FTP, WebDAV), pressing `Delete` does not automatically delete files; instead, it presents an informative notice explaining Trash is unavailable and advising the use of `Shift+Delete` or context menu. Mixed selections (local + remote or multi-protocol) are strictly blocked with an explanatory warning.
+  - Hardened deletion boundaries: root folders (`/`, `file:///`, `smb:/`), device root, and phone storage top-levels (`mtp:/`, `mtp:/<Device>`, `mtp:/<Device>/<Storage>`) are strictly protected from deletion; MTP deletions require normalized canonical path depth >= 3.
+  - Asynchronous execution via `KIO::del()` (sequential KIO worker deletion across multiple selected files without atomic transaction guarantees) with post-deletion directory refresh, robust error reporting, and zero modal dialog leaks.
+  - Local filesystem operations continue to use KDE Trash with full Undo/Redo support via `KIO::FileUndoManager`.
+- **Known Limitations & Test Boundaries:**
+  - Virtual search view (`thispc-search:`) maintains a consistent point-in-time snapshot and does not dynamically inject live background filesystem mutations during query inspection (DR-062).
+  - Physical USB cable disconnection during active deletion (PD-019, PD-020) remains classified as NOT RUN (hardware boundary requiring destructive manual interruption).
+
 ## 0.41.1 — MTP Device Integration & Folder Size Calculator
 
 - **MTP Device Detection & Navigation (Android / Cameras):**

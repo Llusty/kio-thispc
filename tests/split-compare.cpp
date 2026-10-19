@@ -1229,8 +1229,8 @@ int main(int argc, char **argv)
 
     // 33. Stage 3: Version consistency check
     verify(window.m_versionLabel != nullptr, "window versionLabel exists");
-    verify(window.m_versionLabel->text() == QStringLiteral("v0.41.1"), "window versionLabel shows v0.41.1");
-    verify(window.m_versionLabel->toolTip().contains(QStringLiteral("0.41.1")), "version tooltip contains 0.41.1");
+    verify(window.m_versionLabel->text() == QStringLiteral("v0.41.2"), "window versionLabel shows v0.41.2");
+    verify(window.m_versionLabel->toolTip().contains(QStringLiteral("0.41.2")), "version tooltip contains 0.41.2");
 
     qInfo("PASS: %d Split View pane comparison, sync plan, and executor assertions", checks);
     return 0;

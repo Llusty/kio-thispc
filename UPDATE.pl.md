@@ -1,5 +1,27 @@
 [English](UPDATE.md) | [Polski](UPDATE.pl.md)
 
+# Aktualizacja do 0.41.2
+
+```bash
+cd ~/Pobrane
+tar -xzf kio-thispc-0.41.2.tar.gz
+cd kio-thispc-0.41.2
+chmod +x install.sh
+./install.sh
+```
+
+- Automatyczne monitorowanie katalogów przez `KDirWatch` (pliki lokalne) i `org.kde.KDirNotify` (D-Bus KDE Plasma).
+- Ciche odświeżanie w miejscu (Quiet Refresh) zachowujące zaznaczenie, pozycję przewijania, fokus i filtry bez migotania.
+- Gwarantowane odświeżanie po operacjach wewnętrznych: Wytnij/Kopiuj/Wklej, Przeciągnij i upuść, Usuń, Zmień nazwę, Kosz i Przywróć natychmiast wyzwalają odświeżenie folderów źródłowych i docelowych bez konieczności naciśnięcia F5.
+- Kolejka buforowania zdarzeń (debouncing): nominalne okno 150 ms z limitem maksymalnym 500 ms chroniącym przed zagłodzeniem powiadomień.
+- Dedykowana akcja „Usuń trwale…” oraz skrót klawiszowy `Shift+Delete` dla urządzeń Android / aparatów (`mtp:/`) i zdalnych lokalizacji KIO bez obsługi Kosza.
+- Inteligentny fallback (Smart Delete Fallback): naciśnięcie `Delete`, gdy wszystkie zaznaczone elementy znajdują się w pamięci urządzenia MTP, wyświetla czytelne wyjaśnienie i jeden bezpośredni dialog potwierdzenia trwałego usunięcia z domyślnym wyborem „Anuluj”. Dla innych protokołów zdalnych wyświetlana jest informacja o braku obsługi Kosza.
+- Ochrona korzeni i magazynów: zabezpieczenie przed usunięciem katalogów głównych (`/`, `file:///`, `smb:/`), korzeni urządzeń oraz głównych partycji telefonu (`mtp:/`, `mtp:/<Urządzenie>`, `mtp:/<Urządzenie>/<Pamięć>`); wymagana znormalizowana głębokość ścieżki MTP >= 3.
+- Sekwencyjne asynchroniczne usuwanie przez `KIO::del()` (bez gwarancji atomowości transakcyjnej).
+- Pliki lokalne niezmiennie korzystają z Kosza KDE z pełną obsługą Cofnij/Ponów (`Ctrl+Z` / `Ctrl+Y`) przez `KIO::FileUndoManager`.
+
+---
+
 # Aktualizacja do 0.41.1
 
 ```bash

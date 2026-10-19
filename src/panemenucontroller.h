@@ -91,6 +91,7 @@ public:
         std::function<void()> rename;
         std::function<void()> batchRename;
         std::function<void()> trash;
+        std::function<void()> permanentDelete;
         std::function<void()> pasteInto;
         std::function<void()> copyAddress;
         std::function<void()> analyzeStorage;
