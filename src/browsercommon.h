@@ -28,6 +28,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <vector>
 
 #ifndef Q_OS_WIN
 #include <sys/stat.h>
@@ -753,12 +754,58 @@ inline void sortDirectoryFiles(
     bool ascending,
     const std::function<QString(const FileInfo &)> &typeKey)
 {
+    if (files.size() <= 1) {
+        return;
+    }
+
     QLocale locale;
     if (locale.language() == QLocale::C) {
         locale = QLocale(QLocale::English);
     }
     QCollator collator(locale);
     collator.setNumericMode(true);
+
+    if (sortKey == 1 && typeKey) {
+        struct DecoratedItem {
+            FileInfo file;
+            QString type;
+        };
+        std::vector<DecoratedItem> decorated;
+        decorated.reserve(files.size());
+        for (auto &f : files) {
+            QString t = typeKey(f);
+            decorated.push_back({std::move(f), std::move(t)});
+        }
+
+        std::stable_sort(
+            decorated.begin(),
+            decorated.end(),
+            [ascending, &collator](const DecoratedItem &a, const DecoratedItem &b) {
+                // Keep folders together before files, like Explorer/Dolphin.
+                if (a.file.isDir != b.file.isDir) {
+                    return a.file.isDir;
+                }
+
+                int comparison = collator.compare(a.type, b.type);
+
+                if (comparison == 0) {
+                    comparison = collator.compare(a.file.name, b.file.name);
+                }
+
+                if (comparison == 0) {
+                    comparison = collator.compare(a.file.url.toString(), b.file.url.toString());
+                }
+
+                return ascending
+                    ? comparison < 0
+                    : comparison > 0;
+            });
+
+        for (size_t i = 0; i < decorated.size(); ++i) {
+            files[i] = std::move(decorated[i].file);
+        }
+        return;
+    }
 
     std::stable_sort(
         files.begin(),

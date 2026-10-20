@@ -374,6 +374,62 @@ int main(int argc, char **argv)
     verify(emptyOutput.files.isEmpty() && emptyOutput.visibleCount == 0 && emptyOutput.totalCount == 0,
            "Empty listing produces 0 files without errors");
 
+    // 6. Stage 3.1: MIME sorting optimization, tie-breakers, folder-first, single-pass caching
+    {
+        int mimeCalls = 0;
+        auto countingTypeKey = [&mimeCalls, &mimeDatabase](const FileInfo &fi) {
+            ++mimeCalls;
+            return fileTypeLabel(fi, mimeDatabase);
+        };
+
+        QList<FileInfo> typeTestFiles = {
+            {QStringLiteral("archive.zip"), QStringLiteral("application/zip"), {}, QUrl(QStringLiteral("file:///tmp/archive.zip")), false, 100, 100},
+            {QStringLiteral("FolderB"), QStringLiteral("inode/directory"), {}, QUrl(QStringLiteral("file:///tmp/FolderB")), true, 4096, 200},
+            {QStringLiteral("document.pdf"), QStringLiteral("application/pdf"), {}, QUrl(QStringLiteral("file:///tmp/document.pdf")), false, 200, 300},
+            {QStringLiteral("FolderA"), QStringLiteral("inode/directory"), {}, QUrl(QStringLiteral("file:///tmp/FolderA")), true, 4096, 400},
+            {QStringLiteral("image.png"), QStringLiteral("image/png"), {}, QUrl(QStringLiteral("file:///tmp/image.png")), false, 300, 500},
+            {QStringLiteral("text_b.txt"), QStringLiteral("text/plain"), {}, QUrl(QStringLiteral("file:///tmp/text_b.txt")), false, 400, 600},
+            {QStringLiteral("text_a.txt"), QStringLiteral("text/plain"), {}, QUrl(QStringLiteral("file:///tmp/text_a.txt")), false, 500, 700},
+            {QStringLiteral("same_url2.bin"), QStringLiteral("application/octet-stream"), {}, QUrl(QStringLiteral("file:///tmp/b/same.bin")), false, 600, 800},
+            {QStringLiteral("same_url1.bin"), QStringLiteral("application/octet-stream"), {}, QUrl(QStringLiteral("file:///tmp/a/same.bin")), false, 600, 800},
+        };
+
+        // Ascending Type sort
+        mimeCalls = 0;
+        QList<FileInfo> ascFiles = typeTestFiles;
+        sortDirectoryFiles(ascFiles, 1, true, countingTypeKey);
+
+        verify(mimeCalls == typeTestFiles.size(), "Type sort pre-computes type key exactly N times (no O(N log N) re-eval)");
+        verify(ascFiles.at(0).isDir && ascFiles.at(1).isDir, "Folders are placed first before any files");
+        verify(ascFiles.at(0).name == QStringLiteral("FolderA") && ascFiles.at(1).name == QStringLiteral("FolderB"),
+               "Folders are sorted naturally among themselves");
+
+        // Verify tie-breaker by name when types are identical (text_a.txt < text_b.txt)
+        int idxTextA = -1, idxTextB = -1;
+        for (int i = 0; i < ascFiles.size(); ++i) {
+            if (ascFiles.at(i).name == QStringLiteral("text_a.txt")) idxTextA = i;
+            if (ascFiles.at(i).name == QStringLiteral("text_b.txt")) idxTextB = i;
+        }
+        verify(idxTextA >= 0 && idxTextB >= 0 && idxTextA < idxTextB,
+               "Identical MIME types tie-break naturally by file name (text_a < text_b)");
+
+        // Descending Type sort
+        mimeCalls = 0;
+        QList<FileInfo> descFiles = typeTestFiles;
+        sortDirectoryFiles(descFiles, 1, false, countingTypeKey);
+
+        verify(mimeCalls == typeTestFiles.size(), "Descending Type sort also uses exactly N calls");
+        verify(descFiles.at(0).isDir && descFiles.at(1).isDir, "Folders remain first even in descending sort");
+        verify(descFiles.at(0).name == QStringLiteral("FolderB") && descFiles.at(1).name == QStringLiteral("FolderA"),
+               "Folders are inverted in descending sort among themselves");
+
+        // Edge case: single element and empty list do not invoke typeKey
+        mimeCalls = 0;
+        QList<FileInfo> singleItem = {typeTestFiles.at(0)};
+        sortDirectoryFiles(singleItem, 1, true, countingTypeKey);
+        verify(mimeCalls == 0, "Single element list does not evaluate typeKey");
+    }
+
     qInfo("PASS: %d DirectoryListingCore assertions", checks);
     return 0;
 }
