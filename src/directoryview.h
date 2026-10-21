@@ -2004,47 +2004,52 @@ inline void addDirectoryFileItems(
         typeText,
         sizeText,
         modifiedText);
-    list->addFileItem(file, icon, typeText, sizeText, modifiedText, toolTip,
-                      categoryDisplay, categoryOrder);
 
-    QStringList columns{
-        file.name,
-        typeText,
-        sizeText,
-        modifiedText
-    };
-    columns.append(extraDetailColumns);
+    if (list) {
+        list->addFileItem(file, icon, typeText, sizeText, modifiedText, toolTip,
+                          categoryDisplay, categoryOrder);
+    }
 
-    auto *detailsItem = new QTreeWidgetItem(
-        details,
-        columns);
-    detailsItem->setFlags(detailsItem->flags() | Qt::ItemIsEditable);
+    if (details) {
+        QStringList columns{
+            file.name,
+            typeText,
+            sizeText,
+            modifiedText
+        };
+        columns.append(extraDetailColumns);
 
-    detailsItem->setIcon(0, icon);
-    detailsItem->setData(
-        0,
-        Qt::UserRole,
-        file.url.toString());
-    detailsItem->setData(
-        0,
-        Qt::UserRole + 1,
-        file.isDir);
-    detailsItem->setData(
-        0,
-        directory_view_detail::FileItemRole,
-        true);
-    detailsItem->setData(
-        0,
-        directory_view_detail::HiddenRole,
-        file.isHidden);
-    detailsItem->setData(
-        0,
-        directory_view_detail::MimeTypeRole,
-        file.mimeType);
-    detailsItem->setToolTip(0, toolTip);
-    detailsItem->setTextAlignment(
-        2,
-        Qt::AlignRight | Qt::AlignVCenter);
+        auto *detailsItem = new QTreeWidgetItem(
+            details,
+            columns);
+        detailsItem->setFlags(detailsItem->flags() | Qt::ItemIsEditable);
+
+        detailsItem->setIcon(0, icon);
+        detailsItem->setData(
+            0,
+            Qt::UserRole,
+            file.url.toString());
+        detailsItem->setData(
+            0,
+            Qt::UserRole + 1,
+            file.isDir);
+        detailsItem->setData(
+            0,
+            directory_view_detail::FileItemRole,
+            true);
+        detailsItem->setData(
+            0,
+            directory_view_detail::HiddenRole,
+            file.isHidden);
+        detailsItem->setData(
+            0,
+            directory_view_detail::MimeTypeRole,
+            file.mimeType);
+        detailsItem->setToolTip(0, toolTip);
+        detailsItem->setTextAlignment(
+            2,
+            Qt::AlignRight | Qt::AlignVCenter);
+    }
 }
 
 inline void addDirectoryGroupHeader(
@@ -2095,19 +2100,42 @@ inline DirectorySelectionSnapshot captureDirectorySelection(
         ? selectedDirectoryDetailsUrls(details)
         : selectedDirectoryListUrls(list);
 
+    if (snapshot.urls.isEmpty()) {
+        snapshot.urls = detailsActive
+            ? selectedDirectoryListUrls(list)
+            : selectedDirectoryDetailsUrls(details);
+    }
+
     if (detailsActive) {
-        QTreeWidgetItem *current = details->currentItem();
+        QTreeWidgetItem *current = details ? details->currentItem() : nullptr;
         const QString url = current
             ? current->data(0, Qt::UserRole).toString() : QString();
         if (current && current->isSelected() && snapshot.urls.contains(url))
             snapshot.currentUrl = url;
     } else {
-        const QModelIndex current = list->currentIndex();
+        const QModelIndex current = list ? list->currentIndex() : QModelIndex();
         const QString url =
             current.data(directory_view_detail::UrlRole).toString();
-        if (current.isValid() && list->selectionModel()->isSelected(current)
+        if (current.isValid() && list->selectionModel() && list->selectionModel()->isSelected(current)
             && snapshot.urls.contains(url)) {
             snapshot.currentUrl = url;
+        }
+    }
+    if (snapshot.currentUrl.isEmpty()) {
+        if (!detailsActive) {
+            QTreeWidgetItem *current = details ? details->currentItem() : nullptr;
+            const QString url = current
+                ? current->data(0, Qt::UserRole).toString() : QString();
+            if (current && current->isSelected() && snapshot.urls.contains(url))
+                snapshot.currentUrl = url;
+        } else if (list && list->selectionModel()) {
+            const QModelIndex current = list->currentIndex();
+            const QString url =
+                current.data(directory_view_detail::UrlRole).toString();
+            if (current.isValid() && list->selectionModel()->isSelected(current)
+                && snapshot.urls.contains(url)) {
+                snapshot.currentUrl = url;
+            }
         }
     }
     return snapshot;

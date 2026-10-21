@@ -1469,6 +1469,450 @@ int main(int argc, char **argv)
                "narrow Split keeps valid non-overlapping Icons geometry");
     }
 
+    // =========================================================================
+    // Stage 3.2.2: Regression Safety Foundation & Model Behavior Contract
+    // =========================================================================
+    {
+        // 1. Empty catalog handling across all 4 view modes
+        QStackedWidget emptyStack;
+        DirectoryListWidget emptyList;
+        DirectoryTreeWidget emptyDetails;
+        emptyStack.addWidget(&emptyList);
+        emptyStack.addWidget(&emptyDetails);
+        configureDirectoryViewWidgets(&emptyList, &emptyDetails);
+
+        for (int mode : {0, 1, 2, 3}) {
+            applyDirectoryViewLayout(&emptyList, &emptyDetails, &emptyStack, nullptr, mode);
+            app.processEvents();
+            if (mode == 2) {
+                verify(emptyDetails.topLevelItemCount() == 0,
+                       "empty catalog in Details mode has 0 top-level items");
+                verify(emptyDetails.selectedItems().isEmpty(),
+                       "empty catalog in Details mode has empty selection");
+            } else {
+                verify(emptyList.count() == 0,
+                       "empty catalog in List/Icons/Compact mode has 0 items");
+                verify(emptyList.selectedItems().isEmpty(),
+                       "empty catalog in List/Icons/Compact mode has empty selection");
+            }
+        }
+
+        // 2. Realistic multi-item catalog (folders + files)
+        const QUrl fixtureUrl(QStringLiteral("file:///tmp/stage32_safety_fixture"));
+        QList<FileInfo> testFiles = {
+            {QStringLiteral("Folder_Z"), QStringLiteral("inode/directory"), {}, childUrlWithName(fixtureUrl, QStringLiteral("Folder_Z")), true, -1, 1000},
+            {QStringLiteral("Folder_A"), QStringLiteral("inode/directory"), {}, childUrlWithName(fixtureUrl, QStringLiteral("Folder_A")), true, -1, 2000},
+            {QStringLiteral("doc1.pdf"), QStringLiteral("application/pdf"), {}, childUrlWithName(fixtureUrl, QStringLiteral("doc1.pdf")), false, 1024, 3000},
+            {QStringLiteral("image1.png"), QStringLiteral("image/png"), {}, childUrlWithName(fixtureUrl, QStringLiteral("image1.png")), false, 2048, 4000},
+            {QStringLiteral("text1.txt"), QStringLiteral("text/plain"), {}, childUrlWithName(fixtureUrl, QStringLiteral("text1.txt")), false, 512, 5000},
+            {QStringLiteral("video1.mp4"), QStringLiteral("video/mp4"), {}, childUrlWithName(fixtureUrl, QStringLiteral("video1.mp4")), false, 8192, 6000},
+        };
+
+        QStackedWidget multiStack;
+        DirectoryListWidget multiList;
+        DirectoryTreeWidget multiDetails;
+        multiStack.addWidget(&multiList);
+        multiStack.addWidget(&multiDetails);
+        configureDirectoryViewWidgets(&multiList, &multiDetails);
+
+        for (const auto &f : testFiles) {
+            addDirectoryFileItems(&multiList, &multiDetails, f, QIcon(),
+                                  f.isDir ? QStringLiteral("Folder") : QStringLiteral("File"),
+                                  f.isDir ? QString() : QString::number(f.size) + QStringLiteral(" B"),
+                                  QStringLiteral("2026-10-20"),
+                                  {parentLocationForDisplay(f.url)});
+        }
+
+        verify(multiList.count() == testFiles.size(),
+               "multi-item list view populated with exact file count");
+        verify(multiDetails.topLevelItemCount() == testFiles.size(),
+               "multi-item details view populated with exact file count");
+
+        // 3. View mode transition cycles (0 -> 2 -> 0 -> 1 -> 2 -> 3 -> 0)
+        for (int mode : {0, 2, 0, 1, 2, 3, 0}) {
+            applyDirectoryViewLayout(&multiList, &multiDetails, &multiStack, nullptr, mode);
+            app.processEvents();
+            if (mode == 2) {
+                verify(multiStack.currentWidget() == &multiDetails,
+                       "Details mode activates DirectoryTreeWidget in stack");
+            } else {
+                verify(multiStack.currentWidget() == &multiList,
+                       "Icons/List/Compact modes activate DirectoryListWidget in stack");
+            }
+        }
+
+        // 4. Selection preservation contract across view mode transitions
+        // 4a. Single selection
+        const QString selectedUrl1 = testFiles.at(2).url.toString();
+        multiList.clearSelection();
+        multiDetails.clearSelection();
+        for (int r = 0; r < multiList.count(); ++r) {
+            if (multiList.item(r).data(directory_view_detail::UrlRole).toString() == selectedUrl1) {
+                multiList.setRowSelected(r, true);
+                break;
+            }
+        }
+        DirectorySelectionSnapshot snapSingle = captureDirectorySelection(&multiList, &multiDetails, false);
+        verify(snapSingle.urls.size() == 1 && snapSingle.urls.contains(selectedUrl1),
+               "single selection captured correctly from list view");
+
+        // Transition Icons (0) -> Details (2)
+        applyDirectoryViewLayout(&multiList, &multiDetails, &multiStack, nullptr, 2);
+        restoreDirectorySelection(&multiList, &multiDetails, snapSingle);
+        app.processEvents();
+        QSet<QString> detailsSelected = selectedDirectoryDetailsUrls(&multiDetails);
+        verify(detailsSelected.size() == 1 && detailsSelected.contains(selectedUrl1),
+               "single selection preserved exactly in Details view");
+
+        // Transition Details (2) -> Compact (3)
+        DirectorySelectionSnapshot snapFromDetails = captureDirectorySelection(&multiList, &multiDetails, true);
+        applyDirectoryViewLayout(&multiList, &multiDetails, &multiStack, nullptr, 3);
+        restoreDirectorySelection(&multiList, &multiDetails, snapFromDetails);
+        app.processEvents();
+        QSet<QString> compactSelected = selectedDirectoryListUrls(&multiList);
+        verify(compactSelected.size() == 1 && compactSelected.contains(selectedUrl1),
+               "single selection preserved exactly in Compact view");
+
+        // 4b. Multi-selection (disjoint items)
+        const QString selectedUrl2 = testFiles.at(4).url.toString();
+        const QSet<QString> multiExpected{selectedUrl1, selectedUrl2};
+        multiList.clearSelection();
+        for (int r = 0; r < multiList.count(); ++r) {
+            const QString u = multiList.item(r).data(directory_view_detail::UrlRole).toString();
+            if (multiExpected.contains(u)) multiList.setRowSelected(r, true);
+        }
+        DirectorySelectionSnapshot snapMulti = captureDirectorySelection(&multiList, &multiDetails, false);
+        verify(snapMulti.urls == multiExpected,
+               "disjoint multi-selection captured correctly");
+
+        // Transition Compact (3) -> Details (2) -> List (1) -> Icons (0)
+        applyDirectoryViewLayout(&multiList, &multiDetails, &multiStack, nullptr, 2);
+        restoreDirectorySelection(&multiList, &multiDetails, snapMulti);
+        app.processEvents();
+        verify(selectedDirectoryDetailsUrls(&multiDetails) == multiExpected,
+               "disjoint multi-selection preserved in Details view");
+
+        applyDirectoryViewLayout(&multiList, &multiDetails, &multiStack, nullptr, 1);
+        restoreDirectorySelection(&multiList, &multiDetails, snapMulti);
+        app.processEvents();
+        verify(selectedDirectoryListUrls(&multiList) == multiExpected,
+               "disjoint multi-selection preserved in List view");
+
+        // 4c. Select All (Ctrl+A equivalent)
+        QSet<QString> allUrls;
+        for (const auto &f : testFiles) allUrls.insert(f.url.toString());
+        for (int r = 0; r < multiList.count(); ++r) multiList.setRowSelected(r, true);
+        DirectorySelectionSnapshot snapAll = captureDirectorySelection(&multiList, &multiDetails, false);
+        verify(snapAll.urls == allUrls, "select-all captured all URLs");
+
+        applyDirectoryViewLayout(&multiList, &multiDetails, &multiStack, nullptr, 2);
+        restoreDirectorySelection(&multiList, &multiDetails, snapAll);
+        app.processEvents();
+        verify(selectedDirectoryDetailsUrls(&multiDetails) == allUrls,
+               "select-all preserved completely in Details view");
+
+        // 5. Split View Independence Contract
+        QStackedWidget primStack, splStack;
+        DirectoryListWidget primList, splList;
+        DirectoryTreeWidget primDetails, splDetails;
+        primStack.addWidget(&primList); primStack.addWidget(&primDetails);
+        splStack.addWidget(&splList); splStack.addWidget(&splDetails);
+        configureDirectoryViewWidgets(&primList, &primDetails);
+        configureDirectoryViewWidgets(&splList, &splDetails);
+
+        for (const auto &f : testFiles) {
+            addDirectoryFileItems(&primList, &primDetails, f, QIcon(), QStringLiteral("Type"), QStringLiteral("1 KB"), QStringLiteral("Date"));
+            addDirectoryFileItems(&splList, &splDetails, f, QIcon(), QStringLiteral("Type"), QStringLiteral("1 KB"), QStringLiteral("Date"));
+        }
+
+        // Primary in Icons (0), Split in Details (2)
+        applyDirectoryViewLayout(&primList, &primDetails, &primStack, nullptr, 0);
+        applyDirectoryViewLayout(&splList, &splDetails, &splStack, nullptr, 2);
+        app.processEvents();
+        verify(primStack.currentWidget() == &primList, "Primary pane displays DirectoryListWidget");
+        verify(splStack.currentWidget() == &splDetails, "Split pane displays DirectoryTreeWidget");
+
+        // Independent selections: select file 2 in Primary, file 3 in Split
+        primList.setRowSelected(2, true);
+        splDetails.topLevelItem(3)->setSelected(true);
+        verify(selectedDirectoryListUrls(&primList).size() == 1, "Primary has independent single selection");
+        verify(selectedDirectoryDetailsUrls(&splDetails).size() == 1, "Split has independent single selection");
+        verify(selectedDirectoryListUrls(&primList) != selectedDirectoryDetailsUrls(&splDetails),
+               "Primary and Split maintain disjoint independent selections");
+
+        // Changing Primary view mode to List (1) does not mutate Split view mode
+        applyDirectoryViewLayout(&primList, &primDetails, &primStack, nullptr, 1);
+        app.processEvents();
+        verify(primStack.currentWidget() == &primList, "Primary switched to List");
+        verify(splStack.currentWidget() == &splDetails, "Split remains in Details");
+        verify(selectedDirectoryDetailsUrls(&splDetails).size() == 1,
+               "Split selection intact after Primary view layout switch");
+
+        // 6. Search location presentation: Location column 4 hidden in normal, visible in search
+        primDetails.setColumnHidden(4, true);
+        verify(primDetails.isColumnHidden(4),
+               "Location column 4 is hidden during ordinary folder browsing");
+        primDetails.setColumnHidden(4, false);
+        verify(!primDetails.isColumnHidden(4),
+               "Location column 4 is visible during search results display");
+        primDetails.setColumnHidden(4, true);
+
+        // 7. Grouping header contract
+        DirectoryTreeWidget groupTree;
+        addDirectoryGroupHeader(&groupTree, QStringLiteral("Images (5)"));
+        addDirectoryFileItems(&multiList, &groupTree, testFiles.at(3), QIcon(), QStringLiteral("PNG"), QStringLiteral("2 KB"), QStringLiteral("Today"));
+        verify(groupTree.topLevelItemCount() == 2,
+               "grouping tree holds category header and item");
+        verify(!groupTree.topLevelItem(0)->data(0, directory_view_detail::FileItemRole).toBool(),
+               "group header has FileItemRole == false");
+        verify(groupTree.topLevelItem(1)->data(0, directory_view_detail::FileItemRole).toBool(),
+               "group item has FileItemRole == true");
+        groupTree.topLevelItem(0)->setSelected(true);
+        groupTree.topLevelItem(1)->setSelected(true);
+        QSet<QString> groupSelected = selectedDirectoryDetailsUrls(&groupTree);
+        verify(groupSelected.size() == 1 && groupSelected.contains(testFiles.at(3).url.toString()),
+               "selectedDirectoryDetailsUrls filters out non-file group headers");
+    }
+
+    // =========================================================================
+    // Stage 3.2.3: View Profile Fallback & Lazy Model Contracts (Scenarios A–G)
+    // =========================================================================
+    {
+        QTemporaryDir stage32Dir;
+        verify(stage32Dir.isValid(), "stage32 temporary directory");
+
+        auto createTestFolderWithFile = [&](const QString &folderName, const QString &fileName) -> QUrl {
+            const QString folderPath = stage32Dir.filePath(folderName);
+            verify(QDir().mkpath(folderPath), "create stage32 test folder");
+            QFile f(folderPath + QLatin1Char('/') + fileName);
+            verify(f.open(QIODevice::WriteOnly) && f.write("stage32_content") == 15, "create stage32 test file");
+            f.close();
+            return QUrl::fromLocalFile(folderPath);
+        };
+
+        QSettings appSettings;
+
+        // --- Scenario A ---
+        // Global default Icons (0), Folder A has Details (2), navigate A -> B (unprofiled)
+        // => B opens in Icons (0), List populated (1), Details empty (0).
+        {
+            appSettings.setValue(QStringLiteral("directory/viewMode"), 0);
+            verify(DirectoryViewSettings::globalDefault().viewMode == 0, "Scenario A: global default is Icons (0)");
+
+            const QUrl urlA = createTestFolderWithFile(QStringLiteral("scenA_dirA"), QStringLiteral("fileA.txt"));
+            const QUrl urlB = createTestFolderWithFile(QStringLiteral("scenA_dirB"), QStringLiteral("fileB.txt"));
+
+            DirectoryViewSettings::saveExplicitProfile(urlA, {2, 0, 0, true, 0, false});
+            verify(DirectoryViewSettings::hasExplicitProfile(urlA), "urlA has explicit Details profile");
+            verify(!DirectoryViewSettings::hasExplicitProfile(urlB) && !DirectoryViewSettings::hasInheritedRule(urlB),
+                   "urlB is unprofiled");
+
+            ThisPcWindow window(urlA, false);
+            window.show();
+            verify(QTest::qWaitFor([&] { return window.m_directoryDetails->topLevelItemCount() == 1; }, 5000),
+                   "Scenario A: urlA loaded in Details");
+            verify(window.m_directoryViewMode == 2, "Scenario A: urlA viewMode == 2");
+            verify(window.m_directoryViewStack->currentWidget() == window.m_directoryDetails,
+                   "Scenario A: urlA stack shows Details widget");
+            verify(window.m_directoryList->count() == 0,
+                   "Scenario A: urlA inactive List model is lazy / empty (0)");
+
+            window.navigateTo(urlB, true);
+            verify(QTest::qWaitFor([&] { return window.m_directoryList->count() == 1; }, 5000),
+                   "Scenario A: urlB loaded in List");
+            verify(window.m_directoryViewMode == 0,
+                   "Scenario A: urlB falls back to global default Icons (0) without inheriting urlA Details");
+            verify(window.m_directoryViewStack->currentWidget() == window.m_directoryList,
+                   "Scenario A: urlB stack shows List widget");
+            verify(window.m_directoryDetails->topLevelItemCount() == 0,
+                   "Scenario A: urlB inactive Details model is lazy / empty (0)");
+        }
+
+        // --- Scenario B ---
+        // Global default Details (2), Folder A has Icons (0), navigate A -> B (unprofiled)
+        // => B opens in Details (2), Details populated (1), List empty (0).
+        {
+            appSettings.setValue(QStringLiteral("directory/viewMode"), 2);
+            verify(DirectoryViewSettings::globalDefault().viewMode == 2, "Scenario B: global default is Details (2)");
+
+            const QUrl urlB_A = createTestFolderWithFile(QStringLiteral("scenB_dirA"), QStringLiteral("fileBA.txt"));
+            const QUrl urlB_B = createTestFolderWithFile(QStringLiteral("scenB_dirB"), QStringLiteral("fileBB.txt"));
+
+            DirectoryViewSettings::saveExplicitProfile(urlB_A, {0, 0, 0, true, 0, false});
+            verify(DirectoryViewSettings::hasExplicitProfile(urlB_A), "urlB_A has explicit Icons profile");
+            verify(!DirectoryViewSettings::hasExplicitProfile(urlB_B) && !DirectoryViewSettings::hasInheritedRule(urlB_B),
+                   "urlB_B is unprofiled");
+
+            ThisPcWindow window(urlB_A, false);
+            window.show();
+            verify(QTest::qWaitFor([&] { return window.m_directoryList->count() == 1; }, 5000),
+                   "Scenario B: urlB_A loaded in Icons");
+            verify(window.m_directoryViewMode == 0, "Scenario B: urlB_A viewMode == 0");
+            verify(window.m_directoryViewStack->currentWidget() == window.m_directoryList,
+                   "Scenario B: urlB_A stack shows List widget");
+            verify(window.m_directoryDetails->topLevelItemCount() == 0,
+                   "Scenario B: urlB_A inactive Details model is lazy / empty (0)");
+
+            window.navigateTo(urlB_B, true);
+            verify(QTest::qWaitFor([&] { return window.m_directoryDetails->topLevelItemCount() == 1; }, 5000),
+                   "Scenario B: urlB_B loaded in Details");
+            verify(window.m_directoryViewMode == 2,
+                   "Scenario B: urlB_B falls back to global default Details (2) without inheriting urlB_A Icons");
+            verify(window.m_directoryViewStack->currentWidget() == window.m_directoryDetails,
+                   "Scenario B: urlB_B stack shows Details widget");
+            verify(window.m_directoryList->count() == 0,
+                   "Scenario B: urlB_B inactive List model is lazy / empty (0)");
+        }
+
+        // --- Scenario C ---
+        // Global default Details (2), explicit profile Compact (3) on Folder C
+        // => C opens in Compact (3) [wins over global default], List populated (1), Details empty (0).
+        {
+            appSettings.setValue(QStringLiteral("directory/viewMode"), 2);
+            const QUrl urlC = createTestFolderWithFile(QStringLiteral("scenC_dir"), QStringLiteral("fileC.txt"));
+            DirectoryViewSettings::saveExplicitProfile(urlC, {3, 0, 0, true, 0, false});
+
+            ThisPcWindow window(urlC, false);
+            window.show();
+            verify(QTest::qWaitFor([&] { return window.m_directoryList->count() == 1; }, 5000),
+                   "Scenario C: urlC loaded in Compact");
+            verify(window.m_directoryViewMode == 3,
+                   "Scenario C: explicit Compact profile (3) overrides global default Details (2)");
+            verify(window.m_directoryViewStack->currentWidget() == window.m_directoryList,
+                   "Scenario C: urlC stack shows List widget");
+            verify(window.m_directoryDetails->topLevelItemCount() == 0,
+                   "Scenario C: urlC inactive Details model is lazy / empty (0)");
+        }
+
+        // --- Scenario D ---
+        // Global default Icons (0), inherited rule on Parent Details (2), navigate to Child
+        // => Child opens in Details (2) [inherited rule wins over global default], Details populated (1), List empty (0).
+        {
+            appSettings.setValue(QStringLiteral("directory/viewMode"), 0);
+            const QUrl urlD_parent = createTestFolderWithFile(QStringLiteral("scenD_parent"), QStringLiteral("parent.txt"));
+            const QUrl urlD_child = createTestFolderWithFile(QStringLiteral("scenD_parent/child"), QStringLiteral("child.txt"));
+
+            DirectoryViewSettings::setInheritedRule(urlD_parent, {2, 0, 0, true, 0, false}, true);
+            verify(!DirectoryViewSettings::hasExplicitProfile(urlD_child), "urlD_child has no explicit profile");
+            verify(DirectoryViewSettings::hasInheritedRule(urlD_parent), "urlD_parent has inherited rule configured");
+            verify(DirectoryViewSettings::resolveProfile(urlD_child).viewMode == 2, "urlD_child resolves rule from parent");
+
+            ThisPcWindow window(urlD_child, false);
+            window.show();
+            verify(QTest::qWaitFor([&] { return window.m_directoryDetails->topLevelItemCount() == 1; }, 5000),
+                   "Scenario D: urlD_child loaded in Details");
+            verify(window.m_directoryViewMode == 2,
+                   "Scenario D: inherited rule Details (2) overrides global default Icons (0)");
+            verify(window.m_directoryViewStack->currentWidget() == window.m_directoryDetails,
+                   "Scenario D: urlD_child stack shows Details widget");
+            verify(window.m_directoryList->count() == 0,
+                   "Scenario D: urlD_child inactive List model is lazy / empty (0)");
+        }
+
+        // --- Scenario E ---
+        // Tab switching between different profiles:
+        // Tab 0 has Icons (0), Tab 1 has Details (2).
+        // => Switching tabs switches active view widget and model correctly.
+        {
+            const QUrl urlE_1 = createTestFolderWithFile(QStringLiteral("scenE_tab1"), QStringLiteral("e1.txt"));
+            const QUrl urlE_2 = createTestFolderWithFile(QStringLiteral("scenE_tab2"), QStringLiteral("e2.txt"));
+            DirectoryViewSettings::saveExplicitProfile(urlE_1, {0, 0, 0, true, 0, false});
+            DirectoryViewSettings::saveExplicitProfile(urlE_2, {2, 0, 0, true, 0, false});
+
+            ThisPcWindow window(urlE_1, false);
+            window.show();
+            verify(QTest::qWaitFor([&] { return window.m_directoryList->count() == 1; }, 5000),
+                   "Scenario E: Tab 0 initial load");
+            verify(window.m_activeTab == 0 && window.m_directoryViewMode == 0, "Scenario E: Tab 0 is Icons");
+
+            window.createNewTab(urlE_2, true);
+            verify(QTest::qWaitFor([&] { return window.m_directoryDetails->topLevelItemCount() == 1; }, 5000),
+                   "Scenario E: Tab 1 loaded in Details");
+            verify(window.m_activeTab == 1 && window.m_directoryViewMode == 2,
+                   "Scenario E: Tab 1 switched and viewMode == 2");
+            verify(window.m_directoryViewStack->currentWidget() == window.m_directoryDetails,
+                   "Scenario E: Tab 1 stack shows Details widget");
+            verify(window.m_directoryList->count() == 0,
+                   "Scenario E: Tab 1 inactive List model is lazy / empty (0)");
+
+            window.switchToTab(0);
+            verify(QTest::qWaitFor([&] { return window.m_directoryList->count() == 1; }, 5000),
+                   "Scenario E: Tab 0 switched back to Icons");
+            verify(window.m_activeTab == 0 && window.m_directoryViewMode == 0,
+                   "Scenario E: Tab 0 active and viewMode == 0");
+            verify(window.m_directoryViewStack->currentWidget() == window.m_directoryList,
+                   "Scenario E: Tab 0 stack shows List widget");
+            verify(window.m_directoryDetails->topLevelItemCount() == 0,
+                   "Scenario E: Tab 0 inactive Details model is lazy / empty (0)");
+        }
+
+        // --- Scenario F ---
+        // QuietRefresh of the same directory preserves view mode and lazy model state.
+        {
+            const QUrl urlF = createTestFolderWithFile(QStringLiteral("scenF_dir"), QStringLiteral("f1.txt"));
+            DirectoryViewSettings::saveExplicitProfile(urlF, {2, 0, 0, true, 0, false});
+
+            ThisPcWindow window(urlF, false);
+            window.show();
+            verify(QTest::qWaitFor([&] { return window.m_directoryDetails->topLevelItemCount() == 1; }, 5000),
+                   "Scenario F: urlF loaded in Details");
+            verify(window.m_directoryViewMode == 2, "Scenario F: urlF viewMode == 2");
+            verify(window.m_directoryDetails->topLevelItemCount() == 1, "Scenario F: details has 1 item");
+            verify(window.m_directoryList->count() == 0, "Scenario F: list is lazy / empty (0)");
+
+            // Create second file on disk
+            QFile f2(stage32Dir.filePath(QStringLiteral("scenF_dir/f2.txt")));
+            verify(f2.open(QIODevice::WriteOnly) && f2.write("f2_content") == 10, "Scenario F: create f2");
+            f2.close();
+
+            window.loadDirectory(window.m_navigation.currentUrl(), false, DirectoryReloadMode::QuietRefresh);
+            verify(QTest::qWaitFor([&] { return window.m_directoryDetails->topLevelItemCount() == 2; }, 5000),
+                   "Scenario F: QuietRefresh updated Details model to 2 items");
+            verify(window.m_directoryViewMode == 2, "Scenario F: viewMode remains Details (2)");
+            verify(window.m_directoryViewStack->currentWidget() == window.m_directoryDetails,
+                   "Scenario F: stack remains Details widget");
+            verify(window.m_directoryList->count() == 0,
+                   "Scenario F: inactive List model remains lazy / empty (0)");
+        }
+
+        // --- Scenario G ---
+        // Search results vs regular folder mode semantics.
+        {
+            const QUrl urlG_reg = createTestFolderWithFile(QStringLiteral("scenG_dir"), QStringLiteral("g1.txt"));
+            DirectoryViewSettings::saveExplicitProfile(urlG_reg, {2, 0, 0, true, 0, false});
+
+            ThisPcWindow window(urlG_reg, false);
+            window.show();
+            verify(QTest::qWaitFor([&] { return window.m_directoryDetails->topLevelItemCount() == 1; }, 5000),
+                   "Scenario G: regular folder loaded in Details");
+            verify(window.m_directoryDetails->isColumnHidden(4),
+                   "Scenario G: Location column hidden in regular directory Details");
+            verify(window.m_directoryDetails->topLevelItemCount() == 1, "Scenario G: details has 1 item");
+            verify(window.m_directoryList->count() == 0, "Scenario G: list is lazy / empty (0)");
+
+            // Switch to search
+            const QUrl searchLoc = makeSearchLocation(QStringLiteral("g1"), 0, urlG_reg, 0, 0, 0);
+            window.navigateTo(searchLoc, true);
+            verify(QTest::qWaitFor([&] { return !window.m_searchController->isRunning(); }, 5000),
+                   "Scenario G: search completed");
+            verify(!window.m_directoryDetails->isColumnHidden(4),
+                   "Scenario G: Location column visible in search Details");
+
+            // Navigate back to regular folder
+            window.navigateTo(urlG_reg, true);
+            verify(QTest::qWaitFor([&] { return window.m_directoryDetails->topLevelItemCount() == 1; }, 5000),
+                   "Scenario G: navigated back to regular folder");
+            verify(window.m_directoryDetails->isColumnHidden(4),
+                   "Scenario G: Location column hidden again in regular directory Details");
+            verify(window.m_directoryViewMode == 2, "Scenario G: viewMode is Details (2)");
+            verify(window.m_directoryDetails->topLevelItemCount() == 1, "Scenario G: details has 1 item");
+            verify(window.m_directoryList->count() == 0, "Scenario G: list is lazy / empty (0)");
+        }
+
+        // Reset global default to 0 (clean state)
+        appSettings.setValue(QStringLiteral("directory/viewMode"), 0);
+    }
+
     qInfo("PASS: %d per-folder view settings assertions", checks);
     return 0;
 }

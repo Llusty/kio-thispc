@@ -206,7 +206,9 @@ void PrimaryBrowserPane::renderDirectoryItems(const RenderOptions &options)
     if (m_directoryList) m_directoryList->setUpdatesEnabled(false);
     if (m_directoryDetails) m_directoryDetails->setUpdatesEnabled(false);
 
-    m_directoryList->clear(); m_directoryDetails->clear();
+    if (m_directoryList) m_directoryList->clear();
+    if (m_directoryDetails) m_directoryDetails->clear();
+
     QMimeDatabase mimeDb;
     DirectoryListingCore::RenderOptions coreOptions;
     coreOptions.sortKey = options.sortKey;
@@ -214,15 +216,23 @@ void PrimaryBrowserPane::renderDirectoryItems(const RenderOptions &options)
     coreOptions.groupMode = options.groupMode;
     coreOptions.acceptsFile = options.acceptsFile;
     const auto prepared = m_listingCore.prepare(coreOptions, mimeDb);
-    m_directoryList->setCategorized(options.groupMode != DirectoryViewSettings::NoGrouping);
+
+    const bool search = isSearchLocation(m_currentUrl);
+    const bool grouping = (options.groupMode != DirectoryViewSettings::NoGrouping);
+    DirectoryListWidget *targetList = (!options.detailsActive || search) ? m_directoryList : nullptr;
+    DirectoryTreeWidget *targetDetails = (options.detailsActive || search || grouping) ? m_directoryDetails : nullptr;
+
+    if (targetList) {
+        targetList->setCategorized(options.groupMode != DirectoryViewSettings::NoGrouping);
+    }
     QString previousCategory; bool firstCategory = true;
     for (const auto &entry : prepared.files) {
-        if (options.groupMode != DirectoryViewSettings::NoGrouping
+        if (targetDetails && options.groupMode != DirectoryViewSettings::NoGrouping
             && (firstCategory || entry.categorySort != previousCategory)) {
-            addDirectoryGroupHeader(m_directoryDetails, entry.categoryDisplay);
+            addDirectoryGroupHeader(targetDetails, entry.categoryDisplay);
             previousCategory = entry.categorySort; firstCategory = false;
         }
-        addDirectoryFileItems(m_directoryList, m_directoryDetails, entry.file,
+        addDirectoryFileItems(targetList, targetDetails, entry.file,
             iconForFile(entry.file, mimeDb, options.thumbnailsEnabled), entry.typeText,
             formatFileSize(entry.file.size, entry.file.isDir),
             formatModificationTime(entry.file.modificationTime),

@@ -1384,6 +1384,9 @@ int main(int argc, char **argv)
            "Split view mode and sort state preserved independently");
 
     // 5. Navigation from Search to Regular Folder and Back
+    DirectoryViewProfile pRootB = DirectoryViewSettings::resolveProfile(rootB);
+    pRootB.viewMode = 2;
+    DirectoryViewSettings::saveExplicitProfile(rootB, pRootB);
     window.setDirectoryViewMode(2); // Details
     verify(!window.m_directoryDetails->isColumnHidden(4), "Location column visible in search Details");
     window.navigateTo(rootB, true);

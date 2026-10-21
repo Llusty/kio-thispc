@@ -381,6 +381,9 @@ static void testWindow(bool split)
     auto *bar = window.m_tabBar;
     QMimeData mime; mime.setUrls({source});
     for (int mode : {0, 1, 2, 3}) {
+        DirectoryViewProfile pb = DirectoryViewSettings::resolveProfile(b);
+        pb.viewMode = mode;
+        DirectoryViewSettings::saveExplicitProfile(b, pb);
         window.setDirectoryViewMode(mode);
         const QPoint target = bar->tabRect(1).center();
         verify(enter(bar, target, mime), "A to B dragEnter");

@@ -5879,15 +5879,27 @@ public:
 
     void setDirectoryViewMode(int mode)
     {
+        const bool detailsBefore = (m_directoryViewMode == 2);
         const DirectorySelectionSnapshot selection =
             captureDirectorySelection(
-                m_directoryList, m_directoryDetails, m_directoryViewMode == 2);
+                m_directoryList, m_directoryDetails, detailsBefore);
         m_directoryViewMode =
             std::clamp(mode, 0, 3);
+        const bool detailsAfter = (m_directoryViewMode == 2);
 
         savePrimaryDirectoryProfile();
 
         applyDirectoryViewMode(false);
+        if (detailsBefore != detailsAfter
+            && m_contentStack && m_contentStack->currentWidget() == m_directoryPage) {
+            if (m_directoryDetails) {
+                m_directoryDetails->setColumnHidden(4, !isSearchLocation(m_navigation.currentUrl()));
+            }
+            const bool detailsActive = (m_directoryViewMode == 2);
+            if (detailsActive ? (m_directoryDetails->topLevelItemCount() == 0) : (m_directoryList->count() == 0)) {
+                renderDirectoryItems(true);
+            }
+        }
         restoreDirectorySelection(m_directoryList, m_directoryDetails, selection);
     }
 
@@ -5960,6 +5972,20 @@ public:
             m_viewButton,
             m_directoryViewMode,
             m_directoryIconSizeStep);
+
+        if (m_contentStack && m_contentStack->currentWidget() == m_directoryPage
+            && !isSearchLocation(m_navigation.currentUrl()) && m_primaryPane) {
+            const bool detailsActive = (m_directoryViewMode == 2);
+            const bool detailsEmpty = (m_directoryDetails->topLevelItemCount() == 0);
+            const bool listEmpty = (m_directoryList->count() == 0);
+            if ((detailsActive && detailsEmpty && !listEmpty)
+                || (!detailsActive && listEmpty && !detailsEmpty)) {
+                if (m_directoryDetails) {
+                    m_directoryDetails->setColumnHidden(4, !isSearchLocation(m_navigation.currentUrl()));
+                }
+                renderDirectoryItems(true);
+            }
+        }
 
         if (m_primaryPane && m_primaryPane->previewAdapter()) {
             m_primaryPane->previewAdapter()->scheduleUpdate();
