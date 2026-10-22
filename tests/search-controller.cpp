@@ -1397,6 +1397,8 @@ int main(int argc, char **argv)
     verify(isSearchLocation(window.m_navigation.currentUrl()), "Navigated back to search URL");
     waitForSearch(*window.m_searchController);
     verify(!window.m_directoryDetails->isColumnHidden(4), "Location column restored on return to search");
+    pRootB.viewMode = 0;
+    DirectoryViewSettings::saveExplicitProfile(rootB, pRootB);
     // =========================================================================
     // Stage 3C.2: Search Progress & Loading States + Animation Fix
     // =========================================================================

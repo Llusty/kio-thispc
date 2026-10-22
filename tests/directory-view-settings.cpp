@@ -1909,6 +1909,189 @@ int main(int argc, char **argv)
             verify(window.m_directoryList->count() == 0, "Scenario G: list is lazy / empty (0)");
         }
 
+        // =========================================================================
+        // Stage 3.2.4: Split View Lazy Model & Panel Independence Contracts (Scenarios H–K)
+        // =========================================================================
+
+        // --- Scenario H ---
+        // Split View lazy model initial loading in Icons (0) and Details (2) modes:
+        // In Icons: Split listView populated, Split detailsView empty (0).
+        // In Details: Split detailsView populated, Split listView empty (0).
+        {
+            const QUrl urlH = createTestFolderWithFile(QStringLiteral("scenH_dir"), QStringLiteral("h1.txt"));
+            QFile fH2(stage32Dir.filePath(QStringLiteral("scenH_dir/h2.txt")));
+            verify(fH2.open(QIODevice::WriteOnly) && fH2.write("content_h2") == 10, "Scenario H: create h2");
+            fH2.close();
+
+            ThisPcWindow window(urlH, false);
+            window.show();
+            window.setSplitViewEnabled(true);
+            verify(window.m_splitPane != nullptr, "Scenario H: split pane enabled");
+
+            // Open urlH in Split in Icons mode (0)
+            window.m_splitPane->setViewMode(0, false);
+            window.m_splitPane->setCurrentUrl(urlH, true);
+            verify(QTest::qWaitFor([&] { return window.m_splitPane->listView()->count() == 2; }, 5000),
+                   "Scenario H: split loaded in Icons with 2 items");
+            verify(window.m_splitPane->viewMode() == 0, "Scenario H: split viewMode is Icons (0)");
+            verify(window.m_splitPane->listView()->count() == 2, "Scenario H: split list has 2 items");
+            verify(window.m_splitPane->detailsView()->topLevelItemCount() == 0,
+                   "Scenario H: split inactive details is lazy / empty (0)");
+
+            // Open urlH in Split in Details mode (2)
+            window.m_splitPane->setViewMode(2, false);
+            verify(window.m_splitPane->viewMode() == 2, "Scenario H: split viewMode is Details (2)");
+            verify(window.m_splitPane->detailsView()->topLevelItemCount() == 2,
+                   "Scenario H: split details has 2 items after switch");
+            verify(window.m_splitPane->listView()->count() == 0,
+                   "Scenario H: split inactive list is lazy / empty (0)");
+        }
+
+        // --- Scenario I ---
+        // Dynamic switching across the mode boundary in Split View preserves selection
+        // without retriggering listing and leaves inactive model strictly empty:
+        {
+            const QUrl urlI = createTestFolderWithFile(QStringLiteral("scenI_dir"), QStringLiteral("i1.txt"));
+            QFile fI2(stage32Dir.filePath(QStringLiteral("scenI_dir/i2.txt")));
+            verify(fI2.open(QIODevice::WriteOnly) && fI2.write("content_i2") == 10, "Scenario I: create i2");
+            fI2.close();
+
+            ThisPcWindow window(urlI, false);
+            window.show();
+            window.setSplitViewEnabled(true);
+            window.m_splitPane->setViewMode(0, false);
+            window.m_splitPane->setCurrentUrl(urlI, true);
+            verify(QTest::qWaitFor([&] { return window.m_splitPane->listView()->count() == 2; }, 5000),
+                   "Scenario I: split loaded 2 items in Icons");
+
+            // Select item 1 in Split listView
+            window.m_splitPane->listView()->setCurrentRow(1);
+            window.m_splitPane->listView()->setRowSelected(1, true);
+            const QString selectedUrl = window.m_splitPane->listView()->item(1).data(directory_view_detail::UrlRole).toString();
+            verify(!selectedUrl.isEmpty(), "Scenario I: item 1 selected in split list");
+
+            const quint64 listingStartsBefore = window.m_splitPane->listingStartCount();
+
+            // Switch to Details (2)
+            window.m_splitPane->setViewMode(2, false);
+            verify(window.m_splitPane->viewMode() == 2, "Scenario I: split switched to Details");
+            verify(window.m_splitPane->detailsView()->topLevelItemCount() == 2,
+                   "Scenario I: split details populated with 2 items");
+            verify(window.m_splitPane->listView()->count() == 0,
+                   "Scenario I: split list freed / empty (0)");
+            verify(window.m_splitPane->listingStartCount() == listingStartsBefore,
+                   "Scenario I: no redundant KIO listing triggered during view mode switch");
+
+            // Verify selection restored in Details
+            const QSet<QString> selectedInDetails = selectedDirectoryDetailsUrls(window.m_splitPane->detailsView());
+            verify(selectedInDetails.contains(selectedUrl), "Scenario I: selection preserved in split details");
+
+            // Switch back to Icons (0)
+            window.m_splitPane->setViewMode(0, false);
+            verify(window.m_splitPane->viewMode() == 0, "Scenario I: split switched back to Icons");
+            verify(window.m_splitPane->listView()->count() == 2,
+                   "Scenario I: split list populated with 2 items");
+            verify(window.m_splitPane->detailsView()->topLevelItemCount() == 0,
+                   "Scenario I: split details freed / empty (0)");
+            verify(window.m_splitPane->listingStartCount() == listingStartsBefore,
+                   "Scenario I: still no redundant listing on switch back");
+
+            // Verify selection restored in List
+            const QSet<QString> selectedInList = selectedDirectoryListUrls(window.m_splitPane->listView());
+            verify(selectedInList.contains(selectedUrl), "Scenario I: selection preserved in split list");
+        }
+
+        // --- Scenario J ---
+        // Panel Isolation & Independence:
+        // Primary and Split panes can independently hold different view modes and models.
+        // Primary mode/selection/models are completely unaffected by Split view switches.
+        {
+            const QUrl urlJ_prim = createTestFolderWithFile(QStringLiteral("scenJ_prim"), QStringLiteral("p1.txt"));
+            const QUrl urlJ_split = createTestFolderWithFile(QStringLiteral("scenJ_split"), QStringLiteral("s1.txt"));
+            DirectoryViewSettings::saveExplicitProfile(urlJ_split, {2, 0, 0, true, 0, false});
+
+            ThisPcWindow window(urlJ_prim, false);
+            window.show();
+            window.setSplitViewEnabled(true);
+            window.setDirectoryViewMode(0); // Primary in Icons
+            window.m_splitPane->setCurrentUrl(urlJ_split, true);
+
+            verify(QTest::qWaitFor([&] {
+                return window.m_directoryList->count() == 1
+                    && window.m_splitPane->detailsView()->topLevelItemCount() == 1;
+            }, 5000), "Scenario J: both panes loaded in independent modes");
+
+            // Primary: Icons (0) -> list=1, details=0
+            verify(window.m_directoryViewMode == 0, "Scenario J: Primary in Icons (0)");
+            verify(window.m_directoryList->count() == 1, "Scenario J: Primary list has 1 item");
+            verify(window.m_directoryDetails->topLevelItemCount() == 0, "Scenario J: Primary details is empty (0)");
+
+            // Split: Details (2) -> details=1, list=0
+            verify(window.m_splitPane->viewMode() == 2, "Scenario J: Split in Details (2)");
+            verify(window.m_splitPane->detailsView()->topLevelItemCount() == 1, "Scenario J: Split details has 1 item");
+            verify(window.m_splitPane->listView()->count() == 0, "Scenario J: Split list is empty (0)");
+
+            // Toggle Split through all view modes: List (1), Compact (3), Icons (0)
+            window.m_splitPane->setViewMode(1, false);
+            verify(window.m_splitPane->listView()->count() == 1 && window.m_splitPane->detailsView()->topLevelItemCount() == 0,
+                   "Scenario J: Split List (1) has list=1, details=0");
+            window.m_splitPane->setViewMode(3, false);
+            verify(window.m_splitPane->listView()->count() == 1 && window.m_splitPane->detailsView()->topLevelItemCount() == 0,
+                   "Scenario J: Split Compact (3) has list=1, details=0");
+            window.m_splitPane->setViewMode(2, false);
+            verify(window.m_splitPane->detailsView()->topLevelItemCount() == 1 && window.m_splitPane->listView()->count() == 0,
+                   "Scenario J: Split Details (2) has details=1, list=0");
+
+            // Verify Primary remained strictly unchanged throughout all Split actions
+            verify(window.m_directoryViewMode == 0, "Scenario J: Primary viewMode still 0");
+            verify(window.m_directoryList->count() == 1, "Scenario J: Primary list count still 1");
+            verify(window.m_directoryDetails->topLevelItemCount() == 0, "Scenario J: Primary details still 0");
+            verify(window.m_primaryPane->listingJob() == nullptr, "Scenario J: Primary listing never re-triggered");
+        }
+
+        // --- Scenario K ---
+        // Split View Variant A Profile Fallback:
+        // Directory without explicit profile falls back to global default mode in Split View.
+        {
+            appSettings.setValue(QStringLiteral("directory/viewMode"), 0); // Global default = Icons (0)
+
+            const QUrl urlK_A = createTestFolderWithFile(QStringLiteral("scenK_dirA"), QStringLiteral("kA.txt"));
+            const QUrl urlK_B = createTestFolderWithFile(QStringLiteral("scenK_dirB"), QStringLiteral("kB.txt"));
+
+            DirectoryViewSettings::saveExplicitProfile(urlK_A, {2, 0, 0, true, 0, false}); // Explicit Details
+            verify(DirectoryViewSettings::hasExplicitProfile(urlK_A), "urlK_A has explicit profile");
+            verify(!DirectoryViewSettings::hasExplicitProfile(urlK_B), "urlK_B is unprofiled");
+
+            ThisPcWindow window(urlK_A, false);
+            window.show();
+            window.setSplitViewEnabled(true);
+
+            // Navigate Split to urlK_A (explicit Details)
+            window.m_splitPane->setCurrentUrl(urlK_A, true);
+            verify(QTest::qWaitFor([&] { return window.m_splitPane->detailsView()->topLevelItemCount() == 1; }, 5000),
+                   "Scenario K: urlK_A loaded in Split Details");
+            verify(window.m_splitPane->viewMode() == 2, "Scenario K: urlK_A split viewMode == 2");
+            verify(window.m_splitPane->detailsView()->topLevelItemCount() == 1, "Scenario K: details has 1 item");
+            verify(window.m_splitPane->listView()->count() == 0, "Scenario K: list is lazy / empty (0)");
+
+            // Navigate Split to urlK_B (unprofiled -> falls back to global default Icons 0)
+            window.m_splitPane->setCurrentUrl(urlK_B, true);
+            verify(QTest::qWaitFor([&] { return window.m_splitPane->listView()->count() == 1; }, 5000),
+                   "Scenario K: urlK_B loaded in Split Icons");
+            verify(window.m_splitPane->viewMode() == 0,
+                   "Scenario K: urlK_B falls back to global default Icons (0) in Split View");
+            verify(window.m_splitPane->listView()->count() == 1, "Scenario K: list has 1 item");
+            verify(window.m_splitPane->detailsView()->topLevelItemCount() == 0, "Scenario K: details is lazy / empty (0)");
+
+            // Navigate Split back to urlK_A -> restores Details (2)
+            window.m_splitPane->setCurrentUrl(urlK_A, true);
+            verify(QTest::qWaitFor([&] { return window.m_splitPane->detailsView()->topLevelItemCount() == 1; }, 5000),
+                   "Scenario K: navigated back to urlK_A in Split");
+            verify(window.m_splitPane->viewMode() == 2, "Scenario K: restored Details (2) for urlK_A");
+            verify(window.m_splitPane->detailsView()->topLevelItemCount() == 1, "Scenario K: details has 1 item");
+            verify(window.m_splitPane->listView()->count() == 0, "Scenario K: list is lazy / empty (0)");
+        }
+
         // Reset global default to 0 (clean state)
         appSettings.setValue(QStringLiteral("directory/viewMode"), 0);
     }

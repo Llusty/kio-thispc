@@ -862,14 +862,26 @@ public:
 
     void setViewMode(int mode, bool rememberForLocation = true)
     {
+        const bool detailsBefore = (m_viewMode == 2);
         const DirectorySelectionSnapshot selection =
-            captureDirectorySelection(m_list, m_details, m_viewMode == 2);
+            captureDirectorySelection(m_list, m_details, detailsBefore);
         m_viewMode =
             std::clamp(mode, 0, 3);
+        const bool detailsAfter = (m_viewMode == 2);
         if (rememberForLocation) {
             saveCurrentProfile();
         }
         applyViewMode();
+        if (detailsBefore != detailsAfter
+            && m_contentStack && m_contentStack->currentWidget() == m_directoryPage) {
+            if (m_details) {
+                m_details->setColumnHidden(4, !isSearchLocation(m_currentUrl));
+            }
+            const bool detailsActive = (m_viewMode == 2);
+            if (detailsActive ? (m_details->topLevelItemCount() == 0) : (m_list->count() == 0)) {
+                renderItems();
+            }
+        }
         restoreDirectorySelection(m_list, m_details, selection);
         Q_EMIT stateChanged();
     }
@@ -1545,8 +1557,8 @@ private:
         if (m_details) m_details->setUpdatesEnabled(false);
 
         QMimeDatabase database;
-        m_list->clear();
-        m_details->clear();
+        if (m_list) m_list->clear();
+        if (m_details) m_details->clear();
         DirectoryListingCore::RenderOptions options;
         options.sortKey = m_sortKey;
         options.sortAscending = m_sortAscending;
@@ -1564,15 +1576,23 @@ private:
                 || file.mimeType.contains(query, Qt::CaseInsensitive);
         };
         const auto prepared = m_listingCore.prepare(options, database);
-        m_list->setCategorized(m_groupMode != DirectoryViewSettings::NoGrouping);
+
+        const bool search = isSearchLocation(m_currentUrl);
+        const bool detailsActive = (m_viewMode == 2);
+        DirectoryListWidget *targetList = (!detailsActive || search) ? m_list : nullptr;
+        DirectoryTreeWidget *targetDetails = (detailsActive || search) ? m_details : nullptr;
+
+        if (targetList) {
+            targetList->setCategorized(m_groupMode != DirectoryViewSettings::NoGrouping);
+        }
 
         QString previousCategory;
         bool firstCategory = true;
         for (const auto &renderedFile : prepared.files) {
             const FileInfo &file = renderedFile.file;
-            if (m_groupMode != DirectoryViewSettings::NoGrouping
+            if (targetDetails && m_groupMode != DirectoryViewSettings::NoGrouping
                 && (firstCategory || renderedFile.categorySort != previousCategory)) {
-                addDirectoryGroupHeader(m_details, renderedFile.categoryDisplay);
+                addDirectoryGroupHeader(targetDetails, renderedFile.categoryDisplay);
                 previousCategory = renderedFile.categorySort;
                 firstCategory = false;
             }
@@ -1593,8 +1613,8 @@ private:
                     file.modificationTime);
 
             addDirectoryFileItems(
-                m_list,
-                m_details,
+                targetList,
+                targetDetails,
                 file,
                 icon,
                 typeText,
@@ -1664,6 +1684,20 @@ private:
             m_viewButton,
             m_viewMode,
             m_iconSizeStep);
+
+        if (m_contentStack && m_contentStack->currentWidget() == m_directoryPage
+            && !isSearchLocation(m_currentUrl)) {
+            const bool detailsActive = (m_viewMode == 2);
+            const bool detailsEmpty = (m_details ? m_details->topLevelItemCount() == 0 : true);
+            const bool listEmpty = (m_list ? m_list->count() == 0 : true);
+            if ((detailsActive && detailsEmpty && !listEmpty)
+                || (!detailsActive && listEmpty && !detailsEmpty)) {
+                if (m_details) {
+                    m_details->setColumnHidden(4, !isSearchLocation(m_currentUrl));
+                }
+                renderItems();
+            }
+        }
 
         if (m_previewAdapter) {
             m_previewAdapter->scheduleUpdate();
