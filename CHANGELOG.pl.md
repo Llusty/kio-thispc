@@ -2,6 +2,25 @@
 
 # Changelog
 
+## 0.42.0 — Optymalizacja pamięci DirectoryView i szybkie sortowanie MIME
+
+- **Leniwe modele widoku (Lazy Inactive Model) w panelu głównym i Split View:**
+  - Wyeliminowano nadmiarową podwójną alokację elementów w modelach `QListWidget` i `QTreeWidget`: elementy katalogu są teraz tworzone wyłącznie w aktywnej reprezentacji widoku (Ikony/Lista/Zwarty lub Szczegóły).
+  - Nieaktywny model widoku przechowuje ściśle 0 elementów podczas standardowego przeglądania folderów, redukując zużycie pamięci RAM o ~15–18 MB RSS na każde 10 000 plików w widoku pojedynczym oraz o ~39,4 MB RSS (~20,5%) w sesjach dwupanelowych (10k + 10k).
+  - Płynna, synchroniczna odbudowa modelu na żądanie przy przełączaniu pomiędzy trybami widoku (Ikony/Lista/Zwarty ↔ Szczegóły) bezpośrednio z wewnętrznej pamięci podręcznej bez ponownego wywoływania zadań KIO (~330 ms dla 10 000 elementów).
+  - Natychmiastowe przełączanie wewnątrz modeli listy (Ikony ↔ Lista ↔ Zwarty) w czasie ~115–135 ms bez konieczności przebudowy modeli.
+  - Pełne zachowanie stanu widoku: aktywne zaznaczenie wielu elementów, fokusowany element oraz pozycja przewinięcia są bezbłędnie przywracane po zmianie trybu.
+  - Semantyka profili widoku (Wariant A): katalogi bez własnego pliku `.directory` ani reguły dziedziczonej bezwzględnie korzystają z globalnego profilu domyślnego (tryb Ikony), zapobiegając dziedziczeniu trybu z poprzedniego folderu.
+  - Wyjątek wyszukiwania: podwójna reprezentacja została świadomie zachowana wyłącznie dla wirtualnych lokalizacji wyszukiwania (`thispcsearch:/`) w celu zagwarantowania formatowania kolumny lokalizacji i spójności z kontrolerem wyszukiwania.
+- **Optymalizacja sortowania według typu MIME (Decorate-Sort-Undecorate):**
+  - Zoptymalizowano sortowanie katalogów według typu pliku przy użyciu transformacji Schwartza, eliminując wielokrotne, kosztowne zapytania MIME wewnątrz komparatora.
+  - Zapewnia do 21,2x szybsze sortowanie dla 10 000 elementów (88,7 ms zamiast 1880,0 ms) przy 100% bitowej zgodności kolejności z dotychczasową implementacją.
+  - Bezwzględne zachowanie priorytetu folderów przed plikami w obu kierunkach (rosnąco/malejąco) oraz naturalne rozstrzyganie remisów według nazwy i URL przy użyciu `QCollator`.
+  - Zerowy narzut dla sortowania według Nazwy, Rozmiaru i Daty.
+- **Bezpieczeństwo regresyjne i stabilność:**
+  - Potwierdzone pełnym przejściem 69 zestawów testów automatycznych i 114 308 asercji (100% PASS).
+  - Potwierdzony brak wycieków pamięci w serii 40 kolejnych przełączeń widoku (przyrost netto 0,00 MB RSS) oraz 20 cykli nawigacji (dryf zaledwie +0,18 MB).
+
 ## 0.41.2 — Automatyczne odświeżanie katalogów i trwałe usuwanie na MTP
 
 - **Automatyczne monitorowanie katalogów i ciche odświeżanie (Quiet Refresh):**

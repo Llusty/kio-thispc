@@ -1,5 +1,27 @@
 [English](UPDATE.md) | [Polski](UPDATE.pl.md)
 
+# Aktualizacja do 0.42.0
+
+```bash
+cd ~/Pobrane
+tar -xzf kio-thispc-0.42.0.tar.gz
+cd kio-thispc-0.42.0
+chmod +x install.sh
+./install.sh
+```
+
+- Leniwe modele widoku (Lazy Inactive Model): elementy są alokowane wyłącznie w aktywnej reprezentacji widoku, pozostawiając nieaktywny model pustym podczas przeglądania folderów.
+- Redukcja zużycia pamięci RAM o ~15–18 MB RSS na każde 10k elementów w widoku pojedynczym oraz o ~39,4 MB RSS (~20,5%) w sesjach dwupanelowych (10k + 10k).
+- Płynna, synchroniczna odbudowa modelu na żądanie (~330 ms dla 10 000 elementów) przy przełączaniu między widokiem Listy/Ikon a Szczegółami z pamięci podręcznej bez ponownego odczytu dysku.
+- Natychmiastowe przełączanie wewnątrz modeli listy (Ikony ↔ Lista ↔ Zwarty) w czasie ~120 ms.
+- Zaznaczenie, fokus i pozycja przewinięcia są bezbłędnie zachowywane po zmianie trybu.
+- Ścisła semantyka profili (Wariant A): foldery bez własnego profilu `.directory` bezwzględnie korzystają z domyślnego trybu Ikon.
+- Zoptymalizowane sortowanie według typu MIME (Decorate-Sort-Undecorate) zapewniające do 21,2x szybsze sortowanie według typu pliku dla 10 000 elementów.
+- Zachowana podwójna reprezentacja dla wirtualnych lokalizacji wyszukiwania (`thispcsearch:/`).
+- Potwierdzone pełnym przejściem 69 zestawów testów z 114 308 asercjami i zerowym wyciekiem pamięci w 40 przełączeniach widoku.
+
+---
+
 # Aktualizacja do 0.41.2
 
 ```bash

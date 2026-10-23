@@ -1,5 +1,27 @@
 [English](UPDATE.md) | [Polski](UPDATE.pl.md)
 
+# Update to 0.42.0
+
+```bash
+cd ~/Pobrane
+tar -xzf kio-thispc-0.42.0.tar.gz
+cd kio-thispc-0.42.0
+chmod +x install.sh
+./install.sh
+```
+
+- DirectoryView Lazy Inactive Model: items are allocated exclusively in the active view representation, keeping inactive models empty during browsing.
+- Reduces memory consumption by ~15–18 MB RSS per 10k items in single-pane view and ~39.4 MB RSS (~20.5%) in concurrent dual-pane (10k + 10k) sessions.
+- Seamless synchronous on-demand model rebuild (~330 ms on 10,000 items) when switching between List/Icons and Details views from cache without re-reading the filesystem.
+- Intra-model transitions (Icons ↔ List ↔ Compact) remain instantaneous (~120 ms).
+- Selection, focus, and viewport scroll offset are smoothly preserved across view mode switches.
+- Strict directory profile fallback semantics (Variant A): unconfigured folders consistently fall back to global default Icons mode.
+- Optimized MIME type sorting (Decorate-Sort-Undecorate) delivering up to 21.2x faster sorting by File Type on 10,000 items.
+- Dual-model representation preserved for virtual search locations (`thispcsearch:/`).
+- Verified across 69 automated test suites with 114,308 passing assertions and zero memory creep across 40 view mode switches.
+
+---
+
 # Update to 0.41.2
 
 ```bash

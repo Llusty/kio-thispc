@@ -3,7 +3,7 @@
  * thispc-view - a lightweight KDE/Qt file browser with a Windows-like
  * "This PC" home page, backed by KIO.
  *
- * Version 0.41.2
+ * Version 0.42.0
  * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
@@ -2457,14 +2457,14 @@ private:
         statusBar()->setSizeGripEnabled(true);
 
         m_versionLabel = new QLabel(
-            QStringLiteral("v0.41.2"),
+            QStringLiteral("v0.42.0"),
             this);
         m_versionLabel->setObjectName(
             QStringLiteral("versionLabel"));
         m_versionLabel->setToolTip(
             trLocal(
-                "Wersja thispc-view 0.41.2",
-                "thispc-view version 0.41.2"));
+                "Wersja thispc-view 0.42.0",
+                "thispc-view version 0.42.0"));
         statusBar()->addPermanentWidget(m_versionLabel);
     }
 

@@ -14,7 +14,7 @@ def main():
     rc_dir = repo_root / "rc-artifacts"
     rc_dir.mkdir(parents=True, exist_ok=True)
 
-    version = "0.41.2"
+    version = "0.42.0"
     archive_prefix = f"kio-thispc-{version}"
     tar_name = f"kio-thispc-{version}-rc.tar.gz"
     zip_name = f"kio-thispc-{version}-rc.zip"
