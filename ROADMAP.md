@@ -404,27 +404,60 @@ Planned follow-up release focusing on device detection and directory size metric
   - Robust handling of symbolic links, unreadable directories, and permission errors.
   - Performance optimization for large directory trees and complete Primary/Split view independence.
 
-### 0.42.0 — Administrator Fallback for Failed Operations
-When standard operations receive permission denied errors, provide targeted `admin://` retry prompts instead of requiring entire windows to run elevated.
+### 0.42.0 — Performance & Memory Optimization ✅ user-confirmed
+- MIME sorting optimization;
+- Primary/Split lazy inactive models;
+- Memory reduction and view virtualization footprint improvements;
+- Automated and manual acceptance FULL PASS (69/69 test suites, 114,308 assertions);
+- Official release published and installed.
 
-### 0.43.0 — Transfer Queue & Control
+### 0.43.0 — Administrator Fallback for Failed Operations ✅ user-confirmed
+When standard operations receive permission denied errors, provide targeted `admin://` retry prompts instead of requiring entire windows to run elevated.
+- **No Global Administrator Mode:** ThisPC never runs the graphical window as `root`; privilege elevation is strictly scoped to a single, explicitly confirmed operation via KDE's `admin://` KIO worker and PolicyKit (Polkit), with a single-use 60-second `AdminUserConsent` token and automatic retry-loop prevention (`AlreadyRetriedAsAdmin`).
+- **Supported GUI Operations (Central Allowlist `isGuiAdminRetryAllowed`):**
+  - *Copy File To Protected (`file://` → `admin://`):* Single regular local file copied into a protected directory without automatic overwrite.
+  - *Copy File From Protected (`admin://` → `file://`):* Single regular local file read via `admin://` and written to an unprivileged `file://` destination so the resulting file is owned by the standard user (`uid == getuid()`) with strict `0600` (`rw-------`) permissions.
+  - *Create Protected File (`admin://`):* Single file creation via `KIO::storedPut`, preserving template/initial payload (`thispcFileContents`) and structurally qualifying `KIO::ERR_CANNOT_TRUNCATE` (error 177) only when destination directory write denial (`EACCES`/`EPERM`) and absence of pre-existing targets/`.part` files are verified.
+  - *Create Protected Folder (`admin://`):* Single directory creation via `KIO::mkdir`.
+- **Blocked Operations & KIO Backend Limitations:**
+  - *Administrative Rename & Move (`BLOCKED` in GUI):* Security audit of KDE `kio-admin` (`RenameCommand::execute()` calling `QFile::rename()` → `rename(2)` without `RENAME_NOREPLACE`) confirmed the backend cannot guarantee atomic kernel-level no-overwrite against a race after preflight validation. Consequently, administrative `Rename` and `Move` remain strictly blocked in GUI (`OperationDisallowedInGui`).
+  - *Destructive, Batch & Non-Local Operations (`BLOCKED`):* Permanent deletion (`Delete`), `Trash`/`EmptyTrash`, multi-item batch operations, directory moves, symlinks/broken symlinks, hardlinks, archives, and virtual/remote schemes (`thispc:/`, `trash:/`, `mtp:/`, `smb:/`, `sftp:/`) are rejected fail-closed.
+- **Granular Error Classification, Localization & Polkit Semantics:**
+  - Distinguishes true permission denial (`EACCES`/`EPERM`, `ERR_ACCESS_DENIED`, `ERR_WRITE_ACCESS_DENIED`, `ERR_CANNOT_MKDIR`, `ERR_CANNOT_OPEN_FOR_READING`) from read-only filesystems (`ST_RDONLY`/`EROFS`), disk full (`ENOSPC`/`EDQUOT`), collisions (`EEXIST`), and missing paths (`ENOENT`).
+  - Localized Polish error diagnostics for atomic local move failure (`Nie można przenieść pliku atomowo.`), partial destination creation failure (`Nie można utworzyć tymczasowego pliku docelowego.`), and KIO error 177 (`ERR_CANNOT_TRUNCATE`), while keeping error qualification strictly decoupled from translated strings.
+  - Handles Polkit cancellation and authorization denial cleanly as `AuthorizationCancelledOrDenied` / `UserCancelled` without UI hangs or retry loops.
+- **Fail-Closed Artifact Preservation (`AdminArtifactOwnershipAudit`):**
+  - Automatic deletion (`::unlink`) of destination artifacts after failed or interrupted transfers is disabled because out-of-process KIO workers do not provide race-free inode provenance to the GUI client.
+  - Any partial or unverified artifact (including `.part` files) is preserved on disk, audited across 9 ownership/safety checks, reported clearly to the user, and protected against concurrent access via a process-wide active target path registry.
+- **Undo/Redo & Primary/Split View Integrity:**
+  - Privileged operations never record misleading unprivileged entries in `UndoController` or `LocalMoveHistory`, while preserving existing normal Undo/Redo history.
+  - `FileOperationContext` snapshots remain immutable across Primary/Split pane switches, pane swaps, clipboard changes, or Split View closure, and `OperationManager` tracks progress and cancellation cleanly.
+- **Staged Delivery Summary:**
+  - Stage 0 — Architecture & Safety Audit ✅ FULL PASS
+  - Stage 1 — Admin Retry Contract ✅ FULL PASS (67 assertions)
+  - Stage 2 — Safe Copy & Create ✅ FULL PASS (43 tests / 177 assertions + manual sandbox pass)
+  - Stage 3 — Rename & Move Security Gate ✅ CONDITIONAL PASS (43 tests / 71 assertions; blocked in GUI due to KIO non-atomic rename)
+  - Stage 4 — GUI Administrator Retry & Artifact Security Gate ✅ FULL PASS (72 tests / 228 assertions + 12/12 manual GUI acceptance pass)
+  - Stage 5 — Final Integration, Safety Regression & Release Readiness ✅ FULL PASS (17/17 automated scenarios / 161 assertions + 3/3 manual GUI spot-check; full regression 74/74 suites PASS)
+
+### 0.44.0 — Transfer Queue & Control
 - Serial vs. parallel transfer modes;
 - Concurrency limit configuration;
 - Operation priority and reordering;
 - Queue-wide pause, resume, and cancellation;
 - Optional bandwidth throttling where supported by the underlying backend.
 
-### 0.44.0 — Notifications + Operation History
+### 0.45.0 — Notifications + Operation History
 - Plasma desktop notifications for completed background tasks;
 - Recent operation log with source, destination, and result status;
 - Safe retry for eligible failed operations;
 - "Show in folder" action upon task completion.
 
-### 0.45.0 — Extensions / Service Actions
+### 0.46.0 — Extensions / Service Actions
 - Leverage KDE Service Actions and clean extension contracts instead of building a redundant bespoke plugin ecosystem;
 - Support adding custom context actions and integrations without editing core window sources.
 
-### 0.46.0 — Advanced Split Sync
+### 0.47.0 — Advanced Split Sync
 - Optional recursive comparison and synchronization;
 - Dry-run and plan preview before execution;
 - Ignore pattern support;
@@ -433,7 +466,7 @@ When standard operations receive permission denied errors, provide targeted `adm
 - Mirror/delete only as an explicit, high-risk mode with distinct confirmation;
 - Preserve safety models, preflight checks, and revalidation established in 0.31.
 
-### 0.47.0 — Image Printing / Print Pictures Workflow
+### 0.48.0 — Image Printing / Print Pictures Workflow
 - Replace and expand the single-item `Print` action with a predictable image-printing workflow;
 - Handle multiple selected image files in a single job, accepting supported formats and handling mixed selections gracefully;
 - Ergonomics inspired by Windows 11 "Print Pictures" without cloning pixel-for-pixel: large current-image preview, page count, and page navigation;

@@ -582,59 +582,77 @@ Planowane wydanie uzupełniające skupiające się na wykrywaniu urządzeń i me
   - Bezpieczna obsługa dowiązań symbolicznych, nieczytelnych katalogów i błędów uprawnień.
   - Optymalizacja dla dużych drzew katalogów oraz pełna niezależność paneli Primary/Split.
 
-### 0.42.0 — Administrator fallback for failed operations
-When a normal operation receives permission denied, offer a targeted `admin://` retry instead of requiring an entire window to run elevated.
+### 0.42.0 — Optymalizacja wydajności i pamięci ✅ potwierdzone przez użytkownika
+- Optymalizacja sortowania typów MIME;
+- Leniwa inicjalizacja nieaktywnych modeli Primary/Split;
+- Zmniejszenie narzutu pamięciowego wierszy i wirtualizacji widoków;
+- Zakończone procedury odbioru automatycznego i manualnego FULL PASS (69/69 zestawów, 114 308 asercji);
+- Oficjalne wydanie opublikowane i zainstalowane w systemie.
 
-### 0.43.0 — Transfer Queue & Control
-- serial vs parallel;
-- concurrency limit;
-- priorities/order;
-- queue-wide pause/resume/control;
-- optional bandwidth limit wyłącznie dla backendów, które realnie mogą go
-  zapewnić.
+### 0.43.0 — Ponawianie operacji z uprawnieniami administratora (Administrator Fallback) ✅ potwierdzone przez użytkownika
+Gdy zwykła operacja plikowa zakończy się błędem braku uprawnień (Permission Denied), ThisPC zaoferuje ukierunkowane ponowienie operacji za pośrednictwem `admin://` i PolicyKit, bez konieczności uruchamiania całej aplikacji jako root.
+- **Brak globalnego trybu administratora:** ThisPC nigdy nie uruchamia okna GUI jako `root`; podniesienie uprawnień jest ściśle ograniczone do pojedynczej, jawnie potwierdzonej operacji przez worker KIO `admin://` i PolicyKit (Polkit), z jednorazowym tokenem zgody `AdminUserConsent` (ważnym 60 s) oraz blokadą pętli ponowień (`AlreadyRetriedAsAdmin`).
+- **Obsługiwane operacje GUI (centralna allowlista `isGuiAdminRetryAllowed`):**
+  - *Copy File To Protected (`file://` → `admin://`):* Kopiowanie pojedynczego zwykłego pliku lokalnego do chronionego katalogu bez automatycznego nadpisywania.
+  - *Copy File From Protected (`admin://` → `file://`):* Odczyt pojedynczego chronionego pliku przez `admin://` i zapis do nieuprzywilejowanego celu `file://`, dzięki czemu plik docelowy należy do zwykłego użytkownika (`uid == getuid()`) i otrzymuje rygorystyczne uprawnienia `0600` (`rw-------`).
+  - *Create Protected File (`admin://`):* Tworzenie pojedynczego pliku przez `KIO::storedPut` z zachowaniem zawartości szablonu (`thispcFileContents`) oraz strukturalną weryfikacją błędu `KIO::ERR_CANNOT_TRUNCATE` (kod 177) wyłącznie przy potwierdzonym braku praw zapisu w katalogu docelowym i braku wcześniejszych plików/artefaktów `.part`.
+  - *Create Protected Folder (`admin://`):* Tworzenie pojedynczego katalogu przez `KIO::mkdir`.
+- **Operacje zablokowane i ograniczenia backendu KIO:**
+  - *Administracyjne Rename i Move (`BLOCKED` w GUI):* Audyt bezpieczeństwa KDE `kio-admin` (`RenameCommand::execute()` wywołujący `QFile::rename()` → `rename(2)` bez flagi `RENAME_NOREPLACE`) wykazał brak atomowej gwarancji nie-nadpisywania celu na poziomie jądra po walidacji preflight. W konsekwencji administracyjne `Rename` oraz `Move` pozostają bezwzględnie zablokowane w GUI (`OperationDisallowedInGui`).
+  - *Operacje niszczące, wieloplikowe i nielokalne (`BLOCKED`):* Trwałe usuwanie (`Delete`), operacje Kosza (`Trash`/`EmptyTrash`), operacje wieloplikowe (batch), przenoszenie katalogów, dowiązania symboliczne i uszkodzone symlinki, twarde dowiązania (hardlinks), archiwa oraz protokoły wirtualne/zdalne (`thispc:/`, `trash:/`, `mtp:/`, `smb:/`, `sftp:/`) są odrzucane w trybie fail-closed.
+- **Strukturalna klasyfikacja błędów, lokalizacja i obsługa Polkit:**
+  - Odróżnianie rzeczywistej odmowy uprawnień (`EACCES`/`EPERM`, `ERR_ACCESS_DENIED`, `ERR_WRITE_ACCESS_DENIED`, `ERR_CANNOT_MKDIR`, `ERR_CANNOT_OPEN_FOR_READING`) od systemów plików tylko do odczytu (`ST_RDONLY`/`EROFS`), braku miejsca (`ENOSPC`/`EDQUOT`), kolizji nazw (`EEXIST`) i brakujących ścieżek (`ENOENT`).
+  - Spolszczone komunikaty diagnostyczne błędów dla nieatomowego przeniesienia (`Nie można przenieść pliku atomowo.`), tworzenia tymczasowego pliku docelowego (`Nie można utworzyć tymczasowego pliku docelowego.`) oraz błędu KIO 177 (`ERR_CANNOT_TRUNCATE`), przy całkowitej niezależności kwalifikacji błędów od tekstu tłumaczenia.
+  - Czysta obsługa anulowania lub odmowy autoryzacji Polkit jako `AuthorizationCancelledOrDenied` / `UserCancelled` bez zawieszania GUI i bez ponownych pytań.
+- **Zasada zachowania danych i artefaktów po błędach (`AdminArtifactOwnershipAudit`):**
+  - Automatyczne usuwanie (`::unlink`) plików docelowych po nieudanych lub przerwanych transferach jest wyłączone, ponieważ zewnętrzny worker KIO nie przekazuje klientowi GUI kryptograficznie ani atomowo zweryfikowanego dowodu utworzenia i-węzła.
+  - Każdy częściowy lub niezweryfikowany artefakt (w tym `.part`) zostaje zachowany na dysku, przechodzi 9-punktowy audyt własności i bezpieczeństwa, jest jawnie komunikowany użytkownikowi oraz chroniony przez globalny rejestr aktywnych ścieżek docelowych.
+- **Integralność Undo/Redo oraz Primary/Split View:**
+  - Operacje uprzywilejowane nie dodają pozornych wpisów do nieuprzywilejowanego `UndoController` ani `LocalMoveHistory`, zachowując jednocześnie nienaruszoną historię zwykłych operacji Undo/Redo.
+  - Kontekst `FileOperationContext` pozostaje niemutowalny przy przełączaniu lub zamianie paneli Primary/Split, zmianie schowka czy zamknięciu Split View, a `OperationManager` poprawnie śledzi postęp i anulowanie.
+- **Podsumowanie etapów wdrożenia:**
+  - Stage 0 — Architecture & Safety Audit ✅ FULL PASS
+  - Stage 1 — Admin Retry Contract ✅ FULL PASS (67 asercji)
+  - Stage 2 — Safe Copy & Create ✅ FULL PASS (43 testy / 177 asercji + odbiór manualny)
+  - Stage 3 — Rename & Move Security Gate ✅ CONDITIONAL PASS (43 testy / 71 asercji; zablokowane w GUI z powodu braku atomowego no-overwrite w KIO)
+  - Stage 4 — GUI Administrator Retry & Artifact Security Gate ✅ FULL PASS (72 testy / 228 asercji + 12/12 scenariuszy odbioru manualnego GUI)
+  - Stage 5 — Final Integration, Safety Regression & Release Readiness ✅ FULL PASS (17/17 scenariuszy automatycznych / 161 asercji + 3/3 manual GUI spot-check; pełna regresja 74/74 zestawy PASS)
 
-### 0.44.0 — Notifications + Operation History
-- Plasma notification for long/background completions;
-- recent operation log with source/destination/result;
-- retry where meaningful and safe;
-- „Show in folder” po zakończeniu tam, gdzie ma sens.
+### 0.44.0 — Kolejka i kontrola transferów (Transfer Queue & Control)
+- Tryby transferu: szeregowy vs równoległy;
+- Konfiguracja limitu jednoczesnych operacji;
+- Priorytetyzacja i zmiana kolejności zadań w kolejce;
+- Wstrzymywanie, wznawianie i anulowanie dla całej kolejki;
+- Opcjonalne ograniczanie przepustowości (bandwidth throttling) wyłącznie dla backendów, które realnie mogą je zapewnić.
 
-### 0.45.0 — Extensions / Service Actions
-- preferować wykorzystanie KDE Service Actions i prostego extension contract
-  zamiast budowania pełnego własnego plugin ecosystemu bez konkretnej potrzeby;
-- pozwolić dodawać nowe context actions i integracje bez edycji core window source.
+### 0.45.0 — Powiadomienia i historia operacji (Notifications + Operation History)
+- Powiadomienia pulpitu KDE Plasma o zakończeniu długich operacji w tle;
+- Dziennik ostatnich operacji ze ścieżkami źródła, celu i statusem wyniku;
+- Bezpieczne ponawianie dla operacji kwalifikujących się do powtórzenia;
+- Akcja „Pokaż w folderze” po zakończeniu zadania tam, gdzie ma to sens.
 
-### 0.46.0 — Advanced Split Sync
-- opcjonalne recursive compare/sync;
-- dry-run i plan preview przed wykonaniem;
-- ignore patterns;
-- jawne conflict policies;
-- domyślnie nadal zero-delete;
-- mirror/delete dopiero jako jawny, wyraźnie niebezpieczny tryb z osobnym
-  potwierdzeniem;
-- zachować model safety, preflight i revalidation wypracowany w 0.31.
+### 0.46.0 — Rozszerzenia i akcje usług (Extensions / Service Actions)
+- Preferować wykorzystanie KDE Service Actions i prostego kontraktu rozszerzeń zamiast budowania pełnego własnego ekosystemu wtyczek bez konkretnej potrzeby;
+- Pozwolić dodawać nowe akcje menu kontekstowego i integracje bez edycji kodu źródłowego głównego okna.
 
-### 0.47.0 — Image Printing / Print Pictures workflow
-- zastąpić i rozszerzyć obecną pojedynczą ścieżkę `Print` własnym, przewidywalnym
-  workflow drukowania obrazów; obecnie `Print` jest wyłączone przy zaznaczeniu
-  wielu obrazów i samo odblokowanie starej akcji nie jest rozwiązaniem;
-- obsłużyć kilka lub kilkanaście zaznaczonych plików graficznych w jednym
-  zadaniu, z bezpiecznym dopuszczaniem tylko wspieranych formatów i czytelną
-  obsługą mixed selection;
-- zapewnić ergonomię zbliżoną funkcjonalnie do Windows 11 „Print Pictures”, bez
-  kopiowania wyglądu 1:1: duży podgląd bieżącej strony/obrazu, liczba stron oraz
-  nawigacja po stronach zestawu;
-- dodać chooser presetów układu, np. cała strona, 13×18, 10×15 oraz wiele zdjęć
-  na stronie; opcjonalny contact sheet traktować jako naturalne rozszerzenie;
-- udostępnić wybór drukarki, rozmiaru papieru, liczby kopii i przełącznik
-  fit-to-frame/crop, a jakość/DPI oraz typ papieru/nośnika pokazywać tylko wtedy,
-  gdy backend lub sterownik faktycznie zgłasza takie możliwości;
-- korzystać z Qt Print Support oraz wykrywania capabilities przez CUPS/IPP tam,
-  gdzie jest to dostępne; nie hardcode'ować opcji niewspieranych przez drukarkę;
-- utrzymać preview i layout engine na tyle niezależne od systemowego modalnego
-  print dialogu, aby UX oraz wynik rozmieszczenia były przewidywalne;
-- zapewnić identyczne działanie dla Primary i Split View oraz testy layoutu,
-  paginacji, capability fallback, mixed selection i wieloplikowego jobu.
+### 0.47.0 — Zaawansowana synchronizacja paneli (Advanced Split Sync)
+- Opcjonalne rekurencyjne porównywanie i synchronizacja katalogów w Split View;
+- Tryb symulacji (dry-run) i podgląd planu przed wykonaniem;
+- Obsługa wzorców ignorowania (ignore patterns);
+- Jawne zasady rozwiązywania konfliktów (conflict policies);
+- Domyślnie nadal tryb zachowawczy (zero-delete);
+- Tryb lustrzany/usuwanie dopiero jako jawny, wyraźnie niebezpieczny tryb z osobnym potwierdzeniem;
+- Zachować model bezpieczeństwa, preflight i rewalidację wypracowaną w wersji 0.31.
+
+### 0.48.0 — Drukowanie obrazów (Image Printing / Print Pictures Workflow)
+- Zastąpić i rozszerzyć obecną pojedynczą ścieżkę `Print` własnym, przewidywalnym workflow drukowania obrazów; obecnie `Print` jest wyłączone przy zaznaczeniu wielu obrazów i samo odblokowanie starej akcji nie jest rozwiązaniem;
+- Obsłużyć kilka lub kilkanaście zaznaczonych plików graficznych w jednym zadaniu, z bezpiecznym dopuszczaniem tylko wspieranych formatów i czytelną obsługą mixed selection;
+- Zapewnić ergonomię zbliżoną funkcjonalnie do Windows 11 „Print Pictures”, bez kopiowania wyglądu 1:1: duży podgląd bieżącej strony/obrazu, liczba stron oraz nawigacja po stronach zestawu;
+- Dodać chooser presetów układu, np. cała strona, 13×18, 10×15 oraz wiele zdjęć na stronie; opcjonalny contact sheet traktować jako naturalne rozszerzenie;
+- Udostępnić wybór drukarki, rozmiaru papieru, liczby kopii i przełącznik fit-to-frame/crop, a jakość/DPI oraz typ papieru/nośnika pokazywać tylko wtedy, gdy backend lub sterownik faktycznie zgłasza takie możliwości;
+- Korzystać z Qt Print Support oraz wykrywania capabilities przez CUPS/IPP tam, gdzie jest to dostępne; nie hardcode'ować opcji niewspieranych przez drukarkę;
+- Utrzymać preview i layout engine na tyle niezależne od systemowego modalnego print dialogu, aby UX oraz wynik rozmieszczenia były przewidywalne;
+- Zapewnić identyczne działanie dla Primary i Split View oraz testy layoutu, paginacji, capability fallback, mixed selection i wieloplikowego jobu.
 
 ## Backlog bez przypisanej wersji
 

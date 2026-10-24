@@ -767,6 +767,9 @@ int main(int argc, char **argv)
 
     // Restore the original two-item fixture expected by the remaining pane
     // action matrix.
+    if (window.m_watchController) {
+        window.m_watchController->clear();
+    }
     fill(window.m_directoryList, window.m_directoryDetails, left);
     fill(window.m_splitPane->listView(), window.m_splitPane->detailsView(), right);
 

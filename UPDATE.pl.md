@@ -1,5 +1,26 @@
 [English](UPDATE.md) | [Polski](UPDATE.pl.md)
 
+# Aktualizacja do 0.43.0
+
+```bash
+cd ~/Pobrane
+tar -xzf kio-thispc-0.43.0.tar.gz
+cd kio-thispc-0.43.0
+chmod +x install.sh
+./install.sh
+```
+
+- Ukierunkowane ponawianie operacji z uprawnieniami administratora przez worker KIO `admin://` i PolicyKit (Polkit) po błędach braku uprawnień dla obsługiwanych pojedynczych operacji lokalnych — bez uruchamiania okna GUI jako `root`.
+- Dwustopniowe potwierdzenie („Ponów jako administrator” → „Wykonaj jako administrator”) zabezpieczone jednorazowym, 60-sekundowym tokenem `AdminUserConsent` powiązanym skrótem SHA-256 z planem wykonania.
+- Obsługiwane operacje GUI: `CopyFileToProtected` (`file://` → `admin://`), `CopyFileFromProtected` (`admin://` → `file://` tworzące plik należący do użytkownika z uprawnieniami `0600`), `CreateFileProtected` (wraz ze strukturalną kwalifikacją błędu KIO 177 / `ERR_CANNOT_TRUNCATE` i zachowaniem zawartości początkowej) oraz `CreateFolderProtected`.
+- Administracyjne `Rename` i `Move` pozostają celowo **ZABLOKOWANE** w GUI ze względów bezpieczeństwa (brak atomowej gwarancji `RENAME_NOREPLACE` w backendzie KDE `kio-admin`).
+- Bezwzględny zakaz automatycznego nadpisywania istniejących plików (`TargetAlreadyExistsNoOverwrite` / `TargetExistsCollision`) oraz polityka fail-closed zachowania artefaktów po nieudanych transferach (`AdminArtifactOwnershipAudit`, `canAutoDelete() == false`).
+- Izolacja historii Cofnij/Ponów (brak pozornych wpisów dla operacji uprzywilejowanych) oraz niemutowalny kontekst Primary/Split View.
+- Polska lokalizacja komunikatów błędu utworzenia tymczasowego pliku docelowego (`Nie można utworzyć tymczasowego pliku docelowego.`), nieatomowego przeniesienia (`Nie można przenieść pliku atomowo.`) oraz błędu KIO 177.
+- Potwierdzone przejściem 74 zestawów testów regresyjnych (704 asercje Administrator Retry) oraz 15 scenariuszy manualnych GUI.
+
+---
+
 # Aktualizacja do 0.42.0
 
 ```bash

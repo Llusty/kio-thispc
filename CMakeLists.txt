@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(kio-thispc VERSION 0.42.0 LANGUAGES CXX)
+project(kio-thispc VERSION 0.43.0 LANGUAGES CXX)
 
 set(QT_MIN_VERSION "6.5.0")
 set(KF_MIN_VERSION "6.17.0")
@@ -111,6 +111,9 @@ add_executable(thispc-view
     src/tabcontroller.cpp
     src/tabcontroller.h
     src/thispcview.cpp
+    src/adminretrycontract.h
+    src/adminretrycontroller.h
+    src/adminretryexecutor.h
     src/archive-creation.h
     src/archive-detection.h
     src/archive-extraction.h
@@ -256,6 +259,9 @@ add_executable(thispc-view-stage3c1-test EXCLUDE_FROM_ALL
     src/tabcontroller.cpp
     src/tabcontroller.h
     src/thispcview.cpp
+    src/adminretrycontract.h
+    src/adminretrycontroller.h
+    src/adminretryexecutor.h
     src/archive-creation.h
     src/archive-detection.h
     src/archive-extraction.h

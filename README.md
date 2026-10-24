@@ -1,12 +1,38 @@
 [English](README.md) | [Polski](README.pl.md)
 
-# kio-thispc (This PC) 0.42.0
+# kio-thispc (This PC) 0.43.0
 
 ThisPC is a native KDE/Qt file manager focused on a Windows Explorer-like workflow, dual-pane operation, KIO integration, safe local file operations, and native KDE/Linux device handling.
 
 - **Platform:** Linux / KDE Plasma 6
 - **Frameworks:** Qt 6 / KDE Frameworks 6
 - **License:** MIT License
+
+---
+
+## 0.43.0 — Administrator Fallback for Failed Operations
+
+- **Scoped Administrator Retry via `admin://` & PolicyKit (No Root GUI):**
+  - When an eligible single-item local operation fails due to insufficient permissions (`EACCES`/`EPERM`, `KIO::ERR_ACCESS_DENIED`, `KIO::ERR_WRITE_ACCESS_DENIED`, `KIO::ERR_CANNOT_MKDIR`, `KIO::ERR_CANNOT_OPEN_FOR_READING`, or structurally verified `KIO::ERR_CANNOT_TRUNCATE` / error 177), ThisPC offers a two-step confirmation flow ("Retry as Administrator" → "Execute as Administrator") instead of running the application window as `root`.
+  - Requires an explicit, single-use, 60-second SHA-256 bound `AdminUserConsent` token before dispatching a single KIO job through KDE's `admin://` worker and PolicyKit (Polkit).
+  - Never switches the active browsing pane, address bar, tabs, or navigation history to `admin://` and prevents automatic retry loops (`AlreadyRetriedAsAdmin`).
+- **Supported GUI Operations (Central Allowlist `isGuiAdminRetryAllowed`):**
+  - **Copy File To Protected (`file://` → `admin://`):** Copies a single regular local file into a protected directory without automatic overwrite.
+  - **Copy File From Protected (`admin://` → `file://`):** Reads a single protected local file via `admin://` into a private user-owned staging file (`0600`) and atomically publishes it to the destination so the resulting file is owned by the standard user (`uid == getuid()`) with strict `0600` (`rw-------`) permissions.
+  - **Create Protected File (`admin://`):** Creates a single file in a protected directory while preserving template/initial payload (`thispcFileContents`) and structurally qualifying KIO error 177 (`ERR_CANNOT_TRUNCATE` on `.part`) only when parent directory write denial (`EACCES`/`EPERM`) and absence of pre-existing targets/`.part` files are verified.
+  - **Create Protected Folder (`admin://`):** Creates a single directory in a protected parent folder via `KIO::mkdir`.
+- **Blocked Operations & Security Boundaries:**
+  - **Administrative Rename & Move (`BLOCKED` in GUI):** Security audit of KDE's `kio-admin` backend (`RenameCommand::execute()` invoking `QFile::rename()` → `rename(2)` without `RENAME_NOREPLACE`) confirmed the backend cannot guarantee atomic kernel-level no-overwrite against a race after preflight validation. Administrative `Rename` and `Move` are therefore strictly blocked in GUI (`OperationDisallowedInGui`).
+  - **Destructive, Batch & Non-Local Operations (`BLOCKED`):** Permanent deletion (`Delete`), `Trash`/`EmptyTrash`, multi-item batch selections, directory copy/move, symlinks and broken symlinks (`lstat`), hardlinks (`st_nlink > 1`), archives, and virtual/remote protocols (`thispc:/`, `trash:/`, `mtp:/`, `smb:/`, `sftp:/`) are rejected fail-closed.
+  - **No Automatic Overwrite:** Existing target files or directories immediately disqualify Administrator Retry (`TargetAlreadyExistsNoOverwrite` / `TargetExistsCollision`).
+- **Fail-Closed Artifact Preservation & Ownership Audit:**
+  - Automatic deletion (`::unlink`) of destination artifacts after failed or interrupted privileged transfers is disabled (`AdminArtifactOwnershipAudit`, `canAutoDelete() == false`) because out-of-process KIO workers do not provide race-free inode creation provenance. Any partial or unverified artifact is preserved on disk and reported to the user.
+- **Undo/Redo, Primary/Split View & Localization:**
+  - Privileged operations never record misleading unprivileged Undo entries in `UndoController` or `LocalMoveHistory`, while keeping existing normal Undo/Redo history intact.
+  - Captured `FileOperationContext` remains immutable across Primary/Split pane switches, swaps, clipboard updates, or Split View closure.
+  - Added Polish localization for atomic move failure (`Nie można przenieść pliku atomowo.`), partial destination creation failure (`Nie można utworzyć tymczasowego pliku docelowego.`), and KIO error 177 diagnostics, with error qualification strictly decoupled from translated strings.
+- **Verification & Regression:**
+  - Verified across 74 automated regression test suites (including 5 Administrator Retry suites with 704 assertions) and 15 manual GUI acceptance scenarios (Stage 4 12/12 + Stage 5 3/3 PASS).
 
 ---
 
@@ -401,8 +427,8 @@ Features from 0.15.4 — compact operations popup, dynamic height, task cancella
 
 ```bash
 cd ~/Downloads
-tar -xzf kio-thispc-0.42.0.tar.gz
-cd kio-thispc-0.42.0
+tar -xzf kio-thispc-0.43.0.tar.gz
+cd kio-thispc-0.43.0
 chmod +x install.sh
 ./install.sh
 ```

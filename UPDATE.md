@@ -1,5 +1,26 @@
 [English](UPDATE.md) | [Polski](UPDATE.pl.md)
 
+# Update to 0.43.0
+
+```bash
+cd ~/Pobrane
+tar -xzf kio-thispc-0.43.0.tar.gz
+cd kio-thispc-0.43.0
+chmod +x install.sh
+./install.sh
+```
+
+- Scoped Administrator Retry via KDE's `admin://` worker and PolicyKit (Polkit) for eligible single-item local operations failing with permission denial — never running the GUI window as `root`.
+- Two-step confirmation workflow ("Retry as Administrator" → "Execute as Administrator") backed by a single-use, 60-second SHA-256 bound `AdminUserConsent` token.
+- Supported GUI operations: `CopyFileToProtected` (`file://` → `admin://`), `CopyFileFromProtected` (`admin://` → `file://` producing user-owned `0600` files), `CreateFileProtected` (including structural qualification of KIO error 177 / `ERR_CANNOT_TRUNCATE` and payload preservation), and `CreateFolderProtected`.
+- Administrative `Rename` and `Move` remain intentionally **BLOCKED** in GUI due to lack of atomic `RENAME_NOREPLACE` no-overwrite guarantees in KDE's `kio-admin` backend.
+- Strict no-overwrite policy (`TargetAlreadyExistsNoOverwrite` / `TargetExistsCollision`) and fail-closed artifact preservation (`AdminArtifactOwnershipAudit`, `canAutoDelete() == false`).
+- Full Undo/Redo isolation (no fake unprivileged Undo entries) and immutable Primary/Split View context bindings.
+- Localized Polish diagnostics for partial destination creation (`Nie można utworzyć tymczasowego pliku docelowego.`), atomic move failure (`Nie można przenieść pliku atomowo.`), and KIO error 177.
+- Verified across 74 automated regression suites (704 Administrator Retry assertions) and 15 manual GUI scenarios.
+
+---
+
 # Update to 0.42.0
 
 ```bash

@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Sebastian Harasim
 # SPDX-License-Identifier: MIT
 
+import argparse
 import hashlib
 import os
 from pathlib import Path
@@ -10,18 +11,32 @@ import subprocess
 import sys
 
 def main():
-    repo_root = Path(__file__).resolve().parents[1]
-    rc_dir = repo_root / "rc-artifacts"
-    rc_dir.mkdir(parents=True, exist_ok=True)
+    parser = argparse.ArgumentParser(description="Build and verify ThisPC Release Candidate archives.")
+    parser.add_argument("--output-dir", default=os.environ.get("THISPC_RC_OUTPUT_DIR", ""),
+                        help="Output directory for RC archives and manifests.")
+    parser.add_argument("--work-dir", default=os.environ.get("THISPC_RC_WORK_DIR", ""),
+                        help="Working directory for staging and verification builds.")
+    parser.add_argument("--rc-tag", default="rc1",
+                        help="Release candidate suffix for archive filenames (default: rc1).")
+    parser.add_argument("--keep-verify-dir", action="store_true",
+                        help="Retain the extracted verification build directory.")
+    args = parser.parse_args()
 
-    version = "0.42.0"
+    repo_root = Path(__file__).resolve().parents[1]
+    rc_dir = Path(args.output_dir).resolve() if args.output_dir else (repo_root / "rc-artifacts")
+    rc_dir.mkdir(parents=True, exist_ok=True)
+    work_root = Path(args.work_dir).resolve() if args.work_dir else Path("/tmp")
+    work_root.mkdir(parents=True, exist_ok=True)
+
+    version = "0.43.0"
+    rc_suffix = f"-{args.rc_tag}" if args.rc_tag else "-rc"
     archive_prefix = f"kio-thispc-{version}"
-    tar_name = f"kio-thispc-{version}-rc.tar.gz"
-    zip_name = f"kio-thispc-{version}-rc.zip"
+    tar_name = f"kio-thispc-{version}{rc_suffix}.tar.gz"
+    zip_name = f"kio-thispc-{version}{rc_suffix}.zip"
     tar_path = rc_dir / tar_name
     zip_path = rc_dir / zip_name
 
-    # 1. Collect files to include
+    # 1. Collect files to include (inherits GIT_INDEX_FILE when set)
     result = subprocess.run(
         ["git", "ls-files"],
         cwd=repo_root,
@@ -32,25 +47,22 @@ def main():
     tracked_files = [Path(line.strip()) for line in result.stdout.splitlines() if line.strip()]
 
     new_files = [
-        Path("docs/DIRECTORY_REFRESH_CONTRACT_STAGE1.md"),
-        Path("docs/MTP_PERMANENT_DELETE_CONTRACT_STAGE2.md"),
-        Path("docs/SMART_DELETE_FALLBACK_STAGE2_3.md"),
-        Path("docs/RELEASE_CHECKLIST_040_DRAFT.md"),
-        Path("docs/RELEASE_NOTES_040_DRAFT.md"),
-        Path("src/directorywatchcontroller.cpp"),
-        Path("src/directorywatchcontroller.h"),
-        Path("tests/directory-refresh-contract-spec.h"),
-        Path("tests/directory-refresh.cpp"),
-        Path("tests/mtp-permanent-delete-contract-spec.h"),
-        Path("tests/mtp-permanent-delete.cpp"),
-        Path("tests/run-directory-refresh-tests.py"),
-        Path("tests/run-mtp-permanent-delete-tests.py"),
-        Path("tests/run-smart-delete-fallback-tests.py"),
-        Path("tests/smart-delete-fallback-contract-spec.h"),
-        Path("tests/smart-delete-fallback.cpp"),
+        Path("src/adminretrycontract.h"),
+        Path("src/adminretrycontroller.h"),
+        Path("src/adminretryexecutor.h"),
+        Path("tests/admin-retry.cpp"),
+        Path("tests/admin-retry-stage2.cpp"),
+        Path("tests/admin-retry-stage3.cpp"),
+        Path("tests/admin-retry-stage4.cpp"),
+        Path("tests/admin-retry-stage5.cpp"),
     ]
 
-    all_files = set(tracked_files)
+    forbidden_prefixes = ("release-artifacts/", "rc-artifacts/", "build/")
+    all_files = set()
+    for tf in tracked_files:
+        rel_str = tf.as_posix()
+        if not rel_str.startswith(forbidden_prefixes) and (repo_root / tf).is_file():
+            all_files.add(tf)
     for nf in new_files:
         if (repo_root / nf).is_file():
             all_files.add(nf)
@@ -58,17 +70,22 @@ def main():
     print(f"Collected {len(all_files)} files for packaging.")
 
     # 2. Stage into a clean directory
-    staging_base = Path("/tmp/thispc-rc-staging")
+    staging_base = work_root / "thispc-rc-staging"
     if staging_base.exists():
         shutil.rmtree(staging_base)
     staging_target = staging_base / archive_prefix
     staging_target.mkdir(parents=True, exist_ok=True)
 
-    for rel_path in sorted(all_files):
+    sorted_files = sorted(all_files)
+    for rel_path in sorted_files:
         src = repo_root / rel_path
         dst = staging_target / rel_path
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
+
+    # Write source file list manifest
+    source_list_file = rc_dir / "SOURCE_FILES.txt"
+    source_list_file.write_text("".join(f"{archive_prefix}/{p.as_posix()}\n" for p in sorted_files))
 
     # 3. Create tar.gz archive
     if tar_path.exists():
@@ -104,8 +121,8 @@ def main():
     sums_file.write_text("".join(sha_lines))
     print(f"Wrote SHA256SUMS:\n{sums_file.read_text()}")
 
-    # 6. Verify extraction and build in /tmp
-    verify_dir = Path("/tmp/thispc-rc-verify")
+    # 6. Verify extraction and build
+    verify_dir = work_root / "thispc-rc-verify"
     if verify_dir.exists():
         shutil.rmtree(verify_dir)
     verify_dir.mkdir(parents=True, exist_ok=True)
@@ -118,6 +135,9 @@ def main():
 
     extracted_root = verify_dir / archive_prefix
     assert extracted_root.is_dir(), f"Extracted directory {extracted_root} not found"
+
+    for req_file in new_files:
+        assert (extracted_root / req_file).is_file(), f"Missing new 0.43.0 file in extracted archive: {req_file}"
 
     print("Configuring extracted build...")
     subprocess.run(
@@ -143,10 +163,27 @@ def main():
         check=True,
     )
 
+    # Write completeness report
+    completeness_file = rc_dir / "COMPLETENESS_REPORT.md"
+    completeness_lines = [
+        f"# ThisPC {version} ({args.rc_tag.upper()}) — Source Archive Completeness Report\n\n",
+        f"- **Version:** `{version}`\n",
+        f"- **Archive Prefix:** `{archive_prefix}/`\n",
+        f"- **Total Packaged Files:** `{len(sorted_files)}`\n",
+        f"- **Tarball:** `{tar_name}` (`{tar_path.stat().st_size}` bytes)\n",
+        f"- **Zip Archive:** `{zip_name}` (`{zip_path.stat().st_size}` bytes)\n",
+        f"- **Extracted Independent Build:** `PASS`\n",
+        f"- **Extracted CLI `--version`:** `{ver_out.strip()}` (`PASS`)\n\n",
+        "## Verified 0.43.0 New Files Included (8/8)\n\n",
+    ]
+    for nf in new_files:
+        completeness_lines.append(f"- `{archive_prefix}/{nf.as_posix()}` — PRESENT\n")
+    completeness_file.write_text("".join(completeness_lines))
+
     print("SUCCESS: Release Candidate archives created and verified successfully.")
-    # Clean up staging and verify dirs
     shutil.rmtree(staging_base)
-    shutil.rmtree(verify_dir)
+    if not args.keep_verify_dir:
+        shutil.rmtree(verify_dir)
 
 if __name__ == "__main__":
     main()

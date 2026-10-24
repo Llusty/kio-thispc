@@ -13,6 +13,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QList>
+#include <QLocale>
 #include <QStorageInfo>
 #include <QTimer>
 #include <QUrl>
@@ -91,6 +92,7 @@ public:
     QUrl destinationUrl() const { return m_destination; }
     LocalFileMoveError moveError() const { return m_moveError; }
     bool usedAtomicMove() const { return m_usedAtomicMove; }
+    int systemError() const { return m_systemError; }
 
 protected:
     bool doKill() override
@@ -149,8 +151,11 @@ private:
         if (!m_overwrite && m_strategy == LocalFileMoveStrategy::Automatic && sameStorage) {
             m_usedAtomicMove = true;
             if (!QFile::rename(m_source.toLocalFile(), m_destination.toLocalFile())) {
+                m_systemError = errno;
                 finish(LocalFileMoveError::AtomicMove,
-                       tr("Could not move the file atomically."));
+                       QLocale().language() == QLocale::Polish
+                           ? QStringLiteral("Nie można przenieść pliku atomowo.")
+                           : tr("Could not move the file atomically."));
                 return;
             }
             setProcessedAmount(KJob::Bytes, m_sourceSize);
@@ -186,6 +191,7 @@ private:
                 this, [this](KJob *completed) {
                     if (m_finished) return;
                     if (completed->error() != KJob::NoError) {
+                        m_systemError = m_copyJob->systemError();
                         finish(completed->error() == KJob::KilledJobError
                                    ? LocalFileMoveError::Cancelled
                                    : LocalFileMoveError::Copy,
@@ -236,6 +242,9 @@ private:
         m_moveError = error;
         setProperty("thispcDestinationReplaced",
                     m_overwrite && !m_originalDestination.matches(m_destination.toLocalFile()));
+        if (m_systemError != 0) {
+            setProperty("thispcSystemError", m_systemError);
+        }
         if (error == LocalFileMoveError::Cancelled) {
             setError(KJob::KilledJobError);
         } else if (error != LocalFileMoveError::None) {
@@ -259,6 +268,7 @@ private:
     bool m_finished = false;
     bool m_usedAtomicMove = false;
     LocalFileMoveError m_moveError = LocalFileMoveError::None;
+    int m_systemError = 0;
 };
 
 

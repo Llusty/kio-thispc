@@ -1623,6 +1623,7 @@ private:
         // protocol that honors KIO's contract must fail a post-check race.
         KIO::StoredTransferJob *job = KIO::storedPut(
             contents, destination, -1, KIO::HideProgressInfo);
+        job->setProperty("thispcFileContents", contents);
         job->setUiDelegate(nullptr);
         FileOperationContext context;
         context.type = FileOperationType::CreateFile;

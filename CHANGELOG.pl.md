@@ -2,6 +2,31 @@
 
 # Changelog
 
+## 0.43.0 — Ponawianie operacji z uprawnieniami administratora (Administrator Fallback)
+
+- **Architektura ukierunkowanego ponawiania administracyjnego (`AdminRetryContract`, `AdminRetryController`, `AdminRetryExecutor`):**
+  - Wprowadzono mechanizm ponawiania operacji przez worker KIO `admin://` i PolicyKit (Polkit) po wystąpieniu błędu braku uprawnień dla pojedynczych operacji lokalnych, bez uruchamiania okna GUI jako `root`.
+  - Wdrożono dwustopniowy proces potwierdzenia przez użytkownika (okno propozycji + okno potwierdzenia planu wykonania) zabezpieczony jednorazowym, ważnym przez 60 sekund tokenem `AdminUserConsent` powiązanym skrótem SHA-256 z planem oraz ochroną przed pętlami ponowień (`AlreadyRetriedAsAdmin`).
+  - Adresy URL paneli, pasek adresu, karty oraz historia nawigacji pozostają ściśle w nieuprzywilejowanych schematach (`file://`, `thispc:/`).
+- **Obsługiwane operacje GUI (centralna allowlista `isGuiAdminRetryAllowed`):**
+  - `CopyFileToProtected` (`file://` → `admin://`): kopiowanie pojedynczego zwykłego pliku lokalnego do chronionego katalogu bez automatycznego nadpisywania.
+  - `CopyFileFromProtected` (`admin://` → `file://`): odczyt pojedynczego chronionego pliku przez `admin://` do prywatnego pliku tymczasowego użytkownika (`0600`) i atomowa publikacja w miejscu docelowym, dzięki czemu wynikowy plik należy do zwykłego użytkownika (`uid == getuid()`) i ma uprawnienia `0600` (`rw-------`).
+  - `CreateFileProtected` (`admin://`): tworzenie pojedynczego pliku w chronionym katalogu z zachowaniem zawartości początkowej (`thispcFileContents`) oraz strukturalną kwalifikacją błędu `KIO::ERR_CANNOT_TRUNCATE` (kod 177 na pliku `.part`) wyłącznie przy potwierdzonym braku praw zapisu w katalogu nadrzędnym (`EACCES`/`EPERM`) i braku wcześniejszych plików/artefaktów `.part`.
+  - `CreateFolderProtected` (`admin://`): tworzenie pojedynczego katalogu w chronionym folderze nadrzędnym przez `KIO::mkdir`.
+- **Zablokowane operacje i bramki bezpieczeństwa:**
+  - Administracyjne `Rename` i `Move` pozostają bezwzględnie **ZABLOKOWANE** w GUI (`OperationDisallowedInGui`): audyt bezpieczeństwa backendu KDE `kio-admin` (`RenameCommand::execute()` wywołujący `QFile::rename()` → `rename(2)` bez flagi `RENAME_NOREPLACE`) wykazał brak atomowej gwarancji nie-nadpisywania celu na poziomie jądra po walidacji preflight.
+  - Operacje niszczące (`Delete`, `Trash`, `EmptyTrash`), zaznaczenia wieloplikowe (batch), kopiowanie/przenoszenie katalogów, dowiązania symboliczne i zerwane symlinki (`lstat` + weryfikacja segmentów ścieżki), twarde dowiązania (`st_nlink > 1`), archiwa oraz protokoły wirtualne/zdalne (`thispc:/`, `trash:/`, `mtp:/`, `smb:/`, `sftp:/`) są odrzucane w trybie fail-closed.
+  - Istniejący plik lub folder docelowy natychmiast blokuje eskalację (`TargetAlreadyExistsNoOverwrite` / `TargetExistsCollision`).
+- **Zasada zachowania danych i artefaktów po błędach (`AdminArtifactOwnershipAudit`):**
+  - Wyłączono automatyczne usuwanie (`::unlink`) plików docelowych po nieudanych lub przerwanych transferach (`canAutoDelete() == false`), ponieważ zewnętrzny worker KIO nie przekazuje klientowi GUI wolnego od wyścigów dowodu utworzenia i-węzła.
+  - Dodano 9-punktowy audyt własności artefaktów oraz globalny rejestr aktywnych ścieżek docelowych (`s_activeTargetPaths`) blokujący równoległe operacje na tym samym celu.
+- **Undo/Redo, Primary/Split View oraz polska lokalizacja:**
+  - Operacje uprzywilejowane nie dodają pozornych wpisów do nieuprzywilejowanego `UndoController` ani `LocalMoveHistory`, zachowując nienaruszoną historię zwykłych operacji Cofnij/Ponów.
+  - Niemutowalne migawki `FileOperationContext` zachowują powiązanie źródła i celu przy przełączaniu i zamianie paneli Primary/Split, zmianie schowka oraz zamknięciu Split View.
+  - Dodano polską lokalizację komunikatu błędu utworzenia tymczasowego pliku docelowego w `LocalFileCopyWorker` (`Nie można utworzyć tymczasowego pliku docelowego.`), błędu nieatomowego przeniesienia w `LocalFileMoveJob` (`Nie można przenieść pliku atomowo.`) oraz błędu KIO 177 (`ERR_CANNOT_TRUNCATE`), przy zachowaniu całkowitej niezależności kwalifikacji błędów od tekstu komunikatu.
+- **Weryfikacja i regresja:**
+  - Potwierdzone przejściem 74 zestawów testów regresyjnych (w tym 5 zestawów Administrator Retry z 704 asercjami) oraz 15 scenariuszy odbioru manualnego GUI (Stage 4 12/12 + Stage 5 3/3 PASS).
+
 ## 0.42.0 — Optymalizacja pamięci DirectoryView i szybkie sortowanie MIME
 
 - **Leniwe modele widoku (Lazy Inactive Model) w panelu głównym i Split View:**

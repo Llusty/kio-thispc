@@ -12,6 +12,7 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
+#include <QLocale>
 #include <QMutex>
 #include <QMutexLocker>
 #include <QObject>
@@ -123,9 +124,11 @@ public Q_SLOTS:
         QFile destination(m_partialPath);
         const QFileInfo sourceInfo(m_sourcePath);
         if (!sourceInfo.isFile() || !source.open(QIODevice::ReadOnly)) {
+            const int err = errno;
             finishWithError(
                 LocalTransferError::SourceOpen,
-                tr("Could not open the source file."));
+                tr("Could not open the source file."),
+                err);
             return;
         }
         if (m_overwrite
@@ -148,9 +151,13 @@ public Q_SLOTS:
             return;
         }
         if (!destination.open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
+            const int err = errno;
             finishWithError(
                 LocalTransferError::DestinationCreate,
-                tr("Could not create the partial destination."));
+                QLocale().language() == QLocale::Polish
+                    ? QStringLiteral("Nie można utworzyć tymczasowego pliku docelowego.")
+                    : tr("Could not create the partial destination."),
+                err);
             return;
         }
 
@@ -178,11 +185,13 @@ public Q_SLOTS:
             const QByteArray chunk = source.read(m_chunkSize);
             if (chunk.isEmpty()) {
                 if (source.error() != QFile::NoError) {
+                    const int err = errno;
                     destination.close();
                     QFile::remove(m_partialPath);
                     finishWithError(
                         LocalTransferError::SourceRead,
-                        source.errorString());
+                        source.errorString(),
+                        err);
                     return;
                 }
                 break;
@@ -306,7 +315,7 @@ Q_SIGNALS:
     void speedChanged(unsigned long bytesPerSecond);
     void completed();
     void cancelled();
-    void failed(LocalTransferError error, const QString &message);
+    void failed(LocalTransferError error, const QString &message, int systemError = 0);
 
 private:
     bool cancelRequested()
@@ -331,10 +340,10 @@ private:
         return !time.isValid() || file.setFileTime(time, type);
     }
 
-    void finishWithError(LocalTransferError error, const QString &message)
+    void finishWithError(LocalTransferError error, const QString &message, int systemError = 0)
     {
         markFinished();
-        Q_EMIT failed(error, message);
+        Q_EMIT failed(error, message, systemError);
     }
 
     QString m_sourcePath;
@@ -417,7 +426,8 @@ public:
                     finish(true, LocalTransferError::Cancelled, {});
                 });
         connect(m_worker, &LocalFileCopyWorker::failed,
-                this, [this](LocalTransferError error, const QString &message) {
+                this, [this](LocalTransferError error, const QString &message, int systemError) {
+                    m_systemError = systemError;
                     finish(false, error, message);
                 });
         connect(m_worker, &LocalFileCopyWorker::completed,
@@ -452,6 +462,7 @@ public:
     QUrl destinationUrl() const { return m_destination; }
     QString partialPath() const { return m_partialPath; }
     LocalTransferError transferError() const { return m_transferError; }
+    int systemError() const { return m_systemError; }
 
     bool commitOverwrite()
     {
@@ -511,6 +522,9 @@ private:
         m_finished = true;
         setProperty("thispcDestinationReplaced",
                     m_overwrite && !m_originalDestination.matches(m_destination.toLocalFile()));
+        if (m_systemError != 0) {
+            setProperty("thispcSystemError", m_systemError);
+        }
         m_transferError = wasCancelled
             ? LocalTransferError::Cancelled
             : transferError;
@@ -534,4 +548,5 @@ private:
     bool m_started = false;
     bool m_finished = false;
     LocalTransferError m_transferError = LocalTransferError::None;
+    int m_systemError = 0;
 };

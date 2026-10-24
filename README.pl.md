@@ -1,6 +1,32 @@
 [English](README.md) | [Polski](README.pl.md)
 
-# kio-thispc 0.42.0
+# kio-thispc 0.43.0
+
+## 0.43.0 — Ponawianie operacji z uprawnieniami administratora (Administrator Fallback)
+
+- **Ukierunkowane ponawianie operacji przez `admin://` i PolicyKit (bez uruchamiania GUI jako root):**
+  - Gdy pojedyncza obsługiwana operacja lokalna zakończy się błędem braku uprawnień (`EACCES`/`EPERM`, `KIO::ERR_ACCESS_DENIED`, `KIO::ERR_WRITE_ACCESS_DENIED`, `KIO::ERR_CANNOT_MKDIR`, `KIO::ERR_CANNOT_OPEN_FOR_READING` lub strukturalnie zweryfikowany błąd `KIO::ERR_CANNOT_TRUNCATE` / kod 177), ThisPC oferuje dwustopniowe potwierdzenie („Ponów jako administrator” → „Wykonaj jako administrator”) bez uruchamiania okna aplikacji jako `root`.
+  - Wymaga jawnego, jednorazowego tokenu zgody `AdminUserConsent` (ważnego 60 sekund i powiązanego skrótem SHA-256 z planem wykonania) przed uruchomieniem pojedynczego zadania KIO przez worker `admin://` i PolicyKit (Polkit).
+  - Bieżący adres URL panelu, pasek adresu, karty oraz historia nawigacji nigdy nie przełączają się na schemat `admin://`, a blokada `AlreadyRetriedAsAdmin` wyklucza pętle ponowień.
+- **Obsługiwane operacje GUI (centralna allowlista `isGuiAdminRetryAllowed`):**
+  - **Copy File To Protected (`file://` → `admin://`):** Kopiowanie pojedynczego zwykłego pliku lokalnego do chronionego katalogu bez automatycznego nadpisywania.
+  - **Copy File From Protected (`admin://` → `file://`):** Odczyt pojedynczego chronionego pliku przez `admin://` do prywatnego pliku tymczasowego użytkownika (`0600`) i atomowa publikacja w katalogu docelowym, dzięki czemu plik docelowy należy do zwykłego użytkownika (`uid == getuid()`) i ma uprawnienia `0600` (`rw-------`).
+  - **Create Protected File (`admin://`):** Tworzenie pojedynczego pliku w chronionym katalogu z zachowaniem zawartości początkowej (`thispcFileContents`) oraz strukturalną kwalifikacją błędu KIO 177 (`ERR_CANNOT_TRUNCATE` na pliku `.part`) wyłącznie przy potwierdzonym braku praw zapisu w katalogu docelowym i braku wcześniejszych plików/artefaktów `.part`.
+  - **Create Protected Folder (`admin://`):** Tworzenie pojedynczego folderu w chronionym katalogu nadrzędnym przez `KIO::mkdir`.
+- **Operacje zablokowane i granice bezpieczeństwa:**
+  - **Administracyjne Rename i Move (`BLOCKED` w GUI):** Audyt bezpieczeństwa backendu KDE `kio-admin` (`RenameCommand::execute()` wywołujący `QFile::rename()` → `rename(2)` bez flagi `RENAME_NOREPLACE`) wykazał brak atomowej gwarancji nie-nadpisywania celu na poziomie jądra po walidacji preflight. Z tego powodu administracyjne `Rename` oraz `Move` są bezwzględnie zablokowane w GUI (`OperationDisallowedInGui`).
+  - **Operacje niszczące, wieloplikowe i nielokalne (`BLOCKED`):** Trwałe usuwanie (`Delete`), operacje Kosza (`Trash`/`EmptyTrash`), zaznaczenia wieloelementowe (batch), kopiowanie/przenoszenie katalogów, dowiązania symboliczne i zerwane symlinki (`lstat`), twarde dowiązania (`st_nlink > 1`), archiwa oraz protokoły wirtualne/zdalne (`thispc:/`, `trash:/`, `mtp:/`, `smb:/`, `sftp:/`) są odrzucane w trybie fail-closed.
+  - **Brak automatycznego nadpisywania:** Istniejący plik lub katalog docelowy natychmiast dyskwalifikuje ponowienie administracyjne (`TargetAlreadyExistsNoOverwrite` / `TargetExistsCollision`).
+- **Zasada zachowania danych i artefaktów po błędach (`AdminArtifactOwnershipAudit`):**
+  - Automatyczne usuwanie (`::unlink`) plików docelowych po nieudanych lub przerwanych transferach jest wyłączone (`canAutoDelete() == false`), ponieważ zewnętrzny worker KIO nie przekazuje klientowi GUI wolnego od wyścigów dowodu utworzenia i-węzła. Ewentualne częściowe artefakty są zachowywane na dysku i komunikowane użytkownikowi.
+- **Undo/Redo, Primary/Split View oraz polska lokalizacja:**
+  - Operacje uprzywilejowane nie rejestrują pozornych wpisów w nieuprzywilejowanym `UndoController` ani `LocalMoveHistory`, zachowując nienaruszoną historię zwykłych operacji Cofnij/Ponów.
+  - Zrzut kontekstu `FileOperationContext` pozostaje niemutowalny przy przełączaniu i zamianie paneli Primary/Split, zmianie schowka oraz zamknięciu Split View.
+  - Dodano polską lokalizację komunikatów błędu nieatomowego przeniesienia (`Nie można przenieść pliku atomowo.`), błędu utworzenia tymczasowego pliku docelowego (`Nie można utworzyć tymczasowego pliku docelowego.`) oraz błędu KIO 177, przy zachowaniu całkowitej niezależności kwalifikacji błędów od tekstu komunikatu.
+- **Weryfikacja i regresja:**
+  - Potwierdzone przejściem 74 zestawów testów regresyjnych (w tym 5 zestawów Administrator Retry z 704 asercjami) oraz 15 scenariuszy odbioru manualnego GUI (Stage 4 12/12 + Stage 5 3/3 PASS).
+
+---
 
 ## 0.42.0 — Optymalizacja pamięci DirectoryView i szybkie sortowanie MIME
 
@@ -416,8 +442,8 @@ Funkcje z 0.15.4 — kompaktowy popup operacji, dynamiczna wysokość, anulowani
 
 ```bash
 cd ~/Pobrane
-tar -xzf kio-thispc-0.42.0.tar.gz
-cd kio-thispc-0.42.0
+tar -xzf kio-thispc-0.43.0.tar.gz
+cd kio-thispc-0.43.0
 chmod +x install.sh
 ./install.sh
 ```

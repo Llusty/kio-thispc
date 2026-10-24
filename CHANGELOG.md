@@ -2,6 +2,31 @@
 
 # Changelog
 
+## 0.43.0 — Administrator Fallback for Failed Operations
+
+- **Scoped Administrator Retry Architecture (`AdminRetryContract`, `AdminRetryController`, `AdminRetryExecutor`):**
+  - Added targeted Administrator Retry via KDE's `admin://` KIO worker and PolicyKit (Polkit) when eligible single-item local operations fail with permission denial, without ever launching the GUI window as `root`.
+  - Enforced a two-step user confirmation workflow (proposal dialog + explicit execution plan review dialog) backed by a single-use, 60-second SHA-256 bound `AdminUserConsent` token and automatic retry-loop prevention (`AlreadyRetriedAsAdmin`).
+  - Active pane URLs, address bar state, tabs, and navigation history remain strictly on standard unprivileged URLs (`file://`, `thispc:/`).
+- **Supported GUI Operations (Central Allowlist `isGuiAdminRetryAllowed`):**
+  - `CopyFileToProtected` (`file://` → `admin://`): copies a single regular local file into a protected directory without automatic overwrite.
+  - `CopyFileFromProtected` (`admin://` → `file://`): reads a single protected local file via `admin://` into a private user-owned staging file (`0600`) and atomically renames it into place so the resulting destination file is owned by the standard user (`uid == getuid()`) with `0600` (`rw-------`) permissions.
+  - `CreateFileProtected` (`admin://`): creates a single file in a protected directory while preserving template/initial contents (`thispcFileContents`) and structurally qualifying `KIO::ERR_CANNOT_TRUNCATE` (error 177 on `.part`) only when parent directory write denial (`EACCES`/`EPERM`) and absence of pre-existing target/`.part` files are verified.
+  - `CreateFolderProtected` (`admin://`): creates a single folder in a protected parent directory via `KIO::mkdir`.
+- **Blocked Operations & Security Gates:**
+  - Administrative `Rename` and `Move` remain strictly **BLOCKED** in GUI (`OperationDisallowedInGui`): security audit of KDE's `kio-admin` (`RenameCommand::execute()` calling `QFile::rename()` → `rename(2)` without `RENAME_NOREPLACE`) confirmed the backend cannot guarantee atomic kernel-level no-overwrite after preflight validation.
+  - Destructive operations (`Delete`, `Trash`, `EmptyTrash`), multi-item batch selections, directory copy/move, symlinks and broken symlinks (`lstat` + path component check), hardlinks (`st_nlink > 1`), archives, and virtual/remote schemes (`thispc:/`, `trash:/`, `mtp:/`, `smb:/`, `sftp:/`) are rejected fail-closed.
+  - Existing target files or folders immediately disqualify Administrator Retry (`TargetAlreadyExistsNoOverwrite` / `TargetExistsCollision`).
+- **Fail-Closed Artifact Preservation (`AdminArtifactOwnershipAudit`):**
+  - Disabled automatic deletion (`::unlink`) of destination artifacts after failed or interrupted transfers (`canAutoDelete() == false`) because out-of-process KIO workers do not provide race-free inode provenance to the GUI client.
+  - Added a 9-point artifact ownership audit and process-wide active target path registry (`s_activeTargetPaths`) preventing concurrent retries on the same target path.
+- **Undo/Redo, Primary/Split View & Localization:**
+  - Privileged operations never record fake unprivileged entries in `UndoController` or `LocalMoveHistory`, preserving existing normal Undo/Redo history.
+  - Immutable `FileOperationContext` snapshots preserve source/destination bindings across Primary/Split pane switches, swaps, clipboard changes, and Split View closure.
+  - Added Polish localization for `LocalFileCopyWorker` partial destination creation failure (`Nie można utworzyć tymczasowego pliku docelowego.`), `LocalFileMoveJob` atomic move failure (`Nie można przenieść pliku atomowo.`), and KIO error 177 (`ERR_CANNOT_TRUNCATE`), keeping error qualification strictly independent of translated strings.
+- **Verification & Regression:**
+  - Verified across 74 automated regression test suites (including Stage 1–5 Administrator Retry suites with 704 assertions) and 15 manual GUI acceptance scenarios (Stage 4 12/12 + Stage 5 3/3 PASS).
+
 ## 0.42.0 — DirectoryView Memory Optimization & Fast MIME Sorting
 
 - **DirectoryView Lazy Inactive Model Architecture (Primary & Split View):**
