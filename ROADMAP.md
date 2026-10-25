@@ -162,7 +162,7 @@ This ordering prioritizes core file-manager correctness, safety, and maintainabi
 - Stage 5: Keyboard navigation routing and stable current/focus handling on `thispc:/` cards;
 - Stage 6: Per-folder view profiles with snapshot Apply/Remove to subfolders;
 - Stage 7: Nine icon size steps with menu controls and `Ctrl++`/`Ctrl+-` shortcuts;
-- Final Split View visual parity polish;
+- Final Split View visual parity polish (with Split separator double-click 50/50 reset deferred outside 0.34.0 and tracked under *Future Ideas for Consideration*);
 - Final automated regression: 32 suites / 8317 assertions PASS; CLI `thispc-view 0.34.0`, exit code 0: PASS.
 
 ### 0.35.0 — Drives & Devices ✅ feature-complete, released (v0.35.0)
@@ -515,13 +515,60 @@ Valuable features to consider, with no assigned version or delivery date.
 
 ## Future Ideas for Consideration
 
-Loose, non-binding candidates that may never be implemented. Items in this section do not represent commitments or assignments to specific versions. Re-evaluate their utility during future roadmap reviews:
+Loose, non-binding candidates (**OPTIONAL / UNASSIGNED / NOT COMMITTED**) that may never be implemented. Items in this section do not represent commitments or assignments to specific versions (and are not assigned to 0.44–0.48 or any new release). Re-evaluate their utility during future roadmap reviews:
 
 - Appearance candidate: adjustable dimming level for visible hidden items (current default: 0.40). Prefer simple presets over menu sliders if implemented.
 - Optional action and event sound effects candidate: unobtrusive audio cues for long-running jobs, errors, or operation finishes (strictly non-committal future candidate).
 - System integration candidate: allow ThisPC to become the default handler/file manager for inode/directory, using standard XDG/KDE mechanisms; detect the current handler and provide a safe way to restore the previous one.
 - Storage visualization extensions only: the interactive Treemap baseline shipped in 0.38; further visualization refinements remain non-binding candidates.
 - A custom search index only if Baloo and the independent worker fallback prove insufficient; no implementation commitment or assigned version.
+- **Classic Menu Bar & Command Organization (`OPTIONAL / UNASSIGNED / NOT COMMITTED`):**
+  - Optional classic menu bar: `File | Edit | View | Tools | Help` (`Plik | Edycja | Widok | Narzędzia | Pomoc`).
+  - Example organization:
+    - *File:* create, open, properties, close.
+    - *Edit:* Undo/Redo, Cut/Copy/Paste, rename, delete.
+    - *View:* view modes, sorting, grouping, Split View.
+    - *Tools:* search, comparison, future tools.
+    - *Help:* about application, documentation, bug reporting.
+  - Preserve access to frequently used actions on the toolbar; never replace the existing UI without a prior UX design and explicit user approval.
+- **Customizable Toolbar (`OPTIONAL / UNASSIGNED / NOT COMMITTED`):**
+  - Optional selection of visible toolbar buttons and reordering of buttons without removing any underlying functionality from the application.
+  - Persistent settings storage and an option to restore the default toolbar layout.
+- **Collapsible Sidebar (`OPTIONAL / UNASSIGNED / NOT COMMITTED`):**
+  - Dedicated collapse/expand toggle button for the left sidebar, ideally aligned with the Back/Forward navigation buttons.
+  - Preserve sidebar width and visibility state across application restarts; optional keyboard shortcut; no automatic/unsolicited auto-collapsing.
+- **Shortcuts in Context Menus (`OPTIONAL / UNASSIGNED / NOT COMMITTED`):**
+  - Display the actual assigned keyboard shortcuts next to context menu actions.
+  - Shortcut labels must reflect the real active bindings, including after user customization in settings.
+  - Option to show or hide shortcut labels in context menus.
+- **Central ThisPC Settings Dialog (`OPTIONAL / UNASSIGNED / NOT COMMITTED`):**
+  - Single, cohesive settings window consolidating features that require configuration.
+  - Settings category organization to be defined in a dedicated future UX review; never add placeholder, artificial, or non-functional options prematurely.
+- **Context Menu Customization (`OPTIONAL / UNASSIGNED / NOT COMMITTED`):**
+  - Ability to hide selected context menu entries (e.g. "Open in Dolphin" / „Otwórz w Dolphinie”).
+  - Separate per-context configuration for: files, folders, drives, and empty folder background.
+  - Hiding a menu entry must never disable the underlying feature itself or its keyboard shortcut.
+  - Persistent settings storage and ability to restore default menu items.
+  - Distinct from the 0.46 KDE Service Actions support — those address external/custom action extensions, whereas this candidate governs visibility of context menu entries.
+- **Configurable Keyboard Shortcuts (`OPTIONAL / UNASSIGNED / NOT COMMITTED`):**
+  - Ability to reassign or clear the keyboard shortcut for a given action.
+  - Requires conflict detection and resolution, command search/filtering, persistent storage, restoring individual or all shortcuts to defaults, and live synchronization of displayed shortcut labels across the UI.
+- **Configurable Recent Locations Count in Sidebar (`OPTIONAL / UNASSIGNED / NOT COMMITTED`):**
+  - User-configurable limit for the number of visible Recent Locations entries in the sidebar, preferably via a numeric `QSpinBox`.
+  - Minimum: `0`; maximum: to be determined during design.
+  - The limit applies strictly to visible sidebar items: it must not delete stored location history and must not introduce duplicate entries.
+  - Separate proposal from the existing `Recent Files` backlog candidate.
+- **Split View — Separator Double-Click 50/50 Reset (`OPTIONAL / UNASSIGNED / NOT COMMITTED`):**
+  - Double-clicking the splitter handle between panes with the left mouse button immediately restores an equal 50/50 pane ratio (moved from the historical 0.34 polish note into active non-binding candidates).
+  - Requires no `Ctrl`, `Alt`, or `Shift` modifier keys; do not add modifier combinations without a concrete, distinct purpose.
+  - Preserve standard splitter dragging and independent Primary/Split pane operation.
+- **ThisPC Phone Integration — KDE Connect (`OPTIONAL / UNASSIGNED / NOT COMMITTED`):**
+  - Optional future phone integration:
+    - Wireless browsing of phone storage;
+    - File copying between phone and computer (phone ↔ PC);
+    - Dedicated interface for SMS/MMS and notifications;
+    - Potential Bluetooth integration.
+  - Requires a prior technical audit of KDE Connect capabilities and available APIs; never promise features unsupported by a specific phone platform or backend.
 
 ---
 

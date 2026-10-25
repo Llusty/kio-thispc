@@ -340,8 +340,8 @@ zainstalowana i ręcznie potwierdzona przez użytkownika. Pełna regresja wydani
   `thispc:/`/Split Home z `PointingHandCursor` do standardowego `ArrowCursor`;
   świadomie odłożone poza 0.34.0;
 - wykrywanie pendrive/removable pozostaje w 0.35.0 Drives & Devices;
-- double-click separatora Split przywracający 50/50 pozostaje przyszłym pomysłem
-  polishowym, nie zakresem 0.34.0;
+- double-click separatora Split przywracający 50/50 został odłożony poza zakres
+  0.34.0 i przeniesiony do sekcji *Pomysły do rozważenia w przyszłości / Future ideas*;
 - Pełna regresja: 32 zestawy / 8317 asercji PASS; CLI `thispc-view 0.34.0`, exit code 0: PASS.
 
 ### 0.35.0 — Drives & Devices ✅ feature-complete, wydane (v0.35.0)
@@ -709,9 +709,9 @@ Wartościowe funkcje do rozważenia, bez przypisanej wersji ani ustalonego termi
 
 ## Pomysły do rozważenia w przyszłości / Future ideas
 
-Luźne, niewiążące kandydaty, które mogą nigdy nie powstać.
+Luźne, niewiążące kandydaty (**OPTIONAL / UNASSIGNED / NOT COMMITTED**), które mogą nigdy nie powstać.
 Punkty w tej sekcji nie są zobowiązaniem do implementacji ani przypisaniem do
-wersji. Przy każdym kolejnym przeglądzie roadmapy należy ponownie ocenić ich
+wersji (nie są przypisane do wydań 0.44–0.48 ani do żadnego nowego wydania). Przy każdym kolejnym przeglądzie roadmapy należy ponownie ocenić ich
 sens i usunąć je, jeśli przestaną być użyteczne.
 
 - opcjonalny appearance candidate: regulacja siły przygaszenia widocznych
@@ -722,6 +722,53 @@ sens i usunąć je, jeśli przestaną być użyteczne.
 - Kandydat integracji systemowej: możliwość ustawienia ThisPC jako domyślnego programu/menedżera do otwierania katalogów (inode/directory) przez standardowe mechanizmy XDG/KDE, z wykrywaniem obecnego handlera i możliwością bezpiecznego przywrócenia poprzedniego.
 - Wyłącznie rozszerzenia wizualizacji pamięci masowej: bazowy interaktywny treemap wydano w 0.38; dalsze usprawnienia wizualizacji pozostają niewiążącymi kandydatami.
 - Własny indeks wyszukiwania tylko wtedy, gdy Baloo i niezależny fallback workerem okażą się niewystarczające; bez zobowiązania do implementacji i bez przypisanej wersji.
+- **Klasyczny pasek menu i organizacja poleceń (`OPTIONAL / UNASSIGNED / NOT COMMITTED`):**
+  - Opcjonalny klasyczny pasek menu: `Plik | Edycja | Widok | Narzędzia | Pomoc` (`File | Edit | View | Tools | Help`).
+  - Przykładowa organizacja:
+    - *Plik:* tworzenie, otwieranie, właściwości, zamykanie.
+    - *Edycja:* Cofnij/Ponów, Wytnij/Kopiuj/Wklej, zmiana nazwy, usuwanie.
+    - *Widok:* tryby wyświetlania, sortowanie, grupowanie, Split View.
+    - *Narzędzia:* wyszukiwanie, porównywanie, przyszłe narzędzia.
+    - *Pomoc:* informacje o programie, dokumentacja, zgłaszanie błędów.
+  - Zachować dostęp do często używanych funkcji na pasku narzędzi; nie zastępować dotychczasowego UI bez wcześniejszego projektu UX i zgody użytkownika.
+- **Personalizowany pasek narzędzi (`OPTIONAL / UNASSIGNED / NOT COMMITTED`):**
+  - Opcjonalny wybór widocznych przycisków i zmiana ich kolejności, bez usuwania funkcji z aplikacji.
+  - Trwałe zapamiętywanie ustawień i możliwość przywrócenia domyślnego układu.
+- **Zwijany panel boczny (`OPTIONAL / UNASSIGNED / NOT COMMITTED`):**
+  - Przycisk zwijania/rozwijania lewego panelu, najlepiej na wysokości przycisków Wstecz/Dalej.
+  - Zachować szerokość panelu i stan widoczności między uruchomieniami; opcjonalny skrót klawiaturowy; bez samoczynnego zwijania.
+- **Skróty w menu kontekstowym (`OPTIONAL / UNASSIGNED / NOT COMMITTED`):**
+  - Wyświetlanie rzeczywistych przypisanych skrótów klawiaturowych obok poleceń menu kontekstowego.
+  - Etykiety muszą odpowiadać faktycznym skrótom, także po ich zmianie w ustawieniach.
+  - Opcja pokazywania/ukrywania etykiet skrótów.
+- **Centralne ustawienia ThisPC (`OPTIONAL / UNASSIGNED / NOT COMMITTED`):**
+  - Jedno spójne okno ustawień dla funkcji wymagających konfiguracji.
+  - Opracować organizację kategorii ustawień w osobnym przyszłym przeglądzie UX; nie dodawać obecnie sztucznych lub niedziałających opcji.
+- **Personalizacja menu kontekstowego (`OPTIONAL / UNASSIGNED / NOT COMMITTED`):**
+  - Możliwość ukrywania wybranych pozycji, np. „Otwórz w Dolphinie” ("Open in Dolphin").
+  - Ustawienia osobno dla kontekstów: pliki, foldery, dyski, puste tło.
+  - Ukrycie pozycji nie może wyłączyć samej funkcji ani jej skrótu klawiaturowego.
+  - Zapamiętywanie ustawień i przywracanie domyślnych pozycji.
+  - Rozróżnić tę funkcjonalność od planowanego w 0.46 wsparcia KDE Service Actions — dotyczą różnych aspektów menu (rozszerzenia zewnętrznych akcji usług vs widoczność pozycji menu kontekstowego).
+- **Konfigurowalne skróty klawiaturowe (`OPTIONAL / UNASSIGNED / NOT COMMITTED`):**
+  - Możliwość zmiany i usunięcia skrótu dla danej funkcji.
+  - Wymagana obsługa konfliktów, wyszukiwanie poleceń, zapis ustawień, przywracanie pojedynczych lub wszystkich skrótów domyślnych oraz synchronizacja prezentowanych etykiet w całym interfejsie.
+- **Liczba ostatnich lokalizacji w panelu bocznym (`OPTIONAL / UNASSIGNED / NOT COMMITTED`):**
+  - Konfigurowalny limit liczby wyświetlanych ostatnich lokalizacji, najlepiej przez numeryczne `QSpinBox`.
+  - Minimum: `0`; maksimum: do ustalenia na etapie projektowania.
+  - Limit dotyczy wyłącznie widocznych pozycji: nie usuwa historii lokalizacji i nie może powodować duplikatów.
+  - Osobna propozycja od już istniejącego w backlogu `Recent Files`.
+- **Split View — dwuklik separatora 50/50 (`OPTIONAL / UNASSIGNED / NOT COMMITTED`):**
+  - Podwójne kliknięcie lewym przyciskiem myszy separatora między panelami natychmiast przywraca proporcje 50/50 (przeniesione z historycznej wzmianki 0.34 do aktywnego backlogu pomysłów przyszłościowych).
+  - Bez wymaganego `Ctrl`, `Alt` ani `Shift`; nie dodawać kombinacji modyfikatorów bez konkretnego dodatkowego zastosowania.
+  - Zachować obecne przeciąganie separatora i niezależne działanie paneli.
+- **ThisPC Phone Integration — KDE Connect (`OPTIONAL / UNASSIGNED / NOT COMMITTED`):**
+  - Opcjonalna przyszła integracja telefonu:
+    - Bezprzewodowe przeglądanie pamięci telefonu;
+    - Kopiowanie plików telefon ↔ komputer;
+    - Osobny interfejs SMS/MMS i powiadomień;
+    - Ewentualna integracja Bluetooth.
+  - Wymagany wcześniejszy audyt możliwości KDE Connect i dostępnych API; nie obiecywać funkcji nieobsługiwanych przez konkretny telefon lub backend.
 
 ## Before 1.0
 Stability-focused cycle covering:
