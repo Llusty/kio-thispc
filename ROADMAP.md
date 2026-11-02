@@ -434,11 +434,8 @@ When standard operations receive permission denied errors, provide targeted `adm
   - Stage 4 — GUI Administrator Retry & Artifact Security Gate ✅ FULL PASS (72 tests / 228 assertions + 12/12 manual GUI acceptance pass)
   - Stage 5 — Final Integration, Safety Regression & Release Readiness ✅ FULL PASS (17/17 automated scenarios / 161 assertions + 3/3 manual GUI spot-check; full regression 74/74 suites PASS; release commit `33f7b3f`, tag `v0.43.0`)
 
----
 
-## Completed Release Candidate (Pending System Installation & Publication)
-
-### 0.44.0 — Transfer Queue & Control ✅ implementation complete & user-accepted (commit `109106e` — pending system installation, tag `v0.44.0`, and GitHub release)
+### 0.44.0 — Transfer Queue & Control ✅ completed, released (v0.44.0)
 - **Production Transfer Queue Active by Default:** Standard Copy and Move operations from Primary View, Split View, Drag & Drop, Cut/Copy/Paste, and Split View Synchronization route through `TransferQueueController` by default upon application startup (`activateTransferQueueProductionDispatchByDefault()`, with `THISPC_TRANSFER_QUEUE_PRODUCTION=0` retained as a diagnostic override);
 - **Serial vs. Parallel Execution Modes:** Dynamic switching between Serial mode (1 active transfer) and Parallel mode with configurable concurrency limit (`1..8`, default `2`) and starvation protection;
 - **Task Priority & Manual Reordering:** `High`, `Normal`, and `Low` priority levels and manual reordering (`Move Up`, `Move Down`, `Move to Top`, `Move to Bottom`) with deterministic FIFO tie-breaking;
@@ -469,7 +466,7 @@ When standard operations receive permission denied errors, provide targeted `adm
 - **Stage 4 — Priority & Reordering:** ✅ FULL PASS — High / Normal / Low priority levels, manual reordering of waiting jobs, and FIFO determinism.
 - **Stage 5 — Global Pause / Resume / Cancel:** ✅ FULL PASS — Queue-wide controls, accurate per-backend pause state, safe cascading cancellation, and application shutdown confirmation.
 - **Stage 6 — Optional Bandwidth Throttling:** ✅ FULL PASS — Shared token-bucket rate limiter (`TransferBandwidthLimiter`), chunk delay pacing in `LocalFileCopyWorker`, live limit adjustments, and honest per-task capability badges.
-- **Stage 7 — Integration, Unified Operations Manager, MTP Safety Gate & Final Regression:** ✅ FULL PASS — End-to-end integration across Primary/Split views, Drag & Drop, Paste, Split Sync, Unified Operations Manager (`U1–U8.1`, `UX-A..D`), `.thispc-part` staging, MTP Copy/hotplug, MTP Move safety block (`BLOCK MOVE`), ASan/UBSan, and full regression (76/76 suites PASS, 2,335 `transfer_queue` assertions PASS).
+- **Stage 7 — Integration, Unified Operations Manager, MTP Safety Gate & Final Regression:** ✅ FULL PASS — End-to-end integration across Primary/Split views, Drag & Drop, Paste, Split Sync, Unified Operations Manager (`U1–U8.1`, `UX-A..D`), `.thispc-part` staging, MTP Copy/hotplug, MTP Move safety block (`BLOCK MOVE`), ASan/UBSan, full regression (76/76 suites PASS, 2,335 `transfer_queue` assertions PASS), R3 manual acceptance (8/8 PASS), system installation verified (R6 6/6 PASS), release commits `109106e` / `d515815`, tag `v0.44.0`, and official GitHub release published.
 
 ---
 

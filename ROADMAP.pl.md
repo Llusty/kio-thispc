@@ -536,11 +536,8 @@ Gdy zwykła operacja plikowa zakończy się błędem braku uprawnień (Permissio
   - Etap 4 — Integracja GUI i bramka bezpieczeństwa artefaktów ✅ FULL PASS (72 testy / 228 asercji + 12/12 scenariuszy odbioru manualnego GUI)
   - Etap 5 — Końcowa integracja, regresja bezpieczeństwa i gotowość wydania ✅ FULL PASS (17/17 scenariuszy automatycznych / 161 asercji + 3/3 manualne testy kontrolne GUI; pełna regresja 74/74 zestawy PASS; commit wydania `33f7b3f`, tag `v0.43.0`)
 
----
 
-## Ukończone wydanie kandydujące (Oczekujące na instalację systemową i publikację)
-
-### 0.44.0 — Kolejka i kontrola transferów (Transfer Queue & Control) ✅ implementacja ukończona i odebrana przez użytkownika (commit `109106e` — oczekuje na instalację systemową, tag `v0.44.0` i publikację na GitHubie)
+### 0.44.0 — Kolejka i kontrola transferów (Transfer Queue & Control) ✅ ukończone, wydane (v0.44.0)
 - **Domyślna aktywacja produkcyjnej kolejki transferów:** Standardowe operacje Kopiuj i Przenieś z panelu głównego (Primary), widoku podzielonego (Split View), przeciągania i upuszczania (Drag & Drop), schowka (Wytnij/Kopiuj/Wklej) oraz synchronizacji Split View są domyślnie kierowane przez `TransferQueueController` od startu aplikacji (`activateTransferQueueProductionDispatchByDefault()`, ze zmienną `THISPC_TRANSFER_QUEUE_PRODUCTION=0` zachowaną jako przełącznik diagnostyczny);
 - **Tryby transferu Szeregowo vs Równolegle:** Dynamiczne przełączanie między trybem szeregowym (1 aktywny transfer) a równoległym z konfigurowalnym limitem jednoczesnych operacji (`1..8`, domyślnie `2`) i ochroną przed zagłodzeniem zadań;
 - **Priorytetyzacja i zmiana kolejności zadań w kolejce:** Priorytety `Wysoki` (`High`), `Normalny` (`Normal`) i `Niski` (`Low`) oraz ręczna zmiana pozycji zadań oczekujących (`Przesuń wyżej`, `Przesuń niżej`, `Na początek kolejki`, `Na koniec kolejki`) z deterministycznym porządkiem FIFO;
@@ -571,7 +568,7 @@ Gdy zwykła operacja plikowa zakończy się błędem braku uprawnień (Permissio
 - **Etap 4 — Priorytety i zmiana kolejności:** ✅ FULL PASS — Priorytety Wysoki / Normalny / Niski, ręczna zmiana kolejności oczekujących zadań i determinizm kolejkowania FIFO.
 - **Etap 5 — Globalne Wstrzymaj / Wznów / Anuluj:** ✅ FULL PASS — Sterowanie całą kolejką, rzetelna prezentacja stanu pauzy dla każdego backendu, bezpieczne anulowanie kaskadowe i potwierdzenie przy zamykaniu okna.
 - **Etap 6 — Opcjonalne ograniczanie przepustowości:** ✅ FULL PASS — Wspólny limiter token-bucket (`TransferBandwidthLimiter`), opóźnianie bloków w `LocalFileCopyWorker`, dynamiczna zmiana limitów oraz rzetelne oznaczenia na kartach zadań.
-- **Etap 7 — Integracja produkcyjna, Zintegrowany Menedżer Operacji, bramka bezpieczeństwa MTP i końcowa regresja:** ✅ FULL PASS — Integracja end-to-end z widokami Primary/Split, Drag & Drop, Wklej, synchronizacją Split View, Zintegrowanym Menedżerem Operacji (`U1–U8.1`, `UX-A..D`), zapisem etapowym `.thispc-part`, kopiowaniem i hotplugiem MTP, blokadą wydaniową MTP Move (`BLOCK MOVE`), weryfikacją ASan/UBSan oraz pełną regresją (76/76 zestawów PASS, 2335 asercji `transfer_queue` PASS).
+- **Etap 7 — Integracja produkcyjna, Zintegrowany Menedżer Operacji, bramka bezpieczeństwa MTP i końcowa regresja:** ✅ FULL PASS — Integracja end-to-end z widokami Primary/Split, Drag & Drop, Wklej, synchronizacją Split View, Zintegrowanym Menedżerem Operacji (`U1–U8.1`, `UX-A..D`), zapisem etapowym `.thispc-part`, kopiowaniem i hotplugiem MTP, blokadą wydaniową MTP Move (`BLOCK MOVE`), weryfikacją ASan/UBSan, pełną regresją (76/76 zestawów PASS, 2335 asercji `transfer_queue` PASS), odbiorem manualnym R3 (8/8 PASS), zweryfikowaną instalacją systemową (R6 6/6 PASS), commitami wydania `109106e` / `d515815`, tagiem `v0.44.0` oraz opublikowanym oficjalnym wydaniem na GitHubie.
 
 ---
 
