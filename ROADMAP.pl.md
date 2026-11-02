@@ -14,7 +14,7 @@ Kolejność prac priorytetyzuje poprawność działania, bezpieczeństwo danych 
   - Aktywacja karty po przytrzymaniu kursora podczas przeciągania;
   - Skróty klawiszowe i menu kontekstowe kierowane do aktywnego panelu;
   - Ochrona przed cyklami katalogów (kopiowaniem/przenoszeniem folderu do samego siebie lub potomka) oraz integracja z Cofnij/Ponów.
-- **0.18.0 — Obsługa konfliktów kopiowania i przenoszenia** ✅ potwierdzone przez użytkownika
+- **0.18.0 — Obsługa konfliktów kopiowania i przenoszenia** ✅ ukończone, wydane (`v0.18.0-stable`)
   - Interaktywne okno rozwiązywania konfliktów KIO/KIOWidgets dla schowka, przeciągania i upuszczania (Drag & Drop) oraz menu „Wyślij do”;
   - Opcje nadpisania, pominięcia, zmiany nazwy lub użycia automatycznie zaproponowanej nowej nazwy;
   - Zapamiętywanie decyzji przy wielu konfliktach w ramach operacji;
@@ -26,7 +26,7 @@ Kolejność prac priorytetyzuje poprawność działania, bezpieczeństwo danych 
 
 ## Ukończone wydania
 
-### 0.19.0.4 — Przywracanie sesji i pełne nazwy plików ✅ potwierdzone przez użytkownika
+### 0.19.0.4 — Przywracanie sesji i pełne nazwy plików ✅ ukończone, wydane (v0.19.0.4)
 - Przywracanie otwartych kart, aktywnej karty, lokalizacji oraz historii nawigacji panelu głównego;
 - Przywracanie stanu widoku podzielonego (Split View) osobno dla każdej karty, w tym lokalizacji, trybu widoku i sortowania prawego panelu;
 - Przywracanie proporcji podziału (szerokości separatora);
@@ -36,14 +36,14 @@ Kolejność prac priorytetyzuje poprawność działania, bezpieczeństwo danych 
 - Naprawiona sztywna siatka widoku ikon (`IconMode`) i ograniczony układ wielowierszowych nazw plików;
 - Rozwinięcie pełnej nazwy zaznaczonego elementu nie zmienia geometrii wiersza ani pozycji sąsiednich ikon.
 
-### 0.20.0 — Szybki dostęp / Ulubione / Ostatnie lokalizacje ✅ potwierdzone przez użytkownika
+### 0.20.0 — Szybki dostęp / Ulubione / Ostatnie lokalizacje ✅ ukończone, wydane (v0.20.0)
 - Przypinanie i odpinanie folderów;
 - Zmiana kolejności metodą przeciągnij i upuść z trwałym zapisem porządku;
 - Sekcja Szybki dostęp / Ulubione w panelu bocznym;
 - Trwała lista ostatnio odwiedzanych lokalizacji;
 - Opcjonalna lista ostatnich plików odłożona do późniejszego etapu.
 
-### 0.21.0 — Refaktoryzacja architektury i stabilizacja ✅ potwierdzone przez użytkownika
+### 0.21.0 — Refaktoryzacja architektury i stabilizacja ✅ ukończone, wydane (v0.21.0)
 - Wydzielenie modułów `DirectoryView`, `SplitBrowserPane`, `Sidebar`, `SessionManager`, `OperationManager`, `UndoController`, `PropertiesDialog`, `SearchController` oraz `FileActions`;
 - Przeniesienie wspólnych funkcji pomocniczych i typów przeglądarki do `browsercommon.h`;
 - Redukcja duplikacji kodu pomiędzy panelem głównym a widokiem podzielonym (Split View);
@@ -52,7 +52,7 @@ Kolejność prac priorytetyzuje poprawność działania, bezpieczeństwo danych 
 - 577 asercji automatycznych zakończonych wynikiem PASS;
 - Pełny odbiór manualny na KDE/CachyOS zakończony bez regresji.
 
-### 0.22.0 — Zaawansowane okno transferów ✅ potwierdzone przez użytkownika
+### 0.22.0 — Zaawansowane okno transferów ✅ ukończone, wydane (v0.22.0)
 - Zwykłe okno z możliwością przesuwania i minimalizacji otwierane automatycznie dla aktywnych operacji;
 - Prezentacja bieżącego pliku, podsumowania źródła/celu, przetworzonego i całkowitego rozmiaru, wyraźnego postępu procentowego, aktualnej/średniej prędkości oraz szacowanego czasu (ETA);
 - Ograniczony wykres prędkości w funkcji czasu;
@@ -62,7 +62,7 @@ Kolejność prac priorytetyzuje poprawność działania, bezpieczeństwo danych 
 - Kompaktowe okienko podręczne (popup) zachowane jako podgląd historii operacji;
 - Mylące wstrzymywanie oparte na `KIO::CopyJob::suspend()` zostało odrzucone podczas odbioru manualnego i usunięte.
 
-### 0.23.0 — Natywny lokalny silnik transferów ✅ potwierdzone przez użytkownika
+### 0.23.0 — Natywny lokalny silnik transferów ✅ ukończone, wydane (v0.23.0)
 - Blokowe kopiowanie lokalne z rzeczywistym wstrzymywaniem i wznawianiem (Pause/Resume) na znanym przesunięciu bajtowym;
 - Przenoszenie między różnymi urządzeniami (cross-device move) oparte na zweryfikowanym kopiowaniu zakończonym usunięciem źródła;
 - Bezpieczna obsługa plików częściowych oraz sprzątanie/odzyskiwanie po anulowaniu lub błędzie;
@@ -75,7 +75,7 @@ Kolejność prac priorytetyzuje poprawność działania, bezpieczeństwo danych 
 - Pełna regresja automatyczna: **842/842 asercji PASS**;
 - Pełny odbiór manualny na KDE/CachyOS potwierdzony dla konfliktów, drzew katalogów, dowiązań symbolicznych, metadanych, Pause/Resume, Undo/Redo, przepełnienia dysku, utraty urządzenia i integralności SHA-256.
 
-### 0.24.0 — Ulepszenia UX panelu bocznego i Split View ✅ potwierdzone przez użytkownika
+### 0.24.0 — Ulepszenia UX panelu bocznego i Split View ✅ ukończone, wydane (v0.24.0)
 - Równe panele Split View z wyrównanymi paskami ścieżek (breadcrumbs) w każdym panelu oraz jednym wspólnym paskiem narzędzi i panelem bocznym kierowanym do aktywnego panelu;
 - Przeciąganie i upuszczanie (Drag & Drop) na obsługiwane Miejsca, urządzenia i elementy Szybkiego dostępu w panelu bocznym;
 - Pionowo przewijany panel boczny o zmiennej szerokości z trwałym zapisem szerokości wybranej przez użytkownika oraz skracaniem długich etykiet z podpowiedziami (tooltips);
@@ -84,7 +84,7 @@ Kolejność prac priorytetyzuje poprawność działania, bezpieczeństwo danych 
 - Pełna regresja automatyczna: **1022/1022 asercji PASS**;
 - Pełny odbiór manualny etapów 1–4 na KDE/CachyOS zakończony pomyślnie.
 
-### 0.25.0 — Obsługa archiwów i rozbudowane menu Nowy ✅ potwierdzone przez użytkownika
+### 0.25.0 — Obsługa archiwów i rozbudowane menu Nowy ✅ ukończone, wydane (v0.25.0)
 
 Archiwa:
 - Natywna integracja zorientowana na KDE/Ark;
@@ -99,7 +99,7 @@ Menu Nowy:
 - Poprawka szerokości Split View przy długich ścieżkach;
 - Regresja automatyczna Etapu 3: 20 zestawów / 3470 asercji PASS; odbiór manualny zakończony pomyślnie.
 
-### 0.26.0 — Panel podglądu (Preview Pane) ✅ potwierdzone przez użytkownika
+### 0.26.0 — Panel podglądu (Preview Pane) ✅ ukończone, wydane (v0.26.0)
 - Podgląd obrazów z proporcjonalnym skalowaniem;
 - Podgląd plików tekstowych, Markdown, JSON i XML;
 - Asynchroniczny podgląd pierwszej strony dokumentów PDF przy użyciu `QtPdf`;
@@ -114,7 +114,7 @@ Menu Nowy:
 - Pełna regresja automatyczna: 20 zestawów PASS (Panel podglądu: 106 asercji PASS; układ Split View: 99 asercji PASS);
 - Odbiór manualny na KDE/CachyOS potwierdzony przez użytkownika.
 
-### 0.27.0 — Szybki podgląd pod klawiszem Spacja (Quick Look) ✅ potwierdzone przez użytkownika
+### 0.27.0 — Szybki podgląd pod klawiszem Spacja (Quick Look) ✅ ukończone, wydane (v0.27.0)
 - Duże tymczasowe okno podglądu pliku bez otwierania powiązanej aplikacji zewnętrznej;
 - Klawisz `Spacja` otwiera i zamyka Quick Look wyłącznie wtedy, gdy fokus znajduje się w aktywnym widoku plików; klawisz `Esc` zamyka okno podglądu;
 - Zmiana zaznaczonego elementu oraz przełączenie aktywnego panelu Split View automatycznie aktualizują zawartość podglądu przy zachowaniu fokusu w widoku plików;
@@ -124,7 +124,7 @@ Menu Nowy:
 - Pełna regresja automatyczna: **22 zestawy / 3598 asercji PASS** (Quick Look: 19, Panel podglądu: 106, routing paneli: 269, układ Split View: 99);
 - Wszystkie 9 scenariuszy odbioru manualnego na KDE/CachyOS potwierdzone przez użytkownika.
 
-### 0.28.0 — Masowa zmiana nazw (Batch Rename) ✅ wydane i zainstalowane (wariant A)
+### 0.28.0 — Masowa zmiana nazw (Batch Rename) ✅ ukończone, wydane (v0.28.0, wariant A)
 - Przedrostek/przyrostek (prefix/suffix), numerowanie, znajdź i zastąp, wyrażenia regularne (regex), zmiana rozszerzeń i wielkości liter oraz podgląd i diagnostyka planu.
 - Lokalne łańcuchy i zamiany nazw; obsługa cykli 3+ elementów jest wieloetapowa, a nie atomowa dla całej partii.
 - Grupowe Cofnij/Ponów (Undo/Redo) w obsługiwanych scenariuszach; asynchroniczne wykonywanie zamian (swap) i blokada współpracujących modyfikacji między kolejnymi wymianami.
@@ -134,11 +134,11 @@ Menu Nowy:
 - Produkcyjne automatyczne odzyskiwanie (recovery v2) obejmuje wyłącznie kwalifikujące się lokalne operacje liniowe Execute/Undo/Redo. Automatyczne odzyskiwanie zamian (swap) i cykli nie jest jeszcze włączone; brak gwarancji przy zaniku zasilania, dla zdalnych adresów URL/KIO oraz przy równoległej ingerencji niekooperujących procesów.
 - Szczegółowy zakres i ograniczenia: `RELEASE_NOTES_0.28.0.md`; przypadki i status testów: `TEST_CHECKLIST.md`; historia etapów: `docs/BATCH_RENAME_STAGE1.md`, `docs/BATCH_RENAME_STAGE2.md`, `docs/BATCH_RENAME_STAGE3.md` i `docs/BATCH_RENAME_CRASH_RECOVERY_STAGE*.md`.
 
-### 0.29.0 — Inteligentne tworzenie plików i folderów ✅ wydane i zainstalowane
+### 0.29.0 — Inteligentne tworzenie plików i folderów ✅ ukończone, wydane (v0.29.0)
 
 **Cel:** przy tworzeniu nowego elementu wykrywać zajętą nazwę przed otwarciem okna i od razu wstawiać pierwszą wolną propozycję do pola nazwy.
 
-**Stan wydania:** Etap 1 (lokalny) i Etap 2 (zdalne KIO) zostały zaimplementowane, a ich podstawowy przepływ manualny został potwierdzony przez użytkownika. Etap 2 używa dwóch asynchronicznych listingów i końcowych operacji bez flag `Overwrite` ani `Resume`. Nie oznacza to testu awarii połączenia, wszystkich protokołów ani atomowej rezerwacji; granice opisuje `docs/NEW_ITEM_NAMING_STAGE2.md`. Wersja 0.29.0 została wydana jako commit `e56acee`, oznaczona tagiem `v0.29.0`, zainstalowana i ręcznie potwierdzona przez użytkownika. Pełna regresja wydania: 23 zestawy / 5430 asercji PASS.
+**Stan wydania:** Etap 1 (lokalny) i Etap 2 (zdalne KIO) zostały zaimplementowane, a ich podstawowy przepływ manualny został potwierdzony przez użytkownika. Etap 2 używa dwóch asynchronicznych listingów i końcowych operacji bez flag `Overwrite` ani `Resume`. Nie oznacza to testu awarii połączenia, wszystkich protokołów ani atomowej rezerwacji; granice opisuje `docs/NEW_ITEM_NAMING_STAGE2.md`. Wersja 0.29.0 została wydana jako commit `db85e9c` / `e56acee`, oznaczona tagiem `v0.29.0`, zainstalowana i ręcznie potwierdzona przez użytkownika. Pełna regresja wydania: 23 zestawy / 5430 asercji PASS.
 
 - Dla zajętej nazwy proponować `Nowy dokument (1).txt`, następnie `(2)`, `(3)` itd.; przy braku kolizji pozostawiać nazwę domyślną.
 - Numer umieszczać przed rozszerzeniem; poprawnie obsługiwać nazwy katalogów, szablony, pliki z wieloma kropkami oraz pliki ukryte (np. `.gitignore`).
@@ -149,7 +149,7 @@ Menu Nowy:
 - Testy: brak konfliktu, luki w numeracji, zajęte kolejne numery, rozszerzenia i Unicode, foldery, szablony, dowiązania symboliczne, ręczna edycja, jednoczesne utworzenie nazwy przez inny proces, oba panele i brak utraty istniejących danych.
 - Kryterium odbioru: użytkownik widzi wolną nazwę od razu, może ją zmienić, a żaden test kolizji nie nadpisuje istniejącego elementu.
 
-### 0.30.0 — Grupowanie i ustawienia widoku dla poszczególnych folderów ✅ wydane i zaakceptowane
+### 0.30.0 — Grupowanie i ustawienia widoku dla poszczególnych folderów ✅ ukończone, wydane (v0.30.0)
 
 **Etap 1 — tryb widoku przypisany do folderu: zaimplementowany i ręcznie zaakceptowany**
 - Zapamiętywanie trybów Ikony/Lista/Szczegóły według znormalizowanego adresu URL katalogu;
@@ -208,7 +208,7 @@ Menu Nowy:
 - Poprawiono obrys zaznaczenia i zalegające podświetlenie (hover) w widoku pogrupowanym przez wyliczanie stanu spod kursora myszy;
 - Finalny stan wydania: kompilacja PASS, testy ukierunkowane 778 asercji PASS, pełna regresja 24 zestawy / 6278 asercji PASS, `git diff --check` i audyt wersji PASS. Wydanie zaakceptowane przez użytkownika.
 
-### 0.31.0 — Synchronizacja widoku podzielonego (Split View Synchronization) ✅ potwierdzone przez użytkownika
+### 0.31.0 — Synchronizacja widoku podzielonego (Split View Synchronization) ✅ ukończone, wydane (v0.31.0)
 
 **Etap 1 — porównywanie paneli w trybie tylko do odczytu: zaimplementowany i zaakceptowany ✅**
 - Porównywanie bieżącego folderu lewego i prawego panelu Split View (wyłącznie bezpośrednie elementy potomne, bez rekurencji);
@@ -251,7 +251,7 @@ Menu Nowy:
 
 **0.31.0 — UKOŃCZONE**
 
-### 0.32.0 — Porządkowanie architektury (Architecture Cleanup) ✅ ukończone
+### 0.32.0 — Porządkowanie architektury (Architecture Cleanup) ✅ ukończone, wydane (v0.32.0)
 - Usunięcie cykli zależności w modułach synchronizacji Split View;
 - Wydzielenie widżetów i arkuszy stylów aplikacji oraz wzmocnienie punktów rozszerzeń dla zestawów testowych;
 - Jawny kontrakt `PaneContext` / `PaneAdapter`;
@@ -261,7 +261,7 @@ Menu Nowy:
 - Końcowy stan bazowy Etapu 8: **26 zestawów / 6662 asercje PASS**;
 - Dalsze ujednolicanie powłok UI oceniono w wersji 0.33.0.
 
-### 0.33.0 — Kontynuacja porządkowania architektury ✅ wydane, zainstalowane i potwierdzone przez użytkownika
+### 0.33.0 — Kontynuacja porządkowania architektury ✅ ukończone, wydane (v0.33.0)
 - Wydzielenie komponentów `LocationPresentation`, `NavigationHistory`, `PreviewCoordinator` oraz `ActionStateController`;
 - Współdzielony rdzeń listowania katalogów `DirectoryListingCore` wykorzystywany przez panel główny i Split View;
 - Wydzielenie kontrolerów `PaneMenuController` oraz `DriveHomeCoordinator`;
@@ -271,7 +271,7 @@ Menu Nowy:
 - Commit wydania `a3710e466920542aa2a52ac90cdd9a4d3b5c2312`, tag `v0.33.0`;
 - Model `DirectoryListingCore` + osobne powłoki UI został przyjęty jako docelowe rozwiązanie architektoniczne.
 
-### 0.34.0 — Dopracowanie UX Eksploratora, widoków i nawigacji ✅ ukończone i wydane
+### 0.34.0 — Dopracowanie UX Eksploratora, widoków i nawigacji ✅ ukończone, wydane (v0.34.0)
 - Etap 2 ukończony: stabilna obsługa przełącznika CLI `--version`, parytet paska adresu/ścieżki w Split View oraz uporządkowane odstępy kart dysków;
 - Etap 3 ukończony: czytelna prezentacja wizualna ukrytych plików i folderów;
 - Etap 4 ukończony: wspólny mechanizm zmiany nazwy w miejscu (inline rename) dla klawisza `F2`, menu kontekstowego „Zmień nazwę” i wolnego drugiego kliknięcia; masowa zmiana nazw (Batch Rename) przy zaznaczeniu wielu elementów pozostaje osobną ścieżką;
@@ -282,7 +282,7 @@ Menu Nowy:
 - Nieblokujące drobne uwagi kosmetyczne (ok. 1 px różnicy pionowego wyrównania nagłówka oraz ujednolicenie kursora kart `thispc:/` z `PointingHandCursor` do `ArrowCursor`) świadomie odłożone poza zakres 0.34.0;
 - Wykrywanie pamięci wymiennych/pendrive'ów zrealizowane w 0.35.0;
 - Dwuklik separatora Split View przywracający proporcje 50/50 przeniesiony do sekcji *Pomysły do rozważenia w przyszłości*;
-- Pełna regresja: 32 zestawy / 8317 asercji PASS; CLI `thispc-view 0.34.0`, kod wyjścia 0: PASS.
+- Pełna regresja: 32 zestawy / 8317 asercji PASS; CLI `thispc-view 0.34.0`, kod wyjścia 0: PASS; commit wydania `2555547`, tag `v0.34.0`.
 
 ### 0.35.0 — Dyski i urządzenia (Drives & Devices) ✅ ukończone, wydane (v0.35.0)
 - Etap 1 ukończony: dynamiczne wykrywanie dysków i urządzeń przez KDE Solid; sterowany zdarzeniami `SolidDeviceMonitor` z buforowaniem 250 ms eliminuje okresowe odpytywanie (polling) i migotanie komunikatu „Odświeżanie…”;
@@ -295,12 +295,6 @@ Menu Nowy:
   - Bezpieczne przekierowanie panelu głównego i Split View z odmontowanego punktu montowania z powrotem do `thispc:/`.
 - Dla partycji NTFS zachowano zweryfikowane zachowanie zamiast ogólnych założeń;
 - Pełna regresja: 35 zestawów / 8562 asercje PASS; CLI `thispc-view 0.35.0`, kod wyjścia 0: PASS.
-
----
-
-## Planowane wydania
-
-**Zaplanowane:** przyjęte prace przypisane do konkretnych wersji. Ukończone pozycje poniżej zachowują historyczny status oraz dowody odbioru.
 
 ### 0.36.0 — Sieć i lokalizacje zdalne (Network & Remote Locations) ✅ ukończone, wydane (v0.36.0)
 - Obsługa protokołów SMB, SFTP, FTP i WebDAV przez KIO;
@@ -467,54 +461,53 @@ Intencja wydania: rozbudowa okna Właściwości bez rozszerzania projektu na nar
 - **Etap 5 — Semantyka ukrywania plików:** audyt Unix/NTFS/innych backendów, prezentacja rzeczywistego stanu ukrycia, zapis wyłącznie tam, gdzie semantyka jest jednoznaczna i bezpieczna. Ukończony: testy automatyczne + FULL MANUAL PASS.
 - **Etap 6 — Końcowa integracja i regresja:** Primary/Split/Search, znikające pliki, odmontowanie woluminu, ext4/Btrfs/NTFS, czas życia okien, pełna akceptacja automatyczna i manualna (`docs/PROPERTIES_FINAL_AUDIT_040.md`).
 
-### 0.41.0 — Wyszukiwanie zaawansowane (Advanced Search) ✅ ukończone, wydane (v0.41.0)
+### 0.40.1 — Właściwości wielu elementów i masowa zmiana uprawnień (Multi-Selection Properties & Bulk Permissions) ✅ ukończone, wydane (v0.40.1)
+- Okno właściwości dla wielu zaznaczonych plików i katalogów (`AggregatePropertiesDialog`) w panelu głównym, Split View oraz wynikach wyszukiwania (`Alt+Enter` / menu kontekstowe), wydane jako commit `c0e2f29` (tag `v0.40.1`);
+- Zakładka **Ogólne (General)** zliczająca łączną liczbę plików, folderów i dowiązań symbolicznych, całkowity rozmiar logiczny oraz fizyczną alokację bloków systemu plików (`st_blocks`) z deduplikacją dowiązań twardych (`st_dev` + `st_ino`) w asynchronicznym skanerze z obsługą anulowania;
+- Zakładka **Uprawnienia (Permissions)** umożliwiająca selektywną, trójstanową modyfikację pojedynczych bitów `rwx` dla bezpośrednio zaznaczonych lokalnych zwykłych plików i katalogów bez rekurencji, z zachowaniem nienaruszonych bitów `rwx` oraz bitów specjalnych (`setuid`, `setgid`, `sticky`) i uwzględnieniem maski ACL jądra;
+- Ścisłe bramki bezpieczeństwa: zaznaczenia mieszane z dowiązaniami symbolicznymi (aktywnymi lub uszkodzonymi), zdalnymi adresami KIO lub nieobsługiwanymi systemami plików pozostają w trybie tylko do odczytu; deskryptory `O_PATH | O_NOFOLLOW` weryfikują niezmienność i-węzła oraz punktu montowania przed i po zapisie z obowiązkowym oknem potwierdzenia (domyślny przycisk „Nie”).
 
-**Zrealizowany zakres:**
-- Obowiązkowe filtry nazwy pliku, typu MIME, rozszerzenia, daty i rozmiaru; wybór tylko pliki / tylko foldery;
-- Jawny zakres wyszukiwania: tylko bieżący folder, folder + podfoldery lub wybrana lokalizacja/wolumin; bez automatycznego skanowania wszystkich dysków;
-- Aktywne filtry łączone przez AND; alternatywne wartości jednego filtra przez OR (np. `jpg`/`png`). Nieaktywny filtr nie ogranicza wyników;
-- Sortowanie wyników i spójna integracja Primary/Split/Search z niezależnymi zapytaniami i zadaniami paneli;
-- Zapisane wyszukiwania zachowujące zapytanie, filtry, zakres i sortowanie; jawne ponowne uruchamianie i obsługa niedostępnych lokalizacji;
-- Asynchroniczność, anulowanie (Cancel), ochrona przed nieaktualnymi wynikami po zmianie zapytania/nawigacji i bezpieczna obsługa utraty montowania;
-- Niezależny silnik wyszukiwania oparty na własnym workerze, obsługujący także nieindeksowane lokalizacje, wymienne woluminy i partycje NTFS;
-- Opcjonalny adapter Baloo wykorzystywany warunkowo wyłącznie przy wiarygodnym pokryciu indeksu, z automatycznym powrotem (fallback) do workera.
+### 0.41.0 — Wyszukiwanie zaawansowane i responsywny interfejs wyszukiwania ✅ ukończone, wydane (v0.41.0)
 
-**Podsumowanie etapów:**
-1. **Etap 1 — Model zapytania i architektura (FULL PASS):** Zdefiniowanie kontraktu zapytania, zakresu i filtrów oraz oddzielenie modelu zapytania, backendu wykonania i koordynacji UI.
-2. **Etap 2 — Filtry zaawansowane (FULL PASS):** Wdrożenie filtrów wielokryterialnych oraz logiki AND/OR w niezależnej ścieżce workera.
-3. **Etap 3 — Integracja UI i wyników wyszukiwania (FULL PASS, Etapy 3A–3D.4 zaakceptowane):** Kompaktowe, nierozszerzające się pole **Szukaj** (320 px) oraz responsywny panel **SearchPopover (`Zakres | Tryb | Filtry`)** z trybami dopasowania nazwy (`Auto / Tekst / Maska glob`), wyraźnym wskaźnikiem aktywnych filtrów, osobnym przyciskiem czyszczenia `X`, obsługą klawiatury i dostępności oraz pełnym parytetem Primary/Split.
-4. **Etap 4 — Zapisane wyszukiwania (FULL PASS):** Moduł zapisu zwalidowanych zapytań, zakresu, filtrów i sortowania z jawnym ponownym uruchamianiem.
-5. **Etap 5 — Warunkowa integracja Baloo (FULL PASS):** Adapter backendu Baloo z weryfikacją pokrycia indeksu i bezpiecznym powrotem do workera dla lokalizacji nieindeksowanych, wymiennych i NTFS.
-6. **Etap 6 — Wydajność, bezpieczeństwo i regresja (FULL PASS):** Weryfikacja responsywności, limitów zasobów, anulowania, utraty montowania i pełnej regresji przed wydaniem 0.41.0.
+**Zrealizowany zakres w wydaniu 0.41.0 (tag `v0.41.0`, commit `292b8bb`):**
+- Filtry nazwy pliku, kategorii, typu MIME, rozszerzenia, zakresu dat modyfikacji i rozmiaru oraz wybór tylko pliki / tylko foldery;
+- Jawny zakres wyszukiwania: tylko bieżący folder, bieżący folder + podfoldery lub wybrana lokalizacja/wolumin — bez automatycznego skanowania wszystkich dysków;
+- Aktywne filtry łączone przez AND; alternatywne wartości wewnątrz jednego filtra łączone przez OR (np. `jpg`/`png`); nieaktywne filtry nie ograniczają wyników;
+- Sortowalne wyniki i spójna integracja Primary/Split/Search z zachowaniem niezależnych zapytań, zadań i stanu `PaneSearchState` podczas akcji „Zamień panele”;
+- Asynchroniczne wykonanie na niezależnym silniku workera wyszukiwania (obsługującym również nieindeksowane lokalizacje, wymienne woluminy i partycje NTFS), anulowanie (Cancel), ochrona przed nieaktualnymi wynikami po zmianie zapytania/nawigacji i bezpieczna obsługa utraty montowania.
 
-Szybki filtr bieżącego folderu w miejscu (in-place), wyszukiwanie po zawartości plików i zaawansowana logika zapytań AND/OR/NOT pozostają w backlogu bez przypisanej wersji.
+**Podsumowanie etapów i pozycji odłożonych:**
+1. **Etap 1 — Model zapytania i architektura (✅ FULL PASS, wydane w 0.41.0):** Zdefiniowanie kontraktu zapytania, zakresu i filtrów (`SearchQuery`, `SearchPlan`, `SearchMatcher`) oraz oddzielenie modelu zapytania, backendu wykonania i koordynacji UI z pełną akceptacją automatyczną i manualną.
+2. **Etap 2 — Filtry zaawansowane (✅ FULL PASS, wydane w 0.41.0):** Wdrożenie filtrów wielokryterialnych oraz logiki AND i wewnątrzfiltrowego OR w niezależnej ścieżce workera z odbiorem automatycznym i manualnym.
+3. **Etap 3 — Integracja UI i wyników wyszukiwania (✅ FULL PASS — Etapy 3A–3D.4 zaakceptowane, wydane w 0.41.0):** Kompaktowe, nierozszerzające się pole **Szukaj** (320 px) oraz responsywny panel **SearchPopover (`Zakres | Tryb | Filtry`)** z trybami dopasowania nazwy (`Auto / Tekst / Maska glob`), wskaźnikiem aktywnych filtrów (ikona lejka), osobnym przyciskiem czyszczenia `X`, responsywnością Wayland/HiDPI, pełną nawigacją klawiaturą i parytetem Primary/Split.
+4. **Etap 4 — Zapisane wyszukiwania (⏸ odłożone poza 0.41.0):** Moduł trwałego zapisu zapytań, zakresów i filtrów nie został wdrożony w 0.41.0 i pozostaje w sekcji *Dalszy rozwój wyszukiwania — bez przypisanej wersji*.
+5. **Etap 5 — Warunkowa integracja Baloo (⏸ odłożone poza 0.41.0):** Opcjonalny adapter Baloo został odłożony poza 0.41.0; wydanie 0.41.0 opiera się na niezależnym silniku workera, a ewentualna integracja Baloo pozostaje w sekcji *Dalszy rozwój wyszukiwania — bez przypisanej wersji*.
+6. **Etap 6 — Wydajność, bezpieczeństwo i regresja (⏸ częściowo pokryte w regresji Etapów 1–3; osobny cykl Etapu 6 nieuruchomiony przed `v0.41.0`):** Automatyczna regresja dla wydanego zakresu Etapów 1–3 (`search_query`, `search_controller`: granice modułów, anulowanie, ochrona przed nieaktualnymi wynikami, utrata montowania oraz routing Primary/Split) i odbiór manualny Etapów 3A–3D.4 zostały wykonane w commicie `292b8bb` (`v0.41.0`); osobny cykl testów obciążeniowych i między-systemowych (`ext4`/Btrfs/NTFS/nośniki wymienne) Etapu 6 nie był realizowany po odłożeniu Etapów 4–5.
+
+Szybki filtr bieżącego folderu w miejscu (in-place), wyszukiwanie po zawartości plików, zaawansowana logika zapytań AND/OR/NOT, zapisane wyszukiwania oraz opcjonalna integracja Baloo pozostają w backlogu bez przypisanej wersji.
 
 ### 0.41.1 — Wykrywanie urządzeń MTP i rozmiary folderów we Właściwościach ✅ ukończone, wydane (v0.41.1)
 
-Wydanie uzupełniające skupiające się na wykrywaniu urządzeń mobilnych oraz metrykach rozmiaru katalogów:
+Wydanie uzupełniające (tag `v0.41.1`, commit `3cd2f31`) obejmujące integrację urządzeń mobilnych MTP oraz asynchroniczne metryki rozmiaru katalogów:
 
-- **Etap 1 — Wykrywanie urządzeń MTP:**
-  - Automatyczne wykrywanie urządzeń MTP, integracja z widokiem „Ten komputer” i panelem bocznym, przekierowanie identyfikatorów UDI na czytelne ścieżki `mtp:/<Nazwa>`, obsługa podłączania i odłączania na gorąco (hotplug), baner rozłączenia z przyciskiem „Połącz ponownie” oraz pełna zgodność z widokiem Primary/Split.
-- **Etap 2 — Rozmiar folderu i zajętość dysku w oknie Właściwości:**
-  - Rekurencyjne obliczanie rozmiarów folderów i zajętości dysku w oknie Właściwości (ze szczególnym uwzględnieniem Btrfs i NTFS);
-  - Suma logicznych rozmiarów plików oraz raportowana zajętość na dysku (`st_blocks`) z czytelnym oznaczaniem ograniczeń dokładności (kompresja, deduplikacja, reflinki Btrfs);
-  - Liczba plików i podfolderów z poprawną polską odmianą liczebników;
-  - Asynchroniczne obliczanie w tle bez blokowania interfejsu użytkownika, progresywna aktualizacja postępu i natychmiastowe anulowanie;
-  - Bezpieczna obsługa dowiązań symbolicznych, granic montowania, nieczytelnych katalogów i błędów uprawnień.
+- **Etap 1 — Wykrywanie urządzeń MTP i obsługa hotplug (✅ ukończone):**
+  - Automatyczne wykrywanie urządzeń MTP (smartfony Android, aparaty) w widoku „Ten komputer” i panelu bocznym, przejrzyste przekierowanie surowych adresów UDI (`mtp:udi=...`) na czytelne ścieżki `mtp:/<Nazwa urządzenia>`, monitorowanie podłączania/odłączania na gorąco (`Solid` + `org.kde.kmtpd5`), baner rozłączenia z przyciskiem „Połącz ponownie” oraz pełna zgodność z widokiem Primary/Split.
+- **Etap 2 — Rozmiar folderu i zajętość dysku w oknie Właściwości (✅ ukończone):**
+  - Asynchroniczne, nieblokujące rekurencyjne obliczanie sumy logicznych rozmiarów plików, raportowanej alokacji bloków (`st_blocks * 512`) z podpowiedziami dokładności dla Btrfs/NTFS oraz dokładnej liczby plików, podfolderów i dowiązań symbolicznych z poprawną polską odmianą liczebników, ochroną przed pętlami symlinków (`NoFollow`), deduplikacją dowiązań twardych, izolacją granic montowania i natychmiastowym anulowaniem przy zamknięciu okna.
 
 ### 0.41.2 — Automatyczne odświeżanie katalogów i trwałe usuwanie na MTP ✅ ukończone, wydane (v0.41.2)
-- Automatyczne monitorowanie katalogów przez `KDirWatch` (pliki lokalne) i `org.kde.KDirNotify` (D-Bus KDE Plasma) z cichym odświeżaniem w miejscu (Quiet Refresh) zachowującym zaznaczenie, fokus, przewinięcie i aktywny filtr wyszukiwania;
-- Gwarantowane odświeżanie katalogów źródłowych i docelowych po operacjach wewnętrznych (Wytnij/Kopiuj/Wklej, Przeciągnij i upuść, Usuń, Zmień nazwę, Kosz, Przywróć) z buforowaniem zdarzeń (150 ms / maks. 500 ms) i ochroną aktywnej edycji nazwy (`EditingState`);
-- Dedykowana akcja „Usuń trwale…” (`Shift+Delete`) oraz inteligentny fallback klawisza `Delete` dla urządzeń MTP (`mtp:/`) z ochroną katalogów głównych i partycji telefonu (wymagana głębokość ścieżki `>= 3`).
+- Automatyczne monitorowanie katalogów przez `KDirWatch` (pliki lokalne) i `org.kde.KDirNotify` (D-Bus KDE Plasma) z cichym odświeżaniem w miejscu (Quiet Refresh) zachowującym zaznaczenie, fokus, pozycję przewinięcia, aktywną edycję nazwy (`EditingState`) i filtry wyszukiwania (buforowanie zdarzeń 150 ms / maks. 500 ms);
+- Gwarantowane odświeżanie katalogów źródłowych i docelowych po operacjach wewnętrznych (Wytnij/Kopiuj/Wklej, Przeciągnij i upuść, Usuń, Zmień nazwę, Kosz, Przywróć) bez konieczności naciskania `F5`;
+- Dedykowana akcja „Usuń trwale…” (`Shift+Delete`) oraz inteligentny fallback klawisza `Delete` dla urządzeń MTP (`mtp:/`) z ochroną katalogów głównych i partycji telefonu (wymagana znormalizowana głębokość ścieżki `>= 3`), wydane jako commit `061e0a0` (tag `v0.41.2`).
 
-### 0.42.0 — Optymalizacja wydajności i pamięci ✅ potwierdzone przez użytkownika
+### 0.42.0 — Optymalizacja wydajności i pamięci ✅ ukończone, wydane (v0.42.0)
 - Optymalizacja sortowania typów MIME (transformacja Schwartza `Decorate-Sort-Undecorate`, do 21,2x szybsze sortowanie dla 10 000 elementów);
 - Leniwa inicjalizacja nieaktywnych modeli w `DirectoryView` (elementy alokowane wyłącznie w aktywnej reprezentacji widoku Primary/Split, oszczędność ~15–18 MB RSS na 10k elementów w widoku pojedynczym i ~39,4 MB RSS w sesji dwupanelowej);
 - Zmniejszenie narzutu pamięciowego wierszy i zachowanie zaznaczenia, fokusu oraz pozycji przewinięcia przy przełączaniu trybów widoku;
 - Zakończone procedury odbioru automatycznego i manualnego FULL PASS (69/69 zestawów, 114 308 asercji);
-- Oficjalne wydanie opublikowane i zainstalowane w systemie.
+- Oficjalne wydanie opublikowane i zainstalowane w systemie (commit `23b1db6`, tag `v0.42.0`).
 
-### 0.43.0 — Ponawianie operacji z uprawnieniami administratora (Administrator Fallback) ✅ potwierdzone przez użytkownika
+### 0.43.0 — Ponawianie operacji z uprawnieniami administratora (Administrator Fallback) ✅ ukończone, wydane (v0.43.0)
 Gdy zwykła operacja plikowa zakończy się błędem braku uprawnień (Permission Denied), ThisPC oferuje ukierunkowane ponowienie operacji za pośrednictwem `admin://` i PolicyKit, bez konieczności uruchamiania całej aplikacji jako `root`.
 - **Brak globalnego trybu administratora:** ThisPC nigdy nie uruchamia okna GUI jako `root`; podniesienie uprawnień jest ściśle ograniczone do pojedynczej, jawnie potwierdzonej operacji przez worker KIO `admin://` i PolicyKit (Polkit), z jednorazowym tokenem zgody `AdminUserConsent` (ważnym 60 s) oraz blokadą pętli ponowień (`AlreadyRetriedAsAdmin`).
 - **Obsługiwane operacje GUI (centralna allowlista `isGuiAdminRetryAllowed`):**
@@ -541,9 +534,13 @@ Gdy zwykła operacja plikowa zakończy się błędem braku uprawnień (Permissio
   - Etap 2 — Bezpieczne kopiowanie i tworzenie ✅ FULL PASS (43 testy / 177 asercji + odbiór manualny)
   - Etap 3 — Bramka bezpieczeństwa Rename i Move ✅ CONDITIONAL PASS (43 testy / 71 asercji; zablokowane w GUI z powodu braku atomowego no-overwrite w KIO)
   - Etap 4 — Integracja GUI i bramka bezpieczeństwa artefaktów ✅ FULL PASS (72 testy / 228 asercji + 12/12 scenariuszy odbioru manualnego GUI)
-  - Etap 5 — Końcowa integracja, regresja bezpieczeństwa i gotowość wydania ✅ FULL PASS (17/17 scenariuszy automatycznych / 161 asercji + 3/3 manualne testy kontrolne GUI; pełna regresja 74/74 zestawy PASS)
+  - Etap 5 — Końcowa integracja, regresja bezpieczeństwa i gotowość wydania ✅ FULL PASS (17/17 scenariuszy automatycznych / 161 asercji + 3/3 manualne testy kontrolne GUI; pełna regresja 74/74 zestawy PASS; commit wydania `33f7b3f`, tag `v0.43.0`)
 
-### 0.44.0 — Kolejka i kontrola transferów (Transfer Queue & Control) ✅ potwierdzone przez użytkownika
+---
+
+## Ukończone wydanie kandydujące (Oczekujące na instalację systemową i publikację)
+
+### 0.44.0 — Kolejka i kontrola transferów (Transfer Queue & Control) ✅ implementacja ukończona i odebrana przez użytkownika (commit `109106e` — oczekuje na instalację systemową, tag `v0.44.0` i publikację na GitHubie)
 - **Domyślna aktywacja produkcyjnej kolejki transferów:** Standardowe operacje Kopiuj i Przenieś z panelu głównego (Primary), widoku podzielonego (Split View), przeciągania i upuszczania (Drag & Drop), schowka (Wytnij/Kopiuj/Wklej) oraz synchronizacji Split View są domyślnie kierowane przez `TransferQueueController` od startu aplikacji (`activateTransferQueueProductionDispatchByDefault()`, ze zmienną `THISPC_TRANSFER_QUEUE_PRODUCTION=0` zachowaną jako przełącznik diagnostyczny);
 - **Tryby transferu Szeregowo vs Równolegle:** Dynamiczne przełączanie między trybem szeregowym (1 aktywny transfer) a równoległym z konfigurowalnym limitem jednoczesnych operacji (`1..8`, domyślnie `2`) i ochroną przed zagłodzeniem zadań;
 - **Priorytetyzacja i zmiana kolejności zadań w kolejce:** Priorytety `Wysoki` (`High`), `Normalny` (`Normal`) i `Niski` (`Low`) oraz ręczna zmiana pozycji zadań oczekujących (`Przesuń wyżej`, `Przesuń niżej`, `Na początek kolejki`, `Na koniec kolejki`) z deterministycznym porządkiem FIFO;
@@ -576,11 +573,17 @@ Gdy zwykła operacja plikowa zakończy się błędem braku uprawnień (Permissio
 - **Etap 6 — Opcjonalne ograniczanie przepustowości:** ✅ FULL PASS — Wspólny limiter token-bucket (`TransferBandwidthLimiter`), opóźnianie bloków w `LocalFileCopyWorker`, dynamiczna zmiana limitów oraz rzetelne oznaczenia na kartach zadań.
 - **Etap 7 — Integracja produkcyjna, Zintegrowany Menedżer Operacji, bramka bezpieczeństwa MTP i końcowa regresja:** ✅ FULL PASS — Integracja end-to-end z widokami Primary/Split, Drag & Drop, Wklej, synchronizacją Split View, Zintegrowanym Menedżerem Operacji (`U1–U8.1`, `UX-A..D`), zapisem etapowym `.thispc-part`, kopiowaniem i hotplugiem MTP, blokadą wydaniową MTP Move (`BLOCK MOVE`), weryfikacją ASan/UBSan oraz pełną regresją (76/76 zestawów PASS, 2335 asercji `transfer_queue` PASS).
 
-### 0.45.0 — Powiadomienia i historia operacji (Notifications + Operation History)
-- Powiadomienia pulpitu KDE Plasma o zakończeniu długich operacji w tle;
-- Dziennik ostatnich operacji ze ścieżkami źródła, celu i statusem wyniku;
-- Bezpieczne ponawianie dla operacji kwalifikujących się do powtórzenia;
-- Akcja „Pokaż w folderze” po zakończeniu zadania tam, gdzie ma to sens.
+---
+
+## Planowane wydania
+
+**Zaplanowane:** przyjęte przyszłe prace przypisane do docelowych wersji (`0.45.0–0.48.0`), jeszcze niezaimplementowane.
+
+### 0.45.0 — Powiadomienia i rozbudowa historii operacji (Notifications + Operation History Extensions)
+- Powiadomienia pulpitu KDE Plasma o zakończeniu lub niepowodzeniu zadań w tle;
+- Trwały/rozszerzony dziennik historii operacji ze ścieżkami źródła, celu, znacznikami czasu i diagnostyką wyniku, rozwijający karty historii bieżącej sesji wprowadzone w Zintegrowanym Menedżerze Operacji w wersji 0.44.0;
+- Bezpieczne ponawianie dla nieudanych operacji kwalifikujących się do powtórzenia;
+- Akcja „Pokaż w folderze” po zakończeniu zadania tam, gdzie ma to zastosowanie.
 
 ### 0.46.0 — Rozszerzenia i akcje usług (Extensions / Service Actions)
 - Preferować wykorzystanie KDE Service Actions i prostego kontraktu rozszerzeń zamiast budowania pełnego własnego ekosystemu wtyczek bez konkretnej potrzeby;
@@ -612,9 +615,11 @@ Gdy zwykła operacja plikowa zakończy się błędem braku uprawnień (Permissio
 Wartościowe funkcje do rozważenia, bez przypisanej wersji ani ustalonego terminu realizacji.
 
 ### Dalszy rozwój wyszukiwania — bez przypisanej wersji
+- Zapisane wyszukiwania (odłożony Etap 4 z pierwotnego planu 0.41): trwały zapis zwalidowanych definicji zapytania, filtrów, zakresu i sortowania z jawnym ponownym uruchamianiem oraz obsługą niedostępnych lokalizacji.
+- Opcjonalna integracja Baloo (odłożony Etap 5 z pierwotnego planu 0.41): warunkowy adapter backendu oceniany pod kątem zgodności semantyki, pokrycia indeksu i kompletności wyników, z zachowaniem automatycznego powrotu (fallback) do niezależnego silnika workera.
 - Szybki filtr bieżącego folderu w miejscu (in-place): wartościowy osobny mechanizm, bez wyszukiwania rekurencyjnego; wymaga własnej semantyki widoku i filtrowania.
 - Wyszukiwanie po zawartości plików: osobna funkcja wymagająca przeglądu formatów/backendów, wydajności i bezpieczeństwa.
-- Zaawansowana logika zapytań AND/OR/NOT: osobna od prostego łączenia aktywnych filtrów przez AND oraz alternatyw wewnątrz jednego filtra zrealizowanych w 0.41.
+- Zaawansowana logika zapytań AND/OR/NOT: osobna od prostego łączenia aktywnych filtrów przez AND oraz alternatyw wewnątrz jednego filtra wydanych w 0.41.0.
 
 ### Interoperacyjność przeciągania i upuszczania Ark → ThisPC — audyt i plan
 - Przyjmowanie zewnętrznego przeciągania i upuszczania (Drag & Drop) z widoków archiwów Ark/KDE do zwykłego folderu w ThisPC dla pojedynczych i wielu zaznaczonych plików oraz folderów;
