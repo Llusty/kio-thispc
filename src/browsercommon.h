@@ -460,6 +460,33 @@ struct FileOperationContext {
     }
 };
 
+inline QString sysfsPathForSolidUdi(const QString &udi)
+{
+    const QString prefix = QStringLiteral("/org/kde/solid/udev/sys");
+    if (udi.startsWith(prefix)) {
+        return QStringLiteral("/sys") + udi.mid(prefix.size());
+    }
+    return QString();
+}
+
+inline bool isUsbInterfaceDevice(const QString &udi, QString *parentUdiOut = nullptr)
+{
+    const QString sysfs = sysfsPathForSolidUdi(udi);
+    if (sysfs.isEmpty()) {
+        return false;
+    }
+    QFileInfo fi(sysfs);
+    const QString baseName = fi.fileName();
+    if (baseName.contains(QLatin1Char(':'))) {
+        if (parentUdiOut) {
+            const QString parentSysfs = fi.dir().path();
+            *parentUdiOut = QStringLiteral("/org/kde/solid/udev/sys") + parentSysfs.mid(4);
+        }
+        return true;
+    }
+    return false;
+}
+
 namespace MtpRedirectionRegistry {
 inline QHash<QString, QString> &udiToDeviceSegmentMap()
 {
@@ -473,7 +500,13 @@ inline QHash<QString, QString> &deviceSegmentToUdiMap()
     return map;
 }
 
-inline void recordRedirection(const QUrl &requestedUrl, const QUrl &redirectedUrl)
+inline QHash<QString, QString> &idToDeviceSegmentMap()
+{
+    static QHash<QString, QString> map;
+    return map;
+}
+
+inline void recordRedirection(const QUrl &requestedUrl, const QUrl &redirectedUrl, const QString &driveId = QString())
 {
     if (!requestedUrl.isValid() || !redirectedUrl.isValid()) {
         return;
@@ -501,6 +534,9 @@ inline void recordRedirection(const QUrl &requestedUrl, const QUrl &redirectedUr
         }
         udiToDeviceSegmentMap().insert(udi, segment);
         deviceSegmentToUdiMap().insert(segment, udi);
+        if (!driveId.isEmpty()) {
+            idToDeviceSegmentMap().insert(driveId, segment);
+        }
     }
 }
 
@@ -529,6 +565,7 @@ inline void clear()
 {
     udiToDeviceSegmentMap().clear();
     deviceSegmentToUdiMap().clear();
+    idToDeviceSegmentMap().clear();
 }
 } // namespace MtpRedirectionRegistry
 
@@ -540,8 +577,15 @@ inline bool urlBelongsToMtpDrive(const QUrl &url, const DriveInfo &drive)
     }
     if (url.path().startsWith(QStringLiteral("udi="))) {
         const QString udi = url.path().mid(4);
-        return (!drive.udi.isEmpty() && udi == drive.udi)
-            || sameLocation(url, drive.targetUrl);
+        if ((!drive.udi.isEmpty() && udi == drive.udi)
+            || sameLocation(url, drive.targetUrl)) {
+            return true;
+        }
+        QString parentUdi;
+        if (isUsbInterfaceDevice(udi, &parentUdi) && !drive.udi.isEmpty() && parentUdi == drive.udi) {
+            return true;
+        }
+        return false;
     }
     const QStringList parts = url.path().split(QLatin1Char('/'), Qt::SkipEmptyParts);
     if (parts.isEmpty()) {
@@ -550,12 +594,25 @@ inline bool urlBelongsToMtpDrive(const QUrl &url, const DriveInfo &drive)
     const QString &deviceSegment = parts.first();
     const QString mappedUdi = MtpRedirectionRegistry::udiForRedirectedDeviceSegment(deviceSegment);
     if (!mappedUdi.isEmpty() && !drive.udi.isEmpty()) {
-        return drive.udi == mappedUdi;
+        if (drive.udi == mappedUdi) {
+            return true;
+        }
+        QString parentUdi;
+        if (isUsbInterfaceDevice(mappedUdi, &parentUdi) && parentUdi == drive.udi) {
+            return true;
+        }
+        return false;
     }
     if (!drive.udi.isEmpty()) {
         const QString mappedSegment = MtpRedirectionRegistry::redirectedDeviceSegmentForUdi(drive.udi);
-        if (!mappedSegment.isEmpty() && deviceSegment == mappedSegment) {
-            return true;
+        if (!mappedSegment.isEmpty()) {
+            return deviceSegment == mappedSegment;
+        }
+    }
+    if (!drive.id.isEmpty()) {
+        const QString mappedSegment = MtpRedirectionRegistry::idToDeviceSegmentMap().value(drive.id);
+        if (!mappedSegment.isEmpty()) {
+            return deviceSegment == mappedSegment;
         }
     }
     return !drive.name.isEmpty() && deviceSegment == drive.name;
@@ -566,17 +623,31 @@ inline QUrl resolveReconnectedMtpUrl(const QUrl &url, const QList<DriveInfo> &dr
     if (!url.isValid() || url.scheme().compare(QStringLiteral("mtp"), Qt::CaseInsensitive) != 0) {
         return url;
     }
+
+    QList<DriveInfo> mtpDrives;
+    for (const DriveInfo &d : drives) {
+        if (d.isMtpDevice()) {
+            mtpDrives.push_back(d);
+        }
+    }
+
+    if (mtpDrives.isEmpty()) {
+        return url;
+    }
+
     if (url.path().startsWith(QStringLiteral("udi="))) {
         const QString oldUdi = url.path().mid(4);
-        for (const DriveInfo &d : drives) {
-            if (d.isMtpDevice() && d.udi == oldUdi) {
+        for (const DriveInfo &d : mtpDrives) {
+            if (d.udi == oldUdi) {
                 return url;
             }
         }
-        QList<DriveInfo> mtpDrives;
-        for (const DriveInfo &d : drives) {
-            if (d.isMtpDevice()) {
-                mtpDrives.push_back(d);
+        QString parentUdi;
+        if (isUsbInterfaceDevice(oldUdi, &parentUdi)) {
+            for (const DriveInfo &d : mtpDrives) {
+                if (d.udi == parentUdi) {
+                    return d.targetUrl;
+                }
             }
         }
         if (mtpDrives.size() == 1) {
@@ -584,18 +655,39 @@ inline QUrl resolveReconnectedMtpUrl(const QUrl &url, const QList<DriveInfo> &dr
         }
         const QString oldSegment = MtpRedirectionRegistry::redirectedDeviceSegmentForUdi(oldUdi);
         if (!oldSegment.isEmpty()) {
-            QList<DriveInfo> matchingNamed;
             for (const DriveInfo &d : mtpDrives) {
-                if (d.name == oldSegment) {
-                    matchingNamed.push_back(d);
+                if (urlBelongsToMtpDrive(QUrl(QStringLiteral("mtp:/") + oldSegment), d)) {
+                    return d.targetUrl;
                 }
-            }
-            if (matchingNamed.size() == 1) {
-                return matchingNamed.first().targetUrl;
             }
         }
         return url;
     }
+
+    const QStringList parts = url.path().split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    if (!parts.isEmpty()) {
+        const QString &deviceSegment = parts.first();
+        for (const DriveInfo &d : mtpDrives) {
+            if (urlBelongsToMtpDrive(url, d)) {
+                return url;
+            }
+        }
+        if (mtpDrives.size() == 1) {
+            const DriveInfo &liveDrive = mtpDrives.first();
+            const QString liveSegment = MtpRedirectionRegistry::redirectedDeviceSegmentForUdi(liveDrive.udi);
+            if (!liveSegment.isEmpty() && liveSegment != deviceSegment) {
+                QString newPath = QStringLiteral("/") + liveSegment;
+                for (int i = 1; i < parts.size(); ++i) {
+                    newPath += QLatin1Char('/') + parts.at(i);
+                }
+                QUrl resolved = url;
+                resolved.setPath(newPath);
+                return resolved;
+            }
+            return url;
+        }
+    }
+
     return url;
 }
 
@@ -606,6 +698,17 @@ inline QString mtpErrorMessageForUrl(const QUrl &url, const QList<DriveInfo> &dr
         if (urlBelongsToMtpDrive(url, d)) {
             stillConnected = true;
             break;
+        }
+    }
+    if (!stillConnected) {
+        int mtpCount = 0;
+        for (const DriveInfo &d : drives) {
+            if (d.isMtpDevice()) {
+                ++mtpCount;
+            }
+        }
+        if (mtpCount == 1 && url.scheme().compare(QStringLiteral("mtp"), Qt::CaseInsensitive) == 0) {
+            stillConnected = true;
         }
     }
     return stillConnected

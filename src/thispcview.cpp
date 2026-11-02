@@ -3,7 +3,7 @@
  * thispc-view - a lightweight KDE/Qt file browser with a Windows-like
  * "This PC" home page, backed by KIO.
  *
- * Version 0.43.0
+ * Version 0.44.0
  * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
@@ -482,6 +482,12 @@ public:
         const QUrl &initialUrl = kThisPcUrl,
         bool allowSessionRestore = true)
     {
+        THISPC_TRACE("ThisPcWindow startup: pid=%lld, exe=%s, THISPC_TRANSFER_QUEUE_PRODUCTION=%s, isConnected=%d",
+                     static_cast<long long>(QCoreApplication::applicationPid()),
+                     qPrintable(QCoreApplication::applicationFilePath()),
+                     qPrintable(qEnvironmentVariable("THISPC_TRANSFER_QUEUE_PRODUCTION")),
+                     isTransferQueueProductionDispatchConnected() ? 1 : 0);
+
         setWindowTitle(trLocal("Ten komputer", "This PC"));
         setWindowIcon(QIcon::fromTheme(QStringLiteral("computer")));
 
@@ -530,6 +536,17 @@ public:
                    const FileOperationContext &context) {
                 watchFileOperation(job, message, clearClipboard, title, refreshViews, context);
             }, [this](const QString &message) { statusBar()->showMessage(message, 0); });
+
+        if (m_queueController) {
+            if (m_undoController) {
+                m_undoController->setQueueController(m_queueController);
+            }
+            m_fileActions->setQueueController(m_queueController);
+        }
+        THISPC_TRACE("ThisPcWindow wired controllers: queueController=%p, fileActions=%p, queueInFileActions=%p, undoController=%p",
+                     static_cast<void*>(m_queueController), static_cast<void*>(m_fileActions),
+                     static_cast<void*>(m_fileActions ? m_fileActions->queueController() : nullptr),
+                     static_cast<void*>(m_undoController));
 
         m_adminRetryController = new AdminRetryController(this);
 
@@ -740,8 +757,9 @@ protected:
             event->ignore();
             return;
         }
+        const int queueActive = m_queueController ? m_queueController->activeCount() : 0;
         const int activeOperations =
-            m_operationManager ? m_operationManager->activeCount() : 0;
+            (m_operationManager ? m_operationManager->activeCount() : 0) + queueActive;
         if (activeOperations > 0) {
             const QString question =
                 isPolish()
@@ -778,6 +796,15 @@ protected:
         const auto childDialogs = findChildren<QDialog *>();
         for (QDialog *dialog : childDialogs) {
             dialog->close();
+        }
+
+        if (m_queueController) {
+            if (!isTransferQueueDemoMode() || isTransferQueueProductionDispatchConnected()) {
+                QSettings queueSettings;
+                m_queueController->saveSettings(queueSettings);
+                queueSettings.sync();
+            }
+            m_queueController->beginShutdown();
         }
 
         saveSessionState();
@@ -2460,14 +2487,14 @@ private:
         statusBar()->setSizeGripEnabled(true);
 
         m_versionLabel = new QLabel(
-            QStringLiteral("v0.43.0"),
+            QStringLiteral("v0.44.0"),
             this);
         m_versionLabel->setObjectName(
             QStringLiteral("versionLabel"));
         m_versionLabel->setToolTip(
             trLocal(
-                "Wersja thispc-view 0.43.0",
-                "thispc-view version 0.43.0"));
+                "Wersja thispc-view 0.44.0",
+                "thispc-view version 0.44.0"));
         statusBar()->addPermanentWidget(m_versionLabel);
     }
 
@@ -2479,6 +2506,70 @@ private:
 
         m_operationManager =
             new OperationManager(this, toolbar, this);
+        {
+            QSettings s;
+            const bool initialClose = s.value(
+                QLatin1String("TransferQueue/CloseWindowOnComplete"), false).toBool();
+            m_operationManager->setCloseOnComplete(initialClose);
+            connect(m_operationManager, &OperationManager::closeOnCompleteChanged,
+                    this, [](bool enabled) {
+                        QSettings s2;
+                        s2.setValue(
+                            QLatin1String("TransferQueue/CloseWindowOnComplete"), enabled);
+                        s2.sync();
+                    });
+        }
+        if (isTransferQueueDemoMode() || isTransferQueueProductionDispatchConnected()) {
+            m_queueController = new TransferQueueController(this);
+            auto demoSettings = transferQueueDemoSettingsStore();
+            if (demoSettings) {
+                m_queueController->loadSettings(*demoSettings);
+            } else {
+                QSettings userSettings;
+                m_queueController->loadSettings(userSettings);
+            }
+            m_operationManager->setCloseOnComplete(m_queueController->closeWindowOnComplete());
+            m_operationManager->setQueueController(m_queueController);
+
+            auto persistQueueSettings = [this]() {
+                if (m_queueController) {
+                    if (isTransferQueueDemoMode() && !isTransferQueueProductionDispatchConnected()) {
+                        auto demoStore = transferQueueDemoSettingsStore();
+                        if (demoStore) {
+                            m_queueController->saveSettings(*demoStore);
+                            demoStore->sync();
+                        }
+                    } else {
+                        QSettings userStore;
+                        m_queueController->saveSettings(userStore);
+                        userStore.sync();
+                    }
+                }
+            };
+
+            connect(m_queueController, &TransferQueueController::modeChanged, this, [persistQueueSettings](TransferQueueMode) {
+                persistQueueSettings();
+            });
+            connect(m_queueController, &TransferQueueController::parallelLimitChanged, this, [persistQueueSettings](int) {
+                persistQueueSettings();
+            });
+            connect(m_queueController, &TransferQueueController::bandwidthLimitChanged, this, [persistQueueSettings](bool, quint64) {
+                persistQueueSettings();
+            });
+            connect(m_queueController, &TransferQueueController::closeWindowOnCompleteChanged, this, [persistQueueSettings](bool) {
+                persistQueueSettings();
+            });
+
+            if (m_undoController) {
+                m_undoController->setQueueController(m_queueController);
+            }
+            if (m_fileActions) {
+                m_fileActions->setQueueController(m_queueController);
+            }
+            if (isTransferQueueDemoMode() && !isTransferQueueProductionDispatchConnected()) {
+                enqueueDemoTasks(m_queueController);
+            }
+        }
     }
 
     void buildHomePage(PaneId pane, QStackedWidget *stack, QWidget *&homePage,
@@ -6064,6 +6155,13 @@ public:
                 themedIcon(QStringLiteral("go-jump")),
                 trLocal("Przenieś tutaj", "Move here"));
 
+            const MtpMoveSafetyEvaluation mtpEval = MtpMoveSafety::evaluate(urls, destination, true);
+            if (!mtpEval.isAllowed()) {
+                moveHere->setEnabled(false);
+                moveHere->setToolTip(mtpEval.refusalReason);
+                action = Qt::CopyAction;
+            }
+
             menu.setDefaultAction(
                 action == Qt::MoveAction
                     ? moveHere
@@ -6514,7 +6612,7 @@ private Q_SLOTS:
     void refreshCurrent(bool preserveStatusMessage = false)
     {
         reloadDrives();
-        if (m_primaryPane && m_primaryPane->previewAdapter()) {
+        if (!preserveStatusMessage && m_primaryPane && m_primaryPane->previewAdapter()) {
             m_primaryPane->previewAdapter()->invalidatePreviews();
         }
         if (RemoteUrlHelper::isRemoteUrl(m_navigation.currentUrl())) {
@@ -6593,7 +6691,7 @@ private Q_SLOTS:
 
         // Check split pane
         if (m_splitPane && m_splitPane->isVisible() && sameLocation(m_splitPane->currentUrl(), url)) {
-            m_splitPane->refresh();
+            m_splitPane->refresh(true);
         }
 
         // Check background tabs: mark location dirty without running costly background listings
@@ -7199,6 +7297,7 @@ private:
     QStackedWidget *m_contentStack = nullptr;
 
     OperationManager *m_operationManager = nullptr;
+    TransferQueueController *m_queueController = nullptr;
     AdminRetryController *m_adminRetryController = nullptr;
     QLabel *m_versionLabel = nullptr;
     QLabel *m_recoveryStatusLabel = nullptr;
@@ -7305,6 +7404,8 @@ int main(int argc, char **argv)
             }
         }
     }
+
+    activateTransferQueueProductionDispatchByDefault();
 
     ThisPcWindow window(
         initialUrl,

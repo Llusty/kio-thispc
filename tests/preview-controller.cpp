@@ -505,6 +505,105 @@ int main(int argc, char **argv)
                && sourceAfterInfo.lastModified() == sourceBeforeInfo.lastModified(),
            "55. Real preview preserves source size and mtime");
 
+    // 56-60: BMP file disguised as JPEG (e.g. Windows folder.jpg) fallback and failure caching
+    {
+        QTemporaryDir bmpTestDir;
+        verify(bmpTestDir.isValid(), "56. BMP test directory created");
+        const QString bmpJpgPath = bmpTestDir.filePath(QStringLiteral("folder.jpg"));
+        QFile bmpFile(bmpJpgPath);
+        const QByteArray validBmp = QByteArray::fromHex("424d3a000000000000003600000028000000010000000100000001001800000000000400000000000000000000000000000000000000ffffff00");
+        verify(bmpFile.open(QIODevice::WriteOnly) && bmpFile.write(validBmp) == validBmp.size(), "57. folder.jpg BMP fixture written");
+        bmpFile.close();
+
+        class MockFailJob : public KIO::PreviewJob
+        {
+        public:
+            MockFailJob(const KFileItemList &items, const QSize &sz, const QStringList *plugs)
+                : KIO::PreviewJob(items, sz, plugs)
+                , m_items(items)
+            {
+            }
+            void start() override
+            {
+                QTimer::singleShot(0, this, [this] {
+                    for (const auto &item : m_items) {
+                        Q_EMIT failed(item);
+                    }
+                    emitResult();
+                });
+            }
+            KFileItemList m_items;
+        };
+
+        PreviewController bmpCtl;
+        // Simulate KIO preview job failing for this file as it triggers "Not a JPEG file" in qjpeg
+        bmpCtl.setPreviewJobFactoryForTesting([](const KFileItemList &items, const QSize &sz, const QStringList *plugs) -> KIO::PreviewJob * {
+            return new MockFailJob(items, sz, plugs);
+        });
+
+        const QUrl bmpUrl = QUrl::fromLocalFile(bmpJpgPath);
+        bool bmpPreviewReady = false;
+        QObject::connect(&bmpCtl, &PreviewController::previewReady, [&](const QUrl &u, const QPixmap &pix, quint64) {
+            if (u == bmpUrl && !pix.isNull()) {
+                bmpPreviewReady = true;
+            }
+        });
+
+        bmpCtl.requestPreviews({bmpUrl}, QSize(64, 64), 1.0);
+        QCoreApplication::processEvents();
+        QTest::qWait(50);
+
+        verify(bmpPreviewReady, "58. PreviewController falls back to auto-detecting BMP format for folder.jpg");
+        verify(bmpCtl.hasCachedPreview(bmpUrl, QSize(64, 64), 1.0), "59. Decoded BMP preview is cached");
+
+        // Request again: must be served from cache without invoking factory
+        int factoryCalls = 0;
+        bmpCtl.setPreviewJobFactoryForTesting([&factoryCalls](const KFileItemList &items, const QSize &sz, const QStringList *plugs) -> KIO::PreviewJob * {
+            ++factoryCalls;
+            return new MockFailJob(items, sz, plugs);
+        });
+        bmpCtl.requestPreviews({bmpUrl}, QSize(64, 64), 1.0);
+        QCoreApplication::processEvents();
+        verify(factoryCalls == 0, "60. Second request served from cache, preventing repeated decoding");
+
+        // 61-65: Directory containing BMP folder.jpg (Windows folder cover) fast-path and caching
+        const QString movieDirPath = bmpTestDir.filePath(QStringLiteral("MovieDir"));
+        QDir().mkdir(movieDirPath);
+        const QString dirCoverPath = movieDirPath + QStringLiteral("/folder.jpg");
+        QFile dirCoverFile(dirCoverPath);
+        verify(dirCoverFile.open(QIODevice::WriteOnly) && dirCoverFile.write(validBmp) == validBmp.size(),
+               "61. MovieDir folder.jpg BMP fixture written");
+        dirCoverFile.close();
+
+        PreviewController dirCtl;
+        int dirFactoryCalls = 0;
+        dirCtl.setPreviewJobFactoryForTesting([&dirFactoryCalls](const KFileItemList &items, const QSize &sz, const QStringList *plugs) -> KIO::PreviewJob * {
+            ++dirFactoryCalls;
+            return new MockFailJob(items, sz, plugs);
+        });
+
+        const QUrl dirUrl = QUrl::fromLocalFile(movieDirPath);
+        bool dirPreviewReady = false;
+        QObject::connect(&dirCtl, &PreviewController::previewReady, [&](const QUrl &u, const QPixmap &pix, quint64) {
+            if (u == dirUrl && !pix.isNull()) {
+                dirPreviewReady = true;
+            }
+        });
+
+        dirCtl.requestPreviews({dirUrl}, QSize(64, 64), 1.0);
+        QCoreApplication::processEvents();
+
+        verify(dirPreviewReady, "62. PreviewController fast-paths directory cover from folder.jpg");
+        verify(dirCtl.hasCachedPreview(dirUrl, QSize(64, 64), 1.0), "63. Directory preview is cached under directory URL");
+        verify(dirFactoryCalls == 0, "64. KIO factory was bypassed completely for directory with folder.jpg");
+
+        // Re-request directory preview: must be served from RAM cache
+        dirPreviewReady = false;
+        dirCtl.requestPreviews({dirUrl}, QSize(64, 64), 1.0);
+        QCoreApplication::processEvents();
+        verify(dirPreviewReady && dirFactoryCalls == 0, "65. Re-requesting directory preview served directly from cache");
+    }
+
     qInfo("PASS: %d preview controller assertions", checks);
     return 0;
 }

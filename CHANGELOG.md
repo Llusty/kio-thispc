@@ -2,6 +2,27 @@
 
 # Changelog
 
+## 0.44.0 — Transfer Queue & Control
+
+- **Transfer Queue & Scheduler (`TransferQueueController`, `TransferTaskDescriptor`, `TransferQueueSettings`):**
+  - **Production Transfer Queue Active by Default:** Standard Copy and Move operations launched from Primary View, Split View, Drag & Drop, Cut/Copy/Paste, and Split View Synchronization now route through `TransferQueueController` by default upon application startup (`activateTransferQueueProductionDispatchByDefault()`, with `THISPC_TRANSFER_QUEUE_PRODUCTION=0` retained as a diagnostic override).
+  - **Serial & Parallel Execution Modes:** Switch dynamically between **Serial** mode (strictly 1 active transfer at a time) and **Parallel** mode with a configurable concurrency limit (`1..8`, default `2`) and starvation protection.
+  - **Task Priorities & Manual Reordering:** Assign `High`, `Normal`, or `Low` priority to waiting tasks and reorder queued items (`Move Up`, `Move Down`, `Move to Top`, `Move to Bottom`) with deterministic FIFO ordering within the same priority.
+  - **Per-Task & Global Queue Controls:** Pause, resume, or cancel individual transfers or use global **Pause Queue**, **Resume Queue**, and **Cancel All** controls. Pause capability is reported honestly per backend (chunk-boundary pause for `LocalFileCopyWorker`, dispatch-level queue pause for non-suspendable jobs). Closing the application while transfers are active or queued prompts for confirmation before safe cancellation.
+  - **Optional Bandwidth Throttling (`TransferBandwidthLimiter`):** Thread-safe shared token-bucket rate limiter for chunked local transfers (`LocalFileCopyWorker`) configurable in `KiB/s` or `MiB/s`, with live limit adjustments and explicit `No limit` badges for backends that do not support chunk pacing.
+  - **Persistent Queue Settings:** Execution mode, concurrency limit, bandwidth limiter configuration, and auto-close preference are persisted via `QSettings` and synchronized between `OperationManager` and `TransferQueueController`.
+- **Unified Operations Manager (`OperationManager`, `TransferQueueViewWidget`, `TransferQueueTaskItemWidget`):**
+  - **Consolidated Operations Window:** Unified single-window interface combining live transfer queue management, legacy KIO job tracking, aggregate throughput telemetry, and an expandable real-time speed graph.
+  - **Rich Task Cards:** Per-task cards display operation type, source/destination paths, status and priority badges, byte progress (`processed / total`), transfer speed, ETA, expandable per-task speed charts, and context-sensitive control buttons.
+  - **Session History & Legacy KIO Integration:** Completed, cancelled, and failed operations — including queued transfers and traditional KIO jobs such as Trash, Delete, and Archive operations — remain inspectable in the unified list until dismissed individually or cleared via **Clear History**.
+  - **Auto-Open & Auto-Close Behavior:** Automatically surfaces progress when transfers start and optionally closes the operations window when all tasks complete without errors (`CloseWindowOnComplete`), while keeping the window open on failures so diagnostics remain visible.
+  - **Responsive Layout & Multimedia Lifecycle Polish:** Added a scroll container (`QScrollArea`) and minimum control heights for the collapsible settings panel at compact window sizes (`480 × 290 px`), and ensured Quick Look audio/video playback stops cleanly on window close or hide.
+- **Transfer Safety, Staging & MTP Protection (`KioStagedTransferJob`, `TransferReservationRegistry`, `MtpMoveSafety`):**
+  - **Deferred Dispatch, Preflight & Reservation Registry:** Queued tasks store lightweight descriptors and instantiate jobs via `jobFactory` only at dispatch time after preflight revalidation and `TransferReservationRegistry` path-conflict checks prevent concurrent writes to identical or overlapping targets.
+  - **Staging & Identity Verification:** Cross-filesystem and staged transfers write to a temporary `.thispc-part` sibling file, verify transferred byte counts and `LocalFileIdentity` (`dev + ino + size + mtime_ns`), and protect `UndoController` with an active-queue barrier and overwrite fencing.
+  - **MTP Copy & Hotplug Support:** Verified `mtp:/` ↔ local Copy workflows and live device hotplug detection.
+  - **MTP Move Release Safety Block (`BLOCK MOVE`):** All Move operations involving `mtp:/` (`MTP → Local`, `Local → MTP`, `MTP → MTP`, and intra-device MTP Move across Cut+Paste, Drag & Drop Move, and mixed selections) are strictly refused (`MtpMoveVerdict::RefusedUnsupported`) in `MtpMoveSafety::evaluate()`, `FileActions::transfer()`, and `TransferQueueController::enqueue()`. Because `kio_mtp` / `libmtp` cannot provide a race-free post-transfer object identity guarantee prior to source deletion, ThisPC preserves the source files and directs the user to use **Copy** followed by manual verification and deletion.
+
 ## 0.43.0 — Administrator Fallback for Failed Operations
 
 - **Scoped Administrator Retry Architecture (`AdminRetryContract`, `AdminRetryController`, `AdminRetryExecutor`):**

@@ -35,7 +35,7 @@ group.add_argument('--all', action='store_true', help='run every regression suit
 group.add_argument('--suites', nargs='+', choices=[
     'aggregate_permissions', 'aggregate_properties', 'folder_size', 'properties_folder_size', 'panes', 'tabs', 'properties', 'search', 'actions', 'action_state', 'operations',
     'local_transfer', 'transfer_plan', 'local_move', 'local_tree', 'tree_history',
-    'sidebar_dnd', 'sidebar_layout', 'split_layout', 'templates', 'trash', 'archive', 'archive_jobs', 'archive_menu', 'archive_creation', 'preview', 'quick_look', 'batch_rename', 'view_settings', 'listing_core', 'drive_home', 'solid_monitor', 'device_mount', 'device_removal', 'split_compare', 'selection_menu', 'location_presentation', 'navigation_history', 'keyboard_navigation', 'remote_url', 'saved_remote', 'recent_reconnect', 'session_history', 'properties_integration', 'properties_hidden', 'properties_posix_mode', 'properties_xattr_edit', 'properties_xattrs', 'properties_capabilities', 'properties_data', 'drive_properties', 'acl', 'acl_editor', 'checksums', 'metadata', 'properties_lifecycle', 'storage_scan', 'storage_analysis', 'hash_utilities', 'duplicate_finder', 'duplicate_actions', 'storage_treemap', 'launch_url_resolver', 'preview_controller', 'image_video_previews', 'executable_previews', 'folder_previews', 'preview_settings', 'search_query', 'admin_retry', 'admin_retry_stage2', 'admin_retry_stage3', 'admin_retry_stage4', 'admin_retry_stage5'],
+    'sidebar_dnd', 'sidebar_layout', 'split_layout', 'templates', 'trash', 'archive', 'archive_jobs', 'archive_menu', 'archive_creation', 'preview', 'quick_look', 'batch_rename', 'view_settings', 'listing_core', 'drive_home', 'solid_monitor', 'device_mount', 'device_removal', 'split_compare', 'selection_menu', 'location_presentation', 'navigation_history', 'keyboard_navigation', 'remote_url', 'saved_remote', 'recent_reconnect', 'session_history', 'properties_integration', 'properties_hidden', 'properties_posix_mode', 'properties_xattr_edit', 'properties_xattrs', 'properties_capabilities', 'properties_data', 'drive_properties', 'acl', 'acl_editor', 'checksums', 'metadata', 'properties_lifecycle', 'storage_scan', 'storage_analysis', 'hash_utilities', 'duplicate_finder', 'duplicate_actions', 'storage_treemap', 'launch_url_resolver', 'preview_controller', 'image_video_previews', 'executable_previews', 'folder_previews', 'preview_settings', 'search_query', 'admin_retry', 'admin_retry_stage2', 'admin_retry_stage3', 'admin_retry_stage4', 'admin_retry_stage5', 'transfer_queue'],
     help='build once and run only the selected regression suites')
 options = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
@@ -98,11 +98,11 @@ legacy_exposed_headers = {
     'appwidgets.h', 'archive-creation.h', 'archive-extraction.h',
     'batchrename.h', 'batchrenamerecovery.h', 'directorypreviewadapter.h', 'directoryview.h',
     'fileactions.h', 'launchurlresolver.h', 'localfilecopyjob.h', 'localfilemovejob.h',
-    'localtransferjob.h', 'localtransferplan.h', 'localtreehistory.h',
+    'localtransferjob.h', 'localtransferplan.h', 'localtreehistory.h', 'kiostagedtransferjob.h',
     'operationmanager.h', 'pathwidgets.h', 'previewcontroller.h', 'previewpane.h', 'quicklook.h',
     'searchcontroller.h', 'searchpopover.h', 'searchprogressbar.h', 'advancedsearchfiltersdialog.h', 'sidebar.h', 'splitbrowserpane.h',
     'splitcomparedialog.h', 'splitsyncexecutiondialog.h',
-    'splitsyncpreviewdialog.h', 'templatemenu.h', 'undocontroller.h',
+    'splitsyncpreviewdialog.h', 'templatemenu.h', 'transferqueueui.h', 'undocontroller.h',
 }
 prelude = '''#include <QtTest>
 #include <QPdfWriter>
@@ -114,7 +114,13 @@ prelude = '''#include <QtTest>
 #include "localfilemovejob.h"
 #include "localtransferplan.h"
 #include "localtransferjob.h"
+#include "kiostagedtransferjob.h"
 #include "localtreehistory.h"
+#include "transfertaskdescriptor.h"
+#include "transferreservationregistry.h"
+#include "transferqueuesettings.h"
+#include "transferqueuecontroller.h"
+#include "transferqueueui.h"
 #include "previewcontroller.h"
 #include "directorypreviewadapter.h"
 struct Dispatch { QString kind; QList<QUrl> sources; QUrl destination; };
@@ -215,6 +221,7 @@ with tempfile.TemporaryDirectory(prefix='thispc-pane-tests-', delete=not options
     suites['admin_retry_stage3'] = 'admin-retry-stage3.cpp'
     suites['admin_retry_stage4'] = 'admin-retry-stage4.cpp'
     suites['admin_retry_stage5'] = 'admin-retry-stage5.cpp'
+    suites['transfer_queue'] = 'transfer-queue.cpp'
     selected = options.suites or (list(suites) if options.all else ['trash' if options.trash else 'templates' if options.templates else 'sidebar_layout' if options.sidebar_layout else 'sidebar_dnd' if options.sidebar_dnd else 'local_move' if options.local_move else 'transfer_plan' if options.transfer_plan else 'local_transfer' if options.local_transfer else 'operations' if options.operations else 'action_state' if options.action_state else 'actions' if options.actions else 'tabs' if options.tabs else 'properties' if options.properties else 'search' if options.search else 'panes'])
     if 'batch_rename' in selected:
         subprocess.run(['cmake', '-S', str(root), '-B', str(root / 'build'),
@@ -278,6 +285,8 @@ target_compile_definitions(pane-test PRIVATE THISPC_BATCH_RENAME_TEST_HOOKS=1 TH
 ''')
     for suite in selected:
         disk_data = Path(disk_tmp) / suite
+        disk_data.mkdir(parents=True, exist_ok=True)
+        (disk_data / 'data').mkdir(parents=True, exist_ok=True)
         runtime = tmp / suite / 'runtime'
         runtime.mkdir(parents=True, mode=0o700)
         env = dict(os.environ, QT_QPA_PLATFORM='offscreen', QT_FORCE_STDERR_LOGGING='1',
@@ -293,7 +302,7 @@ target_compile_definitions(pane-test PRIVATE THISPC_BATCH_RENAME_TEST_HOOKS=1 TH
             env['THISPC_RECOVERY_STARTUP_SYNC'] = '1'
         command = [str(tmp / 'build/pane-test'), suite]
         if suite not in {'operations', 'local_transfer', 'transfer_plan', 'local_move', 'local_tree', 'tree_history',
-                         'sidebar_layout', 'archive', 'archive_creation', 'solid_monitor', 'admin_retry', 'admin_retry_stage2', 'admin_retry_stage3', 'admin_retry_stage4', 'admin_retry_stage5'}:
+                         'sidebar_layout', 'archive', 'archive_creation', 'solid_monitor', 'admin_retry', 'admin_retry_stage2', 'admin_retry_stage3', 'admin_retry_stage4', 'admin_retry_stage5', 'transfer_queue'}:
             command = ['dbus-run-session', '--config-file=' + str(bus_config), '--'] + command
         print(f'RUN SUITE: {suite}', flush=True)
         subprocess.run(command, env=env, check=True, timeout=60)

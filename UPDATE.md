@@ -1,5 +1,28 @@
 [English](UPDATE.md) | [Polski](UPDATE.pl.md)
 
+# Update to 0.44.0
+
+```bash
+cd ~/Pobrane
+tar -xzf kio-thispc-0.44.0.tar.gz
+cd kio-thispc-0.44.0
+chmod +x install.sh
+./install.sh
+```
+
+- Production Transfer Queue & Scheduler (`TransferQueueController`) active by default on startup for Copy and Move operations across Primary View, Split View, Drag & Drop, Cut/Copy/Paste, and Split View Synchronization (`THISPC_TRANSFER_QUEUE_PRODUCTION=0` retained as diagnostic override).
+- Dynamic **Serial** and **Parallel** execution modes with configurable concurrency limit (`1..8`, default `2`) and starvation protection.
+- Task priorities (`High`, `Normal`, `Low`) and manual queue reordering (`Move Up`, `Move Down`, `Move to Top`, `Move to Bottom`) with deterministic FIFO ordering.
+- Per-task and global **Pause**, **Resume**, and **Cancel** controls with honest backend pause capability reporting and close-window confirmation while transfers are active or queued.
+- Optional bandwidth throttling (`KiB/s`, `MiB/s`) via a thread-safe shared token-bucket limiter (`TransferBandwidthLimiter`) for chunked local transfers (`LocalFileCopyWorker`), with explicit `No limit` indicators for non-throttlable backends.
+- Persistent queue settings (`QSettings`) synchronized between `OperationManager` and `TransferQueueController`.
+- Unified Operations Manager with summary telemetry, expandable real-time speed graphs, rich per-task cards (bytes, speed, ETA, mini speed chart), session history of completed/cancelled/failed tasks (including legacy KIO Trash/Delete/Archive jobs), **Clear History**, auto-open/auto-close (`CloseWindowOnComplete`), and responsive settings scrolling (`QScrollArea`) at compact window sizes (`480 × 290 px`).
+- Transfer safety hardening with deferred `jobFactory` instantiation, pre-dispatch preflight revalidation, `TransferReservationRegistry` path-conflict protection, temporary `.thispc-part` staging, `LocalFileIdentity` verification, and `UndoController` active-queue barriers.
+- **MTP Move Release Safety Block (`BLOCK MOVE`):** all Move operations involving `mtp:/` (`MTP → Local`, `Local → MTP`, `MTP → MTP`, and intra-device MTP Move) are intentionally refused (`MtpMoveVerdict::RefusedUnsupported`) to prevent unverified source deletion in `kio_mtp`; MTP Copy and hotplug remain fully supported.
+- Verified across 76 automated regression suites (2,335 `transfer_queue` assertions) and ASan/UBSan checks.
+
+---
+
 # Update to 0.43.0
 
 ```bash

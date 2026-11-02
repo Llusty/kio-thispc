@@ -16,6 +16,7 @@
 #include "batchrenamerecovery.h"
 #include "localfilemovejob.h"
 #include "localtreehistory.h"
+#include "transferqueuecontroller.h"
 
 #include <KIO/CopyJob>
 #include <KIO/FileUndoManager>
@@ -155,6 +156,24 @@ public:
         updateActions();
     }
 
+    void setQueueController(TransferQueueController *controller)
+    {
+        if (m_queueController == controller) return;
+        if (m_queueController) {
+            disconnect(m_queueController, nullptr, this, nullptr);
+        }
+        m_queueController = controller;
+        if (m_queueController) {
+            connect(m_queueController, &TransferQueueController::queueChanged,
+                    this, [this] { updateActions(); });
+            connect(m_queueController, &TransferQueueController::taskStateChanged,
+                    this, [this](quint64, TransferTaskState, TransferTaskState) { updateActions(); });
+            connect(m_queueController, &TransferQueueController::taskFinished,
+                    this, [this](quint64, TransferTaskState) { updateActions(); });
+        }
+        updateActions();
+    }
+
     // Keep normal KIO Undo/Redo from interleaving with a journaled initial
     // batch. The batch publishes its single history record only after success.
     bool beginGroupedBatch()
@@ -176,7 +195,7 @@ public:
     void undo()
     {
         if (recoveryBlocked()) return;
-        if (m_busy || m_groupedBatchRunning) {
+        if (m_busy || m_groupedBatchRunning || (m_queueController && m_queueController->hasNonTerminalTasks())) {
             return;
         }
 
@@ -231,7 +250,7 @@ public:
     void redo()
     {
         if (recoveryBlocked()) return;
-        if (m_busy || m_groupedBatchRunning) {
+        if (m_busy || m_groupedBatchRunning || (m_queueController && m_queueController->hasNonTerminalTasks())) {
             return;
         }
 
@@ -373,6 +392,29 @@ public:
             discardCycleRedo();
             discardLinearRedo();
             m_redoKinds.clear();
+
+            auto isMtp = [](const QUrl &u) {
+                return u.isValid() && u.scheme().compare(QStringLiteral("mtp"), Qt::CaseInsensitive) == 0;
+            };
+            bool involvesMtp = isMtp(job->destUrl());
+            if (!involvesMtp) {
+                const QList<QUrl> srcs = job->srcUrls();
+                for (const QUrl &u : srcs) {
+                    if (isMtp(u)) {
+                        involvesMtp = true;
+                        break;
+                    }
+                }
+            }
+            if (involvesMtp && job->operationMode() == KIO::CopyJob::Move) {
+                const quint64 serial = m_manager->newCommandSerialNumber();
+                connect(job, &KJob::result, this, [this, serial](KJob *) {
+                    m_irreversibleSerial = qMax(m_irreversibleSerial, serial);
+                    m_redoKinds.clear();
+                    updateActions();
+                });
+                return;
+            }
             m_manager->recordCopyJob(job);
         }
     }
@@ -418,6 +460,41 @@ public:
         if (auto *copyJob = qobject_cast<LocalFileCopyJob *>(job)) {
             m_nativeHistory->recordWhenCompleted(copyJob, serial);
         }
+    }
+
+    void recordStagedTransfer(
+        const QList<QUrl> &sources,
+        const QUrl &destination,
+        KIO::Job *job,
+        bool move)
+    {
+        if (!job || !m_manager) return;
+        if (move || job->property("thispcOverwritesDestination").toBool()) {
+            discardSwapRedo();
+            discardCycleRedo();
+            discardLinearRedo();
+            m_redoKinds.clear();
+            const quint64 serial = m_manager->newCommandSerialNumber();
+            connect(job, &KJob::result, this, [this, serial](KJob *completed) {
+                if (completed->error() != KJob::NoError
+                    && !completed->property("thispcDestinationReplaced").toBool()
+                    && !completed->property("thispcDestinationPublished").toBool()
+                    && !completed->property("thispcSourceDeleted").toBool()) {
+                    return;
+                }
+                // Staged remote/MTP moves and destination overwrites are not
+                // safely reversible via KIO::FileUndoManager. Fence history.
+                m_irreversibleSerial = qMax(m_irreversibleSerial, serial);
+                m_redoKinds.clear();
+                updateActions();
+            });
+            return;
+        }
+        recordJob(
+            KIO::FileUndoManager::Copy,
+            sources,
+            destination,
+            job);
     }
 
     void recordPutJob(const QUrl &destination, KIO::Job *job)
@@ -851,8 +928,10 @@ private:
         const bool managerAvailable = m_manager != nullptr;
         auto &recoveryGate = BatchRenameRecoveryGate::instance();
         recoveryGate.refresh();
+        const bool queueSafe = !(m_queueController && m_queueController->hasNonTerminalTasks());
         const bool historySafe = !m_busy && !m_groupedBatchRunning
-            && !recoveryGate.mutationsBlocked();
+            && !recoveryGate.mutationsBlocked()
+            && queueSafe;
         const bool canUndo =
             historySafe
             && (kioUndoAvailable() || nativeUndoAvailable() || treeUndoAvailable()
@@ -950,6 +1029,7 @@ private:
     bool m_swapWorkerRunning = false;
     bool m_busy = false;
     bool m_groupedBatchRunning = false;
+    QPointer<TransferQueueController> m_queueController;
     quint64 m_irreversibleSerial = 0;
     int m_mode = 0;
 };

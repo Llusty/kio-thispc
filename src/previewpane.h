@@ -326,6 +326,7 @@ private:
             }
             QImageReader reader(path);
             reader.setAutoTransform(true);
+            reader.setAutoDetectImageFormat(true);
             const QSize original = reader.size();
             if (original.isValid() && (original.width() > 12000 || original.height() > 12000
                 || qint64(original.width()) * original.height() > 60'000'000)) {

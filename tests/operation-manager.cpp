@@ -333,6 +333,71 @@ int main(int argc, char **argv)
     copyJob->kill(KJob::Quietly);
     manager.clearFinished();
 
+    // History management in OperationManager and OperationWindow
+    {
+        qputenv("THISPC_TRANSFER_QUEUE_PRODUCTION", "1");
+        TestOperationJob job1(true);
+        TestOperationJob job2(true);
+        TestOperationJob job3(true);
+
+        manager.track(&job1, QStringLiteral("Job 1 Running"));
+        manager.track(&job2, QStringLiteral("Job 2 Completed"));
+        manager.track(&job3, QStringLiteral("Job 3 Failed"));
+
+        operations = manager.operations();
+        quint64 id1 = operations[0].id;
+        quint64 id2 = operations[1].id;
+        quint64 id3 = operations[2].id;
+
+        manager.finish(&job2, true, false, {});
+        manager.finish(&job3, false, true, QStringLiteral("I/O error"));
+
+        manager.showDetailedWindow();
+        auto *clearHistBtn = manager.m_detailedWindow->findChild<QToolButton *>(
+            QStringLiteral("operationClearHistoryButton"));
+        verify(clearHistBtn != nullptr, "operationClearHistoryButton exists in OperationWindow");
+        verify(clearHistBtn->isEnabled(), "clearHistoryButton enabled when finished operations exist");
+
+        // Active job cannot be removed from history
+        verify(!manager.removeFinishedOperation(id1), "cannot remove active job from history");
+
+        // Finished queue task has remove button
+        TransferQueueController qc;
+        manager.setQueueController(&qc);
+        quint64 qTaskId = qc.enqueue(TransferTaskDescriptor{}).id;
+        qc.cancelTask(qTaskId);
+        manager.m_detailedWindow->rebuild();
+
+        auto removeBtns = manager.m_detailedWindow->findChildren<QToolButton *>(
+            QStringLiteral("detailedOperationRemoveButton"));
+        verify(!removeBtns.isEmpty(), "detailedOperationRemoveButton present on finished cards");
+        verify(removeBtns.first()->toolTip().contains(QStringLiteral("histor")),
+               "remove button tooltip references history");
+        qc.clearFinished();
+
+        // Finished legacy job can be removed
+        verify(manager.removeFinishedOperation(id2), "completed job removed from history");
+        verify(!manager.removeFinishedOperation(id2), "removing already removed job returns false");
+
+        operations = manager.operations();
+        verify(operations.size() == 2, "exactly 2 operations remain");
+        verify(operations[0].id == id1 && operations[1].id == id3, "remaining operations keep their IDs");
+
+        // Clear all finished
+        int cleared = manager.clearFinished();
+        verify(cleared == 1, "clearFinished removed remaining finished job 3");
+        operations = manager.operations();
+        verify(operations.size() == 1 && operations[0].id == id1, "only active job 1 remains");
+
+        manager.m_detailedWindow->rebuild();
+        verify(!clearHistBtn->isEnabled(), "clearHistoryButton disabled when no finished operations exist");
+
+        // Clean up job1
+        manager.finish(&job1, false, false, {});
+        manager.clearFinished();
+        qunsetenv("THISPC_TRANSFER_QUEUE_PRODUCTION");
+    }
+
     qInfo("PASS: %d OperationManager assertions", checks);
     return 0;
 }

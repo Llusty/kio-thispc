@@ -946,9 +946,9 @@ public:
         navigateTo(url, addHistory);
     }
 
-    void refresh()
+    void refresh(bool quiet = false)
     {
-        if (m_previewAdapter) m_previewAdapter->invalidatePreviews();
+        if (!quiet && m_previewAdapter) m_previewAdapter->invalidatePreviews();
         if (RemoteUrlHelper::isRemoteUrl(m_currentUrl)) navigateTo(m_currentUrl, false);
         else loadDirectory(m_currentUrl, DirectoryReloadMode::QuietRefresh);
     }
@@ -1283,11 +1283,15 @@ private:
                 [this, targetUrl, isQuietRefresh](const QString &error) {
                     if (m_pendingRemoteUrl != targetUrl) return;
                     m_pendingRemoteUrl.clear();
-                    if (isQuietRefresh) {
+                    const bool isMtp = targetUrl.scheme().compare(QStringLiteral("mtp"), Qt::CaseInsensitive) == 0;
+                    if (isQuietRefresh || isMtp) {
                         m_list->clear();
                         m_details->clear();
+                        if (m_previewAdapter) {
+                            m_previewAdapter->setCurrentDirectoryUrl(QUrl());
+                        }
                     }
-                    const QString sanitized = targetUrl.scheme().compare(QStringLiteral("mtp"), Qt::CaseInsensitive) == 0
+                    const QString sanitized = isMtp
                         ? mtpErrorMessageForUrl(targetUrl, m_drives)
                         : RemoteUrlHelper::sanitizeErrorMessage(error, targetUrl);
                     m_status->setText(sanitized);
@@ -1506,9 +1510,10 @@ private:
                 Q_EMIT listingSucceeded(m_currentUrl);
             },
             [this, url, isQuietRefresh](const QString &error) {
-                if (isQuietRefresh) {
-                    m_list->clear();
-                    m_details->clear();
+                m_list->clear();
+                m_details->clear();
+                if (m_previewAdapter) {
+                    m_previewAdapter->setCurrentDirectoryUrl(QUrl());
                 }
                 if (url.scheme().compare(QStringLiteral("mtp"), Qt::CaseInsensitive) == 0 && m_reconnect) {
                     const QString sanitized = mtpErrorMessageForUrl(url, m_drives);

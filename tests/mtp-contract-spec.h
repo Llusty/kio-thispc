@@ -318,6 +318,22 @@ inline QList<DriveInfo> enumerateCandidates(const QList<MtpSolidCandidate> &cand
         if (claimedUdis.contains(c.udi) || (!c.parentUdi.isEmpty() && claimedUdis.contains(c.parentUdi))) {
             continue;
         }
+        QString parentUsbUdi;
+        if (isUsbInterfaceDevice(c.udi, &parentUsbUdi)) {
+            if (claimedUdis.contains(parentUsbUdi)) {
+                continue;
+            }
+            bool parentExistsInCandidates = false;
+            for (const MtpSolidCandidate &other : candidates) {
+                if (other.udi == parentUsbUdi) {
+                    parentExistsInCandidates = true;
+                    break;
+                }
+            }
+            if (parentExistsInCandidates) {
+                continue;
+            }
+        }
         bool supportsMtp = false;
         for (const QString &proto : c.supportedProtocols) {
             if (proto.compare(QStringLiteral("mtp"), Qt::CaseInsensitive) == 0) {

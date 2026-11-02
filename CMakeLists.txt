@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(kio-thispc VERSION 0.43.0 LANGUAGES CXX)
+project(kio-thispc VERSION 0.44.0 LANGUAGES CXX)
 
 set(QT_MIN_VERSION "6.5.0")
 set(KF_MIN_VERSION "6.17.0")
@@ -130,7 +130,14 @@ add_executable(thispc-view
     src/localfileoverwrite.h
     src/localtransferplan.h
     src/localtransferjob.h
+    src/kiostagedtransferjob.h
     src/localtreehistory.h
+    src/transferbandwidthlimiter.h
+    src/transfertaskdescriptor.h
+    src/transferreservationregistry.h
+    src/transferqueuecontroller.h
+    src/transferqueuesettings.h
+    src/transferqueueui.h
     src/operationmanager.h
     src/propertieshidden.h
     src/propertiesposixmode.h
@@ -206,6 +213,17 @@ target_compile_definitions(thispc-view PRIVATE
     THISPC_VERSION="${PROJECT_VERSION}"
 )
 
+# 0.44 Stage 3: the transfer queue UI is not yet connected to production
+# dispatch. It is compiled into an isolated demo build only, and even then it
+# additionally requires THISPC_TRANSFER_QUEUE_DEMO=1 at runtime.
+option(THISPC_ENABLE_TRANSFER_QUEUE_DEMO
+    "Build the isolated, non-production transfer queue demo UI" OFF)
+if(THISPC_ENABLE_TRANSFER_QUEUE_DEMO)
+    target_compile_definitions(thispc-view PRIVATE
+        THISPC_ENABLE_TRANSFER_QUEUE_DEMO=1
+    )
+endif()
+
 # Black-box startup/recovery integration binary. It is built from the exact
 # application sources but is neither installed nor enabled in production.
 add_executable(thispc-view-stage3c1-test EXCLUDE_FROM_ALL
@@ -278,7 +296,14 @@ add_executable(thispc-view-stage3c1-test EXCLUDE_FROM_ALL
     src/localfileoverwrite.h
     src/localtransferplan.h
     src/localtransferjob.h
+    src/kiostagedtransferjob.h
     src/localtreehistory.h
+    src/transferbandwidthlimiter.h
+    src/transfertaskdescriptor.h
+    src/transferreservationregistry.h
+    src/transferqueuecontroller.h
+    src/transferqueuesettings.h
+    src/transferqueueui.h
     src/operationmanager.h
     src/propertieshidden.h
     src/propertiesposixmode.h

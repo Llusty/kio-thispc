@@ -1,12 +1,37 @@
 [English](README.md) | [Polski](README.pl.md)
 
-# kio-thispc (This PC) 0.43.0
+# kio-thispc (This PC) 0.44.0
 
 ThisPC is a native KDE/Qt file manager focused on a Windows Explorer-like workflow, dual-pane operation, KIO integration, safe local file operations, and native KDE/Linux device handling.
 
 - **Platform:** Linux / KDE Plasma 6
 - **Frameworks:** Qt 6 / KDE Frameworks 6
 - **License:** MIT License
+
+---
+
+## 0.44.0 — Transfer Queue & Control
+
+- **Production Transfer Queue & Scheduler (`TransferQueueController`, `TransferTaskDescriptor`, `TransferQueueSettings`):**
+  - **Default Production Activation:** Copy and Move operations launched from Primary View, Split View, Drag & Drop, Cut/Copy/Paste, and Split View Synchronization route through `TransferQueueController` by default upon application startup (`activateTransferQueueProductionDispatchByDefault()`, with `THISPC_TRANSFER_QUEUE_PRODUCTION=0` retained as a diagnostic override).
+  - **Serial & Parallel Modes:** Switch dynamically between **Serial** mode (strictly 1 active transfer at a time) and **Parallel** mode with a configurable concurrency limit (`1..8`, default `2`) and starvation protection.
+  - **Priorities & Manual Reordering:** Assign `High`, `Normal`, or `Low` priority to waiting tasks and reorder queued transfers (`Move Up`, `Move Down`, `Move to Top`, `Move to Bottom`) with deterministic FIFO ordering within the same priority.
+  - **Per-Task & Global Queue Controls:** Pause, resume, or cancel individual transfers or use global **Pause Queue**, **Resume Queue**, and **Cancel All** controls. Pause capability is reported honestly per backend (chunk-boundary pause for `LocalFileCopyWorker`, dispatch-level queue pause for non-suspendable jobs). Closing the application while transfers are active or queued prompts for confirmation before safe cancellation.
+  - **Optional Bandwidth Throttling (`TransferBandwidthLimiter`):** Thread-safe shared token-bucket rate limiter for chunked local transfers (`LocalFileCopyWorker`) configurable in `KiB/s` or `MiB/s`, with live limit adjustments and explicit `No limit` indicators for backends that do not support chunk pacing.
+  - **Persistent Queue Settings:** Execution mode, concurrency limit, bandwidth limiter configuration, and auto-close preference are saved via `QSettings` and synchronized between `OperationManager` and `TransferQueueController`.
+- **Unified Operations Manager (`OperationManager`, `TransferQueueViewWidget`, `TransferQueueTaskItemWidget`):**
+  - **Consolidated Single-Window Manager:** Combines live transfer queue management, legacy KIO job tracking, aggregate throughput telemetry, and an expandable real-time speed graph.
+  - **Rich Task Cards:** Displays operation type, source/destination paths, status and priority badges, byte progress (`processed / total`), transfer speed, ETA, expandable per-task speed charts, and context-sensitive action buttons.
+  - **Session History & Legacy KIO Integration:** Completed, cancelled, and failed operations — including queued transfers and traditional KIO jobs such as Trash, Delete, and Archive operations — remain inspectable in the unified list until dismissed individually or cleared via **Clear History**.
+  - **Auto-Open & Auto-Close (`CloseWindowOnComplete`):** Automatically surfaces progress when transfers start and optionally closes the operations window when all tasks complete without errors, while keeping the window open on failures so diagnostics remain visible.
+  - **Responsive Layout & Multimedia Lifecycle Polish:** Added a scroll container (`QScrollArea`) and minimum control heights for the collapsible settings panel at compact window sizes (`480 × 290 px`), and ensured Quick Look audio/video playback stops cleanly on window close or hide.
+- **Transfer Safety, Staging & MTP Protection (`KioStagedTransferJob`, `TransferReservationRegistry`, `MtpMoveSafety`):**
+  - **Deferred Dispatch, Preflight & Reservation Registry:** Queued tasks instantiate jobs via `jobFactory` only at dispatch time after preflight revalidation and `TransferReservationRegistry` path-conflict checks prevent concurrent writes to identical or overlapping targets.
+  - **Staging & Identity Verification:** Cross-filesystem and staged transfers write to a temporary `.thispc-part` sibling file, verify transferred byte counts and `LocalFileIdentity` (`dev + ino + size + mtime_ns`), and protect `UndoController` with an active-queue barrier and overwrite fencing.
+  - **MTP Copy & Hotplug Support:** Full support for `mtp:/` ↔ local Copy workflows and live device hotplug detection.
+  - **MTP Move Release Safety Block (`BLOCK MOVE`):** All Move operations involving `mtp:/` (`MTP → Local`, `Local → MTP`, `MTP → MTP`, and intra-device MTP Move across Cut+Paste, Drag & Drop Move, and mixed selections) are strictly refused (`MtpMoveVerdict::RefusedUnsupported`) in `MtpMoveSafety::evaluate()`, `FileActions::transfer()`, and `TransferQueueController::enqueue()`. Because `kio_mtp` / `libmtp` cannot provide a race-free post-transfer object identity guarantee prior to source deletion, ThisPC preserves the source files and directs the user to use **Copy** followed by manual verification and deletion.
+- **Verification & Regression:**
+  - Verified across 76 automated regression suites (2,335 `transfer_queue` assertions) and ASan/UBSan checks.
 
 ---
 
@@ -427,8 +452,8 @@ Features from 0.15.4 — compact operations popup, dynamic height, task cancella
 
 ```bash
 cd ~/Downloads
-tar -xzf kio-thispc-0.43.0.tar.gz
-cd kio-thispc-0.43.0
+tar -xzf kio-thispc-0.44.0.tar.gz
+cd kio-thispc-0.44.0
 chmod +x install.sh
 ./install.sh
 ```

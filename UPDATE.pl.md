@@ -1,5 +1,28 @@
 [English](UPDATE.md) | [Polski](UPDATE.pl.md)
 
+# Aktualizacja do 0.44.0
+
+```bash
+cd ~/Pobrane
+tar -xzf kio-thispc-0.44.0.tar.gz
+cd kio-thispc-0.44.0
+chmod +x install.sh
+./install.sh
+```
+
+- Produkcyjna kolejka i harmonogram transferów (`TransferQueueController`) aktywne domyślnie od startu aplikacji dla operacji Kopiuj i Przenieś z panelu głównego (Primary), widoku podzielonego (Split View), przeciągania i upuszczania (Drag & Drop), schowka (Wytnij/Kopiuj/Wklej) oraz synchronizacji Split View (`THISPC_TRANSFER_QUEUE_PRODUCTION=0` zachowane jako przełącznik diagnostyczny).
+- Dynamiczne tryby wykonywania **Szeregowo** i **Równolegle** z konfigurowalnym limitem współbieżności (`1..8`, domyślnie `2`) oraz ochroną przed zagłodzeniem zadań.
+- Priorytety zadań (`Wysoki`, `Normalny`, `Niski`) oraz ręczna zmiana kolejności oczekujących zadań (`Przesuń wyżej`, `Przesuń niżej`, `Na początek kolejki`, `Na koniec kolejki`) z deterministycznym porządkiem FIFO.
+- Sterowanie pojedynczymi zadaniami oraz całą kolejką (**Wstrzymaj**, **Wznów**, **Anuluj**) z rzetelną prezentacją możliwości wstrzymania dla każdego backendu oraz potwierdzeniem przy zamykaniu okna z aktywnymi lub oczekującymi transferami.
+- Opcjonalny limit przepustowości (`KiB/s`, `MiB/s`) oparty na wielowątkowym zasobniku tokenów (`TransferBandwidthLimiter`) dla lokalnych transferów blokowych (`LocalFileCopyWorker`) oraz czytelne oznaczenie `Brak limitu` dla backendów nieobsługujących opóźniania bloków.
+- Trwały zapis ustawień kolejki (`QSettings`) synchronizowany pomiędzy `OperationManager` a `TransferQueueController`.
+- Zintegrowany Menedżer Operacji (Unified Operations Manager) z podsumowaniem postępu, rozwijanym wykresem prędkości w czasie rzeczywistym, szczegółowymi kartami zadań (bajty, prędkość, ETA, indywidualny wykres prędkości), historią sesji dla zadań ukończonych/anulowanych/nieudanych (w tym tradycyjnych zadań KIO, takich jak Kosz, usuwanie czy archiwizacja), przyciskiem **Wyczyść historię**, automatycznym otwieraniem i zamykaniem (`CloseWindowOnComplete`) oraz przewijanym panelem ustawień (`QScrollArea`) przy małych rozmiarach okna (`480 × 290 px`).
+- Wzmocnione bezpieczeństwo transferów: odroczone tworzenie zadań (`jobFactory`), rewalidacja preflight przed uruchomieniem, ochrona przed konfliktami ścieżek docelowych (`TransferReservationRegistry`), pliki tymczasowe `.thispc-part`, weryfikacja `LocalFileIdentity` oraz bariera aktywnej kolejki w `UndoController`.
+- **Blokada bezpieczeństwa operacji Przenieś dla MTP (`BLOCK MOVE`):** wszystkie operacje przenoszenia (`Move`) obejmujące adresy `mtp:/` (`MTP → lokalny`, `lokalny → MTP`, `MTP → MTP` oraz przenoszenie wewnątrz urządzenia MTP) są celowo zablokowane (`MtpMoveVerdict::RefusedUnsupported`), aby wykluczyć niezweryfikowane usunięcie źródła przez `kio_mtp`; kopiowanie MTP oraz obsługa hotplug działają w pełni.
+- Potwierdzone przejściem 76 zestawów testów regresyjnych (2335 asercji `transfer_queue`) oraz weryfikacją ASan/UBSan.
+
+---
+
 # Aktualizacja do 0.43.0
 
 ```bash

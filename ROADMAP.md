@@ -440,12 +440,38 @@ When standard operations receive permission denied errors, provide targeted `adm
   - Stage 4 — GUI Administrator Retry & Artifact Security Gate ✅ FULL PASS (72 tests / 228 assertions + 12/12 manual GUI acceptance pass)
   - Stage 5 — Final Integration, Safety Regression & Release Readiness ✅ FULL PASS (17/17 automated scenarios / 161 assertions + 3/3 manual GUI spot-check; full regression 74/74 suites PASS)
 
-### 0.44.0 — Transfer Queue & Control
-- Serial vs. parallel transfer modes;
-- Concurrency limit configuration;
-- Operation priority and reordering;
-- Queue-wide pause, resume, and cancellation;
-- Optional bandwidth throttling where supported by the underlying backend.
+### 0.44.0 — Transfer Queue & Control ✅ user-confirmed
+- **Production Transfer Queue Active by Default:** Standard Copy and Move operations from Primary View, Split View, Drag & Drop, Cut/Copy/Paste, and Split View Synchronization route through `TransferQueueController` by default upon application startup (`activateTransferQueueProductionDispatchByDefault()`, with `THISPC_TRANSFER_QUEUE_PRODUCTION=0` retained as a diagnostic override);
+- **Serial vs. Parallel Execution Modes:** Dynamic switching between Serial mode (1 active transfer) and Parallel mode with configurable concurrency limit (`1..8`, default `2`) and starvation protection;
+- **Task Priority & Manual Reordering:** `High`, `Normal`, and `Low` priority levels and manual reordering (`Move Up`, `Move Down`, `Move to Top`, `Move to Bottom`) with deterministic FIFO tie-breaking;
+- **Per-Task & Global Queue Controls:** Per-task and queue-wide Pause, Resume, and Cancel controls, honest per-backend pause capability reporting, and close-window confirmation while transfers are active or queued;
+- **Optional Bandwidth Throttling:** Thread-safe shared token-bucket rate limiter (`TransferBandwidthLimiter`) in `KiB/s` or `MiB/s` for chunked local transfers (`LocalFileCopyWorker`), with explicit `No limit` indicators for non-throttlable backends;
+- **Unified Operations Manager:** Consolidated single-window operations manager with summary telemetry, expandable real-time speed graph, rich task cards (bytes, speed, ETA, mini speed chart), session history of completed/cancelled/failed operations (including legacy KIO Trash/Delete/Archive jobs), **Clear History**, auto-open/auto-close (`CloseWindowOnComplete`), persistent settings (`QSettings`), responsive settings scrolling (`QScrollArea` at `480 × 290 px`), and Quick Look multimedia stop-on-close fix;
+- **Staging, Identity Verification & MTP Move Release Block (`BLOCK MOVE`):** Deferred `jobFactory` instantiation, pre-dispatch preflight revalidation, `TransferReservationRegistry` path-conflict protection, `.thispc-part` staging, `LocalFileIdentity` verification, `UndoController` active-queue barriers, MTP Copy + hotplug support, and a strict release safety block (`MtpMoveVerdict::RefusedUnsupported`) refusing all Move directions involving `mtp:/` (`MTP → Local`, `Local → MTP`, `MTP → MTP`, and intra-device MTP Move) so source files are never deleted without race-free post-transfer verification.
+
+**Core Principles & Architectural Safety Rules:**
+1. **Decouple Scheduler from Presentation:** Separate transfer scheduling and queue state coordination from UI presentation in `OperationManager`.
+2. **Preserve Existing Safe Engines:** Keep existing verified transfer engines (`LocalFileCopyJob`, `LocalFileMoveJob`, `KIO::CopyJob`) intact without regression.
+3. **Protect Target Paths Against Concurrent Access:** Prevent concurrent operations from writing to, moving, or mutating identical or overlapping destination paths.
+4. **Preflight Revalidation Prior to Execution:** Revalidate sources, destinations, free space, and permissions immediately before an operation actually transitions from queued to running.
+5. **No Feigned Pause:** Never represent unsupported pause as effective pause when a backend cannot genuinely pause (e.g. KIO workers).
+6. **Safe Application Shutdown:** Ensure safe application lifecycle handling when operations are running or queued without data corruption.
+7. **Protect Undo/Redo and Conflict Ordering:** Ensure Undo/Redo history and conflict-resolution ordering remain deterministic and protected against concurrent execution races.
+8. **Isolate Administrator Retry:** Do not enqueue delayed or deferred Administrator Retry operations into the general unprivileged transfer queue.
+9. **No Persistence / Crash Recovery in 0.44:** Do not implement persistent queue storage or crash recovery across application restarts in 0.44.
+10. **Scope Boundary with 0.45:** Do not pull desktop notifications, persistent history logs, or "Show in folder" from 0.45 into 0.44.
+11. **Strictly Optional Bandwidth Throttling:** Keep bandwidth throttling strictly optional and restricted to backends that genuinely support chunk-level delay (`LocalFileCopyWorker`).
+12. **Verified Concurrency Limits:** Default concurrency limit of 2 and configurable range of 1–8 verified across automated and manual concurrency benchmarks.
+
+**Staged Delivery Summary:**
+- **Stage 0 — Architecture & Safety Audit:** ✅ FULL PASS — Comprehensive audit of existing operation dispatchers, backend capabilities, state machines, concurrency safety, Undo/Redo, and lifecycle contracts.
+- **Stage 1 — Queue Core & Scheduler:** ✅ FULL PASS — Independent queue coordination engine, job state model, safe dispatch contracts, and slot reservation without premature job creation.
+- **Stage 2 — Sequential / Parallel & Limits:** ✅ FULL PASS — Serial versus parallel execution modes, configurable concurrency limits (`1..8`, default `2`), dynamic limit adjustments, and starvation protection.
+- **Stage 3 — Queue UI & Settings:** ✅ FULL PASS — `OperationManager` queue visualization, queued vs. active task distinction, configuration settings, and dual-language Polish/English UX.
+- **Stage 4 — Priority & Reordering:** ✅ FULL PASS — High / Normal / Low priority levels, manual reordering of waiting jobs, and FIFO determinism.
+- **Stage 5 — Global Pause / Resume / Cancel:** ✅ FULL PASS — Queue-wide controls, accurate per-backend pause state, safe cascading cancellation, and application shutdown confirmation.
+- **Stage 6 — Optional Bandwidth Throttling:** ✅ FULL PASS — Shared token-bucket rate limiter (`TransferBandwidthLimiter`), chunk delay pacing in `LocalFileCopyWorker`, live limit adjustments, and honest per-task capability badges.
+- **Stage 7 — Integration, Unified Operations Manager, MTP Safety Gate & Final Regression:** ✅ FULL PASS — End-to-end integration across Primary/Split views, Drag & Drop, Paste, Split Sync, Unified Operations Manager (`U1–U8.1`, `UX-A..D`), `.thispc-part` staging, MTP Copy/hotplug, MTP Move safety block (`BLOCK MOVE`), ASan/UBSan, and full regression (76/76 suites PASS, 2,335 `transfer_queue` assertions PASS).
 
 ### 0.45.0 — Notifications + Operation History
 - Plasma desktop notifications for completed background tasks;

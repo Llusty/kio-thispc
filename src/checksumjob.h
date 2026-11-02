@@ -5,6 +5,7 @@
 
 #include <QAtomicInteger>
 #include <QByteArray>
+#include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QFile>
 #include <QObject>
@@ -222,10 +223,14 @@ public:
     ~ChecksumJob() override
     {
         cancel();
-        if (m_thread && m_thread->isRunning()) {
-            m_thread->quit();
-            m_thread->wait();
+        if (m_thread) {
+            disconnect(m_thread, nullptr, this, nullptr);
+            if (m_thread->isRunning()) {
+                m_thread->quit();
+                m_thread->wait();
+            }
         }
+        QCoreApplication::removePostedEvents(this);
     }
 
     static ChecksumCapability capabilityForUrl(const QUrl &url)
@@ -258,7 +263,7 @@ public:
         m_data.totalBytes = 0;
         Q_EMIT stateChanged(m_data);
 
-        auto *thread = new QThread(this);
+        auto *thread = new QThread(nullptr);
         auto *worker = new ChecksumWorker(m_url.toLocalFile(), m_options);
         m_thread = thread;
         m_worker = worker;

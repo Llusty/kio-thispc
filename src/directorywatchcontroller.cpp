@@ -15,6 +15,14 @@
 
 namespace {
 
+inline bool isStagingPath(const QString &path)
+{
+    const QString fileName = QFileInfo(path).fileName();
+    return fileName.endsWith(QLatin1String(".thispc-part"))
+        || fileName.contains(QLatin1String(".thispc-part."))
+        || fileName.endsWith(QLatin1String(".part"));
+}
+
 inline bool urlsMatchWatchedDirectory(const QUrl &watchedDirUrl, const QUrl &eventUrl)
 {
     if (sameLocation(watchedDirUrl, eventUrl)) {
@@ -237,14 +245,18 @@ void DirectoryWatchController::handleFilesAdded(const QString &directory)
 void DirectoryWatchController::handleFilesRemoved(const QStringList &fileList)
 {
     for (const QString &fileStr : fileList) {
-        checkAndScheduleMatching(QUrl::fromUserInput(fileStr));
+        if (!isStagingPath(fileStr)) {
+            checkAndScheduleMatching(QUrl::fromUserInput(fileStr));
+        }
     }
 }
 
 void DirectoryWatchController::handleFilesChanged(const QStringList &fileList)
 {
     for (const QString &fileStr : fileList) {
-        checkAndScheduleMatching(QUrl::fromUserInput(fileStr));
+        if (!isStagingPath(fileStr)) {
+            checkAndScheduleMatching(QUrl::fromUserInput(fileStr));
+        }
     }
 }
 
@@ -259,8 +271,12 @@ void DirectoryWatchController::handleFileMoved(const QString &src, const QString
         }
     }
 
-    checkAndScheduleMatching(srcUrl);
-    checkAndScheduleMatching(dstUrl);
+    if (!isStagingPath(src)) {
+        checkAndScheduleMatching(srcUrl);
+    }
+    if (!isStagingPath(dst)) {
+        checkAndScheduleMatching(dstUrl);
+    }
 }
 
 void DirectoryWatchController::handleFileRenamed(const QString &src, const QString &dst)
@@ -270,6 +286,9 @@ void DirectoryWatchController::handleFileRenamed(const QString &src, const QStri
 
 void DirectoryWatchController::onKDirWatchDirty(const QString &path)
 {
+    if (isStagingPath(path)) {
+        return;
+    }
     for (auto it = m_watchedEntries.begin(); it != m_watchedEntries.end(); ++it) {
         if (localPathMatchesWatchedDirectory(it->url, path)) {
             scheduleDebouncedRefresh(it.key());
@@ -279,6 +298,9 @@ void DirectoryWatchController::onKDirWatchDirty(const QString &path)
 
 void DirectoryWatchController::onKDirWatchCreated(const QString &path)
 {
+    if (isStagingPath(path)) {
+        return;
+    }
     for (auto it = m_watchedEntries.begin(); it != m_watchedEntries.end(); ++it) {
         if (localPathMatchesWatchedDirectory(it->url, path)) {
             scheduleDebouncedRefresh(it.key());
@@ -288,6 +310,9 @@ void DirectoryWatchController::onKDirWatchCreated(const QString &path)
 
 void DirectoryWatchController::onKDirWatchDeleted(const QString &path)
 {
+    if (isStagingPath(path)) {
+        return;
+    }
     const QString cleanPath = QDir::cleanPath(path);
     for (auto it = m_watchedEntries.begin(); it != m_watchedEntries.end(); ++it) {
         if (!it->url.isLocalFile()) {

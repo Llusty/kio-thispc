@@ -1229,8 +1229,31 @@ int main(int argc, char **argv)
 
     // 33. Stage 3: Version consistency check
     verify(window.m_versionLabel != nullptr, "window versionLabel exists");
-    verify(window.m_versionLabel->text() == QStringLiteral("v0.43.0"), "window versionLabel shows v0.43.0");
-    verify(window.m_versionLabel->toolTip().contains(QStringLiteral("0.43.0")), "version tooltip contains 0.43.0");
+    verify(window.m_versionLabel->text() == QStringLiteral("v0.44.0"), "window versionLabel shows v0.44.0");
+    verify(window.m_versionLabel->toolTip().contains(QStringLiteral("0.44.0")), "version tooltip contains 0.44.0");
+
+    // 34. R3: Production transfer queue default activation on ThisPcWindow
+    {
+        qunsetenv("THISPC_TRANSFER_QUEUE_PRODUCTION");
+        activateTransferQueueProductionDispatchByDefault();
+        verify(isTransferQueueProductionDispatchConnected(), "R3: production dispatch connected by default");
+        ThisPcWindow prodWindow(QUrl::fromLocalFile(leftDir.toLocalFile()), false);
+        verify(prodWindow.m_queueController != nullptr, "R3: ThisPcWindow creates TransferQueueController by default");
+        verify(prodWindow.m_operationManager != nullptr
+               && prodWindow.m_operationManager->queueController() == prodWindow.m_queueController,
+               "R3: OperationManager connected to TransferQueueController by default");
+        verify(prodWindow.m_fileActions != nullptr
+               && prodWindow.m_fileActions->queueController() == prodWindow.m_queueController,
+               "R3: FileActions connected to TransferQueueController by default");
+
+        qputenv("THISPC_TRANSFER_QUEUE_PRODUCTION", "0");
+        activateTransferQueueProductionDispatchByDefault();
+        verify(!isTransferQueueProductionDispatchConnected(), "R3: THISPC_TRANSFER_QUEUE_PRODUCTION=0 disables production dispatch");
+        ThisPcWindow diagWindow(QUrl::fromLocalFile(leftDir.toLocalFile()), false);
+        verify(diagWindow.m_queueController == nullptr, "R3: ThisPcWindow skips TransferQueueController when THISPC_TRANSFER_QUEUE_PRODUCTION=0");
+        qunsetenv("THISPC_TRANSFER_QUEUE_PRODUCTION");
+        setTransferQueueProductionDispatchConnected(false);
+    }
 
     qInfo("PASS: %d Split View pane comparison, sync plan, and executor assertions", checks);
     return 0;

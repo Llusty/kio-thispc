@@ -12,7 +12,11 @@
 #include "batchrenamerecovery.h"
 #include "localfilecopyjob.h"
 #include "localfilemovejob.h"
+#include "kiostagedtransferjob.h"
 #include "undocontroller.h"
+#include "transferqueuecontroller.h"
+#include "transferqueueui.h"
+#include <KDirNotify>
 #include <KIO/DeleteJob>
 #include <KIO/EmptyTrashJob>
 #include <KIO/JobUiDelegateFactory>
@@ -119,9 +123,37 @@ public:
 
         if (!mutationAllowed()) return;
 
+        if (!checkAndRefuseUnsafeMtpMove(urls, destination, cut)) {
+            return;
+        }
+
         const FileOperationContext context = FileOperationContext::create(
             cut ? FileOperationType::Move : FileOperationType::Copy,
             urls, destination);
+
+        THISPC_TRACE("GUI pasteClipboardInto: dest=%s, urls=%lld, cut=%d, m_queueController=%p, prodDispatch=%d",
+                     qPrintable(destination.toString()), static_cast<long long>(urls.size()),
+                     cut ? 1 : 0, static_cast<void*>(m_queueController.data()), isTransferQueueProductionDispatchConnected() ? 1 : 0);
+
+        if (isTransferQueueProductionDispatchConnected()) {
+            if (!m_queueController) {
+                THISPC_TRACE("pasteClipboardInto: production dispatch enabled but m_queueController is null!");
+            } else {
+                const bool enqueued = enqueueProductionTransfer(
+                    urls, destination, cut, cut,
+                    cut
+                        ? trLocal("Przenoszenie zakończone", "Move completed")
+                        : trLocal("Kopiowanie zakończone", "Copy completed"),
+                    cut
+                        ? trLocal("Przenoszenie", "Moving")
+                        : trLocal("Kopiowanie", "Copying"),
+                    context);
+                if (!enqueued) {
+                    THISPC_TRACE("pasteClipboardInto: production dispatch active but enqueue failed; blocking silent legacy fallback");
+                }
+                return;
+            }
+        }
 
         if (startNativeSingleFileTransfer(
                 urls, destination, cut, cut,
@@ -137,20 +169,46 @@ public:
 
         if (!mutationAllowed()) return;
 
-        KIO::CopyJob *job =
-            cut
-                ? KIO::move(
-                    urls,
-                    destination,
-                    KIO::HideProgressInfo)
-                : KIO::copy(
-                    urls,
-                    destination,
-                    KIO::HideProgressInfo);
+        KJob *job = nullptr;
+        bool allLocalSources = true;
+        for (const QUrl &u : urls) {
+            if (!u.isLocalFile()) { allLocalSources = false; break; }
+        }
+        const MtpMoveSafetyEvaluation mtpEval = MtpMoveSafety::evaluate(urls, destination, cut);
+        if (!mtpEval.isAllowed()) {
+            return;
+        }
+        if (!allLocalSources && destination.isLocalFile() && !cut) {
+            auto *stagedJob = new KioStagedTransferJob(urls, destination, false, QUrl(), false, {}, m_parentWidget, this);
+            if (m_stagedJobConfigurator) {
+                m_stagedJobConfigurator(stagedJob);
+            }
+            if (m_undoController) {
+                m_undoController->recordStagedTransfer(urls, destination, stagedJob, false);
+            }
+            job = stagedJob;
+            stagedJob->start();
+        } else {
+            if (cut && (MtpMoveSafety::isMtpSchemeUrl(destination)
+                        || std::any_of(urls.begin(), urls.end(), MtpMoveSafety::isMtpSchemeUrl))) {
+                return;
+            }
+            KIO::CopyJob *cjob =
+                cut
+                    ? KIO::move(
+                        urls,
+                        destination,
+                        KIO::HideProgressInfo)
+                    : KIO::copy(
+                        urls,
+                        destination,
+                        KIO::HideProgressInfo);
 
-        configureInteractiveCopyJob(job);
-        if (m_undoController) {
-            m_undoController->recordCopyJob(job);
+            configureInteractiveCopyJob(cjob);
+            if (m_undoController) {
+                m_undoController->recordCopyJob(cjob);
+            }
+            job = cjob;
         }
 
         watchFileOperation(
@@ -191,6 +249,25 @@ public:
 
         const FileOperationContext context = FileOperationContext::create(
             FileOperationType::Copy, urls, QUrl::fromLocalFile(directory));
+
+        THISPC_TRACE("GUI copySelectionToDirectory: dir=%s, urls=%lld, m_queueController=%p, prodDispatch=%d",
+                     qPrintable(directory), static_cast<long long>(urls.size()),
+                     static_cast<void*>(m_queueController.data()), isTransferQueueProductionDispatchConnected() ? 1 : 0);
+
+        if (isTransferQueueProductionDispatchConnected()) {
+            if (!m_queueController) {
+                THISPC_TRACE("copySelectionToDirectory: production dispatch enabled but m_queueController is null!");
+            } else {
+                const bool enqueued = enqueueProductionTransfer(
+                    urls, QUrl::fromLocalFile(directory), false, false,
+                    successMessage, trLocal("Kopiowanie", "Copying"),
+                    context);
+                if (!enqueued) {
+                    THISPC_TRACE("copySelectionToDirectory: production dispatch active but enqueue failed; blocking silent legacy fallback");
+                }
+                return;
+            }
+        }
 
         if (startNativeSingleFileTransfer(
                 urls, QUrl::fromLocalFile(directory), false, false,
@@ -1373,9 +1450,36 @@ public:
         if (urls.isEmpty() || !destination.isValid()) return;
         if (!mutationAllowed()) return;
         const bool move = action == Qt::MoveAction;
+        if (!checkAndRefuseUnsafeMtpMove(urls, destination, move)) {
+            return;
+        }
         const FileOperationContext context = FileOperationContext::create(
             action == Qt::MoveAction ? FileOperationType::Move : FileOperationType::Copy,
             urls, destination);
+
+        THISPC_TRACE("GUI transfer (drop): dest=%s, urls=%lld, move=%d, m_queueController=%p, prodDispatch=%d",
+                     qPrintable(destination.toString()), static_cast<long long>(urls.size()),
+                     move ? 1 : 0, static_cast<void*>(m_queueController.data()), isTransferQueueProductionDispatchConnected() ? 1 : 0);
+
+        if (isTransferQueueProductionDispatchConnected()) {
+            if (!m_queueController) {
+                THISPC_TRACE("transfer: production dispatch enabled but m_queueController is null!");
+            } else {
+                const bool enqueued = enqueueProductionTransfer(
+                    urls, destination, move, false,
+                    move
+                        ? trLocal("Przenoszenie zakończone", "Move completed")
+                        : trLocal("Kopiowanie zakończone", "Copy completed"),
+                    move
+                        ? trLocal("Przenoszenie", "Moving")
+                        : trLocal("Kopiowanie", "Copying"),
+                    context);
+                if (!enqueued) {
+                    THISPC_TRACE("transfer: production dispatch active but enqueue failed; blocking silent legacy fallback");
+                }
+                return;
+            }
+        }
 
         if (startNativeSingleFileTransfer(
                 urls, destination, move, false,
@@ -1389,20 +1493,48 @@ public:
             return;
         }
         if (!mutationAllowed()) return;
-        KIO::CopyJob *job =
-            action == Qt::MoveAction
-                ? KIO::move(
-                    urls,
-                    destination,
-                    KIO::HideProgressInfo)
-                : KIO::copy(
-                    urls,
-                    destination,
-                    KIO::HideProgressInfo);
 
-        configureInteractiveCopyJob(job);
-        if (m_undoController) {
-            m_undoController->recordCopyJob(job);
+        bool allLocalSources = true;
+        for (const QUrl &u : urls) {
+            if (!u.isLocalFile()) { allLocalSources = false; break; }
+        }
+        const MtpMoveSafetyEvaluation mtpEval = MtpMoveSafety::evaluate(urls, destination, move);
+        if (!mtpEval.isAllowed()) {
+            return;
+        }
+
+        KJob *job = nullptr;
+        if (!allLocalSources && destination.isLocalFile() && !move) {
+            auto *stagedJob = new KioStagedTransferJob(urls, destination, false, QUrl(), false, {}, m_parentWidget, this);
+            if (m_stagedJobConfigurator) {
+                m_stagedJobConfigurator(stagedJob);
+            }
+            if (m_undoController) {
+                m_undoController->recordStagedTransfer(urls, destination, stagedJob, false);
+            }
+            job = stagedJob;
+            stagedJob->start();
+        } else {
+            if (move && (MtpMoveSafety::isMtpSchemeUrl(destination)
+                         || std::any_of(urls.begin(), urls.end(), MtpMoveSafety::isMtpSchemeUrl))) {
+                return;
+            }
+            KIO::CopyJob *cjob =
+                action == Qt::MoveAction
+                    ? KIO::move(
+                        urls,
+                        destination,
+                        KIO::HideProgressInfo)
+                    : KIO::copy(
+                        urls,
+                        destination,
+                        KIO::HideProgressInfo);
+
+            configureInteractiveCopyJob(cjob);
+            if (m_undoController) {
+                m_undoController->recordCopyJob(cjob);
+            }
+            job = cjob;
         }
 
         watchFileOperation(
@@ -1429,20 +1561,55 @@ public:
             if (onFinished) onFinished(nullptr);
             return;
         }
-        KIO::CopyJob *job =
-            action == Qt::MoveAction
-                ? KIO::move(
-                    urls,
-                    destination,
-                    KIO::HideProgressInfo)
-                : KIO::copy(
-                    urls,
-                    destination,
-                    KIO::HideProgressInfo);
+        const bool move = action == Qt::MoveAction;
+        if (!checkAndRefuseUnsafeMtpMove(urls, destination, move)) {
+            if (onFinished) onFinished(nullptr);
+            return;
+        }
 
-        configureInteractiveCopyJob(job);
-        if (m_undoController) {
-            m_undoController->recordCopyJob(job);
+        bool allLocalSources = true;
+        for (const QUrl &u : urls) {
+            if (!u.isLocalFile()) { allLocalSources = false; break; }
+        }
+        const MtpMoveSafetyEvaluation mtpEval = MtpMoveSafety::evaluate(urls, destination, move);
+        if (!mtpEval.isAllowed()) {
+            if (onFinished) onFinished(nullptr);
+            return;
+        }
+
+        KJob *job = nullptr;
+        if (!allLocalSources && destination.isLocalFile() && !move) {
+            auto *stagedJob = new KioStagedTransferJob(urls, destination, false, QUrl(), false, {}, m_parentWidget, this);
+            if (m_stagedJobConfigurator) {
+                m_stagedJobConfigurator(stagedJob);
+            }
+            if (m_undoController) {
+                m_undoController->recordStagedTransfer(urls, destination, stagedJob, false);
+            }
+            job = stagedJob;
+            stagedJob->start();
+        } else {
+            if (move && (MtpMoveSafety::isMtpSchemeUrl(destination)
+                         || std::any_of(urls.begin(), urls.end(), MtpMoveSafety::isMtpSchemeUrl))) {
+                if (onFinished) onFinished(nullptr);
+                return;
+            }
+            KIO::CopyJob *cjob =
+                action == Qt::MoveAction
+                    ? KIO::move(
+                        urls,
+                        destination,
+                        KIO::HideProgressInfo)
+                    : KIO::copy(
+                        urls,
+                        destination,
+                        KIO::HideProgressInfo);
+
+            configureInteractiveCopyJob(cjob);
+            if (m_undoController) {
+                m_undoController->recordCopyJob(cjob);
+            }
+            job = cjob;
         }
 
         if (onFinished) {
@@ -1774,6 +1941,304 @@ private:
         return name;
     }
 
+    static void emitAffectedDirectories(const FileOperationContext &context)
+    {
+#if QT_CONFIG(dbus)
+        switch (context.type) {
+        case FileOperationType::Move:
+            if (!context.sources.isEmpty()) {
+                org::kde::KDirNotify::emitFilesRemoved(context.sources);
+            }
+            if (!context.destinationUrls.isEmpty()) {
+                org::kde::KDirNotify::emitFilesAdded(context.destinationUrls.first().adjusted(QUrl::RemoveFilename | QUrl::StripTrailingSlash));
+            } else if (context.destinationDirectory.isValid()) {
+                org::kde::KDirNotify::emitFilesAdded(context.destinationDirectory);
+            }
+            break;
+        case FileOperationType::Copy:
+            if (context.destinationDirectory.isValid()) {
+                org::kde::KDirNotify::emitFilesAdded(context.destinationDirectory);
+            }
+            break;
+        case FileOperationType::Trash:
+        case FileOperationType::Delete:
+            if (!context.sources.isEmpty()) {
+                org::kde::KDirNotify::emitFilesRemoved(context.sources);
+            }
+            break;
+        default:
+            break;
+        }
+#else
+        Q_UNUSED(context);
+#endif
+    }
+
+    bool checkAndRefuseUnsafeMtpMove(
+        const QList<QUrl> &sources,
+        const QUrl &destinationDirectory,
+        bool move)
+    {
+        m_lastMtpMoveEvaluation = MtpMoveSafety::evaluate(sources, destinationDirectory, move);
+        if (m_lastMtpMoveEvaluation.verdict == MtpMoveVerdict::RefusedUnsupported) {
+            ++m_mtpMoveRefusalCount;
+            if (m_showRecoveryFence && !m_lastMtpMoveEvaluation.refusalReason.isEmpty()) {
+                m_showRecoveryFence(m_lastMtpMoveEvaluation.refusalReason);
+            }
+            if (!m_suppressMoveRefusalDialog && m_parentWidget && m_parentWidget->isVisible()) {
+                QMessageBox::warning(
+                    m_parentWidget,
+                    trLocal("Przenoszenie niedostępne", "Move unavailable"),
+                    m_lastMtpMoveEvaluation.refusalReason);
+            }
+            return false;
+        }
+        return true;
+    }
+
+    bool enqueueProductionTransfer(
+        const QList<QUrl> &sources,
+        const QUrl &destinationDirectory,
+        bool move,
+        bool clearClipboard,
+        const QString &successMessage,
+        const QString &title,
+        const FileOperationContext &opContext = {})
+    {
+        THISPC_TRACE("enqueueProductionTransfer entry: move=%d, sources=%lld, dest=%s, m_queueController=%p",
+                     move ? 1 : 0, static_cast<long long>(sources.size()),
+                     qPrintable(destinationDirectory.toString()), static_cast<void*>(m_queueController.data()));
+        if (!mutationAllowed()) {
+            THISPC_TRACE("enqueueProductionTransfer: mutation blocked by recovery gate");
+            return true;
+        }
+        if (sources.isEmpty() || !destinationDirectory.isValid()) {
+            THISPC_TRACE("enqueueProductionTransfer: invalid sources or destination");
+            return false;
+        }
+        if (!checkAndRefuseUnsafeMtpMove(sources, destinationDirectory, move)) {
+            THISPC_TRACE("enqueueProductionTransfer: refused by MTP move safety policy");
+            return true;
+        }
+        if (!m_queueController) {
+            THISPC_TRACE("enqueueProductionTransfer: m_queueController is NULL!");
+            return false;
+        }
+
+        const MtpMoveSafetyEvaluation mtpEval = MtpMoveSafety::evaluate(sources, destinationDirectory, move);
+        if (!mtpEval.isAllowed()) {
+            return true;
+        }
+
+        bool allLocal = destinationDirectory.isLocalFile();
+        if (allLocal) {
+            for (const QUrl &s : sources) {
+                if (!s.isLocalFile()) {
+                    allLocal = false;
+                    break;
+                }
+            }
+        }
+
+        if (allLocal) {
+            const QFileInfo destDirInfo(destinationDirectory.toLocalFile());
+            if (!destDirInfo.exists() || !destDirInfo.isDir()) {
+                THISPC_TRACE("enqueueProductionTransfer: destination exists=%d, isDir=%d (%s)",
+                             destDirInfo.exists() ? 1 : 0, destDirInfo.isDir() ? 1 : 0,
+                             qPrintable(destinationDirectory.toLocalFile()));
+                return false;
+            }
+        }
+
+        bool overwrite = false;
+        LocalFileIdentity originalDestination;
+        QUrl singleTargetDestination;
+
+        if (destinationDirectory.isLocalFile() && sources.size() == 1) {
+            QUrl destination = childUrlWithName(destinationDirectory, sources.first().fileName());
+            while (true) {
+                const QFileInfo targetInfo(destination.toLocalFile());
+                if (!targetInfo.exists() && !targetInfo.isSymLink()) {
+                    singleTargetDestination = destination;
+                    break;
+                }
+                if (!targetInfo.isFile() || targetInfo.isSymLink()) {
+                    if (allLocal) allLocal = false;
+                    break;
+                }
+                if (allLocal) {
+                    const QFileInfo sourceInfo(sources.first().toLocalFile());
+                    if (LocalFileIdentity::read(sourceInfo.absoluteFilePath())
+                            .sameFile(LocalFileIdentity::read(destination.toLocalFile()))) {
+                        allLocal = false;
+                        break;
+                    }
+                }
+                originalDestination = LocalFileIdentity::read(destination.toLocalFile());
+                int decision = KIO::Result_Cancel;
+                QUrl customRenamedUrl;
+                if (m_conflictDecisionOverride) {
+                    decision = m_conflictDecisionOverride(sources.first(), destination, &customRenamedUrl);
+                } else {
+                    KIO::RenameDialog dialog(
+                        m_parentWidget, title, sources.first(), destination,
+                        KIO::RenameDialog_Overwrite | KIO::RenameDialog_Skip
+                            | KIO::RenameDialog_MultipleItems,
+                        0, targetInfo.size(),
+                        QDateTime(), targetInfo.birthTime(),
+                        QDateTime(), targetInfo.lastModified());
+                    dialog.setWindowTitle(isPolish() ? QStringLiteral("Czy zastąpić istniejący plik?")
+                                                     : QStringLiteral("Replace existing file?"));
+                    for (QLabel *lbl : dialog.findChildren<QLabel *>()) {
+                        if (lbl->text().contains(QStringLiteral("rzecz docelow"), Qt::CaseInsensitive)) {
+                            QString txt = lbl->text();
+                            txt.replace(QStringLiteral("Czy zastąpić rzecz docelową?"), QStringLiteral("Czy zastąpić istniejący plik?"));
+                            txt.replace(QStringLiteral("rzecz docelową"), QStringLiteral("istniejący plik"));
+                            txt.replace(QStringLiteral("rzeczy docelowej"), QStringLiteral("istniejącego pliku"));
+                            lbl->setText(txt);
+                        }
+                    }
+                    decision = dialog.exec();
+                    if (decision == KIO::Result_Rename) {
+                        customRenamedUrl = dialog.newDestUrl();
+                    } else if (decision == KIO::Result_AutoRename) {
+                        customRenamedUrl = dialog.autoDestUrl();
+                    }
+                }
+                if (!mutationAllowed()) return true;
+                if (decision == KIO::Result_Overwrite || decision == KIO::Result_OverwriteAll) {
+                    overwrite = true;
+                    singleTargetDestination = destination;
+                    break;
+                }
+                if (decision == KIO::Result_Rename || decision == KIO::Result_AutoRename) {
+                    destination = customRenamedUrl;
+                    if (destination.isLocalFile() && !destination.fileName().isEmpty()) {
+                        continue;
+                    }
+                }
+                return true;
+            }
+        }
+
+        const bool useStagedTransfer = !allLocal
+            && destinationDirectory.isLocalFile()
+            && !move;
+
+        TransferTaskDescriptor desc;
+        desc.title = title.isEmpty()
+            ? (move ? trLocal("Przenoszenie", "Moving") : trLocal("Kopiowanie", "Copying"))
+            : title;
+        desc.type = move ? TransferOperationType::Move : TransferOperationType::Copy;
+        desc.backend = allLocal ? TransferBackendKind::LocalNative : TransferBackendKind::Kio;
+        desc.sources = sources;
+        desc.destination = destinationDirectory;
+        if (singleTargetDestination.isValid()) {
+            desc.targetUrls = {singleTargetDestination};
+        }
+        desc.context = opContext;
+        desc.priority = TransferPriority::Normal;
+        desc.capabilities = defaultTransferCapabilities(desc.backend, desc.type);
+        desc.startMode = (allLocal || useStagedTransfer)
+            ? TransferJobStartMode::ControllerStarts
+            : TransferJobStartMode::FactoryStarts;
+
+        desc.jobFactory = [this, sources, destinationDirectory, move, allLocal, useStagedTransfer,
+                           singleTargetDestination, overwrite, originalDestination,
+                           clearClipboard, successMessage, opContext]() -> KJob* {
+            if (!mutationAllowed()) return nullptr;
+            const MtpMoveSafetyEvaluation launchEval = MtpMoveSafety::evaluate(sources, destinationDirectory, move);
+            if (!launchEval.isAllowed()) {
+                return nullptr;
+            }
+            KJob *job = nullptr;
+            if (allLocal) {
+                const QFileInfo sourceInfo(sources.first().toLocalFile());
+                if (sources.size() == 1 && sourceInfo.isFile() && !sourceInfo.isSymLink()) {
+                    const QUrl target = singleTargetDestination.isValid()
+                        ? singleTargetDestination
+                        : childUrlWithName(destinationDirectory, sourceInfo.fileName());
+                    if (move) {
+                        job = new LocalFileMoveJob(
+                            sources.first(), target, this,
+                            LocalFileMoveStrategy::Automatic, 256 * 1024, 0, {},
+                            overwrite, originalDestination);
+                    } else {
+                        job = new LocalFileCopyJob(
+                            sources.first(), target, this,
+                            256 * 1024, 0, overwrite, false, originalDestination);
+                    }
+                } else {
+                    auto *treeJob = new LocalTransferJob(sources, destinationDirectory, move, this);
+                    treeJob->setFallbackFactory([this, sources, destinationDirectory, move] {
+                        if (!mutationAllowed()) return static_cast<KIO::CopyJob *>(nullptr);
+                        auto *fallback = move
+                            ? KIO::move(sources, destinationDirectory, KIO::HideProgressInfo)
+                            : KIO::copy(sources, destinationDirectory, KIO::HideProgressInfo);
+                        configureInteractiveCopyJob(fallback);
+                        if (m_undoController) m_undoController->recordCopyJob(fallback);
+                        return fallback;
+                    });
+                    job = treeJob;
+                }
+                if (m_undoController) {
+                    m_undoController->recordNativeTransfer(qobject_cast<KIO::Job*>(job), move);
+                }
+            } else if (useStagedTransfer) {
+                auto *stagedJob = new KioStagedTransferJob(
+                    sources, destinationDirectory, false, singleTargetDestination,
+                    overwrite, originalDestination, m_parentWidget, this);
+                if (m_stagedJobConfigurator) {
+                    m_stagedJobConfigurator(stagedJob);
+                }
+                if (m_undoController) {
+                    m_undoController->recordStagedTransfer(sources, destinationDirectory, stagedJob, false);
+                }
+                job = stagedJob;
+            } else {
+                // Defense in depth: never invoke KIO::move if any URL is mtp:/
+                if (move && (MtpMoveSafety::isMtpSchemeUrl(destinationDirectory)
+                             || std::any_of(sources.begin(), sources.end(), MtpMoveSafety::isMtpSchemeUrl))) {
+                    return nullptr;
+                }
+                auto *copyJob = move
+                    ? KIO::move(sources, destinationDirectory, KIO::HideProgressInfo)
+                    : KIO::copy(sources, destinationDirectory, KIO::HideProgressInfo);
+                configureInteractiveCopyJob(copyJob);
+                if (m_undoController) {
+                    m_undoController->recordCopyJob(copyJob);
+                }
+                job = copyJob;
+            }
+
+            if (job) {
+                connect(job, &KJob::result, this,
+                        [this, clearClipboard, successMessage, opContext](KJob *res) {
+                    if (res->error() == 0) {
+                        if (clearClipboard) {
+                            QApplication::clipboard()->clear();
+                        }
+                        if (!successMessage.isEmpty() && m_showRecoveryFence) {
+                            m_showRecoveryFence(successMessage);
+                        }
+                    } else if (res->property("thispcPartialMoveOutcome").toBool()) {
+                        if (m_showRecoveryFence && !res->errorText().isEmpty()) {
+                            m_showRecoveryFence(res->errorText());
+                        }
+                    }
+                    emitAffectedDirectories(opContext);
+                });
+            }
+            return job;
+        };
+
+        TransferEnqueueResult res = m_queueController->enqueue(std::move(desc));
+        THISPC_TRACE("enqueueProductionTransfer: enqueue returned id=%llu, rejection=%d, diagnostic=%s",
+                     static_cast<unsigned long long>(res.id), static_cast<int>(res.rejection),
+                     qPrintable(res.diagnostic));
+        return res.rejection == TransferEnqueueRejection::None;
+    }
+
     bool startNativeSingleFileTransfer(
         const QList<QUrl> &sources,
         const QUrl &destinationDirectory,
@@ -1847,6 +2312,17 @@ private:
                 sourceInfo.size(), targetInfo.size(),
                 sourceInfo.birthTime(), targetInfo.birthTime(),
                 sourceInfo.lastModified(), targetInfo.lastModified());
+            dialog.setWindowTitle(isPolish() ? QStringLiteral("Czy zastąpić istniejący plik?")
+                                             : QStringLiteral("Replace existing file?"));
+            for (QLabel *lbl : dialog.findChildren<QLabel *>()) {
+                if (lbl->text().contains(QStringLiteral("rzecz docelow"), Qt::CaseInsensitive)) {
+                    QString txt = lbl->text();
+                    txt.replace(QStringLiteral("Czy zastąpić rzecz docelową?"), QStringLiteral("Czy zastąpić istniejący plik?"));
+                    txt.replace(QStringLiteral("rzecz docelową"), QStringLiteral("istniejący plik"));
+                    txt.replace(QStringLiteral("rzeczy docelowej"), QStringLiteral("istniejącego pliku"));
+                    lbl->setText(txt);
+                }
+            }
             const int decision = dialog.exec();
             if (!mutationAllowed()) return true;
             if (decision == KIO::Result_Overwrite || decision == KIO::Result_OverwriteAll
@@ -1924,4 +2400,24 @@ private:
     bool m_swapWorkerRunning = false;
     bool m_swapBatchRunning = false;
     bool m_linearBatchRunning = false;
+    QPointer<TransferQueueController> m_queueController;
+    std::function<void(KioStagedTransferJob *)> m_stagedJobConfigurator;
+    std::function<int(const QUrl &src, const QUrl &dest, QUrl *newDestOut)> m_conflictDecisionOverride;
+    MtpMoveSafetyEvaluation m_lastMtpMoveEvaluation;
+    int m_mtpMoveRefusalCount = 0;
+    bool m_suppressMoveRefusalDialog = false;
+public:
+    void setQueueController(TransferQueueController *controller) { m_queueController = controller; }
+    TransferQueueController *queueController() const { return m_queueController; }
+    void setStagedJobConfigurator(std::function<void(KioStagedTransferJob *)> configurator)
+    {
+        m_stagedJobConfigurator = std::move(configurator);
+    }
+    void setConflictDecisionOverride(std::function<int(const QUrl &src, const QUrl &dest, QUrl *newDestOut)> resolver)
+    {
+        m_conflictDecisionOverride = std::move(resolver);
+    }
+    void setSuppressMoveRefusalDialog(bool suppress) { m_suppressMoveRefusalDialog = suppress; }
+    MtpMoveSafetyEvaluation lastMtpMoveEvaluation() const { return m_lastMtpMoveEvaluation; }
+    int mtpMoveRefusalCount() const { return m_mtpMoveRefusalCount; }
 };

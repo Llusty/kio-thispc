@@ -10,6 +10,58 @@
 
 #include "previewcontroller.h"
 
+#include <QFile>
+#include <QFileInfo>
+#include <QImageReader>
+
+namespace {
+
+QImage tryReadImageWithAutodetect(const QString &filePath, const QSize &physicalSize)
+{
+    QFileInfo fi(filePath);
+    if (!fi.exists() || !fi.isFile() || fi.size() <= 0 || fi.size() > 50 * 1024 * 1024) {
+        return QImage();
+    }
+    QImageReader reader(filePath);
+    reader.setAutoDetectImageFormat(true);
+    reader.setAutoTransform(true);
+    const QSize origSize = reader.size();
+    if (origSize.isValid() && (origSize.width() > 12000 || origSize.height() > 12000
+        || qint64(origSize.width()) * origSize.height() > 60'000'000)) {
+        return QImage();
+    }
+    const QImage img = reader.read();
+    if (img.isNull()) {
+        return QImage();
+    }
+    return img.scaled(physicalSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+}
+
+QString findDirectoryCoverImage(const QString &dirPath)
+{
+    static const QStringList candidates = {
+        QStringLiteral("folder.jpg"),
+        QStringLiteral("Folder.jpg"),
+        QStringLiteral("cover.jpg"),
+        QStringLiteral("Cover.jpg"),
+        QStringLiteral("poster.jpg"),
+        QStringLiteral("Poster.jpg"),
+        QStringLiteral("folder.png"),
+        QStringLiteral("Folder.png"),
+        QStringLiteral("cover.png"),
+        QStringLiteral("Cover.png")
+    };
+    for (const QString &name : candidates) {
+        const QString full = dirPath + QLatin1Char('/') + name;
+        if (QFileInfo::exists(full)) {
+            return full;
+        }
+    }
+    return QString();
+}
+
+} // namespace
+
 // Plugin policy: KIO's neutral default set (plugins whose metadata marks them
 // enabled by default). No application-specific config (e.g. another file
 // manager's rc file) is consulted at runtime. setEnabledPlugins() remains the
@@ -110,6 +162,44 @@ void PreviewController::requestPreviews(const QList<QUrl> &urls, const QSize &lo
             continue;
         }
 
+        // Fast-path: Check for local directory cover or local file format mismatch (e.g. BMP disguised as jpg)
+        if (url.isLocalFile()) {
+            const QString localPath = url.toLocalFile();
+            const QFileInfo fi(localPath);
+            if (fi.isDir()) {
+                const QString coverPath = findDirectoryCoverImage(localPath);
+                if (!coverPath.isEmpty()) {
+                    const QImage img = tryReadImageWithAutodetect(coverPath, physicalSize);
+                    if (!img.isNull()) {
+                        QPixmap scaled = QPixmap::fromImage(img);
+                        scaled.setDevicePixelRatio(dpr);
+                        insertCachedPreview(url, physicalSize, scaled);
+                        Q_EMIT previewReady(url, scaled, gen);
+                        continue;
+                    }
+                }
+            } else if (fi.isFile()) {
+                const QString ext = fi.suffix().toLower();
+                if (ext == QLatin1String("jpg") || ext == QLatin1String("jpeg")) {
+                    QFile f(localPath);
+                    if (f.open(QIODevice::ReadOnly)) {
+                        const QByteArray header = f.peek(2);
+                        f.close();
+                        if (header == "BM") {
+                            const QImage img = tryReadImageWithAutodetect(localPath, physicalSize);
+                            if (!img.isNull()) {
+                                QPixmap scaled = QPixmap::fromImage(img);
+                                scaled.setDevicePixelRatio(dpr);
+                                insertCachedPreview(url, physicalSize, scaled);
+                                Q_EMIT previewReady(url, scaled, gen);
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         m_pendingQueue.append(url);
     }
 
@@ -180,9 +270,43 @@ void PreviewController::setupJobConnections(
         });
 
     connect(job, &KIO::PreviewJob::failed, this,
-        [this, generation](const KFileItem &item) {
+        [this, generation, dpr, physicalSize](const KFileItem &item) {
             if (generation != m_generation) {
                 return; // Stale callback dropped
+            }
+            // Fallback for directory cover or file format mismatch (e.g. BMP bitmap saved with .jpg / .jpeg):
+            if (item.url().isLocalFile()) {
+                const QString localPath = item.url().toLocalFile();
+                const QFileInfo fi(localPath);
+                if (fi.isDir()) {
+                    const QString coverPath = findDirectoryCoverImage(localPath);
+                    if (!coverPath.isEmpty()) {
+                        const QImage img = tryReadImageWithAutodetect(coverPath, physicalSize);
+                        if (!img.isNull()) {
+                            QPixmap scaled = QPixmap::fromImage(img);
+                            scaled.setDevicePixelRatio(dpr);
+                            insertCachedPreview(item.url(), physicalSize, scaled);
+                            Q_EMIT previewReady(item.url(), scaled, generation);
+                            return;
+                        }
+                    }
+                } else if (fi.isFile()) {
+                    QFile f(localPath);
+                    if (f.open(QIODevice::ReadOnly)) {
+                        const QByteArray header = f.peek(2);
+                        f.close();
+                        if (header == "BM") {
+                            const QImage img = tryReadImageWithAutodetect(localPath, physicalSize);
+                            if (!img.isNull()) {
+                                QPixmap scaled = QPixmap::fromImage(img);
+                                scaled.setDevicePixelRatio(dpr);
+                                insertCachedPreview(item.url(), physicalSize, scaled);
+                                Q_EMIT previewReady(item.url(), scaled, generation);
+                                return;
+                            }
+                        }
+                    }
+                }
             }
             Q_EMIT previewFailed(item.url(), generation);
         });

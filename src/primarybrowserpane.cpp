@@ -109,9 +109,10 @@ void PrimaryBrowserPane::loadDirectory(const QUrl &url, bool preserveStatusMessa
             Q_EMIT listingFinished(effectiveUrl, true);
         },
         [this, url, reportError, isQuietRefresh](const QString &error) {
-            if (isQuietRefresh) {
-                m_directoryList->clear();
-                m_directoryDetails->clear();
+            m_directoryList->clear();
+            m_directoryDetails->clear();
+            if (m_previewAdapter) {
+                m_previewAdapter->setCurrentDirectoryUrl(QUrl());
             }
             m_directoryStatus->setText(trLocal("Nie udało się otworzyć tej lokalizacji.",
                                                 "Could not open this location."));

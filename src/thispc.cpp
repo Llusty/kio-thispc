@@ -1,7 +1,7 @@
 /*
  * kio-thispc - KF6 KIO worker providing thispc:/
  *
- * Version 0.43.0
+ * Version 0.44.0
  * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
@@ -218,8 +218,26 @@ bool supportsMtpProtocol(const Solid::PortableMediaPlayer *player)
 
 QString resolveMtpDisplayName(const Solid::Device &device)
 {
-    const QString vendor = device.vendor().trimmed();
-    const QString product = device.product().trimmed();
+    QString vendor = device.vendor().trimmed();
+    QString product = device.product().trimmed();
+
+    if (vendor.isEmpty() && product.isEmpty()) {
+        const QString udi = device.udi().trimmed();
+        const QString prefix = QStringLiteral("/org/kde/solid/udev/sys");
+        if (udi.startsWith(prefix)) {
+            const QString sysfs = QStringLiteral("/sys") + udi.mid(prefix.size());
+            QFileInfo fi(sysfs);
+            if (fi.fileName().contains(QLatin1Char(':'))) {
+                const QString parentSysfs = fi.dir().path();
+                const QString parentUdi = prefix + parentSysfs.mid(4);
+                Solid::Device parentDev(parentUdi);
+                if (parentDev.isValid()) {
+                    vendor = parentDev.vendor().trimmed();
+                    product = parentDev.product().trimmed();
+                }
+            }
+        }
+    }
 
     if (!vendor.isEmpty() && !product.isEmpty()) {
         if (product.startsWith(vendor, Qt::CaseInsensitive)) {
@@ -471,16 +489,53 @@ QList<VolumeInfo> discoveredVolumes()
         Solid::Device::listFromType(
             Solid::DeviceInterface::PortableMediaPlayer);
 
+    auto sysfsPathForUdi = [](const QString &udi) -> QString {
+        const QString prefix = QStringLiteral("/org/kde/solid/udev/sys");
+        if (udi.startsWith(prefix)) {
+            return QStringLiteral("/sys") + udi.mid(prefix.size());
+        }
+        return QString();
+    };
+
+    auto isUsbInterfaceDevice = [&sysfsPathForUdi](const QString &udi, QString *parentUdiOut = nullptr) -> bool {
+        const QString sysfs = sysfsPathForUdi(udi);
+        if (sysfs.isEmpty()) {
+            return false;
+        }
+        QFileInfo fi(sysfs);
+        const QString baseName = fi.fileName();
+        // A USB interface directory in Linux sysfs matches "<bus>-<port>:<config>.<interface>"
+        if (baseName.contains(QLatin1Char(':'))) {
+            if (parentUdiOut) {
+                const QString parentSysfs = fi.dir().path();
+                *parentUdiOut = QStringLiteral("/org/kde/solid/udev/sys") + parentSysfs.mid(4);
+            }
+            return true;
+        }
+        return false;
+    };
+
     QHash<QString, int> mtpSerialCounts;
+    QSet<QString> physicalUsbContainers;
+
     for (const Solid::Device &device : mtpDevices) {
         const QString udi = device.udi().trimmed();
         if (udi.isEmpty() || storageVolumeUdis.contains(udi)) {
+            continue;
+        }
+        const QString sysfs = sysfsPathForUdi(udi);
+        if (!sysfs.isEmpty() && QDir(QStringLiteral("/sys")).exists() && !QFileInfo::exists(sysfs)) {
             continue;
         }
         const auto *player = device.as<Solid::PortableMediaPlayer>();
         if (!supportsMtpProtocol(player)) {
             continue;
         }
+        QString parentUdi;
+        if (isUsbInterfaceDevice(udi, &parentUdi)) {
+            continue;
+        }
+        physicalUsbContainers.insert(udi);
         const QString serial = player->driverHandle(QStringLiteral("mtp")).toString().trimmed();
         if (!serial.isEmpty()) {
             mtpSerialCounts[serial] += 1;
@@ -488,8 +543,13 @@ QList<VolumeInfo> discoveredVolumes()
     }
 
     for (const Solid::Device &device : mtpDevices) {
-        const QString udi = device.udi().trimmed();
+        QString udi = device.udi().trimmed();
         if (udi.isEmpty() || storageVolumeUdis.contains(udi)) {
+            continue;
+        }
+
+        const QString sysfs = sysfsPathForUdi(udi);
+        if (!sysfs.isEmpty() && QDir(QStringLiteral("/sys")).exists() && !QFileInfo::exists(sysfs)) {
             continue;
         }
 
@@ -503,6 +563,23 @@ QList<VolumeInfo> discoveredVolumes()
         const auto *player = device.as<Solid::PortableMediaPlayer>();
         if (!supportsMtpProtocol(player)) {
             continue;
+        }
+
+        QString parentUdi;
+        const bool isInterface = isUsbInterfaceDevice(udi, &parentUdi);
+        if (isInterface) {
+            if (physicalUsbContainers.contains(parentUdi) || storageVolumeUdis.contains(parentUdi)) {
+                continue;
+            }
+            Solid::Device parentDev(parentUdi);
+            if (parentDev.isValid()) {
+                udi = parentUdi;
+                if (storageVolumeUdis.contains(udi)) {
+                    continue;
+                }
+            } else {
+                continue;
+            }
         }
 
         const QString serial = player->driverHandle(QStringLiteral("mtp")).toString().trimmed();

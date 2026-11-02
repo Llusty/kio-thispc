@@ -258,7 +258,10 @@ bool SelectionMenuController::canSetWallpaper(const QUrl &url, bool isDir) const
 
 void SelectionMenuController::printImageUrl(const QUrl &url) const
 {
-    QImageReader reader(url.toLocalFile()); reader.setAutoTransform(true); const QImage image = reader.read();
+    QImageReader reader(url.toLocalFile());
+    reader.setAutoTransform(true);
+    reader.setAutoDetectImageFormat(true);
+    const QImage image = reader.read();
     if (image.isNull()) {
         QMessageBox::warning(m_parent, trLocal("Drukowanie","Printing"), isPolish()
             ? QStringLiteral("Nie udało się odczytać obrazu:\n%1").arg(reader.errorString())

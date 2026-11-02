@@ -1,6 +1,39 @@
 [English](README.md) | [Polski](README.pl.md)
 
-# kio-thispc 0.43.0
+# kio-thispc (Ten komputer) 0.44.0
+
+ThisPC to natywny menedżer plików dla środowiska KDE/Qt, łączący ergonomię inspirowaną Eksploratorem Windows z pracą dwupanelową (Split View), integracją KIO, bezpiecznymi lokalnymi operacjami plikowymi oraz natywną obsługą urządzeń w systemie Linux/KDE.
+
+- **Platforma:** Linux / KDE Plasma 6
+- **Biblioteki:** Qt 6 / KDE Frameworks 6
+- **Licencja:** Licencja MIT
+
+---
+
+## 0.44.0 — Kolejka i kontrola transferów (Transfer Queue & Control)
+
+- **Produkcyjna kolejka i harmonogram transferów (`TransferQueueController`, `TransferTaskDescriptor`, `TransferQueueSettings`):**
+  - **Domyślna aktywacja produkcyjna:** Operacje Kopiuj i Przenieś uruchamiane z panelu głównego (Primary), widoku podzielonego (Split View), przeciągania i upuszczania (Drag & Drop), schowka (Wytnij/Kopiuj/Wklej) oraz synchronizacji Split View są domyślnie kierowane przez `TransferQueueController` od startu aplikacji (`activateTransferQueueProductionDispatchByDefault()`, ze zmienną `THISPC_TRANSFER_QUEUE_PRODUCTION=0` zachowaną jako przełącznik diagnostyczny).
+  - **Tryby Szeregowo i Równolegle:** Dynamiczne przełączanie między trybem **Szeregowo** (dokładnie 1 aktywny transfer naraz) a trybem **Równolegle** z konfigurowalnym limitem współbieżności (`1..8`, domyślnie `2`) oraz ochroną przed zagłodzeniem zadań (starvation protection).
+  - **Priorytety i ręczna zmiana kolejności:** Obsługa priorytetów `Wysoki` (`High`), `Normalny` (`Normal`) i `Niski` (`Low`) dla oczekujących zadań oraz ręczna zmiana ich pozycji w kolejce (`Przesuń wyżej`, `Przesuń niżej`, `Na początek kolejki`, `Na koniec kolejki`) z deterministycznym porządkiem FIFO w obrębie tego samego priorytetu.
+  - **Sterowanie pojedynczymi zadaniami i całą kolejką:** Wstrzymywanie (`Pause`), wznawianie (`Resume`) i anulowanie (`Cancel`) pojedynczych zadań oraz globalne akcje **Wstrzymaj kolejkę**, **Wznów kolejkę** i **Anuluj wszystko**. Możliwość wstrzymania jest raportowana rzetelnie dla każdego backendu (wstrzymywanie na granicy bloków w `LocalFileCopyWorker`, wstrzymanie uruchamiania nowych zadań kolejki dla backendów nieobsługujących bezpiecznej pauzy). Zamknięcie okna aplikacji przy aktywnych lub oczekujących transferach wymaga potwierdzenia przed bezpiecznym anulowaniem.
+  - **Opcjonalny limit przepustowości (`TransferBandwidthLimiter`):** Wielowątkowy limiter oparty na wspólnym zasobniku tokenów dla lokalnych transferów blokowych (`LocalFileCopyWorker`), konfigurowalny w `KiB/s` lub `MiB/s` ze zmianą limitu w locie oraz czytelnym oznaczeniem `Brak limitu` (`No limit`) dla backendów nieobsługujących opóźniania bloków.
+  - **Trwały zapis ustawień kolejki:** Tryb wykonywania, limit zadań równoległych, konfiguracja limitu prędkości oraz opcja automatycznego zamykania okna są zapisywane przez `QSettings` i synchronizowane pomiędzy `OperationManager` a `TransferQueueController`.
+- **Zintegrowany Menedżer Operacji (`OperationManager`, `TransferQueueViewWidget`, `TransferQueueTaskItemWidget`):**
+  - **Jednolite okno operacji plikowych:** Zintegrowany interfejs łączący zarządzanie kolejką transferów, śledzenie tradycyjnych zadań KIO, łączne statystyki przepustowości oraz rozwijany wykres prędkości w czasie rzeczywistym.
+  - **Szczegółowe karty zadań:** Karty poszczególnych operacji prezentują typ zadania, ścieżki źródłowe i docelowe, oznaczenia stanu i priorytetu, postęp bajtowy (`przesłano / łącznie`), aktualną prędkość, szacowany czas do końca (ETA), indywidualny wykres prędkości oraz przyciski sterujące.
+  - **Historia sesji i integracja tradycyjnych operacji KIO:** Operacje zakończone, anulowane i nieudane — zarówno zadania kolejki, jak i tradycyjne operacje KIO (przenoszenie do Kosza, usuwanie, archiwizacja) — pozostają widoczne na głównej liście do momentu indywidualnego zamknięcia karty lub użycia przycisku **Wyczyść historię**.
+  - **Automatyczne otwieranie i zamykanie (`CloseWindowOnComplete`):** Opcjonalne automatyczne zamykanie okna operacji po bezbłędnym zakończeniu wszystkich zadań, przy zachowaniu otwartego okna w przypadku wystąpienia błędów.
+  - **Responsywny układ i poprawki cyklu życia multimediów:** Panel ustawień z kontenerem przewijania (`QScrollArea`) i minimalnymi wysokościami kontrolek zapobiega nakładaniu się elementów przy małych rozmiarach okna (`480 × 290 px`); zamknięcie lub ukrycie okna Quick Look natychmiast zatrzymuje odtwarzanie audio/wideo.
+- **Bezpieczeństwo transferów, staging i ochrona MTP (`KioStagedTransferJob`, `TransferReservationRegistry`, `MtpMoveSafety`):**
+  - **Odroczone tworzenie zadań, rewalidacja preflight i rejestr rezerwacji:** Zadania oczekujące tworzą obiekty `KJob` przez `jobFactory` dopiero w momencie uruchomienia po przejściu rewalidacji preflight oraz kontroli `TransferReservationRegistry`, co wyklucza równoczesny zapis do tych samych lub nakładających się ścieżek docelowych.
+  - **Pliki tymczasowe `.thispc-part` i weryfikacja tożsamości:** Transfery między systemami plików i transfery etapowe zapisują dane do pliku tymczasowego `.thispc-part`, weryfikują rozmiar i tożsamość pliku lokalnego (`LocalFileIdentity`: `dev + ino + size + mtime_ns`) przed atomową publikacją oraz chronią historię `UndoController` barierą aktywnych zadań kolejki i blokadą po nadpisaniu.
+  - **Kopiowanie MTP i obsługa hotplug:** Pełna obsługa kopiowania `mtp:/` ↔ lokalny system plików oraz wykrywania podłączania i odłączania urządzeń MTP.
+  - **Blokada bezpieczeństwa operacji Przenieś dla MTP (`BLOCK MOVE`):** Wszystkie operacje przenoszenia (`Move`) obejmujące adresy `mtp:/` (`MTP → lokalny`, `lokalny → MTP`, `MTP → MTP` oraz przenoszenie wewnątrz urządzenia MTP, w tym Wytnij+Wklej, Przeciągnij i upuść z przenoszeniem oraz zaznaczenia mieszane) są celowo zablokowane (`MtpMoveVerdict::RefusedUnsupported`) w `MtpMoveSafety::evaluate()`, `FileActions::transfer()` oraz `TransferQueueController::enqueue()`. Ponieważ backend `kio_mtp` / `libmtp` nie zapewnia odpornej na wyścigi (TOCTOU) weryfikacji tożsamości obiektu przed usunięciem źródła, aplikacja bezwzględnie zachowuje pliki źródłowe i informuje o konieczności użycia operacji **Kopiuj** oraz ręcznego usunięcia plików po sprawdzeniu kopii.
+- **Weryfikacja i regresja:**
+  - Potwierdzone przejściem 76 zestawów testów regresyjnych (2335 asercji `transfer_queue`) oraz weryfikacją ASan/UBSan.
+
+---
 
 ## 0.43.0 — Ponawianie operacji z uprawnieniami administratora (Administrator Fallback)
 
@@ -442,8 +475,8 @@ Funkcje z 0.15.4 — kompaktowy popup operacji, dynamiczna wysokość, anulowani
 
 ```bash
 cd ~/Pobrane
-tar -xzf kio-thispc-0.43.0.tar.gz
-cd kio-thispc-0.43.0
+tar -xzf kio-thispc-0.44.0.tar.gz
+cd kio-thispc-0.44.0
 chmod +x install.sh
 ./install.sh
 ```

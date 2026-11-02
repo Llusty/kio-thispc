@@ -7,6 +7,8 @@
 #pragma once
 
 #include "localfileoverwrite.h"
+#include "transferbandwidthlimiter.h"
+#include "transfertaskdescriptor.h"
 #include <KIO/Job>
 
 #include <QElapsedTimer>
@@ -70,6 +72,15 @@ public:
     QString partialPath() const
     {
         return m_partialPath;
+    }
+
+    void setBandwidthLimiter(std::shared_ptr<TransferBandwidthLimiter> limiter, quint64 taskId = 0)
+    {
+        QMutexLocker locker(&m_mutex);
+        m_limiter = std::move(limiter);
+        m_taskId = taskId;
+        THISPC_TRACE("LocalFileCopyWorker::setBandwidthLimiter called: this=%p, taskId=%llu",
+                     static_cast<void*>(this), static_cast<unsigned long long>(taskId));
     }
 
     static LocalTransferError classifyWriteError(int errorNumber)
@@ -235,6 +246,16 @@ public Q_SLOTS:
                 QThread::msleep(
                     static_cast<unsigned long>(m_chunkDelayMilliseconds));
             }
+            if (m_limiter) {
+                THISPC_TRACE("LocalFileCopyWorker::run calling acquire: this=%p, m_taskId=%llu, size=%lld",
+                             static_cast<void*>(this), static_cast<unsigned long long>(m_taskId), static_cast<long long>(chunk.size()));
+                m_limiter->acquire(m_taskId, chunk.size(), [this]() {
+                    return cancelRequested() || m_pauseRequested;
+                });
+                if (cancelRequested()) {
+                    break;
+                }
+            }
         }
 
         if (cancelRequested()) {
@@ -361,6 +382,8 @@ private:
     bool m_cancelRequested = false;
     bool m_finished = false;
     qulonglong m_processedBytes = 0;
+    std::shared_ptr<TransferBandwidthLimiter> m_limiter;
+    quint64 m_taskId = 0;
 };
 
 
@@ -436,17 +459,19 @@ public:
                 &m_thread, &QThread::quit);
         connect(m_worker, &LocalFileCopyWorker::failed,
                 &m_thread, &QThread::quit);
-        connect(&m_thread, &QThread::finished,
-                m_worker, &QObject::deleteLater);
     }
 
     ~LocalFileCopyJob() override
     {
-        if (m_thread.isRunning()) {
-            m_worker->requestCancel();
-            m_thread.quit();
+        if (m_started) {
+            if (m_thread.isRunning()) {
+                m_worker->requestCancel();
+                m_thread.quit();
+            }
             m_thread.wait();
         }
+        delete m_worker;
+        m_worker = nullptr;
     }
 
     void start() override
@@ -463,6 +488,13 @@ public:
     QString partialPath() const { return m_partialPath; }
     LocalTransferError transferError() const { return m_transferError; }
     int systemError() const { return m_systemError; }
+
+    Q_INVOKABLE void setBandwidthLimiter(std::shared_ptr<TransferBandwidthLimiter> limiter, quint64 taskId = 0)
+    {
+        if (m_worker) {
+            m_worker->setBandwidthLimiter(std::move(limiter), taskId);
+        }
+    }
 
     bool commitOverwrite()
     {
