@@ -2559,6 +2559,9 @@ private:
             connect(m_queueController, &TransferQueueController::closeWindowOnCompleteChanged, this, [persistQueueSettings](bool) {
                 persistQueueSettings();
             });
+            connect(m_queueController, &TransferQueueController::desktopNotificationsEnabledChanged, this, [persistQueueSettings](bool) {
+                persistQueueSettings();
+            });
 
             if (m_undoController) {
                 m_undoController->setQueueController(m_queueController);
@@ -7369,6 +7372,8 @@ int main(int argc, char **argv)
         QStringLiteral("thispc-view"));
     QCoreApplication::setApplicationVersion(
         QStringLiteral(THISPC_VERSION));
+    QGuiApplication::setDesktopFileName(
+        QStringLiteral("org.kde.thispcview"));
 
     app.setApplicationDisplayName(
         isPolish()

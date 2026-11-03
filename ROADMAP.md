@@ -475,10 +475,31 @@ When standard operations receive permission denied errors, provide targeted `adm
 **Planned:** accepted future work assigned to target versions (`0.45.0–0.48.0`), not yet implemented.
 
 ### 0.45.0 — Notifications + Operation History Extensions
-- Plasma desktop notifications for completed or failed background tasks;
-- Persistent/extended operation history log with source, destination, timestamps, and result diagnostics, building upon the in-session history cards introduced in the 0.44.0 Unified Operations Manager;
-- Safe retry for eligible failed operations;
-- "Show in folder" action upon task completion where applicable.
+- **Stage 1 — KDE Plasma Notifications:** ✅ IMPLEMENTED / AUTOMATED PASS / MANUAL ACCEPTED (7/7)
+  - Native KDE Plasma desktop notifications via `KF6::Notifications` (`TransferNotificationManager`) for completed and failed Copy/Move transfers running in the background;
+  - Accurate observer detection (`isUserObserving()`): suppressed when ThisPC window is active, dispatched when ThisPC is inactive or minimized;
+  - Error notifications dispatched unconditionally regardless of focus; cancelled operations emit no notifications;
+  - Batch completion coalescing window (250 ms) preventing desktop flooding during rapid small transfers;
+  - Full user configuration in Transfer Queue settings (`DesktopNotificationsEnabled`) with persistent `QSettings` storage;
+  - Standard `DefaultEvent` fallback and `data/org.kde.thispcview.notifyrc` specification matching desktop-entry `org.kde.thispcview`;
+  - 13/13 automated test scenarios pass (74 assertions), full regression suite 78/78 PASS;
+  - Manual acceptance: 7/7 PASS (A: background copy, B: active suppression, C: minimized window, D: error notification, E: cancel suppression, F: settings toggle & restart persistence, G: 6-task batch coalescing).
+- **Stage 2 — Persistent / Extended Operation History:** (Planned)
+  - Persistent/extended operation history log with source, destination, timestamps, and result diagnostics, building upon the in-session history cards introduced in the 0.44.0 Unified Operations Manager;
+  - Unification of history state between `OperationWindow` and `OperationPopup` toolbar popover (UX Backlog Item C).
+- **Stage 3 — Safe Retry for Eligible Operations:** (Planned)
+  - Safe retry for eligible failed operations.
+- **Stage 4 — Show in Folder Action:** (Planned)
+  - "Show in folder" action upon task completion where applicable.
+- **Stage 5 — Polish, Packaging & Release 0.45.0:** (Planned)
+
+#### Tracked UX Backlog Items (0.45.0 Scope):
+- **UX Item A — Default Size of "File Operations" Window:**
+  Target compact initial geometry (~580×380 px) showing one expanded card fully without excessive vertical blank space, while preserving manual resizing, multi-task scrolling, Wayland, and HiDPI scaling.
+- **UX Item B — Speed Graph on Instantaneous Transfers:**
+  Completed operations with fewer than 2 speed samples (transfers under 500 ms) must not display "Waiting for speed samples…"; suppress graph or display appropriate completed status.
+- **UX Item C — History Consistency Between Popup and Detailed Window:**
+  Ensure toolbar `OperationPopup` does not display "No history" while in-session completed operations exist in the detailed `OperationWindow`.
 
 ### 0.46.0 — Extensions / Service Actions
 - Leverage KDE Service Actions and clean extension contracts instead of building a redundant bespoke plugin ecosystem;

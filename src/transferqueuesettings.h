@@ -23,6 +23,7 @@ struct TransferQueueConfig
     BandwidthUnit bandwidthLimitUnit = BandwidthUnit::MiB_s;
     int bandwidthLimitValue = 1;
     bool closeWindowOnComplete = false;
+    bool desktopNotificationsEnabled = true;
 
     bool operator==(const TransferQueueConfig &) const = default;
 };
@@ -38,6 +39,7 @@ public:
     static constexpr const char *BandwidthLimitUnitKey = "BandwidthLimitUnit";
     static constexpr const char *BandwidthLimitValueKey = "BandwidthLimitValue";
     static constexpr const char *CloseWindowOnCompleteKey = "CloseWindowOnComplete";
+    static constexpr const char *DesktopNotificationsEnabledKey = "DesktopNotificationsEnabled";
 
     static int clampLimit(int limit)
     {
@@ -122,6 +124,11 @@ public:
             config.closeWindowOnComplete = closeVar.toBool();
         }
 
+        const QVariant notifVar = settings.value(QLatin1String(DesktopNotificationsEnabledKey));
+        if (notifVar.isValid()) {
+            config.desktopNotificationsEnabled = notifVar.toBool();
+        }
+
         settings.endGroup();
         return config;
     }
@@ -136,6 +143,7 @@ public:
         settings.setValue(QLatin1String(BandwidthLimitUnitKey), bandwidthUnitName(config.bandwidthLimitUnit));
         settings.setValue(QLatin1String(BandwidthLimitValueKey), config.bandwidthLimitValue);
         settings.setValue(QLatin1String(CloseWindowOnCompleteKey), config.closeWindowOnComplete);
+        settings.setValue(QLatin1String(DesktopNotificationsEnabledKey), config.desktopNotificationsEnabled);
         settings.endGroup();
     }
 };

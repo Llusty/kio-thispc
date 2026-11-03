@@ -342,6 +342,7 @@ public:
         cfg.mode = m_mode;
         cfg.parallelLimit = m_parallelLimit;
         cfg.closeWindowOnComplete = m_closeWindowOnComplete;
+        cfg.desktopNotificationsEnabled = m_desktopNotificationsEnabled;
         cfg.bandwidthLimitUnit = m_bandwidthLimitUnit;
         cfg.bandwidthLimitValue = m_bandwidthLimitValue;
         if (m_bandwidthLimiter) {
@@ -368,9 +369,11 @@ public:
         const bool modeChangedFlag = m_mode != config.mode;
         const bool limitChangedFlag = m_parallelLimit != clamped;
         const bool closeChangedFlag = m_closeWindowOnComplete != config.closeWindowOnComplete;
+        const bool notifChangedFlag = m_desktopNotificationsEnabled != config.desktopNotificationsEnabled;
         m_mode = config.mode;
         m_parallelLimit = clamped;
         m_closeWindowOnComplete = config.closeWindowOnComplete;
+        m_desktopNotificationsEnabled = config.desktopNotificationsEnabled;
         m_bandwidthLimitUnit = config.bandwidthLimitUnit;
         m_bandwidthLimitValue = config.bandwidthLimitValue > 0 ? config.bandwidthLimitValue : 1;
 
@@ -382,6 +385,7 @@ public:
         if (modeChangedFlag) Q_EMIT modeChanged(m_mode);
         if (limitChangedFlag) Q_EMIT parallelLimitChanged(m_parallelLimit);
         if (closeChangedFlag) Q_EMIT closeWindowOnCompleteChanged(m_closeWindowOnComplete);
+        if (notifChangedFlag) Q_EMIT desktopNotificationsEnabledChanged(m_desktopNotificationsEnabled);
     }
 
     bool closeWindowOnComplete() const { return m_closeWindowOnComplete; }
@@ -391,6 +395,15 @@ public:
         m_closeWindowOnComplete = close;
         markQueueChanged();
         Q_EMIT closeWindowOnCompleteChanged(close);
+    }
+
+    bool desktopNotificationsEnabled() const { return m_desktopNotificationsEnabled; }
+    void setDesktopNotificationsEnabled(bool enabled)
+    {
+        if (m_desktopNotificationsEnabled == enabled) return;
+        m_desktopNotificationsEnabled = enabled;
+        markQueueChanged();
+        Q_EMIT desktopNotificationsEnabledChanged(enabled);
     }
 
     void loadSettings(QSettings &settings)
@@ -918,6 +931,7 @@ Q_SIGNALS:
     void cancelAllCompleted();
     void bandwidthLimitChanged(bool enabled, quint64 bytesPerSec);
     void closeWindowOnCompleteChanged(bool close);
+    void desktopNotificationsEnabledChanged(bool enabled);
 
 private:
     struct Task {
@@ -1826,6 +1840,7 @@ private:
     bool m_globalPauseActive = false;
     bool m_cancellingAll = false;
     bool m_closeWindowOnComplete = false;
+    bool m_desktopNotificationsEnabled = true;
     TransferQueueGlobalControlState m_lastGlobalControlState = TransferQueueGlobalControlState::Normal;
     bool m_shuttingDown = false;
     bool m_shutdownReported = false;

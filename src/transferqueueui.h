@@ -542,14 +542,14 @@ public:
 
         auto *mainLayout = new QVBoxLayout(this);
         mainLayout->setContentsMargins(0, 0, 0, 0);
-        mainLayout->setSpacing(6);
+        mainLayout->setSpacing(2);
 
         m_groupBox = new QGroupBox(trLocal("Tryb wykonywania", "Execution mode"), this);
         m_groupBox->setObjectName(QStringLiteral("transferQueueSettingsGroup"));
         m_groupBox->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
         auto *groupLayout = new QVBoxLayout(m_groupBox);
-        groupLayout->setContentsMargins(8, 4, 8, 6);
-        groupLayout->setSpacing(5);
+        groupLayout->setContentsMargins(8, 2, 8, 3);
+        groupLayout->setSpacing(2);
 
         auto *controlsRow = new QHBoxLayout;
         controlsRow->setContentsMargins(0, 0, 0, 0);
@@ -561,7 +561,6 @@ public:
         m_sequentialRadio->setToolTip(
             trLocal("Wykonywanie jednego transferu na raz (1 aktywny)",
                     "Run one transfer at a time (1 active)"));
-        m_sequentialRadio->setMinimumHeight(22);
 
         m_parallelRadio = new QRadioButton(
             trLocal("Równoległy", "Parallel"), m_groupBox);
@@ -569,7 +568,6 @@ public:
         m_parallelRadio->setToolTip(
             trLocal("Równoczesne wykonywanie transferów zgodnie z limitem",
                     "Run concurrent transfers up to the configured limit"));
-        m_parallelRadio->setMinimumHeight(22);
 
         m_modeGroup = new QButtonGroup(this);
         m_modeGroup->addButton(m_sequentialRadio, static_cast<int>(TransferQueueMode::Sequential));
@@ -583,7 +581,6 @@ public:
         m_limitLabel = new QLabel(
             trLocal("Limit jednoczesnych:", "Concurrent limit:"), m_groupBox);
         m_limitLabel->setObjectName(QStringLiteral("transferQueueLimitLabel"));
-        m_limitLabel->setMinimumHeight(22);
         controlsRow->addWidget(m_limitLabel);
 
         m_limitSpin = new QSpinBox(m_groupBox);
@@ -594,7 +591,7 @@ public:
             trLocal("Maksymalna liczba transferów wykonywanych jednocześnie (1–8)",
                     "Maximum number of concurrent transfers (1–8)"));
         m_limitSpin->setFixedWidth(64);
-        m_limitSpin->setMinimumHeight(24);
+        m_limitSpin->setMinimumHeight(20);
         controlsRow->addWidget(m_limitSpin);
 
         controlsRow->addStretch(1);
@@ -611,7 +608,6 @@ public:
         m_bandwidthCheck->setToolTip(
             trLocal("Ogranicz prędkość transferu — ogranicza łączną przepustowość wszystkich zadań",
                     "Limit transfer speed — limits global bandwidth across all queued tasks"));
-        m_bandwidthCheck->setMinimumHeight(22);
         bandwidthRow->addWidget(m_bandwidthCheck);
 
         m_bandwidthSpin = new QSpinBox(m_groupBox);
@@ -619,7 +615,7 @@ public:
         m_bandwidthSpin->setRange(1, 9999);
         m_bandwidthSpin->setValue(10);
         m_bandwidthSpin->setFixedWidth(64);
-        m_bandwidthSpin->setMinimumHeight(24);
+        m_bandwidthSpin->setMinimumHeight(20);
         m_bandwidthSpin->setEnabled(false);
         m_bandwidthSpin->setToolTip(
             trLocal("Wartość limitu prędkości", "Speed limit value"));
@@ -630,7 +626,7 @@ public:
         m_bandwidthUnitCombo->addItem(QStringLiteral("MiB/s"), static_cast<int>(BandwidthUnit::MiB_s));
         m_bandwidthUnitCombo->addItem(QStringLiteral("KiB/s"), static_cast<int>(BandwidthUnit::KiB_s));
         m_bandwidthUnitCombo->setFixedWidth(74);
-        m_bandwidthUnitCombo->setMinimumHeight(24);
+        m_bandwidthUnitCombo->setMinimumHeight(20);
         m_bandwidthUnitCombo->setEnabled(false);
         m_bandwidthUnitCombo->setToolTip(
             trLocal("Jednostka prędkości transferu", "Transfer speed unit"));
@@ -646,7 +642,6 @@ public:
         m_bandwidthInfoLabel->setToolTip(
             trLocal("Ograniczenie prędkości dotyczy lokalnych operacji we/wy",
                     "Bandwidth throttling applies to local I/O operations"));
-        m_bandwidthInfoLabel->setMinimumHeight(20);
         bandwidthRow->addWidget(m_bandwidthInfoLabel);
 
         bandwidthRow->addStretch(1);
@@ -659,8 +654,16 @@ public:
         m_closeOnCompleteCheckBox->setToolTip(
             trLocal("Automatycznie zamyka okno operacji po zakończeniu wszystkich zadań, jeśli nie wystąpiły błędy",
                     "Automatically closes the operations window when all tasks finish without errors"));
-        m_closeOnCompleteCheckBox->setMinimumHeight(22);
         groupLayout->addWidget(m_closeOnCompleteCheckBox);
+
+        m_desktopNotificationsCheckBox = new QCheckBox(
+            trLocal("Powiadomienia na pulpicie o zakończeniu i błędach",
+                    "Desktop notifications for completion and errors"), m_groupBox);
+        m_desktopNotificationsCheckBox->setObjectName(QStringLiteral("desktopNotificationsCheckBox"));
+        m_desktopNotificationsCheckBox->setToolTip(
+            trLocal("Wyświetla powiadomienia KDE Plasma po zakończeniu transferów w tle oraz przy błędach",
+                    "Displays KDE Plasma notifications when background transfers complete and on errors"));
+        groupLayout->addWidget(m_desktopNotificationsCheckBox);
 
         m_drainingLabel = new QLabel(m_groupBox);
         m_drainingLabel->setObjectName(QStringLiteral("transferQueueDrainingLabel"));
@@ -726,6 +729,13 @@ public:
             Q_EMIT closeWindowOnCompleteToggled(checked);
         });
 
+        connect(m_desktopNotificationsCheckBox, &QCheckBox::toggled, this, [this](bool checked) {
+            if (!m_updating && m_controller) {
+                m_controller->setDesktopNotificationsEnabled(checked);
+                persistSettings();
+            }
+        });
+
         m_parallelRadio->setChecked(true);
     }
 
@@ -750,6 +760,9 @@ public:
                 refreshFromController();
             });
             connect(m_controller, &TransferQueueController::closeWindowOnCompleteChanged, this, [this](bool) {
+                refreshFromController();
+            });
+            connect(m_controller, &TransferQueueController::desktopNotificationsEnabledChanged, this, [this](bool) {
                 refreshFromController();
             });
             connect(m_controller, &TransferQueueController::drainingChanged, this, [this](bool) {
@@ -801,6 +814,7 @@ public:
         }
 
         m_closeOnCompleteCheckBox->setChecked(m_controller->closeWindowOnComplete());
+        m_desktopNotificationsCheckBox->setChecked(m_controller->desktopNotificationsEnabled());
 
         m_updating = false;
         updateDrainingState();
@@ -837,6 +851,7 @@ public:
         config.bandwidthLimitUnit = static_cast<BandwidthUnit>(m_bandwidthUnitCombo->currentData().toInt());
         config.bandwidthLimitBytesPerSec = bandwidthToBytesPerSec(config.bandwidthLimitValue, config.bandwidthLimitUnit);
         config.closeWindowOnComplete = m_closeOnCompleteCheckBox->isChecked();
+        config.desktopNotificationsEnabled = m_desktopNotificationsCheckBox->isChecked();
         TransferQueueSettings::save(settings, config);
     }
 
@@ -862,6 +877,7 @@ public:
         if (uIdx >= 0) m_bandwidthUnitCombo->setCurrentIndex(uIdx);
 
         m_closeOnCompleteCheckBox->setChecked(config.closeWindowOnComplete);
+        m_desktopNotificationsCheckBox->setChecked(config.desktopNotificationsEnabled);
 
         m_updating = false;
 
@@ -884,6 +900,7 @@ public:
     QComboBox *bandwidthUnitCombo() const { return m_bandwidthUnitCombo; }
     QLabel *bandwidthInfoLabel() const { return m_bandwidthInfoLabel; }
     QCheckBox *closeOnCompleteCheckBox() const { return m_closeOnCompleteCheckBox; }
+    QCheckBox *desktopNotificationsCheckBox() const { return m_desktopNotificationsCheckBox; }
     QLabel *drainingLabel() const { return m_drainingLabel; }
     QGroupBox *groupBox() const { return m_groupBox; }
 
@@ -943,6 +960,7 @@ private:
     QComboBox *m_bandwidthUnitCombo = nullptr;
     QLabel *m_bandwidthInfoLabel = nullptr;
     QCheckBox *m_closeOnCompleteCheckBox = nullptr;
+    QCheckBox *m_desktopNotificationsCheckBox = nullptr;
     QLabel *m_drainingLabel = nullptr;
     bool m_updating = false;
 };

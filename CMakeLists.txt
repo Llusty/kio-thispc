@@ -24,7 +24,7 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBACL REQUIRED IMPORTED_TARGET libacl)
 
 find_package(Qt6 ${QT_MIN_VERSION} CONFIG REQUIRED COMPONENTS Core Concurrent Gui Widgets PrintSupport Pdf DBus)
-find_package(KF6 ${KF_MIN_VERSION} REQUIRED COMPONENTS KIO ItemViews Solid FileMetaData Config CoreAddons)
+find_package(KF6 ${KF_MIN_VERSION} REQUIRED COMPONENTS KIO ItemViews Solid FileMetaData Config CoreAddons Notifications)
 
 # ---------------------------------------------------------------------------
 # KIO backend: thispc:/
@@ -138,6 +138,7 @@ add_executable(thispc-view
     src/transferqueuecontroller.h
     src/transferqueuesettings.h
     src/transferqueueui.h
+    src/transfernotificationmanager.h
     src/operationmanager.h
     src/propertieshidden.h
     src/propertiesposixmode.h
@@ -304,6 +305,7 @@ add_executable(thispc-view-stage3c1-test EXCLUDE_FROM_ALL
     src/transferqueuecontroller.h
     src/transferqueuesettings.h
     src/transferqueueui.h
+    src/transfernotificationmanager.h
     src/operationmanager.h
     src/propertieshidden.h
     src/propertiesposixmode.h
@@ -405,6 +407,7 @@ target_link_libraries(thispc-view PRIVATE
     KF6::FileMetaData
     KF6::ConfigCore
     KF6::CoreAddons
+    KF6::Notifications
     PkgConfig::LIBACL
 )
 
@@ -413,11 +416,16 @@ target_include_directories(thispc-view-stage3c1-test PRIVATE ${LibArchive_INCLUD
 target_link_libraries(thispc-view-stage3c1-test PRIVATE
     ${LibArchive_LIBRARIES} ZLIB::ZLIB TagLib::TagLib Exiv2::exiv2lib
     Qt6::Core Qt6::Concurrent Qt6::Gui Qt6::Widgets Qt6::PrintSupport Qt6::Pdf Qt6::DBus
-    KF6::KIOCore KF6::KIOGui KF6::KIOWidgets KF6::ItemViews KF6::Solid KF6::FileMetaData KF6::ConfigCore KF6::CoreAddons PkgConfig::LIBACL)
+    KF6::KIOCore KF6::KIOGui KF6::KIOWidgets KF6::ItemViews KF6::Solid KF6::FileMetaData KF6::ConfigCore KF6::CoreAddons KF6::Notifications PkgConfig::LIBACL)
 
 install(TARGETS thispc-view DESTINATION ${KDE_INSTALL_BINDIR})
 
 install(
     FILES data/org.kde.thispcview.desktop
     DESTINATION ${KDE_INSTALL_APPDIR}
+)
+
+install(
+    FILES data/org.kde.thispcview.notifyrc
+    DESTINATION ${KDE_INSTALL_KNOTIFYRCDIR}
 )

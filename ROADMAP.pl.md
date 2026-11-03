@@ -577,10 +577,31 @@ Gdy zwykła operacja plikowa zakończy się błędem braku uprawnień (Permissio
 **Zaplanowane:** przyjęte przyszłe prace przypisane do docelowych wersji (`0.45.0–0.48.0`), jeszcze niezaimplementowane.
 
 ### 0.45.0 — Powiadomienia i rozbudowa historii operacji (Notifications + Operation History Extensions)
-- Powiadomienia pulpitu KDE Plasma o zakończeniu lub niepowodzeniu zadań w tle;
-- Trwały/rozszerzony dziennik historii operacji ze ścieżkami źródła, celu, znacznikami czasu i diagnostyką wyniku, rozwijający karty historii bieżącej sesji wprowadzone w Zintegrowanym Menedżerze Operacji w wersji 0.44.0;
-- Bezpieczne ponawianie dla nieudanych operacji kwalifikujących się do powtórzenia;
-- Akcja „Pokaż w folderze” po zakończeniu zadania tam, gdzie ma to zastosowanie.
+- **Etap 1 — Powiadomienia pulpitu KDE Plasma:** ✅ IMPLEMENTED / AUTOMATED PASS / MANUAL ACCEPTED (7/7)
+  - Natywne powiadomienia pulpitu KDE Plasma przez `KF6::Notifications` (`TransferNotificationManager`) informujące o ukończonych lub zakończonych błędem operacjach Kopiuj/Przenieś działających w tle;
+  - Precyzyjne wykrywanie obserwacji okna (`isUserObserving()`): powiadomienia sukcesu wyciszane przy aktywnym oknie ThisPC, wysyłane przy oknie nieaktywnym lub zminimalizowanym;
+  - Powiadomienia o błędach wysyłane bezwarunkowo niezależnie od fokusu; operacje anulowane nie generują powiadomień;
+  - Agregowanie powiadomień dla szybkich transferów w oknie 250 ms, chroniące pulpit przed zalewaniem osobnymi komunikatami;
+  - Pełna konfiguracja użytkownika w opcjach kolejki transferów (`DesktopNotificationsEnabled`) z trwałym zapisem w `QSettings`;
+  - Standardowe zdarzenia awaryjne `DefaultEvent` i definicja `data/org.kde.thispcview.notifyrc` powiązana z `desktop-entry` `org.kde.thispcview`;
+  - 13/13 scenariuszy testów automatycznych PASS (74 asercje), pełna regresja 78/78 PASS;
+  - Odbiór manualny użytkownika: 7/7 PASS (A: kopiowanie w tle, B: wyciszenie przy aktywnym oknie, C: zminimalizowane okno, D: błąd transferu, E: brak powiadomienia przy anulowaniu, F: przełączanie i trwałość ustawienia, G: agregacja 6 transferów).
+- **Etap 2 — Trwały i rozszerzony dziennik historii operacji:** (Planowane)
+  - Trwały/rozszerzony dziennik historii operacji ze ścieżkami źródła, celu, znacznikami czasu i diagnostyką wyniku, rozwijający karty historii bieżącej sesji wprowadzone w Zintegrowanym Menedżerze Operacji w wersji 0.44.0;
+  - Ujednolicenie stanu historii pomiędzy oknem szczegółowym `OperationWindow` a wysuwanym panelem `OperationPopup` (Zagadnienie UX C).
+- **Etap 3 — Bezpieczne ponawianie operacji kwalifikujących się do powtórzenia:** (Planowane)
+  - Bezpieczne ponawianie dla nieudanych operacji kwalifikujących się do powtórzenia.
+- **Etap 4 — Akcja „Pokaż w folderze”:** (Planowane)
+  - Akcja „Pokaż w folderze” po zakończeniu zadania tam, gdzie ma to zastosowanie.
+- **Etap 5 — Szlif końcowy, pakietyzacja i wydanie 0.45.0:** (Planowane)
+
+#### Rejestr zagadnień UX (zakres 0.45.0):
+- **Zagadnienie UX A — Domyślny rozmiar okna „Operacje plikowe”:**
+  Docelowy kompaktowy rozmiar początkowy (ok. 580×380 px), z pełną widocznością jednej rozwiniętej karty operacji bez nadmiaru pustej przestrzeni, z zachowaniem ręcznego skalowania, przewijania wielu zadań, Wayland oraz skalowania HiDPI.
+- **Zagadnienie UX B — Wykres prędkości po natychmiastowym transferze:**
+  Zakończone operacje z mniej niż 2 próbkami prędkości (transfery poniżej 500 ms) nie mogą wyświetlać komunikatu „Oczekiwanie na próbki prędkości…”; ukrycie wykresu lub czytelny stan ukończenia.
+- **Zagadnienie UX C — Spójność historii operacji:**
+  Zapewnienie, że panel podręczny `OperationPopup` nie raportuje „Brak historii”, gdy w oknie szczegółowym `OperationWindow` znajdują się ukończone operacje bieżącej sesji.
 
 ### 0.46.0 — Rozszerzenia i akcje usług (Extensions / Service Actions)
 - Preferować wykorzystanie KDE Service Actions i prostego kontraktu rozszerzeń zamiast budowania pełnego własnego ekosystemu wtyczek bez konkretnej potrzeby;

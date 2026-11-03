@@ -35,7 +35,7 @@ group.add_argument('--all', action='store_true', help='run every regression suit
 group.add_argument('--suites', nargs='+', choices=[
     'aggregate_permissions', 'aggregate_properties', 'folder_size', 'properties_folder_size', 'panes', 'tabs', 'properties', 'search', 'actions', 'action_state', 'operations',
     'local_transfer', 'transfer_plan', 'local_move', 'local_tree', 'tree_history',
-    'sidebar_dnd', 'sidebar_layout', 'split_layout', 'templates', 'trash', 'archive', 'archive_jobs', 'archive_menu', 'archive_creation', 'preview', 'quick_look', 'batch_rename', 'view_settings', 'listing_core', 'drive_home', 'solid_monitor', 'device_mount', 'device_removal', 'split_compare', 'selection_menu', 'location_presentation', 'navigation_history', 'keyboard_navigation', 'remote_url', 'saved_remote', 'recent_reconnect', 'session_history', 'properties_integration', 'properties_hidden', 'properties_posix_mode', 'properties_xattr_edit', 'properties_xattrs', 'properties_capabilities', 'properties_data', 'drive_properties', 'acl', 'acl_editor', 'checksums', 'metadata', 'properties_lifecycle', 'storage_scan', 'storage_analysis', 'hash_utilities', 'duplicate_finder', 'duplicate_actions', 'storage_treemap', 'launch_url_resolver', 'preview_controller', 'image_video_previews', 'executable_previews', 'folder_previews', 'preview_settings', 'search_query', 'admin_retry', 'admin_retry_stage2', 'admin_retry_stage3', 'admin_retry_stage4', 'admin_retry_stage5', 'transfer_queue'],
+    'sidebar_dnd', 'sidebar_layout', 'split_layout', 'templates', 'trash', 'archive', 'archive_jobs', 'archive_menu', 'archive_creation', 'preview', 'quick_look', 'batch_rename', 'view_settings', 'listing_core', 'drive_home', 'solid_monitor', 'device_mount', 'device_removal', 'split_compare', 'selection_menu', 'location_presentation', 'navigation_history', 'keyboard_navigation', 'remote_url', 'saved_remote', 'recent_reconnect', 'session_history', 'properties_integration', 'properties_hidden', 'properties_posix_mode', 'properties_xattr_edit', 'properties_xattrs', 'properties_capabilities', 'properties_data', 'drive_properties', 'acl', 'acl_editor', 'checksums', 'metadata', 'properties_lifecycle', 'storage_scan', 'storage_analysis', 'hash_utilities', 'duplicate_finder', 'duplicate_actions', 'storage_treemap', 'launch_url_resolver', 'preview_controller', 'image_video_previews', 'executable_previews', 'folder_previews', 'preview_settings', 'search_query', 'admin_retry', 'admin_retry_stage2', 'admin_retry_stage3', 'admin_retry_stage4', 'admin_retry_stage5', 'transfer_queue', 'notifications'],
     help='build once and run only the selected regression suites')
 options = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
@@ -222,6 +222,7 @@ with tempfile.TemporaryDirectory(prefix='thispc-pane-tests-', delete=not options
     suites['admin_retry_stage4'] = 'admin-retry-stage4.cpp'
     suites['admin_retry_stage5'] = 'admin-retry-stage5.cpp'
     suites['transfer_queue'] = 'transfer-queue.cpp'
+    suites['notifications'] = 'notifications.cpp'
     selected = options.suites or (list(suites) if options.all else ['trash' if options.trash else 'templates' if options.templates else 'sidebar_layout' if options.sidebar_layout else 'sidebar_dnd' if options.sidebar_dnd else 'local_move' if options.local_move else 'transfer_plan' if options.transfer_plan else 'local_transfer' if options.local_transfer else 'operations' if options.operations else 'action_state' if options.action_state else 'actions' if options.actions else 'tabs' if options.tabs else 'properties' if options.properties else 'search' if options.search else 'panes'])
     if 'batch_rename' in selected:
         subprocess.run(['cmake', '-S', str(root), '-B', str(root / 'build'),
@@ -255,6 +256,7 @@ find_package(KF6Solid REQUIRED)
 find_package(KF6FileMetaData REQUIRED)
 find_package(KF6Config REQUIRED)
 find_package(KF6CoreAddons REQUIRED)
+find_package(KF6Notifications REQUIRED)
 find_package(LibArchive REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(TagLib REQUIRED)
@@ -265,7 +267,7 @@ file(GLOB TEST_HEADERS CONFIGURE_DEPENDS src/*.h)
 add_executable(pane-test src/thispcview.cpp src/actionstatecontroller.cpp src/appwidgets.cpp src/applicationstyle.cpp src/directorylistingcore.cpp src/directorywatchcontroller.cpp src/drivehomecoordinator.cpp src/soliddevicemonitor.cpp src/devicemountcontroller.cpp src/deviceremovalcontroller.cpp src/keyboardnavigation.cpp src/locationpresentation.cpp src/navigationhistory.cpp src/paneadapter.cpp src/panemenucontroller.cpp src/primarybrowserpane.cpp src/previewcoordinator.cpp src/previewcontroller.cpp src/directorypreviewadapter.cpp src/tabcontroller.cpp src/searchuicontroller.cpp src/searchpopover.cpp src/advancedsearchfiltersdialog.cpp src/selectionmenucontroller.cpp src/remoteurlhelper.cpp src/savedremotelocation.cpp src/savedremotelocationdialog.cpp ${TEST_HEADERS})
 target_compile_options(pane-test PRIVATE -g3 -O0 -fno-omit-frame-pointer -Wno-unused-function -Wno-unused-variable)
 target_include_directories(pane-test PRIVATE ${LibArchive_INCLUDE_DIRS})
-target_link_libraries(pane-test PRIVATE Qt6::Core Qt6::Concurrent Qt6::Gui Qt6::Widgets Qt6::PrintSupport Qt6::Pdf Qt6::DBus Qt6::Test KF6::KIOCore KF6::KIOGui KF6::KIOWidgets KF6::ItemViews KF6::Solid KF6::FileMetaData KF6::ConfigCore KF6::CoreAddons ${LibArchive_LIBRARIES} ZLIB::ZLIB TagLib::TagLib Exiv2::exiv2lib PkgConfig::LIBACL)
+target_link_libraries(pane-test PRIVATE Qt6::Core Qt6::Concurrent Qt6::Gui Qt6::Widgets Qt6::PrintSupport Qt6::Pdf Qt6::DBus Qt6::Test KF6::KIOCore KF6::KIOGui KF6::KIOWidgets KF6::ItemViews KF6::Solid KF6::FileMetaData KF6::ConfigCore KF6::CoreAddons KF6::Notifications ${LibArchive_LIBRARIES} ZLIB::ZLIB TagLib::TagLib Exiv2::exiv2lib PkgConfig::LIBACL)
 target_compile_definitions(pane-test PRIVATE THISPC_BATCH_RENAME_TEST_HOOKS=1 THISPC_TEST_HARNESS=1)
 '''
     (tmp / 'CMakeLists.txt').write_text(cmake)

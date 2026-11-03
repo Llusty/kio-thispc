@@ -1,0 +1,23 @@
+[Global]
+IconName=computer
+DesktopEntry=org.kde.thispcview
+Name=Ten komputer
+Name[en]=This PC
+Comment=Foldery użytkownika oraz urządzenia i dyski w stylu Windows 11
+Comment[en]=User folders and devices/drives in a Windows-11-like view
+
+[Event/notification]
+Name=Transfer plików ukończony
+Name[en]=File transfer completed
+Comment=Powiadomienie o pomyślnym zakończeniu operacji transferu plików
+Comment[en]=Notification when a file transfer operation completes successfully
+Action=Popup
+Urgency=Normal
+
+[Event/fatalerror]
+Name=Błąd transferu plików
+Name[en]=File transfer error
+Comment=Powiadomienie o błędzie podczas transferu plików
+Comment[en]=Notification when a file transfer error occurs
+Action=Popup
+Urgency=High

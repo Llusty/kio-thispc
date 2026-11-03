@@ -13,6 +13,7 @@
 #include "browsercommon.h"
 #include "transferqueuecontroller.h"
 #include "transferqueueui.h"
+#include "transfernotificationmanager.h"
 
 #include <KJob>
 #include <KIO/CopyJob>
@@ -434,6 +435,7 @@ public:
                 showDetailedWindow();
             }
         });
+        m_notificationManager = new TransferNotificationManager(m_window, nullptr, this);
         build(toolbar);
     }
 
@@ -945,7 +947,8 @@ public:
     void setAutoShowGracePeriodMs(int ms) { m_autoShowGracePeriodMs = ms; }
     QTimer *autoShowTimer() const { return m_autoShowTimer; }
     OperationWindow *detailedWindow() const { return m_detailedWindow; }
-    void setDetailedWindow(OperationWindow *window) { m_detailedWindow = window; }
+    void setDetailedWindow(OperationWindow *window);
+    TransferNotificationManager *notificationManager() const { return m_notificationManager; }
     OperationPopup *popup() const { return m_popup; }
     void onOperationTracked();
     void checkAutoCloseOrStopTimer();
@@ -1412,6 +1415,7 @@ private:
     QLabel *m_badgeLabel = nullptr;
     OperationPopup *m_popup = nullptr;
     OperationWindow *m_detailedWindow = nullptr;
+    TransferNotificationManager *m_notificationManager = nullptr;
     QPointer<TransferQueueController> m_queueController;
     QList<FileOperationItem *> m_items;
     QHash<KJob *, FileOperationItem *> m_byJob;
@@ -3203,7 +3207,7 @@ private:
         addLegacyOperationCard(operation);
     }
 
-    OperationManager *m_manager = nullptr;
+    QPointer<OperationManager> m_manager;
     QPointer<TransferQueueController> m_queueController;
     QVBoxLayout *m_windowLayout = nullptr;
     QTabWidget *m_tabs = nullptr;
@@ -3254,6 +3258,9 @@ inline void OperationManager::showDetailedWindow()
     if (!m_detailedWindow) {
         m_detailedWindow = new OperationWindow(this, m_window);
         m_detailedWindow->setQueueController(m_queueController);
+        if (m_notificationManager) {
+            m_notificationManager->setOperationWindow(m_detailedWindow);
+        }
     }
     const int legacyAct = activeCount();
     const int queueAct = m_queueController
@@ -3281,6 +3288,14 @@ inline void OperationManager::showDetailedWindow()
     }
     m_detailedWindow->raise();
     m_detailedWindow->activateWindow();
+}
+
+inline void OperationManager::setDetailedWindow(OperationWindow *window)
+{
+    m_detailedWindow = window;
+    if (m_notificationManager) {
+        m_notificationManager->setOperationWindow(window);
+    }
 }
 
 inline void OperationManager::setCloseOnComplete(bool close)
@@ -3346,6 +3361,9 @@ inline void OperationManager::setQueueController(TransferQueueController *contro
     }
     if (m_detailedWindow) {
         m_detailedWindow->setQueueController(controller);
+    }
+    if (m_notificationManager) {
+        m_notificationManager->setQueueController(controller);
     }
     if (m_queueController) {
         connect(m_queueController, &TransferQueueController::queueChanged,
