@@ -38,6 +38,7 @@
 #include <QScrollArea>
 #include <QScreen>
 #include <QSet>
+#include <QSettings>
 #include <QSizePolicy>
 #include <QStatusBar>
 #include <QString>
@@ -1437,7 +1438,7 @@ class OperationSpeedGraph final : public QWidget
 
 public:
     explicit OperationSpeedGraph(
-        QList<qulonglong> samples,
+        QList<qulonglong> samples = {},
         QWidget *parent = nullptr)
         : QWidget(parent)
         , m_samples(std::move(samples))
@@ -1467,6 +1468,16 @@ public:
         update();
     }
 
+    void setTerminal(bool isTerminal, TransferTaskState terminalState = TransferTaskState::Completed)
+    {
+        m_isTerminal = isTerminal;
+        m_terminalState = terminalState;
+        update();
+    }
+
+    bool isTerminal() const { return m_isTerminal; }
+    TransferTaskState terminalState() const { return m_terminalState; }
+
 protected:
     void paintEvent(QPaintEvent *event) override
     {
@@ -1481,12 +1492,34 @@ protected:
 
         if (m_samples.size() < 2) {
             painter.setPen(palette().color(QPalette::PlaceholderText));
-            painter.drawText(
-                graphRect,
-                Qt::AlignCenter,
-                trLocal(
-                    "Oczekiwanie na próbki prędkości…",
-                    "Waiting for speed samples…"));
+            if (m_isTerminal) {
+                QString terminalMsg;
+                if (m_terminalState == TransferTaskState::Completed) {
+                    terminalMsg = trLocal(
+                        "Transfer ukończony natychmiastowo",
+                        "Transfer completed instantly");
+                } else if (m_terminalState == TransferTaskState::Cancelled) {
+                    terminalMsg = trLocal(
+                        "Transfer anulowany",
+                        "Transfer cancelled");
+                } else if (m_terminalState == TransferTaskState::Failed) {
+                    terminalMsg = trLocal(
+                        "Transfer zakończony niepowodzeniem",
+                        "Transfer failed");
+                } else {
+                    terminalMsg = trLocal(
+                        "Operacja zakończona",
+                        "Operation completed");
+                }
+                painter.drawText(graphRect, Qt::AlignCenter, terminalMsg);
+            } else {
+                painter.drawText(
+                    graphRect,
+                    Qt::AlignCenter,
+                    trLocal(
+                        "Oczekiwanie na próbki prędkości…",
+                        "Waiting for speed samples…"));
+            }
             return;
         }
 
@@ -1595,6 +1628,8 @@ private:
     }
 
     QList<qulonglong> m_samples;
+    bool m_isTerminal = false;
+    TransferTaskState m_terminalState = TransferTaskState::Completed;
 };
 
 // Isolated demo only: feeds the legacy OperationManager with in-memory jobs
@@ -1650,7 +1685,7 @@ class OperationWindow final : public QWidget
 
 public:
     explicit OperationWindow(
-        OperationManager *manager,
+        OperationManager *manager = nullptr,
         QWidget *parent = nullptr)
         : QWidget(parent, Qt::Window)
         , m_manager(manager)
@@ -1666,11 +1701,17 @@ public:
         if (m_manager && !m_manager->detailedWindow()) {
             m_manager->setDetailedWindow(this);
         }
-        if (m_queueController) {
-            setMinimumSize(480, 260);
-            resize(640, 480);
+        setMinimumSize(480, 260);
+        QSettings settings;
+        const QByteArray savedGeom = settings.value(QStringLiteral("operationWindow/geometry")).toByteArray();
+        if (!savedGeom.isEmpty() && restoreGeometry(savedGeom)) {
+            // Restored saved geometry
         } else {
-            resize(580, 320);
+            if (m_queueController) {
+                resize(580, 380);
+            } else {
+                resize(580, 320);
+            }
         }
 
         m_windowLayout = new QVBoxLayout(this);
@@ -1889,7 +1930,7 @@ public:
     QSize sizeHint() const override
     {
         if (m_queueController) {
-            return QSize(640, 480);
+            return QSize(580, 380);
         }
         return QWidget::sizeHint();
     }
@@ -1920,7 +1961,17 @@ public:
     void clearHistory()
     {
         if (m_queueController) {
+            for (const auto &task : m_queueController->snapshot().tasks) {
+                if (task.terminal && !task.historyUuid.isEmpty()) {
+                    m_dismissedHistoryUuids.insert(task.historyUuid);
+                }
+            }
             m_queueController->clearFinished();
+        }
+        if (TransferHistoryManager *histMgr = historyManager()) {
+            for (const auto &rec : histMgr->records()) {
+                m_dismissedHistoryUuids.insert(rec.uuid);
+            }
         }
         if (m_manager) {
             m_manager->clearFinished();
@@ -1994,7 +2045,7 @@ public:
             m_scrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
             setMinimumSize(480, 380);
             if (!isVisible()) {
-                resize(qMax(width(), 640), qMax(height(), 480));
+                resize(qMax(width(), 580), qMax(height(), 380));
             }
         } else if (!tabMode) {
             if (hasQueueTab()) {
@@ -2013,6 +2064,12 @@ public:
             m_scrollArea->setMaximumHeight(QWIDGETSIZE_MAX);
             m_scrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
             setMinimumSize(480, 260);
+            if (!isVisible()) {
+                QSettings settings;
+                if (!settings.contains(QStringLiteral("operationWindow/geometry"))) {
+                    resize(580, 380);
+                }
+            }
         }
 
         m_queueNoticeLabel->setVisible(tabMode && !isTransferQueueProductionDispatchConnected());
@@ -2020,6 +2077,12 @@ public:
         m_demoOperationsButton->setVisible(tabMode && isTransferQueueDemoMode() && !isTransferQueueProductionDispatchConnected());
 
         if (controller) {
+            if (controller->historyManager()) {
+                connect(controller->historyManager(), &TransferHistoryManager::recordsChanged,
+                        this, [this] {
+                            if (isVisible()) scheduleRebuild();
+                        });
+            }
             connect(controller, &TransferQueueController::queueChanged,
                     this, [this] {
                         if (isVisible()) scheduleRebuild();
@@ -2338,11 +2401,43 @@ public:
             }
         }
 
+        // 4. Archival history records (Completed / Cancelled / Failed from TransferHistoryManager)
+        QSet<QString> activeOrRecentHistoryUuids;
+        for (const auto &task : queueSnapshot.tasks) {
+            if (!task.historyUuid.isEmpty()) {
+                activeOrRecentHistoryUuids.insert(task.historyUuid);
+            }
+        }
+
+        QList<TransferHistoryRecord> archivalRecords;
+        TransferHistoryManager *histMgr = historyManager();
+        if (histMgr) {
+            const QList<TransferHistoryRecord> allHistory = histMgr->records();
+            for (const auto &rec : allHistory) {
+                if (activeOrRecentHistoryUuids.contains(rec.uuid)) {
+                    continue; // Skip: already shown in active/recent queue cards
+                }
+                if (m_dismissedHistoryUuids.contains(rec.uuid)) {
+                    continue; // Skip: dismissed from view by user in this session
+                }
+                archivalRecords.push_back(rec);
+            }
+        }
+
+        if (archivalRecords.size() == 1 && !m_knownHistoryUuids.contains(archivalRecords.first().uuid)) {
+            m_expandedHistoryUuids.insert(archivalRecords.first().uuid);
+        }
+        for (const auto &rec : archivalRecords) {
+            m_knownHistoryUuids.insert(rec.uuid);
+            addArchivalHistoryCard(rec);
+        }
+
         TransferQueueCounts qCounts = transferQueueCounts(queueSnapshot);
         const int totalActive = qCounts.active + legacyActive;
         const int totalQueued = qCounts.queued;
         const int totalFinished = (qCounts.completed + qCounts.cancelled + qCounts.failed) + legacyFinished;
-        const int totalTasks = queueSnapshot.tasks.size() + filteredLegacy.size();
+        const int totalArchival = archivalRecords.size();
+        const int totalTasks = queueSnapshot.tasks.size() + filteredLegacy.size() + totalArchival;
 
         QString summaryText;
         QString summaryTooltip;
@@ -2361,12 +2456,13 @@ public:
                 ? QStringLiteral("W kolejce: %1").arg(totalQueued)
                 : QStringLiteral("Queued: %1").arg(totalQueued);
             summaryTooltip = summaryText;
-        } else if (totalFinished > 0) {
+        } else if (totalFinished > 0 || totalArchival > 0) {
+            const int displayFinished = totalFinished + totalArchival;
             summaryText = isPolish()
-                ? QStringLiteral("Zakończone: %1").arg(totalFinished)
-                : QStringLiteral("Completed: %1").arg(totalFinished);
+                ? QStringLiteral("Zakończone: %1").arg(displayFinished)
+                : QStringLiteral("Completed: %1").arg(displayFinished);
             summaryTooltip = trLocal("Wszystkie operacje zakończone", "All operations completed")
-                             + QStringLiteral(" (%1)").arg(totalFinished);
+                             + QStringLiteral(" (%1)").arg(displayFinished);
         } else {
             summaryText = trLocal("Brak aktywnych operacji", "No active operations");
             summaryTooltip = summaryText;
@@ -2390,6 +2486,9 @@ public:
                 return;
             }
             m_scrollArea->hide();
+            m_operationsEmptyLabel->setText(
+                trLocal("Brak aktywnych operacji plikowych i historii.",
+                        "No active file operations or history."));
             m_operationsEmptyLabel->show();
             m_lastOperationCount = 0;
             return;
@@ -2405,6 +2504,8 @@ public:
 protected:
     void closeEvent(QCloseEvent *event) override
     {
+        QSettings settings;
+        settings.setValue(QStringLiteral("operationWindow/geometry"), saveGeometry());
         if (m_manager) {
             const int active = m_manager->activeCount()
                 + (m_queueController ? (m_queueController->activeCount() + m_queueController->queuedCount()) : 0);
@@ -2489,6 +2590,9 @@ public:
                 auto *graph = targetRow->findChild<OperationSpeedGraph *>(QStringLiteral("operationSpeedGraph"));
                 if (graph) {
                     graph->setSamples(snap.speedSamples);
+                    if (snap.terminal) {
+                        graph->setTerminal(true, snap.state);
+                    }
                 }
             }
         }
@@ -2599,6 +2703,225 @@ private:
             : QStringLiteral("%1 hr %2 min")
                 .arg(seconds / 3600)
                 .arg((seconds % 3600) / 60);
+    }
+
+    static QString durationText(qint64 ms)
+    {
+        if (ms < 0) {
+            return QStringLiteral("—");
+        }
+        const qint64 totalSec = ms / 1000;
+        if (totalSec < 1) {
+            return QStringLiteral("< 1 s");
+        }
+        return etaText(totalSec);
+    }
+
+    TransferHistoryManager *historyManager() const
+    {
+        if (m_queueController && m_queueController->historyManager()) {
+            return m_queueController->historyManager();
+        }
+        if (m_manager && m_manager->historyManager()) {
+            return m_manager->historyManager();
+        }
+        return nullptr;
+    }
+
+    void addArchivalHistoryCard(const TransferHistoryRecord &rec)
+    {
+        auto *row = new QFrame(m_listWidget);
+        row->setObjectName(QStringLiteral("operationRow"));
+        row->setProperty("historyUuid", rec.uuid);
+        row->setProperty("isArchival", true);
+        row->setFrameShape(QFrame::StyledPanel);
+        row->setAutoFillBackground(true);
+
+        auto *rowLayout = new QHBoxLayout(row);
+        rowLayout->setContentsMargins(12, 10, 10, 10);
+        rowLayout->setSpacing(10);
+
+        auto *icon = new QLabel(row);
+        const QString iconName = (rec.terminalState == TransferTaskState::Failed)
+            ? QStringLiteral("dialog-error")
+            : (rec.terminalState == TransferTaskState::Cancelled)
+                ? QStringLiteral("process-stop")
+                : (rec.operationType == TransferOperationType::Move)
+                    ? QStringLiteral("edit-cut")
+                    : QStringLiteral("emblem-default");
+        icon->setPixmap(themedIcon(iconName, QStringLiteral("folder-sync")).pixmap(28, 28));
+        rowLayout->addWidget(icon, 0, Qt::AlignTop);
+
+        auto *content = new QWidget(row);
+        content->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        auto *contentLayout = new QVBoxLayout(content);
+        contentLayout->setContentsMargins(0, 0, 0, 0);
+        contentLayout->setSpacing(5);
+
+        auto *topLine = new QHBoxLayout;
+        QString titleText = rec.title;
+        if (titleText.isEmpty()) {
+            if (!rec.sourceUrls.isEmpty()) {
+                const QString fileName = rec.sourceUrls.first().fileName();
+                titleText = (rec.operationType == TransferOperationType::Move)
+                    ? (isPolish() ? QStringLiteral("Przenoszenie: %1").arg(fileName)
+                                  : QStringLiteral("Moving: %1").arg(fileName))
+                    : (isPolish() ? QStringLiteral("Kopiowanie: %1").arg(fileName)
+                                  : QStringLiteral("Copying: %1").arg(fileName));
+            } else {
+                titleText = (rec.operationType == TransferOperationType::Move)
+                    ? trLocal("Przenoszenie plików", "Moving files")
+                    : trLocal("Kopiowanie plików", "Copying files");
+            }
+        }
+        auto *title = new TransferQueueElidedLabel(titleText, content, Qt::ElideRight);
+        title->setObjectName(QStringLiteral("operationTitleLabel"));
+        QFont titleFont = title->font();
+        titleFont.setBold(true);
+        title->setFont(titleFont);
+        title->setToolTip(formatSingleValueTooltip(trLocal("Zadanie", "Task"), titleText));
+        topLine->addWidget(title, 1);
+
+        const QString badgeStyle = QStringLiteral(
+            "QLabel { background-color: rgba(128, 128, 128, 0.18); "
+            "border-radius: 4px; padding: 1px 6px; }");
+
+        auto *historyBadge = new QLabel(trLocal("Historia", "History"), content);
+        historyBadge->setObjectName(QStringLiteral("operationHistoryBadge"));
+        historyBadge->setStyleSheet(badgeStyle);
+        topLine->addWidget(historyBadge, 0);
+
+        auto *stateLabel = new QLabel(transferTaskStateText(rec.terminalState), content);
+        stateLabel->setObjectName(QStringLiteral("operationDetailsLabel"));
+        stateLabel->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
+        topLine->addWidget(stateLabel, 0);
+
+        auto *detailsToggle = new QToolButton(content);
+        detailsToggle->setObjectName(QStringLiteral("operationDetailsToggleButton"));
+        detailsToggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        detailsToggle->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        topLine->addWidget(detailsToggle, 0);
+
+        auto *dismiss = new QToolButton(content);
+        dismiss->setObjectName(QStringLiteral("detailedOperationDismissButton"));
+        dismiss->setIcon(themedIcon(QStringLiteral("window-close"), QStringLiteral("edit-delete")));
+        dismiss->setToolTip(trLocal("Ukryj z widoku", "Dismiss from view"));
+        dismiss->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        protectInteraction(dismiss);
+        connect(dismiss, &QToolButton::clicked, this, [this, uuid = rec.uuid] {
+            m_dismissedHistoryUuids.insert(uuid);
+            scheduleRebuild();
+        });
+        topLine->addWidget(dismiss, 0);
+        contentLayout->addLayout(topLine);
+
+        auto *detailsWidget = new QWidget(content);
+        detailsWidget->setObjectName(QStringLiteral("operationExpandedDetails"));
+        auto *detailsLayout = new QVBoxLayout(detailsWidget);
+        detailsLayout->setContentsMargins(0, 2, 0, 2);
+        detailsLayout->setSpacing(5);
+
+        const bool expanded = m_expandedHistoryUuids.contains(rec.uuid);
+        auto updateToggle = [detailsToggle](bool isExpanded) {
+            detailsToggle->setIcon(themedIcon(
+                isExpanded ? QStringLiteral("go-up") : QStringLiteral("go-down")));
+            detailsToggle->setText(
+                isExpanded ? trLocal("Mniej", "Less") : trLocal("Szczegóły", "Details"));
+        };
+        updateToggle(expanded);
+        detailsWidget->setVisible(expanded);
+        protectInteraction(detailsToggle);
+        connect(detailsToggle, &QToolButton::clicked, this,
+                [this, uuid = rec.uuid, detailsWidget, updateToggle] {
+                    const bool expand = !m_expandedHistoryUuids.contains(uuid);
+                    if (expand) m_expandedHistoryUuids.insert(uuid);
+                    else m_expandedHistoryUuids.remove(uuid);
+                    detailsWidget->setVisible(expand);
+                    updateToggle(expand);
+                });
+
+        auto addLocation = [detailsWidget, detailsLayout](
+                               const QString &objectName,
+                               const QString &caption,
+                               const QString &value) {
+            if (value.isEmpty()) return;
+            auto *label = new TransferQueueElidedLabel(detailsWidget, Qt::ElideMiddle);
+            label->setObjectName(objectName);
+            label->setTextInteractionFlags(Qt::TextSelectableByMouse);
+            label->setFullText(QStringLiteral("%1: %2").arg(caption, value));
+            label->setToolTip(formatSingleValueTooltip(caption, value));
+            detailsLayout->addWidget(label);
+        };
+
+        const QString fullSources = TransferQueueTaskItemWidget::formatFullSourcesText(rec.sourceUrls);
+        const QString dstText = TransferQueueTaskItemWidget::displayUrl(rec.destinationUrl);
+        addLocation(QStringLiteral("operationSourceLabel"),
+                    trLocal("Źródło", "Source"),
+                    fullSources);
+        addLocation(QStringLiteral("operationDestinationLabel"),
+                    trLocal("Cel", "Target"),
+                    dstText);
+
+        if (rec.endTimeUtc.isValid()) {
+            addLocation(QStringLiteral("operationEndTimeLabel"),
+                        trLocal("Zakończono", "Finished"),
+                        rec.endTimeUtc.toLocalTime().toString(QStringLiteral("yyyy-MM-dd hh:mm:ss")));
+        }
+        if (rec.durationMs > 0) {
+            addLocation(QStringLiteral("operationDurationLabel"),
+                        trLocal("Czas trwania", "Duration"),
+                        durationText(rec.durationMs));
+        }
+
+        const QString bytesStr = transferText(rec.processedBytes, rec.totalBytes);
+        if (!bytesStr.isEmpty()) {
+            auto *bytesLabel = new QLabel(bytesStr, content);
+            bytesLabel->setObjectName(QStringLiteral("operationBytesLabel"));
+            bytesLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+            contentLayout->addWidget(bytesLabel);
+        }
+
+        if (rec.averageSpeedBytesPerSecond.has_value() && *rec.averageSpeedBytesPerSecond > 0) {
+            addLocation(QStringLiteral("operationAverageSpeedLabel"),
+                        trLocal("Średnia prędkość", "Average speed"),
+                        speedText(*rec.averageSpeedBytesPerSecond));
+        }
+
+        if (rec.terminalState == TransferTaskState::Failed && !rec.errorText.isEmpty()) {
+            auto *errLabel = new OperationDetailsLabel(rec.errorText, content);
+            errLabel->setObjectName(QStringLiteral("operationErrorLabel"));
+            detailsLayout->addWidget(errLabel);
+        }
+
+        auto *progressLayout = new QHBoxLayout;
+        progressLayout->setContentsMargins(0, 0, 0, 0);
+        progressLayout->setSpacing(10);
+        auto *progress = new QProgressBar(content);
+        progress->setObjectName(QStringLiteral("operationProgress"));
+        progress->setRange(0, 100);
+        const int pct = (rec.terminalState == TransferTaskState::Completed)
+            ? 100
+            : ((rec.totalBytes > 0)
+                ? static_cast<int>(qBound<quint64>(0, (rec.processedBytes * 100) / rec.totalBytes, 100))
+                : 0);
+        progress->setValue(pct);
+        progress->setTextVisible(false);
+        progress->setMinimumHeight(14);
+        progressLayout->addWidget(progress, 1);
+        auto *percentLabel = new QLabel(QStringLiteral("%1%").arg(pct), content);
+        percentLabel->setObjectName(QStringLiteral("operationPercentLabel"));
+        QFont percentFont = percentLabel->font();
+        percentFont.setBold(true);
+        percentFont.setPointSize(percentFont.pointSize() + 4);
+        percentLabel->setFont(percentFont);
+        percentLabel->setMinimumWidth(58);
+        percentLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        progressLayout->addWidget(percentLabel, 0);
+        contentLayout->addLayout(progressLayout);
+
+        contentLayout->addWidget(detailsWidget);
+        rowLayout->addWidget(content, 1);
+        m_listLayout->addWidget(row);
     }
 
     static QString displayUrl(const QUrl &url)
@@ -2775,8 +3098,11 @@ private:
         remove->setVisible(task.terminal);
         remove->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
         protectInteraction(remove);
-        connect(remove, &QToolButton::clicked, this, [this, id = task.id] {
+        connect(remove, &QToolButton::clicked, this, [this, id = task.id, histUuid = task.historyUuid] {
             if (m_queueController) {
+                if (!histUuid.isEmpty()) {
+                    m_dismissedHistoryUuids.insert(histUuid);
+                }
                 m_queueController->removeFinishedTask(id);
                 scheduleRebuild();
             }
@@ -2884,6 +3210,9 @@ private:
             contentLayout->addWidget(bytesLabel);
 
             auto *graph = new OperationSpeedGraph(task.speedSamples, detailsWidget);
+            if (task.terminal) {
+                graph->setTerminal(true, task.state);
+            }
             detailsLayout->addWidget(graph);
 
             auto *progressLayout = new QHBoxLayout;
@@ -3168,6 +3497,15 @@ private:
             auto *graph = new OperationSpeedGraph(
                 operation.speedSamples,
                 detailsWidget);
+            const bool isLegacyTerminal = (operation.state == OperationManager::State::Completed
+                                           || operation.state == OperationManager::State::Cancelled
+                                           || operation.state == OperationManager::State::Failed);
+            if (isLegacyTerminal) {
+                TransferTaskState tState = TransferTaskState::Completed;
+                if (operation.state == OperationManager::State::Cancelled) tState = TransferTaskState::Cancelled;
+                else if (operation.state == OperationManager::State::Failed) tState = TransferTaskState::Failed;
+                graph->setTerminal(true, tState);
+            }
             detailsLayout->addWidget(graph);
         }
         contentLayout->addWidget(detailsWidget);
@@ -3235,6 +3573,9 @@ private:
     QScrollArea *m_settingsContainer = nullptr;
     QSet<quint64> m_knownIds;
     QSet<quint64> m_expandedIds;
+    QSet<QString> m_knownHistoryUuids;
+    QSet<QString> m_expandedHistoryUuids;
+    QSet<QString> m_dismissedHistoryUuids;
     bool m_rebuildScheduled = false;
     bool m_pointerInteraction = false;
 };

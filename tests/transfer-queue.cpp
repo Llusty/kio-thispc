@@ -151,6 +151,10 @@ struct QueueHarness {
     {
         QDir().mkpath(root + TQ_S("/src"));
         QDir().mkpath(root + TQ_S("/dst"));
+        QFile::remove(root + TQ_S("/history.json"));
+        if (ctl.historyManager()) {
+            ctl.historyManager()->setFilePath(root + TQ_S("/history.json"));
+        }
     }
 
     ~QueueHarness()

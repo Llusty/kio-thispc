@@ -984,6 +984,7 @@ private:
         QDateTime startTimeUtc;
         QDateTime endTimeUtc;
         bool historyRecorded = false;
+        QString historyUuid;
     };
 
     struct Event {
@@ -1183,6 +1184,7 @@ private:
         snap.contextText = task.contextText;
         snap.currentSourceUrl = task.currentSourceUrl;
         snap.currentDestinationUrl = task.currentDestinationUrl;
+        snap.historyUuid = task.historyUuid;
         return snap;
     }
 
@@ -1503,6 +1505,7 @@ private:
 
         TransferHistoryRecord rec;
         rec.uuid = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        task->historyUuid = rec.uuid;
         rec.operationType = task->desc.type;
         rec.backendKind = task->desc.backend;
         rec.terminalState = terminal;

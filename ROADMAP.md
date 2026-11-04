@@ -497,11 +497,18 @@ When standard operations receive permission denied errors, provide targeted `adm
     - Security Gate A verified: `clear()` in Instance A increments disk epoch, preventing delayed writes from Instance B from resurrecting wiped history;
     - Safe shutdown: `flushSync()` synchronous debounced save flush upon window close and controller destruction;
     - Manual acceptance 6/6 PASS: A (single Copy Completed), B (multi-file Copy Completed, itemCount=2), C (Copy Failed, errorCode=100 with KDE notification), D (3 records preserved across restarts), E (Move Completed, persistent record), F (Copy Cancelled, persistent record, source preserved, no partial destination or staging).
-  - **Stage 2.3 — OperationWindow History Integration & UX Polish:** (Planned)
+  - **Stage 2.3 — OperationWindow Persistent History & UX Polish:** ✅ IMPLEMENTED / AUTOMATED PASS / MANUAL ACCEPTED (6/6)
     - Integration of persistent history records with existing `OperationWindow` (no separate bespoke window without explicit decision);
-    - Presentation of completed/terminal operations loaded from `TransferHistoryManager`;
-    - Resolution of **UX Item A**: compact initial window geometry (~580×380 px) matching accepted screenshot layout without excessive vertical blank space, preserving manual resizing, multi-task scrolling, Wayland and HiDPI scaling;
-    - Resolution of **UX Item B**: speed graph polish on instantaneous transfers (suppress "Waiting for speed samples…" after rapid transfers under 500 ms; display clear completed status).
+    - Archival cards rendered from `TransferHistoryManager` with distinct `operationHistoryBadge` ("History" / "Historia");
+    - Task deduplication between in-session active/completed transfers and archival database records (using `task.historyUuid`);
+    - Comprehensive terminal state visualization (Completed, Cancelled, Failed with error text), timestamps, durations, and byte totals;
+    - Strict UI safety: no active control buttons (Pause/Cancel/Resume) on archival cards;
+    - Safe dismiss button (`detailedOperationDismissButton`) removes cards from the active session view without deleting or modifying disk records;
+    - Zero blocking I/O or stat queries when rendering archival cards referencing disconnected USB/MTP storage;
+    - Resolution of **UX Item A**: compact initial window geometry (~580×380 px) matching accepted screenshot layout without excessive vertical blank space, preserving manual resizing, multi-task scrolling, Wayland and HiDPI scaling, and persistent geometry restoration via `QSettings`;
+    - Resolution of **UX Item B**: speed graph polish on instantaneous transfers (suppresses "Waiting for speed samples…" after rapid transfers under 500 ms; displays clear terminal status "Transfer completed instantly" / "Transfer cancelled" / "Transfer failed");
+    - Automated test suite: 10 new test suites (46 total history suites, 1863 assertions PASS), full regression 79/79 PASS;
+    - Manual acceptance 6/6 PASS: A (5 archival cards loaded on start), B (details, dismiss, and restart restoration), C (deduplication on copy), D (compact 580x380 px geometry and resize persistence), E (speed graph instant vs 20 MB transfer), F (safe expansion, disconnected locations, scrolling, and store integrity).
   - **Stage 2.4 — OperationPopup History Integration & Consistency:** (Planned)
     - Integration of history with toolbar `OperationPopup`;
     - Resolution of **UX Item C**: eliminate misleading "No history" in `OperationPopup` while completed transfers exist; unified data model.

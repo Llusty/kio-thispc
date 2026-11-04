@@ -599,11 +599,18 @@ Gdy zwykła operacja plikowa zakończy się błędem braku uprawnień (Permissio
     - Zweryfikowana bramka Security Gate A: `clear()` w procesie A podbija epokę na dysku, uniemożliwiając procesowi B wskrzeszenie wyczyszczonej historii;
     - Bezpieczne zamykanie: synchroniczne opróżnienie zapisu (`flushSync()`) przy zamykaniu okna i niszczeniu kontrolera;
     - Odbiór manualny użytkownika 6/6 PASS: A (pojedynczy Copy Completed), B (wieloplikowy Copy Completed, itemCount=2), C (Copy Failed, errorCode=100 z powiadomieniem KDE), D (3 rekordy zachowane po restarcie), E (Move Completed z trwałym rekordem), F (Copy Cancelled, trwały rekord, źródło nienaruszone, brak częściowego celu i stagingu).
-  - **Etap 2.3 — Integracja trwałej historii z OperationWindow i szlify UX:** (Planowane)
+  - **Etap 2.3 — Integracja trwałej historii z OperationWindow i szlify UX:** ✅ IMPLEMENTED / AUTOMATED PASS / MANUAL ACCEPTED (6/6)
     - Integracja trwałych rekordów historii z istniejącym oknem `OperationWindow` (bez tworzenia osobnego dedykowanego okna bez odrębnej decyzji użytkownika);
-    - Prezentacja operacji terminalnych/zakończonych pobieranych z `TransferHistoryManager`;
-    - Rozwiązanie **Zagadnienia UX A**: docelowy kompaktowy rozmiar startowy okna (ok. 580×380 px), zgodny z zaakceptowanym zrzutem, bez nadmiaru pustej przestrzeni pionowej, z zachowaniem ręcznego skalowania, przewijania wielu zadań, Wayland i skalowania HiDPI;
-    - Rozwiązanie **Zagadnienia UX B**: brak oczekiwania na próbki po zakończeniu szybkiego transferu (wyeliminowanie „Oczekiwanie na próbki prędkości…” po operacjach poniżej 500 ms; czytelny stan ukończenia).
+    - Karty archiwalne renderowane z `TransferHistoryManager` z czytelną plakietką `operationHistoryBadge` („Historia” / „History”);
+    - Deduplikacja zadań sesyjnych i archiwalnych w oknie (powiązanie `task.historyUuid`);
+    - Pełna wizualizacja stanów terminalnych (Ukończono, Anulowano, Błąd z opisem błędu), dat/czasu zakończenia, czasów trwania i rozmiarów;
+    - Bezpieczeństwo kontrolek UI: brak aktywnych przycisków sterowania (Wstrzymaj/Anuluj/Wznów) na kartach archiwalnych;
+    - Bezpieczny przycisk ukrycia (`detailedOperationDismissButton`) usuwający kartę wyłącznie z bieżącego widoku bez modyfikacji bazy na dysku;
+    - Zero blokujących operacji I/O i zapytań stat przy renderowaniu kart z odłączonych nośników USB/MTP;
+    - Rozwiązanie **Zagadnienia UX A**: kompaktowy rozmiar początkowy okna (580×380 px) zgodny z zaakceptowanym zrzutem bez pustej przestrzeni, z zachowaniem ręcznego skalowania, przewijania wielu zadań, Wayland, HiDPI oraz trwałego przywracania geometrii przez `QSettings`;
+    - Rozwiązanie **Zagadnienia UX B**: eliminacja komunikatu „Oczekiwanie na próbki prędkości…” po szybkich transferach (< 500 ms) i jednoznaczny status ukończenia („Transfer ukończony natychmiastowo” / „Transfer anulowany” / „Transfer zakończony niepowodzeniem”);
+    - Zestaw testów automatycznych: 10 nowych zestawów (łącznie 46 zestawów historii, 1863 asercje PASS), pełna regresja 79/79 PASS;
+    - Odbiór manualny użytkownika 6/6 PASS: A (5 kart archiwalnych po starcie), B (szczegóły, ukrywanie i przywrócenie po restarcie), C (deduplikacja przy kopiowaniu), D (kompaktowy rozmiar 580×380 px i zapamiętywanie geometrii), E (wykres prędkości przy transferze natychmiastowym i 20 MB), F (bezpieczne rozwijanie, odłączone nośniki, przewijanie i integralność bazy).
   - **Etap 2.4 — Integracja historii z OperationPopup i spójność:** (Planowane)
     - Integracja historii z wysuwanym panelem `OperationPopup`;
     - Rozwiązanie **Zagadnienia UX C**: usunięcie mylącego komunikatu „Brak historii” w `OperationPopup`, gdy w oknie szczegółowym istnieją ukończone transfery; ujednolicony model danych.

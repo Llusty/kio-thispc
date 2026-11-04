@@ -251,6 +251,7 @@ struct TransferTaskSnapshot {
     QString contextText;
     QUrl currentSourceUrl;
     QUrl currentDestinationUrl;
+    QString historyUuid;
 };
 
 // Stage 5: Global Queue Control States

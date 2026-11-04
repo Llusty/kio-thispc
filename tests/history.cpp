@@ -30,6 +30,7 @@
  */
 
 #include "transferhistorymanager.h"
+#include "operationmanager.h"
 
 #include <QApplication>
 #include <QDateTime>
@@ -1532,6 +1533,501 @@ static void testNoOrphanedFiles(const QString &tempDir)
     }
 }
 
+struct ScopedProductionDispatch {
+    bool prev;
+    explicit ScopedProductionDispatch(bool enabled = true) : prev(TransferQueueProductionDispatchConnected) {
+        TransferQueueProductionDispatchConnected = enabled;
+    }
+    ~ScopedProductionDispatch() {
+        TransferQueueProductionDispatchConnected = prev;
+    }
+};
+
+static void testOperationWindowPersistentHistoryLoadedOnStart(const QString &tempDir)
+{
+    ScopedProductionDispatch prodGuard(true);
+    const QString filePath = tempDir + QStringLiteral("/win_loaded_start.json");
+    TransferHistoryManager histMgr(filePath);
+
+    const auto t0 = QDateTime::currentDateTimeUtc().addSecs(-100);
+    const auto t1 = t0.addSecs(10);
+    const auto t2 = t1.addSecs(5);
+
+    auto r1 = TransferHistoryRecord::createNew(
+        TransferOperationType::Copy, TransferBackendKind::LocalNative, TransferTaskState::Completed,
+        {QUrl(QStringLiteral("file:///data/photo.jpg"))}, QUrl(QStringLiteral("file:///backup/")),
+        t0, t1, 10000, 10485760ULL, 10485760ULL, 1048576ULL, 0, QString(), QStringLiteral("Copy photo.jpg"));
+
+    auto r2 = TransferHistoryRecord::createNew(
+        TransferOperationType::Move, TransferBackendKind::LocalNative, TransferTaskState::Cancelled,
+        {QUrl(QStringLiteral("file:///data/video.mp4"))}, QUrl(QStringLiteral("file:///backup/")),
+        t1, t2, 5000, 5242880ULL, 2621440ULL, 524288ULL, 0, QString(), QStringLiteral("Move video.mp4"));
+
+    auto r3 = TransferHistoryRecord::createNew(
+        TransferOperationType::Copy, TransferBackendKind::LocalNative, TransferTaskState::Failed,
+        {QUrl(QStringLiteral("file:///data/secret.dat"))}, QUrl(QStringLiteral("file:///cloud/")),
+        t2, t2.addSecs(1), 1000, 2048ULL, 0ULL, std::nullopt, 100, QStringLiteral("Access denied"), QStringLiteral("Copy secret.dat"));
+
+    histMgr.addRecord(r1, false);
+    histMgr.addRecord(r2, false);
+    histMgr.addRecord(r3, false);
+    verifyHistory(histMgr.saveSync(), "Saved 3 records to disk");
+
+    TransferQueueController controller;
+    controller.setHistoryManager(&histMgr);
+
+    OperationWindow win;
+    win.setQueueController(&controller);
+    win.show();
+    QCoreApplication::processEvents();
+
+    const auto badges = win.findChildren<QLabel*>(QStringLiteral("operationHistoryBadge"));
+    verifyHistory(badges.size() == 3, "OperationWindow rendered exactly 3 archival badges");
+
+    const auto rows = win.findChildren<QFrame*>(QStringLiteral("operationRow"));
+    verifyHistory(rows.size() == 3, "OperationWindow rendered exactly 3 operation rows");
+
+    for (QFrame *row : rows) {
+        verifyHistory(row->property("isArchival").toBool(), "Row is marked as archival");
+        verifyHistory(!row->property("historyUuid").toString().isEmpty(), "Row has history UUID");
+    }
+
+    auto *summary = win.findChild<TransferQueueElidedLabel*>(QStringLiteral("detailedOperationsSummaryLabel"));
+    if (!summary) {
+        const auto labels = win.findChildren<TransferQueueElidedLabel*>();
+        for (auto *lbl : labels) {
+            if (lbl->fullText().contains(QStringLiteral("Zakończone")) || lbl->fullText().contains(QStringLiteral("Completed"))) {
+                summary = lbl;
+                break;
+            }
+        }
+    }
+    verifyHistory(summary != nullptr, "Summary label exists and indicates finished/completed items");
+}
+
+static void testOperationWindowDeduplicationBetweenQueueAndHistory(const QString &tempDir)
+{
+    ScopedProductionDispatch prodGuard(true);
+    const QString filePath = tempDir + QStringLiteral("/win_dedup.json");
+    TransferHistoryManager histMgr(filePath);
+
+    // Archival record from a previous session
+    auto archivalRec = TransferHistoryRecord::createNew(
+        TransferOperationType::Copy, TransferBackendKind::LocalNative, TransferTaskState::Completed,
+        {QUrl(QStringLiteral("file:///old_data.zip"))}, QUrl(QStringLiteral("file:///backup/")),
+        QDateTime::currentDateTimeUtc().addSecs(-60), QDateTime::currentDateTimeUtc().addSecs(-50),
+        10000, 2048, 2048, 200, 0, QString(), QStringLiteral("Old session copy"));
+    histMgr.addRecord(archivalRec, false);
+    verifyHistory(histMgr.saveSync(), "Saved initial archival record");
+
+    TransferQueueController controller;
+    controller.setHistoryManager(&histMgr);
+
+    OperationWindow win;
+    win.setQueueController(&controller);
+    win.show();
+    QCoreApplication::processEvents();
+
+    // Verify 1 archival card initially
+    auto rowsBefore = win.findChildren<QFrame*>(QStringLiteral("operationRow"));
+    verifyHistory(rowsBefore.size() == 1, "Initially 1 archival card in window");
+
+    // Enqueue an in-session task
+    HistoryTestJob *jobInstance = nullptr;
+    auto desc = makeQueueTestDescriptor(
+        TransferOperationType::Copy,
+        {QUrl(QStringLiteral("file:///live_data.bin"))},
+        QUrl(QStringLiteral("file:///dest/")),
+        [&jobInstance]() -> KJob* {
+            jobInstance = new HistoryTestJob(false);
+            return jobInstance;
+        },
+        QStringLiteral("Live session task")
+    );
+
+    auto result = controller.enqueue(desc);
+    verifyHistory(result.id > 0, "Task enqueued");
+    QCoreApplication::processEvents();
+
+    verifyHistory(jobInstance != nullptr, "Job started");
+    jobInstance->complete(4096, 4096);
+    QCoreApplication::processEvents();
+
+    histMgr.flushSync();
+    verifyHistory(histMgr.count() == 2, "HistoryManager now contains 2 records on disk");
+
+    // In OperationWindow:
+    // There should be exactly 2 rows: 1 for the live finished queue task, and 1 for the archival record.
+    // The live task MUST NOT be duplicated as an archival card!
+    win.rebuild();
+    QCoreApplication::processEvents();
+
+    auto rowsAfter = win.findChildren<QFrame*>(QStringLiteral("operationRow"));
+    verifyHistory(rowsAfter.size() == 2, "Exactly 2 rows in window: deduplication prevents double card for live task");
+
+    int archivalCount = 0;
+    int liveQueueCount = 0;
+    for (QFrame *row : rowsAfter) {
+        if (row->property("isArchival").toBool()) {
+            ++archivalCount;
+        } else if (row->property("taskId").toULongLong() == result.id) {
+            ++liveQueueCount;
+        }
+    }
+    verifyHistory(archivalCount == 1, "Exactly 1 archival card");
+    verifyHistory(liveQueueCount == 1, "Exactly 1 live queue card");
+    delete jobInstance;
+}
+
+static void testOperationWindowStatusBadgesAndDetails(const QString &tempDir)
+{
+    ScopedProductionDispatch prodGuard(true);
+    const QString filePath = tempDir + QStringLiteral("/win_details.json");
+    TransferHistoryManager histMgr(filePath);
+
+    const auto start = QDateTime::fromString(QStringLiteral("2026-11-04T12:00:00Z"), Qt::ISODate);
+    const auto end = QDateTime::fromString(QStringLiteral("2026-11-04T12:00:05Z"), Qt::ISODate);
+
+    auto rSuccess = TransferHistoryRecord::createNew(
+        TransferOperationType::Copy, TransferBackendKind::LocalNative, TransferTaskState::Completed,
+        {QUrl(QStringLiteral("file:///home/user/doc.txt"))}, QUrl(QStringLiteral("file:///media/usb/")),
+        start, end, 5000, 1048576, 1048576, 209715, 0, QString(), QStringLiteral("Copy doc.txt"));
+
+    auto rFailed = TransferHistoryRecord::createNew(
+        TransferOperationType::Copy, TransferBackendKind::LocalNative, TransferTaskState::Failed,
+        {QUrl(QStringLiteral("file:///home/user/fail.bin"))}, QUrl(QStringLiteral("file:///media/usb/")),
+        start, end, 1000, 1048576, 0, std::nullopt, 100, QStringLiteral("Device write error #100"), QStringLiteral("Failed file"));
+
+    auto rCancel = TransferHistoryRecord::createNew(
+        TransferOperationType::Move, TransferBackendKind::LocalNative, TransferTaskState::Cancelled,
+        {QUrl(QStringLiteral("file:///home/user/cancel.iso"))}, QUrl(QStringLiteral("file:///backup/")),
+        start, end, 2000, 5000000, 1000000, 500000, 0, QString(), QStringLiteral("Cancelled move"));
+
+    histMgr.addRecord(rSuccess, false);
+    histMgr.addRecord(rFailed, false);
+    histMgr.addRecord(rCancel, false);
+    histMgr.saveSync();
+
+    TransferQueueController controller;
+    controller.setHistoryManager(&histMgr);
+
+    OperationWindow win;
+    win.setQueueController(&controller);
+    win.show();
+    QCoreApplication::processEvents();
+
+    const auto rows = win.findChildren<QFrame*>(QStringLiteral("operationRow"));
+    verifyHistory(rows.size() == 3, "3 rows present");
+
+    for (QFrame *row : rows) {
+        const QString uuid = row->property("historyUuid").toString();
+        auto *stateLbl = row->findChild<QLabel*>(QStringLiteral("operationDetailsLabel"));
+        verifyHistory(stateLbl != nullptr, "operationDetailsLabel exists on row");
+
+        if (uuid == rSuccess.uuid) {
+            verifyHistory(stateLbl->text().contains(QStringLiteral("Ukończono")) || stateLbl->text().contains(QStringLiteral("Completed")),
+                          "rSuccess shows Completed state");
+            auto *prog = row->findChild<QProgressBar*>(QStringLiteral("operationProgress"));
+            verifyHistory(prog != nullptr && prog->value() == 100, "Progress bar is 100% on Completed");
+            auto *pctLbl = row->findChild<QLabel*>(QStringLiteral("operationPercentLabel"));
+            verifyHistory(pctLbl != nullptr && pctLbl->text() == QStringLiteral("100%"), "Percent label is 100%");
+            auto *durLbl = row->findChild<TransferQueueElidedLabel*>(QStringLiteral("operationDurationLabel"));
+            verifyHistory(durLbl != nullptr && (durLbl->fullText().contains(QStringLiteral("5 s")) || durLbl->fullText().contains(QStringLiteral("5 sec"))), "Duration label formatted correctly");
+            auto *endLbl = row->findChild<TransferQueueElidedLabel*>(QStringLiteral("operationEndTimeLabel"));
+            verifyHistory(endLbl != nullptr && !endLbl->fullText().isEmpty(), "End time label is formatted");
+        } else if (uuid == rFailed.uuid) {
+            verifyHistory(stateLbl->text().contains(QStringLiteral("Błąd")) || stateLbl->text().contains(QStringLiteral("Failed")),
+                          "rFailed shows Failed state");
+            auto *errLbl = row->findChild<OperationDetailsLabel*>(QStringLiteral("operationErrorLabel"));
+            verifyHistory(errLbl != nullptr && errLbl->text().contains(QStringLiteral("Device write error #100")),
+                          "Error text displayed correctly on failed card");
+        } else if (uuid == rCancel.uuid) {
+            verifyHistory(stateLbl->text().contains(QStringLiteral("Anulowano")) || stateLbl->text().contains(QStringLiteral("Cancelled")),
+                          "rCancel shows Cancelled state");
+        }
+    }
+}
+
+static void testOperationWindowNoActiveControlsOnArchivalCards(const QString &tempDir)
+{
+    ScopedProductionDispatch prodGuard(true);
+    const QString filePath = tempDir + QStringLiteral("/win_no_controls.json");
+    TransferHistoryManager histMgr(filePath);
+
+    auto r = TransferHistoryRecord::createNew(
+        TransferOperationType::Copy, TransferBackendKind::LocalNative, TransferTaskState::Completed,
+        {QUrl(QStringLiteral("file:///data/report.pdf"))});
+    histMgr.addRecord(r, false);
+    histMgr.saveSync();
+
+    TransferQueueController controller;
+    controller.setHistoryManager(&histMgr);
+
+    OperationWindow win;
+    win.setQueueController(&controller);
+    win.show();
+    QCoreApplication::processEvents();
+
+    const auto rows = win.findChildren<QFrame*>(QStringLiteral("operationRow"));
+    verifyHistory(rows.size() == 1, "1 row present");
+    QFrame *row = rows.first();
+
+    // MUST NOT have active control buttons
+    verifyHistory(row->findChild<QToolButton*>(QStringLiteral("detailedOperationPauseButton")) == nullptr,
+                  "No pause button on archival card");
+    verifyHistory(row->findChild<QToolButton*>(QStringLiteral("detailedOperationCancelButton")) == nullptr,
+                  "No cancel button on archival card");
+    verifyHistory(row->findChild<QToolButton*>(QStringLiteral("detailedOperationResumeButton")) == nullptr,
+                  "No resume button on archival card");
+
+    // MUST have dismiss button
+    auto *dismiss = row->findChild<QToolButton*>(QStringLiteral("detailedOperationDismissButton"));
+    verifyHistory(dismiss != nullptr, "Dismiss button is present on archival card");
+}
+
+static void testOperationWindowEmptyAndCorruptedHistory(const QString &tempDir)
+{
+    ScopedProductionDispatch prodGuard(true);
+    // Part A: Empty history
+    {
+        const QString emptyPath = tempDir + QStringLiteral("/win_empty.json");
+        TransferHistoryManager histMgr(emptyPath);
+        histMgr.saveSync();
+
+        TransferQueueController controller;
+        controller.setHistoryManager(&histMgr);
+
+        OperationWindow win;
+        win.setQueueController(&controller);
+        win.show();
+        QCoreApplication::processEvents();
+
+        auto *emptyLbl = win.findChild<QLabel*>(QStringLiteral("operationWindowEmptyLabel"));
+        verifyHistory(emptyLbl != nullptr && emptyLbl->isVisible(), "Empty label is visible when history is empty");
+        verifyHistory(emptyLbl->text().contains(QStringLiteral("historii")) ||
+                      emptyLbl->text().contains(QStringLiteral("history")),
+                      "Empty label text correctly mentions both active ops and history");
+    }
+
+    // Part B: Corrupted file
+    {
+        const QString badPath = tempDir + QStringLiteral("/win_bad.json");
+        QFile f(badPath);
+        verifyHistory(f.open(QIODevice::WriteOnly), "Can write corrupted fixture");
+        f.write("{\"schemaVersion\": 1, \"records\": [{\"corrupted\": true, ");
+        f.close();
+
+        TransferHistoryManager histMgr(badPath);
+        histMgr.loadSync(); // safe fallback
+
+        TransferQueueController controller;
+        controller.setHistoryManager(&histMgr);
+
+        OperationWindow win;
+        win.setQueueController(&controller);
+        win.show();
+        QCoreApplication::processEvents();
+
+        auto *emptyLbl = win.findChild<QLabel*>(QStringLiteral("operationWindowEmptyLabel"));
+        verifyHistory(emptyLbl != nullptr && emptyLbl->isVisible(), "Window gracefully renders empty state on corrupted history without crash");
+    }
+}
+
+static void testOperationWindowDisconnectedDevicesRendering(const QString &tempDir)
+{
+    ScopedProductionDispatch prodGuard(true);
+    const QString filePath = tempDir + QStringLiteral("/win_disconnected.json");
+    TransferHistoryManager histMgr(filePath);
+
+    // Records containing unmounted/disconnected device URLs
+    auto rMtp = TransferHistoryRecord::createNew(
+        TransferOperationType::Copy, TransferBackendKind::LocalNative, TransferTaskState::Completed,
+        {QUrl(QStringLiteral("mtp:/Phone/DCIM/Camera/IMG_9999.jpg"))},
+        QUrl(QStringLiteral("file:///home/user/Pictures/")),
+        QDateTime::currentDateTimeUtc(), QDateTime::currentDateTimeUtc(), 100, 1024, 1024);
+
+    auto rUsb = TransferHistoryRecord::createNew(
+        TransferOperationType::Move, TransferBackendKind::LocalNative, TransferTaskState::Completed,
+        {QUrl(QStringLiteral("file:///home/user/backup.tar.gz"))},
+        QUrl(QStringLiteral("file:///run/media/user/DISCONNECTED_DRIVE_999/")),
+        QDateTime::currentDateTimeUtc(), QDateTime::currentDateTimeUtc(), 200, 2048, 2048);
+
+    histMgr.addRecord(rMtp, false);
+    histMgr.addRecord(rUsb, false);
+    histMgr.saveSync();
+
+    TransferQueueController controller;
+    controller.setHistoryManager(&histMgr);
+
+    QElapsedTimer timer;
+    timer.start();
+
+    OperationWindow win;
+    win.setQueueController(&controller);
+    win.show();
+    QCoreApplication::processEvents();
+
+    const qint64 elapsed = timer.elapsed();
+    verifyHistory(elapsed < 300, "Rendering archival cards with disconnected devices must be instant and perform zero blocking I/O");
+
+    const auto rows = win.findChildren<QFrame*>(QStringLiteral("operationRow"));
+    verifyHistory(rows.size() == 2, "Both disconnected device cards rendered cleanly");
+}
+
+static void testOperationWindowMultipleRecordsAndScrolling(const QString &tempDir)
+{
+    ScopedProductionDispatch prodGuard(true);
+    const QString filePath = tempDir + QStringLiteral("/win_scroll.json");
+    TransferHistoryManager histMgr(filePath);
+
+    for (int i = 0; i < 20; ++i) {
+        auto r = TransferHistoryRecord::createNew(
+            TransferOperationType::Copy, TransferBackendKind::LocalNative, TransferTaskState::Completed,
+            {QUrl(QStringLiteral("file:///test/item_%1.dat").arg(i))},
+            QUrl(QStringLiteral("file:///backup/")),
+            QDateTime::currentDateTimeUtc(), QDateTime::currentDateTimeUtc(), 100 * (i + 1),
+            1024 * (i + 1), 1024 * (i + 1), 1000, 0, QString(), QStringLiteral("Batch item %1").arg(i));
+        histMgr.addRecord(r, false);
+    }
+    histMgr.saveSync();
+
+    TransferQueueController controller;
+    controller.setHistoryManager(&histMgr);
+
+    OperationWindow win;
+    win.setQueueController(&controller);
+    win.show();
+    QCoreApplication::processEvents();
+
+    const auto rows = win.findChildren<QFrame*>(QStringLiteral("operationRow"));
+    verifyHistory(rows.size() == 20, "All 20 archival rows are instantiated");
+
+    auto *scroll = win.findChild<QScrollArea*>(QStringLiteral("operationWindowScrollArea"));
+    verifyHistory(scroll != nullptr && scroll->isVisible(), "Scroll area is visible and active for multiple records");
+}
+
+static void testOperationWindowUxAGeometryAndResize(const QString &tempDir)
+{
+    ScopedProductionDispatch prodGuard(true);
+    Q_UNUSED(tempDir);
+
+    // UX Item A: Default size 580x380, minimum size 480x260 in unified mode
+    TransferQueueController controller;
+    OperationWindow win;
+    win.setQueueController(&controller);
+    verifyHistory(win.sizeHint() == QSize(580, 380), "sizeHint is 580x380");
+    verifyHistory(win.minimumSizeHint() == QSize(480, 260), "minimumSizeHint is 480x260 in unified mode");
+
+    // Clear previous stored geometry in QSettings to verify clean default
+    QSettings settings;
+    settings.remove(QStringLiteral("operationWindow/geometry"));
+
+    win.show();
+    QCoreApplication::processEvents();
+
+    // Verify initial width is compact (~580)
+    verifyHistory(win.width() >= 480 && win.width() <= 600, "Window initial width is compact (~580)");
+
+    // Manual resize test and persistence
+    win.resize(650, 420);
+    QCloseEvent ce;
+    QApplication::sendEvent(&win, &ce); // triggers closeEvent which saves geometry
+
+    // Open second instance
+    OperationWindow win2;
+    win2.setQueueController(&controller);
+    win2.show();
+    QCoreApplication::processEvents();
+
+    verifyHistory(win2.width() == 650, "Restored width 650 from QSettings");
+    verifyHistory(win2.height() == 420, "Restored height 420 from QSettings");
+
+    // Clean up settings
+    settings.remove(QStringLiteral("operationWindow/geometry"));
+}
+
+static void testOperationWindowUxBSpeedGraphTerminal(const QString &tempDir)
+{
+    Q_UNUSED(tempDir);
+    // UX Item B: Speed graph terminal status presentation
+    OperationSpeedGraph graph;
+    verifyHistory(!graph.isTerminal(), "Initially not terminal");
+
+    // When running with 0 samples:
+    QPixmap pixmap(200, 60);
+    pixmap.fill(Qt::black);
+    graph.resize(200, 60);
+    graph.render(&pixmap); // paints without crash
+
+    // When terminal with 0 samples (instant transfer):
+    graph.setTerminal(true, TransferTaskState::Completed);
+    verifyHistory(graph.isTerminal(), "Graph is marked terminal");
+    verifyHistory(graph.terminalState() == TransferTaskState::Completed, "Terminal state is Completed");
+    graph.render(&pixmap); // paints "Transfer ukończony natychmiastowo" without crash
+
+    // When terminal with Cancelled:
+    graph.setTerminal(true, TransferTaskState::Cancelled);
+    verifyHistory(graph.terminalState() == TransferTaskState::Cancelled, "Terminal state is Cancelled");
+    graph.render(&pixmap);
+
+    // When terminal with Failed:
+    graph.setTerminal(true, TransferTaskState::Failed);
+    verifyHistory(graph.terminalState() == TransferTaskState::Failed, "Terminal state is Failed");
+    graph.render(&pixmap);
+}
+
+static void testOperationWindowDismissDoesNotDeleteFromDisk(const QString &tempDir)
+{
+    ScopedProductionDispatch prodGuard(true);
+    const QString filePath = tempDir + QStringLiteral("/win_dismiss.json");
+    TransferHistoryManager histMgr(filePath);
+
+    auto r1 = TransferHistoryRecord::createNew(TransferOperationType::Copy, TransferBackendKind::LocalNative, TransferTaskState::Completed, {QUrl(QStringLiteral("file:///item1.txt"))});
+    auto r2 = TransferHistoryRecord::createNew(TransferOperationType::Copy, TransferBackendKind::LocalNative, TransferTaskState::Completed, {QUrl(QStringLiteral("file:///item2.txt"))});
+    histMgr.addRecord(r1, false);
+    histMgr.addRecord(r2, false);
+    histMgr.saveSync();
+
+    TransferQueueController controller;
+    controller.setHistoryManager(&histMgr);
+
+    OperationWindow win;
+    win.setQueueController(&controller);
+    win.show();
+    QCoreApplication::processEvents();
+
+    auto rows = win.findChildren<QFrame*>(QStringLiteral("operationRow"));
+    verifyHistory(rows.size() == 2, "2 rows in window initially");
+
+    // Click dismiss button on first card
+    auto *dismissBtn = rows.first()->findChild<QToolButton*>(QStringLiteral("detailedOperationDismissButton"));
+    verifyHistory(dismissBtn != nullptr, "Dismiss button found on archival card");
+
+    dismissBtn->click();
+    QTest::qWait(250);
+
+    // After dismiss, only 1 row remains visible in window
+    auto rowsAfterDismiss = win.findChildren<QFrame*>(QStringLiteral("operationRow"));
+    verifyHistory(rowsAfterDismiss.size() == 1, "Only 1 row visible in window after dismissing 1 card");
+
+    // CRITICAL: Disk store and TransferHistoryManager still have BOTH records!
+    verifyHistory(histMgr.count() == 2, "TransferHistoryManager still has 2 records in memory");
+    {
+        TransferHistoryManager diskCheck(filePath);
+        diskCheck.loadSync();
+        verifyHistory(diskCheck.count() == 2, "Disk file still contains BOTH records (dismiss only hides from view)");
+    }
+
+    // Creating a new window session will show both records again
+    OperationWindow win2;
+    win2.setQueueController(&controller);
+    win2.show();
+    QCoreApplication::processEvents();
+
+    auto rowsNewSession = win2.findChildren<QFrame*>(QStringLiteral("operationRow"));
+    verifyHistory(rowsNewSession.size() == 2, "New session window displays all 2 records from disk");
+}
+
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
@@ -1605,6 +2101,18 @@ int main(int argc, char **argv)
     testSchemaVersionMismatchProtected(path);
     testNoOrphanedFiles(path);
 
-    qDebug("PASS: [history] %d assertions verified across 36 test suites", s_historyChecks);
+    // Stage 2.3 OperationWindow & UX Polish Tests
+    testOperationWindowPersistentHistoryLoadedOnStart(path);
+    testOperationWindowDeduplicationBetweenQueueAndHistory(path);
+    testOperationWindowStatusBadgesAndDetails(path);
+    testOperationWindowNoActiveControlsOnArchivalCards(path);
+    testOperationWindowEmptyAndCorruptedHistory(path);
+    testOperationWindowDisconnectedDevicesRendering(path);
+    testOperationWindowMultipleRecordsAndScrolling(path);
+    testOperationWindowUxAGeometryAndResize(path);
+    testOperationWindowUxBSpeedGraphTerminal(path);
+    testOperationWindowDismissDoesNotDeleteFromDisk(path);
+
+    qDebug("PASS: [history] %d assertions verified across 46 test suites", s_historyChecks);
     return 0;
 }
