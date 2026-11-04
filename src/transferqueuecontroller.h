@@ -35,6 +35,7 @@
 
 #include "localfilecopyjob.h"
 #include "transferbandwidthlimiter.h"
+#include "transferhistorymanager.h"
 #include "transferqueuesettings.h"
 #include "transferreservationregistry.h"
 #include "transfertaskdescriptor.h"
@@ -73,6 +74,8 @@ public:
         : QObject(parent)
         , m_watchdog(new QTimer(this))
         , m_bandwidthLimiter(std::make_shared<TransferBandwidthLimiter>(nullptr))
+        , m_ownedHistoryManager(new TransferHistoryManager(QString(), this))
+        , m_historyManager(m_ownedHistoryManager)
     {
         qRegisterMetaType<TransferTaskState>();
         qRegisterMetaType<std::shared_ptr<TransferBandwidthLimiter>>();
@@ -89,6 +92,9 @@ public:
     ~TransferQueueController() override
     {
         m_shuttingDown = true;
+        if (m_historyManager) {
+            m_historyManager->flushSync();
+        }
         for (const auto &entry : m_tasks) {
             for (const auto &connection : entry.second->connections) {
                 QObject::disconnect(connection);
@@ -142,6 +148,7 @@ public:
         }
 
         auto task = std::make_unique<Task>();
+        task->enqueuedTimeUtc = QDateTime::currentDateTimeUtc();
         task->reservation = TransferReservation::build(
             descriptor.type, descriptor.sources, descriptor.destination,
             descriptor.targetUrls);
@@ -414,6 +421,13 @@ public:
     void saveSettings(QSettings &settings) const
     {
         TransferQueueSettings::save(settings, exportConfig());
+    }
+
+    TransferHistoryManager *historyManager() const { return m_historyManager; }
+    void setHistoryManager(TransferHistoryManager *manager)
+    {
+        if (m_historyManager == manager) return;
+        m_historyManager = manager;
     }
 
     // Stops STARTING further tasks; running tasks are untouched. This is not
@@ -966,6 +980,10 @@ private:
         QUrl currentSourceUrl;
         QUrl currentDestinationUrl;
         QList<QMetaObject::Connection> connections;
+        QDateTime enqueuedTimeUtc;
+        QDateTime startTimeUtc;
+        QDateTime endTimeUtc;
+        bool historyRecorded = false;
     };
 
     struct Event {
@@ -1397,6 +1415,9 @@ private:
         if (previous == next) return;
         task->state = next;
         if (next == TransferTaskState::Running) {
+            if (!task->startTimeUtc.isValid()) {
+                task->startTimeUtc = QDateTime::currentDateTimeUtc();
+            }
             if (!task->elapsedTimer.isValid()) {
                 task->elapsedTimer.start();
             }
@@ -1459,12 +1480,58 @@ private:
         task->failureKind = kind;
         task->errorCode = errorCode;
         task->errorText = errorText;
+        task->endTimeUtc = QDateTime::currentDateTimeUtc();
+        recordHistoryForTask(task, terminal);
         releaseResources(task);
         setState(task, terminal);
         Event event{Event::Finished};
         event.id = task->desc.id;
         event.to = terminal;
         pushEvent(event);
+    }
+
+    void recordHistoryForTask(Task *task, TransferTaskState terminal)
+    {
+        if (!task || task->historyRecorded) {
+            return;
+        }
+        task->historyRecorded = true;
+
+        if (!m_historyManager) {
+            return;
+        }
+
+        TransferHistoryRecord rec;
+        rec.uuid = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        rec.operationType = task->desc.type;
+        rec.backendKind = task->desc.backend;
+        rec.terminalState = terminal;
+        rec.sourceUrls = TransferHistoryRecord::sanitizeUrls(task->desc.sources);
+        rec.destinationUrl = TransferHistoryRecord::sanitizeUrl(task->desc.destination);
+        rec.startTimeUtc = task->startTimeUtc;
+        rec.endTimeUtc = task->endTimeUtc.isValid() ? task->endTimeUtc : QDateTime::currentDateTimeUtc();
+
+        if (rec.startTimeUtc.isValid() && rec.endTimeUtc.isValid()) {
+            rec.durationMs = std::max<qint64>(0, rec.startTimeUtc.msecsTo(rec.endTimeUtc));
+        } else {
+            rec.durationMs = 0;
+        }
+
+        rec.totalBytes = task->totalBytes;
+        rec.processedBytes = task->processedBytes;
+
+        if (task->averageSpeedBytesPerSecond > 0) {
+            rec.averageSpeedBytesPerSecond = task->averageSpeedBytesPerSecond;
+        } else if (rec.durationMs > 500 && task->processedBytes > 0) {
+            rec.averageSpeedBytesPerSecond = static_cast<quint64>((task->processedBytes * 1000ULL) / rec.durationMs);
+        }
+
+        rec.errorCode = task->errorCode;
+        rec.errorText = task->errorText;
+        rec.title = task->desc.title;
+        rec.itemCount = task->desc.sources.size();
+
+        m_historyManager->addRecord(rec, true);
     }
 
     int cancelQueuedImpl()
@@ -1851,4 +1918,6 @@ private:
     bool m_queueChangedPending = false;
     bool m_wasIdle = true;
     bool m_lastDraining = false;
+    TransferHistoryManager *m_ownedHistoryManager = nullptr;
+    TransferHistoryManager *m_historyManager = nullptr;
 };

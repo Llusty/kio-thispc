@@ -804,6 +804,9 @@ protected:
                 m_queueController->saveSettings(queueSettings);
                 queueSettings.sync();
             }
+            if (m_queueController->historyManager()) {
+                m_queueController->historyManager()->flushSync();
+            }
             m_queueController->beginShutdown();
         }
 

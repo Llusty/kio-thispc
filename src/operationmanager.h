@@ -949,6 +949,10 @@ public:
     OperationWindow *detailedWindow() const { return m_detailedWindow; }
     void setDetailedWindow(OperationWindow *window);
     TransferNotificationManager *notificationManager() const { return m_notificationManager; }
+    TransferHistoryManager *historyManager() const
+    {
+        return m_queueController ? m_queueController->historyManager() : nullptr;
+    }
     OperationPopup *popup() const { return m_popup; }
     void onOperationTracked();
     void checkAutoCloseOrStopTimer();

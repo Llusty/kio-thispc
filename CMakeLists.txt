@@ -139,6 +139,7 @@ add_executable(thispc-view
     src/transferqueuesettings.h
     src/transferqueueui.h
     src/transfernotificationmanager.h
+    src/transferhistorymanager.h
     src/operationmanager.h
     src/propertieshidden.h
     src/propertiesposixmode.h
@@ -306,6 +307,7 @@ add_executable(thispc-view-stage3c1-test EXCLUDE_FROM_ALL
     src/transferqueuesettings.h
     src/transferqueueui.h
     src/transfernotificationmanager.h
+    src/transferhistorymanager.h
     src/operationmanager.h
     src/propertieshidden.h
     src/propertiesposixmode.h

@@ -475,7 +475,7 @@ When standard operations receive permission denied errors, provide targeted `adm
 **Planned:** accepted future work assigned to target versions (`0.45.0–0.48.0`), not yet implemented.
 
 ### 0.45.0 — Notifications + Operation History Extensions
-- **Stage 1 — KDE Plasma Notifications:** ✅ IMPLEMENTED / AUTOMATED PASS / MANUAL ACCEPTED (7/7)
+- **Stage 1 — KDE Plasma Notifications:** ✅ CLOSED / IMPLEMENTED / AUTOMATED PASS / MANUAL ACCEPTED (7/7)
   - Native KDE Plasma desktop notifications via `KF6::Notifications` (`TransferNotificationManager`) for completed and failed Copy/Move transfers running in the background;
   - Accurate observer detection (`isUserObserving()`): suppressed when ThisPC window is active, dispatched when ThisPC is inactive or minimized;
   - Error notifications dispatched unconditionally regardless of focus; cancelled operations emit no notifications;
@@ -484,9 +484,31 @@ When standard operations receive permission denied errors, provide targeted `adm
   - Standard `DefaultEvent` fallback and `data/org.kde.thispcview.notifyrc` specification matching desktop-entry `org.kde.thispcview`;
   - 13/13 automated test scenarios pass (74 assertions), full regression suite 78/78 PASS;
   - Manual acceptance: 7/7 PASS (A: background copy, B: active suppression, C: minimized window, D: error notification, E: cancel suppression, F: settings toggle & restart persistence, G: 6-task batch coalescing).
-- **Stage 2 — Persistent / Extended Operation History:** (Planned)
-  - Persistent/extended operation history log with source, destination, timestamps, and result diagnostics, building upon the in-session history cards introduced in the 0.44.0 Unified Operations Manager;
-  - Unification of history state between `OperationWindow` and `OperationPopup` toolbar popover (UX Backlog Item C).
+- **Stage 2 — Persistent / Extended Operation History:** (In Progress)
+  - **Stage 2.1 — Persistent History Model & Safe Storage:** ✅ IMPLEMENTED / AUTOMATED PASS (20/20 test suites, 1637 assertions)
+    - Value-type descriptor `TransferHistoryRecord` and thread-safe, non-blocking `TransferHistoryManager`;
+    - JSON serialization with schema versioning (`schemaVersion: 1`), XDG State location (`~/.local/state/kio-thispc/thispc-view/operations_history.json`);
+    - FIFO ring buffer (200 records), atomic write via `QSaveFile`, multi-process lock via `QLockFile` (500 ms timeout), 0600 file permissions;
+    - Security Gate A & B: generation/epoch mechanism (`historyEpoch`), symlink rejection, corrupted JSON backup preservation (`.corrupted.<ts>.<N>`), CRDT local delta synchronization.
+  - **Stage 2.2 — Production Transfer History Integration:** ✅ IMPLEMENTED / AUTOMATED PASS (36/36 test suites, 1804 assertions) / MANUAL ACCEPTED (6/6)
+    - Full end-to-end integration of `TransferHistoryManager` into `TransferQueueController`;
+    - Temporal metadata: `enqueuedTimeUtc`, `startTimeUtc`, `endTimeUtc`, 64-bit volume accuracy (`totalBytes`, `processedBytes`), `durationMs`, average speed, KIO error codes and diagnostics;
+    - Strict idempotency (`historyRecorded` guard) and fault isolation (history storage failures never abort or alter Copy/Move jobs);
+    - Security Gate A verified: `clear()` in Instance A increments disk epoch, preventing delayed writes from Instance B from resurrecting wiped history;
+    - Safe shutdown: `flushSync()` synchronous debounced save flush upon window close and controller destruction;
+    - Manual acceptance 6/6 PASS: A (single Copy Completed), B (multi-file Copy Completed, itemCount=2), C (Copy Failed, errorCode=100 with KDE notification), D (3 records preserved across restarts), E (Move Completed, persistent record), F (Copy Cancelled, persistent record, source preserved, no partial destination or staging).
+  - **Stage 2.3 — OperationWindow History Integration & UX Polish:** (Planned)
+    - Integration of persistent history records with existing `OperationWindow` (no separate bespoke window without explicit decision);
+    - Presentation of completed/terminal operations loaded from `TransferHistoryManager`;
+    - Resolution of **UX Item A**: compact initial window geometry (~580×380 px) matching accepted screenshot layout without excessive vertical blank space, preserving manual resizing, multi-task scrolling, Wayland and HiDPI scaling;
+    - Resolution of **UX Item B**: speed graph polish on instantaneous transfers (suppress "Waiting for speed samples…" after rapid transfers under 500 ms; display clear completed status).
+  - **Stage 2.4 — OperationPopup History Integration & Consistency:** (Planned)
+    - Integration of history with toolbar `OperationPopup`;
+    - Resolution of **UX Item C**: eliminate misleading "No history" in `OperationPopup` while completed transfers exist; unified data model.
+  - **Stage 2.5 — History Settings, Retention Policy & Multi-Instance Final Acceptance:** (Planned)
+    - Configurable history retention limits and clear-history action;
+    - Multi-instance concurrent synchronization verification;
+    - Final end-to-end regression and manual acceptance closure of Stage 2.
 - **Stage 3 — Safe Retry for Eligible Operations:** (Planned)
   - Safe retry for eligible failed operations.
 - **Stage 4 — Show in Folder Action:** (Planned)

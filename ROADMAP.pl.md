@@ -577,7 +577,7 @@ Gdy zwykła operacja plikowa zakończy się błędem braku uprawnień (Permissio
 **Zaplanowane:** przyjęte przyszłe prace przypisane do docelowych wersji (`0.45.0–0.48.0`), jeszcze niezaimplementowane.
 
 ### 0.45.0 — Powiadomienia i rozbudowa historii operacji (Notifications + Operation History Extensions)
-- **Etap 1 — Powiadomienia pulpitu KDE Plasma:** ✅ IMPLEMENTED / AUTOMATED PASS / MANUAL ACCEPTED (7/7)
+- **Etap 1 — Powiadomienia pulpitu KDE Plasma:** ✅ CLOSED / IMPLEMENTED / AUTOMATED PASS / MANUAL ACCEPTED (7/7)
   - Natywne powiadomienia pulpitu KDE Plasma przez `KF6::Notifications` (`TransferNotificationManager`) informujące o ukończonych lub zakończonych błędem operacjach Kopiuj/Przenieś działających w tle;
   - Precyzyjne wykrywanie obserwacji okna (`isUserObserving()`): powiadomienia sukcesu wyciszane przy aktywnym oknie ThisPC, wysyłane przy oknie nieaktywnym lub zminimalizowanym;
   - Powiadomienia o błędach wysyłane bezwarunkowo niezależnie od fokusu; operacje anulowane nie generują powiadomień;
@@ -586,9 +586,31 @@ Gdy zwykła operacja plikowa zakończy się błędem braku uprawnień (Permissio
   - Standardowe zdarzenia awaryjne `DefaultEvent` i definicja `data/org.kde.thispcview.notifyrc` powiązana z `desktop-entry` `org.kde.thispcview`;
   - 13/13 scenariuszy testów automatycznych PASS (74 asercje), pełna regresja 78/78 PASS;
   - Odbiór manualny użytkownika: 7/7 PASS (A: kopiowanie w tle, B: wyciszenie przy aktywnym oknie, C: zminimalizowane okno, D: błąd transferu, E: brak powiadomienia przy anulowaniu, F: przełączanie i trwałość ustawienia, G: agregacja 6 transferów).
-- **Etap 2 — Trwały i rozszerzony dziennik historii operacji:** (Planowane)
-  - Trwały/rozszerzony dziennik historii operacji ze ścieżkami źródła, celu, znacznikami czasu i diagnostyką wyniku, rozwijający karty historii bieżącej sesji wprowadzone w Zintegrowanym Menedżerze Operacji w wersji 0.44.0;
-  - Ujednolicenie stanu historii pomiędzy oknem szczegółowym `OperationWindow` a wysuwanym panelem `OperationPopup` (Zagadnienie UX C).
+- **Etap 2 — Trwały i rozszerzony dziennik historii operacji:** (W toku)
+  - **Etap 2.1 — Model trwałej historii i bezpieczny magazyn:** ✅ IMPLEMENTED / AUTOMATED PASS (20/20 zestawów testów, 1637 asercji)
+    - Deskryptor wartościowy `TransferHistoryRecord` oraz wielowątkowy, nieblokujący `TransferHistoryManager`;
+    - Serializacja JSON z wersjonowaniem schematu (`schemaVersion: 1`), standardowa lokalizacja XDG State (`~/.local/state/kio-thispc/thispc-view/operations_history.json`);
+    - Bufor pierścieniowy FIFO (200 rekordów), atomowy zapis przez `QSaveFile`, blokada wieloprocesowa przez `QLockFile` (limit 500 ms), uprawnienia prywatne 0600;
+    - Bezpieczeństwo i bramki: mechanizm epok/generacji (`historyEpoch`), blokada symlinków, zachowanie uszkodzonych plików (`.corrupted.<ts>.<N>`), synchronizacja deltowa CRDT.
+  - **Etap 2.2 — Integracja z produkcyjną kolejką transferów:** ✅ IMPLEMENTED / AUTOMATED PASS (36/36 zestawów testów, 1804 asercje) / MANUAL ACCEPTED (6/6)
+    - Bezpieczne podłączenie `TransferHistoryManager` do produkcyjnego przepływu `TransferQueueController`;
+    - Pełne metadane temporalne: `enqueuedTimeUtc`, `startTimeUtc`, `endTimeUtc`, dokładność 64-bitowych bajtów (`totalBytes`, `processedBytes`), `durationMs`, średnia prędkość, kody błędów KIO i opisy diagnostyczne;
+    - Ścisła idempotencja (flaga `historyRecorded`) oraz pełna izolacja błędów magazynu (awaria zapisu historii nie przerywa ani nie unieważnia transferu Copy/Move);
+    - Zweryfikowana bramka Security Gate A: `clear()` w procesie A podbija epokę na dysku, uniemożliwiając procesowi B wskrzeszenie wyczyszczonej historii;
+    - Bezpieczne zamykanie: synchroniczne opróżnienie zapisu (`flushSync()`) przy zamykaniu okna i niszczeniu kontrolera;
+    - Odbiór manualny użytkownika 6/6 PASS: A (pojedynczy Copy Completed), B (wieloplikowy Copy Completed, itemCount=2), C (Copy Failed, errorCode=100 z powiadomieniem KDE), D (3 rekordy zachowane po restarcie), E (Move Completed z trwałym rekordem), F (Copy Cancelled, trwały rekord, źródło nienaruszone, brak częściowego celu i stagingu).
+  - **Etap 2.3 — Integracja trwałej historii z OperationWindow i szlify UX:** (Planowane)
+    - Integracja trwałych rekordów historii z istniejącym oknem `OperationWindow` (bez tworzenia osobnego dedykowanego okna bez odrębnej decyzji użytkownika);
+    - Prezentacja operacji terminalnych/zakończonych pobieranych z `TransferHistoryManager`;
+    - Rozwiązanie **Zagadnienia UX A**: docelowy kompaktowy rozmiar startowy okna (ok. 580×380 px), zgodny z zaakceptowanym zrzutem, bez nadmiaru pustej przestrzeni pionowej, z zachowaniem ręcznego skalowania, przewijania wielu zadań, Wayland i skalowania HiDPI;
+    - Rozwiązanie **Zagadnienia UX B**: brak oczekiwania na próbki po zakończeniu szybkiego transferu (wyeliminowanie „Oczekiwanie na próbki prędkości…” po operacjach poniżej 500 ms; czytelny stan ukończenia).
+  - **Etap 2.4 — Integracja historii z OperationPopup i spójność:** (Planowane)
+    - Integracja historii z wysuwanym panelem `OperationPopup`;
+    - Rozwiązanie **Zagadnienia UX C**: usunięcie mylącego komunikatu „Brak historii” w `OperationPopup`, gdy w oknie szczegółowym istnieją ukończone transfery; ujednolicony model danych.
+  - **Etap 2.5 — Ustawienia historii, retencja, synchronizacja wieloinstancyjna i odbiór końcowy:** (Planowane)
+    - Konfigurowalne limity retencji i czyszczenie historii;
+    - Weryfikacja współbieżnej synchronizacji wielu instancji;
+    - Końcowa regresja całości i odbiór Stage 2.
 - **Etap 3 — Bezpieczne ponawianie operacji kwalifikujących się do powtórzenia:** (Planowane)
   - Bezpieczne ponawianie dla nieudanych operacji kwalifikujących się do powtórzenia.
 - **Etap 4 — Akcja „Pokaż w folderze”:** (Planowane)
