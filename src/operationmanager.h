@@ -952,9 +952,15 @@ public:
     TransferNotificationManager *notificationManager() const { return m_notificationManager; }
     TransferHistoryManager *historyManager() const
     {
+        if (m_historyManager) {
+            return m_historyManager;
+        }
         return m_queueController ? m_queueController->historyManager() : nullptr;
     }
+    void setHistoryManager(TransferHistoryManager *manager);
     OperationPopup *popup() const { return m_popup; }
+    QToolButton *button() const { return m_button; }
+    QLabel *badgeLabel() const { return m_badgeLabel; }
     void onOperationTracked();
     void checkAutoCloseOrStopTimer();
 
@@ -1140,6 +1146,7 @@ private:
                     return;
                 }
 
+                updateSummary();
                 updatePopupHeight();
                 m_popup->positionNear(m_button);
                 m_popup->show();
@@ -1277,6 +1284,36 @@ private:
         const int queueQueued = m_queueController ? m_queueController->queuedCount() : 0;
         const int totalActive = isUnified ? (active + queueActive) : active;
 
+        int queueFinished = 0;
+        int queuePercentSum = 0;
+        QSet<QString> activeOrRecentHistoryUuids;
+        if (m_queueController) {
+            const TransferQueueSnapshot queueSnapshot = m_queueController->snapshot();
+            const TransferQueueCounts qCounts = transferQueueCounts(queueSnapshot);
+            queueFinished = qCounts.completed + qCounts.cancelled + qCounts.failed;
+            for (const auto &task : queueSnapshot.tasks) {
+                if (!task.historyUuid.isEmpty()) {
+                    activeOrRecentHistoryUuids.insert(task.historyUuid);
+                }
+                if (task.state == TransferTaskState::Running) {
+                    queuePercentSum += qBound(0, task.percent, 100);
+                }
+            }
+        }
+
+        int archivalHistoryCount = 0;
+        TransferHistoryManager *histMgr = historyManager();
+        if (histMgr) {
+            const QList<TransferHistoryRecord> allHistory = histMgr->records();
+            for (const auto &rec : allHistory) {
+                if (!activeOrRecentHistoryUuids.contains(rec.uuid)) {
+                    ++archivalHistoryCount;
+                }
+            }
+        }
+
+        const int totalHistoryCount = completed + queueFinished + archivalHistoryCount;
+
         const bool empty = m_items.isEmpty();
 
         m_popup->m_emptyLabel->setVisible(empty);
@@ -1288,13 +1325,42 @@ private:
                 m_popup->m_emptyLabel->setText(
                     trLocal("Aktywne transfery w kolejce operacji.\nKliknij przycisk powyżej, aby otworzyć szczegóły.",
                             "Active transfers in operation queue.\nClick the button above to view details."));
+                if (queueActive > 0 && queueQueued > 0) {
+                    m_popup->m_summaryLabel->setText(
+                        isPolish()
+                            ? QStringLiteral("W toku: %1 • W kolejce: %2").arg(queueActive).arg(queueQueued)
+                            : QStringLiteral("Running: %1 • Queued: %2").arg(queueActive).arg(queueQueued));
+                } else if (queueActive > 0) {
+                    m_popup->m_summaryLabel->setText(
+                        isPolish()
+                            ? (totalHistoryCount > 0
+                                  ? QStringLiteral("W toku: %1 • Historia: %2").arg(queueActive).arg(totalHistoryCount)
+                                  : QStringLiteral("W toku: %1").arg(queueActive))
+                            : (totalHistoryCount > 0
+                                  ? QStringLiteral("Running: %1 • History: %2").arg(queueActive).arg(totalHistoryCount)
+                                  : QStringLiteral("Running: %1").arg(queueActive)));
+                } else {
+                    m_popup->m_summaryLabel->setText(
+                        isPolish()
+                            ? (totalHistoryCount > 0
+                                  ? QStringLiteral("W kolejce: %1 • Historia: %2").arg(queueQueued).arg(totalHistoryCount)
+                                  : QStringLiteral("W kolejce: %1").arg(queueQueued))
+                            : (totalHistoryCount > 0
+                                  ? QStringLiteral("Queued: %1 • History: %2").arg(queueQueued).arg(totalHistoryCount)
+                                  : QStringLiteral("Queued: %1").arg(queueQueued)));
+                }
+            } else if (totalHistoryCount > 0) {
+                m_popup->m_emptyLabel->setText(
+                    isPolish()
+                        ? QStringLiteral("Brak aktywnych operacji plikowych.\nZapisana historia: %1 (kliknij przycisk powyżej).").arg(totalHistoryCount)
+                        : QStringLiteral("No active file operations.\nSaved history: %1 (click the button above).").arg(totalHistoryCount));
                 m_popup->m_summaryLabel->setText(
                     isPolish()
-                        ? QStringLiteral("W toku: %1 • W kolejce: %2").arg(queueActive).arg(queueQueued)
-                        : QStringLiteral("Running: %1 • Queued: %2").arg(queueActive).arg(queueQueued));
+                        ? QStringLiteral("Historia: %1").arg(totalHistoryCount)
+                        : QStringLiteral("History: %1").arg(totalHistoryCount));
             } else {
                 m_popup->m_emptyLabel->setText(
-                    trLocal("Brak operacji plikowych.", "No file operations."));
+                    trLocal("Brak operacji plikowych i historii.", "No file operations or history."));
                 m_popup->m_summaryLabel->setText(
                     trLocal("Brak historii", "No history"));
             }
@@ -1303,20 +1369,21 @@ private:
                 isPolish()
                     ? QStringLiteral("%1 w toku • %2 zakończone")
                         .arg(totalActive)
-                        .arg(completed)
+                        .arg(totalHistoryCount)
                     : QStringLiteral("%1 active • %2 completed")
                         .arg(totalActive)
-                        .arg(completed));
+                        .arg(totalHistoryCount));
         } else {
             m_popup->m_summaryLabel->setText(
                 isPolish()
-                    ? QStringLiteral("Zakończone: %1").arg(completed)
-                    : QStringLiteral("Completed: %1").arg(completed));
+                    ? QStringLiteral("Zakończone: %1").arg(totalHistoryCount)
+                    : QStringLiteral("Completed: %1").arg(totalHistoryCount));
         }
 
         m_popup->m_overallProgress->setVisible(totalActive > 0);
+        const int combinedPercentSum = sumPercent + queuePercentSum;
         m_popup->m_overallProgress->setValue(
-            active > 0 ? (sumPercent / active) : 0);
+            totalActive > 0 ? (combinedPercentSum / totalActive) : 0);
 
         m_popup->m_cancelAllButton->setVisible(totalActive > 0);
         m_popup->m_clearFinishedButton->setVisible(completed > 0);
@@ -1350,31 +1417,48 @@ private:
                     : QStringLiteral("view-task"),
                 QStringLiteral("system-run")));
 
-        if (empty && totalActive == 0) {
-            m_button->setToolTip(
-                trLocal(
-                    "Operacje plikowe — brak historii",
-                    "File operations — no history"));
+        if (empty && totalActive == 0 && queueQueued == 0) {
+            if (totalHistoryCount > 0) {
+                m_button->setToolTip(
+                    isPolish()
+                        ? QStringLiteral("Operacje plikowe — historia: %1").arg(totalHistoryCount)
+                        : QStringLiteral("File operations — history: %1").arg(totalHistoryCount));
+            } else {
+                m_button->setToolTip(
+                    trLocal(
+                        "Operacje plikowe — brak historii",
+                        "File operations — no history"));
+            }
         } else if (totalActive > 0) {
+            if (queueQueued > 0) {
+                m_button->setToolTip(
+                    isPolish()
+                        ? QStringLiteral("Operacje plikowe — %1 w toku, %2 w kolejce")
+                            .arg(totalActive).arg(queueQueued)
+                        : QStringLiteral("File operations — %1 active, %2 queued")
+                            .arg(totalActive).arg(queueQueued));
+            } else {
+                m_button->setToolTip(
+                    isPolish()
+                        ? QStringLiteral("Operacje plikowe — %1 w toku, %2 zakończone")
+                            .arg(totalActive).arg(totalHistoryCount)
+                        : QStringLiteral("File operations — %1 active, %2 completed")
+                            .arg(totalActive).arg(totalHistoryCount));
+            }
+        } else if (queueQueued > 0) {
             m_button->setToolTip(
                 isPolish()
-                    ? QStringLiteral(
-                        "Operacje plikowe — %1 w toku, %2 zakończone")
-                        .arg(totalActive)
-                        .arg(completed)
-                    : QStringLiteral(
-                        "File operations — %1 active, %2 completed")
-                        .arg(totalActive)
-                        .arg(completed));
+                    ? QStringLiteral("Operacje plikowe — %1 w kolejce, historia: %2").arg(queueQueued).arg(totalHistoryCount)
+                    : QStringLiteral("File operations — %1 queued, history: %2").arg(queueQueued).arg(totalHistoryCount));
         } else {
             m_button->setToolTip(
                 isPolish()
                     ? QStringLiteral(
                         "Operacje plikowe — zakończone: %1")
-                        .arg(completed)
+                        .arg(totalHistoryCount)
                     : QStringLiteral(
                         "File operations — completed: %1")
-                        .arg(completed));
+                        .arg(totalHistoryCount));
         }
 
         // Stage 3 fix: the demo queue summary is shown on a separate line and
@@ -1382,16 +1466,36 @@ private:
         if (m_popup->m_queueSummaryLabel) {
             if (m_queueController) {
                 const bool isProd = isTransferQueueProductionDispatchConnected();
-                m_popup->m_queueSummaryLabel->setText(
-                    isPolish()
-                        ? (isProd
-                              ? QStringLiteral("Kolejka: %1 w toku • %2 oczekuje")
-                              : QStringLiteral("Kolejka demonstracyjna: %1 w toku • %2 oczekuje"))
-                              .arg(queueActive).arg(queueQueued)
-                        : (isProd
-                              ? QStringLiteral("Queue: %1 running • %2 waiting")
-                              : QStringLiteral("Demo queue: %1 running • %2 waiting"))
-                              .arg(queueActive).arg(queueQueued));
+                if (queueActive > 0 || queueQueued > 0) {
+                    m_popup->m_queueSummaryLabel->setText(
+                        isPolish()
+                            ? (isProd
+                                  ? QStringLiteral("Kolejka: %1 w toku • %2 oczekuje")
+                                  : QStringLiteral("Kolejka demonstracyjna: %1 w toku • %2 oczekuje"))
+                                  .arg(queueActive).arg(queueQueued)
+                            : (isProd
+                                  ? QStringLiteral("Queue: %1 running • %2 waiting")
+                                  : QStringLiteral("Demo queue: %1 running • %2 waiting"))
+                                  .arg(queueActive).arg(queueQueued));
+                } else if (totalHistoryCount > 0) {
+                    m_popup->m_queueSummaryLabel->setText(
+                        isPolish()
+                            ? (isProd
+                                  ? QStringLiteral("Kolejka bezczynna • Zapisana historia: %1").arg(totalHistoryCount)
+                                  : QStringLiteral("Kolejka: bezczynna • Zapisana historia: %1").arg(totalHistoryCount))
+                            : (isProd
+                                  ? QStringLiteral("Queue idle • Saved history: %1").arg(totalHistoryCount)
+                                  : QStringLiteral("Queue: idle • Saved history: %1").arg(totalHistoryCount)));
+                } else {
+                    m_popup->m_queueSummaryLabel->setText(
+                        isPolish()
+                            ? (isProd
+                                  ? QStringLiteral("Kolejka: 0 w toku • 0 oczekuje")
+                                  : QStringLiteral("Kolejka demonstracyjna: 0 w toku • 0 oczekuje"))
+                            : (isProd
+                                  ? QStringLiteral("Queue: 0 running • 0 waiting")
+                                  : QStringLiteral("Demo queue: 0 running • 0 waiting")));
+                }
                 m_popup->m_queueSummaryLabel->setToolTip(
                     trLocal("Szczegóły: otwórz główne okno operacji",
                             "Details: open main operations window"));
@@ -1421,6 +1525,7 @@ private:
     OperationPopup *m_popup = nullptr;
     OperationWindow *m_detailedWindow = nullptr;
     TransferNotificationManager *m_notificationManager = nullptr;
+    QPointer<TransferHistoryManager> m_historyManager;
     QPointer<TransferQueueController> m_queueController;
     QList<FileOperationItem *> m_items;
     QHash<KJob *, FileOperationItem *> m_byJob;
@@ -1917,6 +2022,9 @@ public:
         if (m_manager && m_manager->queueController()) {
             setQueueController(m_manager->queueController());
         }
+        if (m_manager && m_manager->historyManager()) {
+            setHistoryManager(m_manager->historyManager());
+        }
         rebuild();
     }
 
@@ -2022,8 +2130,12 @@ public:
             disconnect(m_queueController, nullptr, this, nullptr);
         }
         m_queueController = controller;
-        m_queueSettings->setController(controller);
-        m_queueView->setController(controller);
+        if (m_queueSettings) {
+            m_queueSettings->setController(controller);
+        }
+        if (m_queueView) {
+            m_queueView->setController(controller);
+        }
 
         const bool isUnified = isTransferQueueProductionDispatchConnected();
         const bool tabMode = controller != nullptr && !isUnified;
@@ -2078,11 +2190,21 @@ public:
 
         if (controller) {
             if (controller->historyManager()) {
+                disconnect(controller->historyManager(), nullptr, this, nullptr);
                 connect(controller->historyManager(), &TransferHistoryManager::recordsChanged,
                         this, [this] {
                             if (isVisible()) scheduleRebuild();
                         });
             }
+            connect(controller, &TransferQueueController::historyManagerChanged,
+                    this, [this](TransferHistoryManager *hm) {
+                        if (hm) {
+                            disconnect(hm, nullptr, this, nullptr);
+                            connect(hm, &TransferHistoryManager::recordsChanged,
+                                    this, [this] { if (isVisible()) scheduleRebuild(); });
+                        }
+                        if (isVisible()) scheduleRebuild();
+                    });
             connect(controller, &TransferQueueController::queueChanged,
                     this, [this] {
                         if (isVisible()) scheduleRebuild();
@@ -2113,6 +2235,34 @@ public:
         }
         updateTabTitles();
         rebuild();
+    }
+
+    void setHistoryManager(TransferHistoryManager *manager)
+    {
+        if (m_explicitHistoryManager == manager) return;
+        if (m_explicitHistoryManager) {
+            disconnect(m_explicitHistoryManager, nullptr, this, nullptr);
+        }
+        m_explicitHistoryManager = manager;
+        if (m_explicitHistoryManager) {
+            connect(m_explicitHistoryManager, &TransferHistoryManager::recordsChanged,
+                    this, [this] { if (isVisible()) scheduleRebuild(); });
+        }
+        if (isVisible()) scheduleRebuild();
+    }
+
+    TransferHistoryManager *historyManager() const
+    {
+        if (m_explicitHistoryManager) {
+            return m_explicitHistoryManager;
+        }
+        if (m_queueController && m_queueController->historyManager()) {
+            return m_queueController->historyManager();
+        }
+        if (m_manager && m_manager->historyManager()) {
+            return m_manager->historyManager();
+        }
+        return nullptr;
     }
 
     int operationsTabCount() const
@@ -2715,17 +2865,6 @@ private:
             return QStringLiteral("< 1 s");
         }
         return etaText(totalSec);
-    }
-
-    TransferHistoryManager *historyManager() const
-    {
-        if (m_queueController && m_queueController->historyManager()) {
-            return m_queueController->historyManager();
-        }
-        if (m_manager && m_manager->historyManager()) {
-            return m_manager->historyManager();
-        }
-        return nullptr;
     }
 
     void addArchivalHistoryCard(const TransferHistoryRecord &rec)
@@ -3576,6 +3715,7 @@ private:
     QSet<QString> m_knownHistoryUuids;
     QSet<QString> m_expandedHistoryUuids;
     QSet<QString> m_dismissedHistoryUuids;
+    QPointer<TransferHistoryManager> m_explicitHistoryManager;
     bool m_rebuildScheduled = false;
     bool m_pointerInteraction = false;
 };
@@ -3612,7 +3752,7 @@ inline void OperationManager::showDetailedWindow()
         ? (m_queueController->activeCount() + m_queueController->queuedCount())
         : 0;
     if (legacyAct == 0 && queueAct == 0) {
-        if (!m_queueController && !isTransferQueueDemoMode()) {
+        if (!m_queueController && !isTransferQueueDemoMode() && (!historyManager() || historyManager()->records().isEmpty())) {
             m_detailedWindow->hide();
             return;
         }
@@ -3641,6 +3781,25 @@ inline void OperationManager::setDetailedWindow(OperationWindow *window)
     if (m_notificationManager) {
         m_notificationManager->setOperationWindow(window);
     }
+}
+
+inline void OperationManager::setHistoryManager(TransferHistoryManager *manager)
+{
+    if (m_historyManager == manager) {
+        return;
+    }
+    if (m_historyManager) {
+        disconnect(m_historyManager, nullptr, this, nullptr);
+    }
+    m_historyManager = manager;
+    if (m_historyManager) {
+        connect(m_historyManager, &TransferHistoryManager::recordsChanged,
+                this, [this] { updateSummary(); });
+    }
+    if (m_detailedWindow) {
+        m_detailedWindow->setHistoryManager(manager);
+    }
+    updateSummary();
 }
 
 inline void OperationManager::setCloseOnComplete(bool close)
@@ -3699,6 +3858,9 @@ inline void OperationManager::setQueueController(TransferQueueController *contro
     }
     if (m_queueController) {
         disconnect(m_queueController, nullptr, this, nullptr);
+        if (m_queueController->historyManager()) {
+            disconnect(m_queueController->historyManager(), nullptr, this, nullptr);
+        }
     }
     m_queueController = controller;
     if (m_queueController) {
@@ -3711,6 +3873,20 @@ inline void OperationManager::setQueueController(TransferQueueController *contro
         m_notificationManager->setQueueController(controller);
     }
     if (m_queueController) {
+        if (m_queueController->historyManager()) {
+            disconnect(m_queueController->historyManager(), nullptr, this, nullptr);
+            connect(m_queueController->historyManager(), &TransferHistoryManager::recordsChanged,
+                    this, [this] { updateSummary(); });
+        }
+        connect(m_queueController, &TransferQueueController::historyManagerChanged,
+                this, [this](TransferHistoryManager *hm) {
+                    if (hm) {
+                        disconnect(hm, nullptr, this, nullptr);
+                        connect(hm, &TransferHistoryManager::recordsChanged,
+                                this, [this] { updateSummary(); });
+                    }
+                    updateSummary();
+                });
         connect(m_queueController, &TransferQueueController::queueChanged,
                 this, [this] {
                     updateSummary();
@@ -3736,6 +3912,10 @@ inline void OperationManager::setQueueController(TransferQueueController *contro
                 this, [this](quint64, TransferTaskState) {
                     updateSummary();
                     checkAutoCloseOrStopTimer();
+                });
+        connect(m_queueController, &TransferQueueController::taskProgressChanged,
+                this, [this](quint64, quint64, quint64, int) {
+                    updateSummary();
                 });
         connect(m_queueController, &TransferQueueController::closeWindowOnCompleteChanged,
                 this, &OperationManager::setCloseOnComplete);

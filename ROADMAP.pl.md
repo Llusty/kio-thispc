@@ -611,9 +611,17 @@ Gdy zwykła operacja plikowa zakończy się błędem braku uprawnień (Permissio
     - Rozwiązanie **Zagadnienia UX B**: eliminacja komunikatu „Oczekiwanie na próbki prędkości…” po szybkich transferach (< 500 ms) i jednoznaczny status ukończenia („Transfer ukończony natychmiastowo” / „Transfer anulowany” / „Transfer zakończony niepowodzeniem”);
     - Zestaw testów automatycznych: 10 nowych zestawów (łącznie 46 zestawów historii, 1863 asercje PASS), pełna regresja 79/79 PASS;
     - Odbiór manualny użytkownika 6/6 PASS: A (5 kart archiwalnych po starcie), B (szczegóły, ukrywanie i przywrócenie po restarcie), C (deduplikacja przy kopiowaniu), D (kompaktowy rozmiar 580×380 px i zapamiętywanie geometrii), E (wykres prędkości przy transferze natychmiastowym i 20 MB), F (bezpieczne rozwijanie, odłączone nośniki, przewijanie i integralność bazy).
-  - **Etap 2.4 — Integracja historii z OperationPopup i spójność:** (Planowane)
-    - Integracja historii z wysuwanym panelem `OperationPopup`;
-    - Rozwiązanie **Zagadnienia UX C**: usunięcie mylącego komunikatu „Brak historii” w `OperationPopup`, gdy w oknie szczegółowym istnieją ukończone transfery; ujednolicony model danych.
+  - **Etap 2.4 — Integracja historii z OperationPopup i UX C:** ✅ IMPLEMENTED / AUTOMATED PASS / MANUAL ACCEPTED (6/6)
+    - Pełna integracja trwałej historii (`TransferHistoryManager`) z wysuwanym panelem paska narzędzi `OperationPopup`;
+    - Rozwiązanie **Zagadnienia UX C**: całkowite wyeliminowanie mylącego komunikatu „Brak historii” w `OperationPopup`, gdy w bazie i oknie szczegółowym istnieją operacje;
+    - Zunifikowany model deduplikacji (`historyUuid`) gwarantujący precyzyjne zliczanie operacji aktywnych, oczekujących i archiwalnych bez duplikatów;
+    - Neutralna terminologia: prezentacja etykiety „Historia: N” / „History: N” dla mieszanych statusów końcowych (Completed, Failed, Cancelled) bez błędnego nazywania wszystkiego „Zakończone”;
+    - Precyzyjna obsługa pustego stanu: komunikat „Brak operacji plikowych i historii.” wyświetlany wyłącznie wtedy, gdy magazyn historii jest faktycznie pusty;
+    - Reaktywne, nieblokujące odświeżanie podsumowania w odpowiedzi na sygnały `recordsChanged` i `historyManagerChanged` bez odczytów dyskowych przy otwieraniu panelu;
+    - Pełna spójność między `OperationPopup` i `OperationWindow`, z płynnym otwieraniem okna szczegółowego przez `m_showDetailsButton`;
+    - Zachowanie kompaktowych wymiarów panelu podręcznego i ograniczonej wysokości (~180–200 px w stanie spoczynku);
+    - Zestaw testów automatycznych: 8 nowych zestawów (łącznie 54 zestawy historii, 1897 asercji PASS), pełna regresja 79/79 PASS;
+    - Odbiór manualny użytkownika 6/6 PASS: A (7 wpisów archiwalnych poprawnie wyświetlonych po starcie), B (otwarcie OperationWindow z panelu z 7 zgodnymi kartami), C (aktualizacja na żywo podczas transferów, plakietka, liczniki, skopiowanie 2 plików), D (przywrócenie 9 rekordów po pełnym restarcie), E (czysty profil z pustą historią poprawnie pokazuje brak operacji), F (spójność obydwu widoków i integralność bazy z 9 rekordami).
   - **Etap 2.5 — Ustawienia historii, retencja, synchronizacja wieloinstancyjna i odbiór końcowy:** (Planowane)
     - Konfigurowalne limity retencji i czyszczenie historii;
     - Weryfikacja współbieżnej synchronizacji wielu instancji;

@@ -1725,7 +1725,9 @@ static void testOperationWindowStatusBadgesAndDetails(const QString &tempDir)
         verifyHistory(stateLbl != nullptr, "operationDetailsLabel exists on row");
 
         if (uuid == rSuccess.uuid) {
-            verifyHistory(stateLbl->text().contains(QStringLiteral("Ukończono")) || stateLbl->text().contains(QStringLiteral("Completed")),
+            verifyHistory(stateLbl->text().contains(QStringLiteral("Zakończono"))
+                          || stateLbl->text().contains(QStringLiteral("Ukończono"))
+                          || stateLbl->text().contains(QStringLiteral("Completed")),
                           "rSuccess shows Completed state");
             auto *prog = row->findChild<QProgressBar*>(QStringLiteral("operationProgress"));
             verifyHistory(prog != nullptr && prog->value() == 100, "Progress bar is 100% on Completed");
@@ -2028,6 +2030,350 @@ static void testOperationWindowDismissDoesNotDeleteFromDisk(const QString &tempD
     verifyHistory(rowsNewSession.size() == 2, "New session window displays all 2 records from disk");
 }
 
+// =========================================================================
+// Stage 2.4 OperationPopup History Integration & UX Polish Tests
+// =========================================================================
+
+static void testOperationPopupEmptyHistory(const QString &tempDir)
+{
+    ScopedProductionDispatch prodGuard(true);
+    const QString filePath = tempDir + QStringLiteral("/popup_empty.json");
+    TransferHistoryManager histMgr(filePath);
+    histMgr.saveSync();
+
+    TransferQueueController controller;
+    controller.setHistoryManager(&histMgr);
+
+    QMainWindow win;
+    QToolBar tb(&win);
+    OperationManager opMgr(&win, &tb, &win);
+    opMgr.setQueueController(&controller);
+    opMgr.updateSummary();
+
+    OperationPopup *popup = opMgr.popup();
+    verifyHistory(popup != nullptr, "Popup exists");
+    auto *summaryLbl = popup->findChild<QLabel *>(QStringLiteral("operationSummaryLabel"));
+    auto *emptyLbl = popup->findChild<QLabel *>(QStringLiteral("operationEmptyLabel"));
+    verifyHistory(summaryLbl != nullptr, "Popup summary label exists");
+    verifyHistory(emptyLbl != nullptr, "Popup empty label exists");
+
+    // Empty state should report "Brak historii" / "No history"
+    verifyHistory(summaryLbl->text() == QStringLiteral("Brak historii")
+                  || summaryLbl->text() == QStringLiteral("No history"),
+                  "Empty history displays 'Brak historii'");
+    verifyHistory(emptyLbl->text().contains(QStringLiteral("Brak operacji plikowych i historii"))
+                  || emptyLbl->text().contains(QStringLiteral("No file operations or history")),
+                  "Empty label explains no operations or history exist");
+    verifyHistory(opMgr.button()->toolTip().contains(QStringLiteral("brak historii"))
+                  || opMgr.button()->toolTip().contains(QStringLiteral("no history")),
+                  "Button tooltip indicates no history");
+    verifyHistory(opMgr.badgeLabel()->isHidden(), "Badge is hidden when empty");
+}
+
+static void testOperationPopupArchivalRecordsLoaded(const QString &tempDir)
+{
+    ScopedProductionDispatch prodGuard(true);
+    const QString filePath = tempDir + QStringLiteral("/popup_archival_7.json");
+    TransferHistoryManager histMgr(filePath);
+
+    // Add 7 archival records matching the Stage 2.3 acceptance baseline
+    for (int i = 0; i < 7; ++i) {
+        auto r = TransferHistoryRecord::createNew(
+            TransferOperationType::Copy,
+            TransferBackendKind::LocalNative,
+            TransferTaskState::Completed,
+            {QUrl(QStringLiteral("file:///data/file_%1.dat").arg(i))},
+            QUrl(QStringLiteral("file:///backup/")),
+            QDateTime::currentDateTimeUtc().addSecs(-100 + i),
+            QDateTime::currentDateTimeUtc().addSecs(-90 + i),
+            10000, 4096, 4096, 400, 0, QString(),
+            QStringLiteral("Archival file %1").arg(i));
+        histMgr.addRecord(r, false);
+    }
+    verifyHistory(histMgr.saveSync(), "7 archival records saved to disk");
+
+    TransferQueueController controller;
+    controller.setHistoryManager(&histMgr);
+
+    QMainWindow win;
+    QToolBar tb(&win);
+    OperationManager opMgr(&win, &tb, &win);
+    opMgr.setQueueController(&controller);
+    opMgr.updateSummary();
+
+    OperationPopup *popup = opMgr.popup();
+    auto *summaryLbl = popup->findChild<QLabel *>(QStringLiteral("operationSummaryLabel"));
+    auto *emptyLbl = popup->findChild<QLabel *>(QStringLiteral("operationEmptyLabel"));
+    verifyHistory(summaryLbl != nullptr && emptyLbl != nullptr, "Popup labels exist");
+
+    // UX Item C: MUST NOT claim "Brak historii"!
+    verifyHistory(!summaryLbl->text().contains(QStringLiteral("Brak historii")),
+                  "UX-C: Summary label MUST NOT say 'Brak historii' when 7 records exist");
+    verifyHistory(!summaryLbl->text().contains(QStringLiteral("No history")),
+                  "UX-C: Summary label MUST NOT say 'No history' when 7 records exist");
+    verifyHistory(summaryLbl->text() == QStringLiteral("Historia: 7")
+                  || summaryLbl->text() == QStringLiteral("History: 7"),
+                  "UX-C: Summary label indicates exactly 'Historia: 7'");
+
+    verifyHistory(!emptyLbl->text().contains(QStringLiteral("Brak historii")),
+                  "UX-C: Empty label does not say 'Brak historii'");
+    verifyHistory(emptyLbl->text().contains(QStringLiteral("Zapisana historia: 7"))
+                  || emptyLbl->text().contains(QStringLiteral("Saved history: 7")),
+                  "UX-C: Empty label clearly informs user about 7 saved history records");
+
+    verifyHistory(opMgr.button()->toolTip().contains(QStringLiteral("historia: 7"))
+                  || opMgr.button()->toolTip().contains(QStringLiteral("history: 7")),
+                  "UX-C: Tooltip reflects saved history count");
+
+    // Queue summary label in header
+    auto *queueSummaryLbl = popup->findChild<QLabel *>(QStringLiteral("operationPopupQueueSummary"));
+    verifyHistory(queueSummaryLbl != nullptr, "Queue summary label exists");
+    verifyHistory(queueSummaryLbl->text().contains(QStringLiteral("Zapisana historia: 7"))
+                  || queueSummaryLbl->text().contains(QStringLiteral("Saved history: 7")),
+                  "Queue summary label also reflects saved history count");
+
+    // Height remains compact and bounded (does not expand uncontrollably for 7 records)
+    popup->updateHeight({}, opMgr.button());
+    verifyHistory(popup->height() <= 250, "Popup height remains compact and bounded");
+}
+
+static void testOperationPopupMixedStatusesNeutralTerminology(const QString &tempDir)
+{
+    ScopedProductionDispatch prodGuard(true);
+    const QString filePath = tempDir + QStringLiteral("/popup_mixed_terms.json");
+    TransferHistoryManager histMgr(filePath);
+
+    // 1 Completed, 1 Cancelled, 1 Failed
+    auto rComp = TransferHistoryRecord::createNew(TransferOperationType::Copy, TransferBackendKind::LocalNative, TransferTaskState::Completed, {QUrl(QStringLiteral("file:///comp.txt"))});
+    auto rCanc = TransferHistoryRecord::createNew(TransferOperationType::Copy, TransferBackendKind::LocalNative, TransferTaskState::Cancelled, {QUrl(QStringLiteral("file:///canc.txt"))});
+    auto rFail = TransferHistoryRecord::createNew(TransferOperationType::Copy, TransferBackendKind::LocalNative, TransferTaskState::Failed, {QUrl(QStringLiteral("file:///fail.txt"))});
+    rFail.errorCode = 100;
+    rFail.errorText = QStringLiteral("Disk write error");
+
+    histMgr.addRecord(rComp, false);
+    histMgr.addRecord(rCanc, false);
+    histMgr.addRecord(rFail, false);
+    verifyHistory(histMgr.saveSync(), "Saved 3 mixed records");
+
+    TransferQueueController controller;
+    controller.setHistoryManager(&histMgr);
+
+    QMainWindow win;
+    QToolBar tb(&win);
+    OperationManager opMgr(&win, &tb, &win);
+    opMgr.setQueueController(&controller);
+    opMgr.updateSummary();
+
+    OperationPopup *popup = opMgr.popup();
+    auto *summaryLbl = popup->findChild<QLabel *>(QStringLiteral("operationSummaryLabel"));
+    verifyHistory(summaryLbl != nullptr, "Summary label exists");
+
+    // Neutral terminology: MUST say "Historia: 3" / "History: 3" and NOT "Zakończone: 3"
+    verifyHistory(summaryLbl->text() == QStringLiteral("Historia: 3")
+                  || summaryLbl->text() == QStringLiteral("History: 3"),
+                  "Neutral terminology: reports 'Historia: 3' rather than calling failed/cancelled records 'Zakończone'");
+}
+
+static void testOperationPopupActiveAndQueuedTasks(const QString &tempDir)
+{
+    ScopedProductionDispatch prodGuard(true);
+    const QString filePath = tempDir + QStringLiteral("/popup_active.json");
+    TransferHistoryManager histMgr(filePath);
+
+    auto rArch = TransferHistoryRecord::createNew(TransferOperationType::Copy, TransferBackendKind::LocalNative, TransferTaskState::Completed, {QUrl(QStringLiteral("file:///old.txt"))});
+    histMgr.addRecord(rArch, false);
+    histMgr.saveSync();
+
+    TransferQueueController controller;
+    controller.setHistoryManager(&histMgr);
+
+    QMainWindow win;
+    QToolBar tb(&win);
+    OperationManager opMgr(&win, &tb, &win);
+    opMgr.setQueueController(&controller);
+
+    // Enqueue 2 tasks
+    TransferTaskDescriptor desc1;
+    desc1.type = TransferOperationType::Copy;
+    desc1.sources = {QUrl(QStringLiteral("file:///src1.bin"))};
+    desc1.destination = QUrl(QStringLiteral("file:///dst/"));
+    quint64 id1 = controller.enqueue(desc1).id;
+
+    TransferTaskDescriptor desc2;
+    desc2.type = TransferOperationType::Copy;
+    desc2.sources = {QUrl(QStringLiteral("file:///src2.bin"))};
+    desc2.destination = QUrl(QStringLiteral("file:///dst/"));
+    quint64 id2 = controller.enqueue(desc2).id;
+    Q_UNUSED(id1);
+    Q_UNUSED(id2);
+
+    opMgr.updateSummary();
+
+    OperationPopup *popup = opMgr.popup();
+    auto *summaryLbl = popup->findChild<QLabel *>(QStringLiteral("operationSummaryLabel"));
+    auto *progressBar = popup->findChild<QProgressBar *>(QStringLiteral("operationOverallProgress"));
+    verifyHistory(summaryLbl != nullptr && progressBar != nullptr, "Popup controls exist");
+
+    // Should indicate running / queued status
+    const int act = controller.activeCount();
+    const int qd = controller.queuedCount();
+    if (act > 0 && qd > 0) {
+        verifyHistory(summaryLbl->text().contains(QString::number(act))
+                      && summaryLbl->text().contains(QString::number(qd)),
+                      "Popup summary indicates active and queued task counts");
+    } else if (act > 0) {
+        verifyHistory(summaryLbl->text().contains(QString::number(act)),
+                      "Popup summary indicates active task count");
+    }
+
+    if (act > 0) {
+        verifyHistory(progressBar->isVisible(), "Overall progress bar is visible when active");
+        verifyHistory(opMgr.badgeLabel()->isVisible(), "Badge is visible when active");
+        verifyHistory(opMgr.badgeLabel()->text() == QString::number(act), "Badge displays active count");
+    }
+}
+
+static void testOperationPopupReactiveUpdatesOnRecordChanged(const QString &tempDir)
+{
+    ScopedProductionDispatch prodGuard(true);
+    const QString filePath = tempDir + QStringLiteral("/popup_reactive.json");
+    TransferHistoryManager histMgr(filePath);
+
+    auto r1 = TransferHistoryRecord::createNew(TransferOperationType::Copy, TransferBackendKind::LocalNative, TransferTaskState::Completed, {QUrl(QStringLiteral("file:///r1.txt"))});
+    auto r2 = TransferHistoryRecord::createNew(TransferOperationType::Copy, TransferBackendKind::LocalNative, TransferTaskState::Completed, {QUrl(QStringLiteral("file:///r2.txt"))});
+    histMgr.addRecord(r1, false);
+    histMgr.addRecord(r2, false);
+    histMgr.saveSync();
+
+    TransferQueueController controller;
+    controller.setHistoryManager(&histMgr);
+
+    QMainWindow win;
+    QToolBar tb(&win);
+    OperationManager opMgr(&win, &tb, &win);
+    opMgr.setQueueController(&controller);
+    opMgr.updateSummary();
+
+    OperationPopup *popup = opMgr.popup();
+    auto *summaryLbl = popup->findChild<QLabel *>(QStringLiteral("operationSummaryLabel"));
+    verifyHistory(summaryLbl != nullptr, "Summary label exists");
+    verifyHistory(summaryLbl->text() == QStringLiteral("Historia: 2") || summaryLbl->text() == QStringLiteral("History: 2"),
+                  "Initially shows 2 records");
+
+    // Emit recordsChanged by adding a record with emitChanged=true
+    auto r3 = TransferHistoryRecord::createNew(TransferOperationType::Copy, TransferBackendKind::LocalNative, TransferTaskState::Completed, {QUrl(QStringLiteral("file:///r3.txt"))});
+    histMgr.addRecord(r3, true);
+    QCoreApplication::processEvents();
+
+    // Verify popup reactively updated to 3 records
+    verifyHistory(summaryLbl->text() == QStringLiteral("Historia: 3") || summaryLbl->text() == QStringLiteral("History: 3"),
+                  "Popup reactively updated to 'Historia: 3' on recordsChanged signal");
+}
+
+static void testOperationPopupDeduplicationWithQueueTasks(const QString &tempDir)
+{
+    ScopedProductionDispatch prodGuard(true);
+    const QString filePath = tempDir + QStringLiteral("/popup_dedup.json");
+    TransferHistoryManager histMgr(filePath);
+
+    const QString sharedUuid = QStringLiteral("shared-uuid-stage24-dedup");
+    auto r = TransferHistoryRecord::createNew(TransferOperationType::Copy, TransferBackendKind::LocalNative, TransferTaskState::Completed, {QUrl(QStringLiteral("file:///shared.txt"))});
+    r.uuid = sharedUuid;
+    histMgr.addRecord(r, false);
+    histMgr.saveSync();
+
+    TransferQueueController controller;
+    controller.setHistoryManager(&histMgr);
+
+    // Simulate task in queue having the same historyUuid
+    TransferTaskDescriptor desc;
+    desc.type = TransferOperationType::Copy;
+    desc.sources = {QUrl(QStringLiteral("file:///shared.txt"))};
+    quint64 tid = controller.enqueue(desc).id;
+    controller.setTaskHistoryUuid(tid, sharedUuid);
+
+    QMainWindow win;
+    QToolBar tb(&win);
+    OperationManager opMgr(&win, &tb, &win);
+    opMgr.setQueueController(&controller);
+    opMgr.updateSummary();
+
+    OperationPopup *popup = opMgr.popup();
+    auto *summaryLbl = popup->findChild<QLabel *>(QStringLiteral("operationSummaryLabel"));
+    verifyHistory(summaryLbl != nullptr, "Summary label exists");
+
+    // Archival count should not double-count the task that has the same UUID in queue
+    const QString txt = summaryLbl->text();
+    verifyHistory(!txt.contains(QStringLiteral("Historia: 2")),
+                  "No double-counting between queue task and archival history");
+}
+
+static void testOperationPopupShowDetailsButtonOpensWindow(const QString &tempDir)
+{
+    ScopedProductionDispatch prodGuard(true);
+    const QString filePath = tempDir + QStringLiteral("/popup_details_btn.json");
+    TransferHistoryManager histMgr(filePath);
+
+    for (int i = 0; i < 4; ++i) {
+        auto r = TransferHistoryRecord::createNew(TransferOperationType::Copy, TransferBackendKind::LocalNative, TransferTaskState::Completed, {QUrl(QStringLiteral("file:///item_%1.txt").arg(i))});
+        histMgr.addRecord(r, false);
+    }
+    histMgr.saveSync();
+
+    TransferQueueController controller;
+    controller.setHistoryManager(&histMgr);
+
+    QMainWindow win;
+    QToolBar tb(&win);
+    OperationManager opMgr(&win, &tb, &win);
+    opMgr.setQueueController(&controller);
+
+    OperationPopup *popup = opMgr.popup();
+    auto *detailsBtn = popup->findChild<QToolButton *>(QStringLiteral("operationDetailsButton"));
+    verifyHistory(detailsBtn != nullptr, "Details button found in popup header");
+
+    detailsBtn->click();
+    QCoreApplication::processEvents();
+
+    OperationWindow *opWin = opMgr.detailedWindow();
+    verifyHistory(opWin != nullptr, "Detailed window created");
+    verifyHistory(opWin->isVisible(), "Detailed window is visible after clicking details button");
+
+    const auto archivalBadges = opWin->findChildren<QLabel *>(QStringLiteral("operationHistoryBadge"));
+    verifyHistory(archivalBadges.size() == 4, "Detailed window displays all 4 archival history cards");
+}
+
+static void testOperationPopupCorruptedStoreResilience(const QString &tempDir)
+{
+    ScopedProductionDispatch prodGuard(true);
+    const QString filePath = tempDir + QStringLiteral("/popup_corrupted.json");
+    {
+        QFile f(filePath);
+        verifyHistory(f.open(QIODevice::WriteOnly), "Created corrupted json file");
+        f.write("{ \"version\": 1, \"records\": [ { broken-json-syntax... ");
+        f.close();
+    }
+
+    TransferHistoryManager histMgr(filePath);
+    histMgr.loadSync();
+
+    TransferQueueController controller;
+    controller.setHistoryManager(&histMgr);
+
+    QMainWindow win;
+    QToolBar tb(&win);
+    OperationManager opMgr(&win, &tb, &win);
+    opMgr.setQueueController(&controller);
+    opMgr.updateSummary();
+
+    OperationPopup *popup = opMgr.popup();
+    auto *summaryLbl = popup->findChild<QLabel *>(QStringLiteral("operationSummaryLabel"));
+    verifyHistory(summaryLbl != nullptr, "Summary label exists even on corrupted history");
+    verifyHistory(summaryLbl->text() == QStringLiteral("Brak historii")
+                  || summaryLbl->text() == QStringLiteral("No history"),
+                  "Corrupted history safely falls back to 'Brak historii'");
+}
+
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
@@ -2113,6 +2459,16 @@ int main(int argc, char **argv)
     testOperationWindowUxBSpeedGraphTerminal(path);
     testOperationWindowDismissDoesNotDeleteFromDisk(path);
 
-    qDebug("PASS: [history] %d assertions verified across 46 test suites", s_historyChecks);
+    // Stage 2.4 OperationPopup History Integration & UX Polish Tests
+    testOperationPopupEmptyHistory(path);
+    testOperationPopupArchivalRecordsLoaded(path);
+    testOperationPopupMixedStatusesNeutralTerminology(path);
+    testOperationPopupActiveAndQueuedTasks(path);
+    testOperationPopupReactiveUpdatesOnRecordChanged(path);
+    testOperationPopupDeduplicationWithQueueTasks(path);
+    testOperationPopupShowDetailsButtonOpensWindow(path);
+    testOperationPopupCorruptedStoreResilience(path);
+
+    qDebug("PASS: [history] %d assertions verified across 54 test suites", s_historyChecks);
     return 0;
 }

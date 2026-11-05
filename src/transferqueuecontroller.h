@@ -428,6 +428,15 @@ public:
     {
         if (m_historyManager == manager) return;
         m_historyManager = manager;
+        Q_EMIT historyManagerChanged(m_historyManager);
+    }
+    // Diagnostic/test helper to set historyUuid on an existing task for deduplication testing
+    void setTaskHistoryUuid(quint64 id, const QString &uuid)
+    {
+        auto it = m_tasks.find(id);
+        if (it != m_tasks.end() && it->second) {
+            it->second->historyUuid = uuid;
+        }
     }
 
     // Stops STARTING further tasks; running tasks are untouched. This is not
@@ -946,6 +955,7 @@ Q_SIGNALS:
     void bandwidthLimitChanged(bool enabled, quint64 bytesPerSec);
     void closeWindowOnCompleteChanged(bool close);
     void desktopNotificationsEnabledChanged(bool enabled);
+    void historyManagerChanged(TransferHistoryManager *manager);
 
 private:
     struct Task {

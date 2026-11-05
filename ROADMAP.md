@@ -509,9 +509,17 @@ When standard operations receive permission denied errors, provide targeted `adm
     - Resolution of **UX Item B**: speed graph polish on instantaneous transfers (suppresses "Waiting for speed samples…" after rapid transfers under 500 ms; displays clear terminal status "Transfer completed instantly" / "Transfer cancelled" / "Transfer failed");
     - Automated test suite: 10 new test suites (46 total history suites, 1863 assertions PASS), full regression 79/79 PASS;
     - Manual acceptance 6/6 PASS: A (5 archival cards loaded on start), B (details, dismiss, and restart restoration), C (deduplication on copy), D (compact 580x380 px geometry and resize persistence), E (speed graph instant vs 20 MB transfer), F (safe expansion, disconnected locations, scrolling, and store integrity).
-  - **Stage 2.4 — OperationPopup History Integration & Consistency:** (Planned)
-    - Integration of history with toolbar `OperationPopup`;
-    - Resolution of **UX Item C**: eliminate misleading "No history" in `OperationPopup` while completed transfers exist; unified data model.
+  - **Stage 2.4 — OperationPopup History Integration & UX C:** ✅ IMPLEMENTED / AUTOMATED PASS / MANUAL ACCEPTED (6/6)
+    - Full integration of persistent history (`TransferHistoryManager`) with toolbar `OperationPopup`;
+    - Resolution of **UX Item C**: eliminated misleading "No history" in `OperationPopup` while archival and completed operations exist;
+    - Unified deduplication model (`historyUuid`) ensuring active, queued, and archival records are counted accurately without duplicates;
+    - Neutral terminology: displays "Historia: N" / "History: N" across mixed terminal statuses (Completed, Failed, Cancelled) instead of mislabeling non-successful operations;
+    - Accurate empty state handling: displays "Brak operacji plikowych i historii." / "No file operations or history." strictly when the history database is genuinely empty;
+    - Reactive, non-blocking summary updates on `recordsChanged` and `historyManagerChanged` without disk I/O on popup open;
+    - Seamless consistency between `OperationPopup` and `OperationWindow`, with quick navigation via `m_showDetailsButton`;
+    - Preserved compact popup geometry and bounded height (~180–200 px in resting state);
+    - Automated test suite: 8 new test suites (54 total history suites, 1897 assertions PASS), full regression 79/79 PASS;
+    - Manual acceptance 6/6 PASS: A (7 archival records correctly displayed on start), B (open OperationWindow from popup with 7 matching cards), C (live update during active transfers, badge, counters, copying 2 files), D (full restart restoration of 9 records), E (clean empty history profile correctly shows no operations), F (dual-view consistency and 9-record store integrity).
   - **Stage 2.5 — History Settings, Retention Policy & Multi-Instance Final Acceptance:** (Planned)
     - Configurable history retention limits and clear-history action;
     - Multi-instance concurrent synchronization verification;
