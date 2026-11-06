@@ -586,7 +586,7 @@ Gdy zwykła operacja plikowa zakończy się błędem braku uprawnień (Permissio
   - Standardowe zdarzenia awaryjne `DefaultEvent` i definicja `data/org.kde.thispcview.notifyrc` powiązana z `desktop-entry` `org.kde.thispcview`;
   - 13/13 scenariuszy testów automatycznych PASS (74 asercje), pełna regresja 78/78 PASS;
   - Odbiór manualny użytkownika: 7/7 PASS (A: kopiowanie w tle, B: wyciszenie przy aktywnym oknie, C: zminimalizowane okno, D: błąd transferu, E: brak powiadomienia przy anulowaniu, F: przełączanie i trwałość ustawienia, G: agregacja 6 transferów).
-- **Etap 2 — Trwały i rozszerzony dziennik historii operacji:** (W toku)
+- **Etap 2 — Trwały i rozszerzony dziennik historii operacji:** ✅ ZAMKNIĘTY / IMPLEMENTACJA I ODBIÓR MANUALNY ZAKOŃCZONE
   - **Etap 2.1 — Model trwałej historii i bezpieczny magazyn:** ✅ IMPLEMENTED / AUTOMATED PASS (20/20 zestawów testów, 1637 asercji)
     - Deskryptor wartościowy `TransferHistoryRecord` oraz wielowątkowy, nieblokujący `TransferHistoryManager`;
     - Serializacja JSON z wersjonowaniem schematu (`schemaVersion: 1`), standardowa lokalizacja XDG State (`~/.local/state/kio-thispc/thispc-view/operations_history.json`);
@@ -622,10 +622,27 @@ Gdy zwykła operacja plikowa zakończy się błędem braku uprawnień (Permissio
     - Zachowanie kompaktowych wymiarów panelu podręcznego i ograniczonej wysokości (~180–200 px w stanie spoczynku);
     - Zestaw testów automatycznych: 8 nowych zestawów (łącznie 54 zestawy historii, 1897 asercji PASS), pełna regresja 79/79 PASS;
     - Odbiór manualny użytkownika 6/6 PASS: A (7 wpisów archiwalnych poprawnie wyświetlonych po starcie), B (otwarcie OperationWindow z panelu z 7 zgodnymi kartami), C (aktualizacja na żywo podczas transferów, plakietka, liczniki, skopiowanie 2 plików), D (przywrócenie 9 rekordów po pełnym restarcie), E (czysty profil z pustą historią poprawnie pokazuje brak operacji), F (spójność obydwu widoków i integralność bazy z 9 rekordami).
-  - **Etap 2.5 — Ustawienia historii, retencja, synchronizacja wieloinstancyjna i odbiór końcowy:** (Planowane)
-    - Konfigurowalne limity retencji i czyszczenie historii;
-    - Weryfikacja współbieżnej synchronizacji wielu instancji;
-    - Końcowa regresja całości i odbiór Stage 2.
+  - **Etap 2.5 — Ustawienia historii, retencja, synchronizacja wieloinstancyjna i odbiór końcowy:** ✅ CLOSED / ACCEPTED / BACKED UP / COMMITTED / PUSHED (8/8 PASS)
+    - Integracja ustawień historii w `TransferQueueSettingsWidget` (przełącznik „Zapisuj historię operacji”, limity retencji 50/100/200/500, akcja „Wyczyść historię…”);
+    - Bezpieczne okno dialogowe z potwierdzeniem (`promptClearHistoryConfirmation`) informujące o usunięciu wyłącznie wpisów dziennika bez naruszania plików na dysku;
+    - Ścisła ochrona przed zmartwychwstaniem (resurrection): usunięte zadania z pamięci i dysku nie mogą zostać ponownie zapisane (mechanizm epok `historyEpoch`);
+    - Sztywny limit rozmiaru pliku (2 MiB) z priorytetem usuwania najstarszych wpisów przed limitem liczbowym;
+    - Bezpieczna synchronizacja współbieżna wielu instancji za pośrednictwem `QLockFile` i mechanizmu epok (Security Gate A);
+    - Synchronizacja międzyprocesowa w czasie rzeczywistym za pomocą `QFileSystemWatcher` z debouncingiem (150 ms) oraz asynchronicznym odczytem w tle (`QtConcurrent::run`), odporna na atomową podmianę inodów przez `QSaveFile`;
+    - Zabezpieczenie spójności liczników i czyszczenia: `TransferQueueController` usuwa zakończone zadania sesyjne z minionej epoki po odebraniu `historyCleared()`, eliminując zadania-widma, a `OperationPopup` nigdy nie wyświetla mylącego komunikatu „Zapisana historia: 1”, gdy trwały magazyn ma zero rekordów;
+    - Poprawka kolorystyki paska narzędzi (`applicationstyle.cpp`): usunięcie problemu białego tła przy rozwijaniu ukrytych przycisków w motywach ciemnych/izolowanych (`background: palette(window)`);
+    - Audyt i poprawka wieloinstancyjnego odzyskiwania Batch Rename (`batchrenamerecovery.h`): izolacja blokad procesów potomnych w katalogach `instance-<PID>` przy zachowaniu ochrony osieroconych dzienników po awarii;
+    - Pełna weryfikacja automatyczna: 13 nowych zestawów testowych historii (67 zestawów historii / 2008 asercji PASS), `transfer_queue` (2335 asercji PASS), `notifications` (13/13 PASS), `operations` (57 asercji PASS), pełna regresja 77 nadrzędnych zestawów PASS;
+    - Pełny odbiór manualny użytkownika (8/8 PASS — 6 listopada 2026 r.):
+      - Scenariusz A (ustawienia historii, wartości domyślne i trwałość): PASS;
+      - Scenariusz B (konfigurowalne limity retencji 50/100/200/500): PASS;
+      - Scenariusz C (wyłączenie i ponowne włączenie zapisywania historii): PASS;
+      - Scenariusz D (czyszczenie historii, potwierdzenie, anulowanie i integralność danych): PASS;
+      - Scenariusz E (spójność OperationPopup, OperationWindow i trwałego magazynu): PASS;
+      - Scenariusz F (dwa niezależne procesy, synchronizacja dodawania i czyszczenia, historyEpoch, brak wskrzeszania rekordów): PASS;
+      - Scenariusz G (kopiowanie, przenoszenie i powiadomienia KDE Plasma): PASS;
+      - Scenariusz H (ponowny start, trwałość trzech rekordów, integralność danych, brak staging leftovers, płynność GUI, brak zawieszeń i crashy): PASS.
+    - Wszystkie funkcjonalności Etapu 2 (Trwała historia transferów) zostały w pełni zrealizowane, zaakceptowane manualnie i formalnie zamknięte w repozytorium.
 - **Etap 3 — Bezpieczne ponawianie operacji kwalifikujących się do powtórzenia:** (Planowane)
   - Bezpieczne ponawianie dla nieudanych operacji kwalifikujących się do powtórzenia.
 - **Etap 4 — Akcja „Pokaż w folderze”:** (Planowane)

@@ -1180,5 +1180,80 @@ int main(int argc, char **argv)
     verify(dispatch.kind == "launch" && dispatch.sources.value(0) == resolvedExe,
            "split pane launchItem resolves and delegates to window launch seam");
 
+    // 4. Multi-instance recovery lock and Split View action availability check:
+    {
+        QTemporaryDir lockRoot;
+        verify(lockRoot.isValid(), "isolated multi-instance lock root");
+        const int rootFd = BatchRenameRecoveryDetail::openPrivateRecoveryRoot(lockRoot.path());
+        verify(rootFd >= 0, "primary recovery root opened");
+        const int primaryLockFd = ::openat(rootFd, "recovery-audit.lock",
+                                           O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, 0600);
+        ::close(rootFd);
+        verify(primaryLockFd >= 0 && ::flock(primaryLockFd, LOCK_EX | LOCK_NB) == 0,
+               "simulated instance 1 holds primary recovery lock");
+
+        const QString resolvedInstanceRoot = BatchRenameRecoveryGate::resolveRecoveryRoot(lockRoot.path());
+        verify(resolvedInstanceRoot != lockRoot.path()
+                   && resolvedInstanceRoot.startsWith(lockRoot.path() + QStringLiteral("/instance-")),
+               "secondary instance resolves dedicated instance recovery root");
+
+        BatchRenameRecoveryGate instanceGate(resolvedInstanceRoot);
+        verify(!instanceGate.mutationsBlocked() && instanceGate.audit().inspectorLockHeld,
+               "secondary instance gate remains unblocked for file modifications");
+
+        // Verify Split View actions under simulated secondary instance
+        window.setActivePane(Pane::Split);
+        window.m_splitPane->setCurrentUrl(right, false);
+        QMimeData *mime = new QMimeData();
+        mime->setUrls({childUrlWithName(left, QStringLiteral("multi_b.txt"))});
+        QApplication::clipboard()->setMimeData(mime);
+
+        const auto splitAvailability = ActionStateController::compute(window.actionStateInput());
+        verify(splitAvailability.createEnabled, "new folder is enabled in right pane under secondary instance");
+        verify(splitAvailability.pasteEnabled, "paste is enabled in right pane with clipboard URLs under secondary instance");
+
+        ::close(primaryLockFd);
+
+        // 5. Crash recovery safety: dead secondary instance with unresolved journal must be protected
+        const QString orphanedInstanceDir = lockRoot.path() + QStringLiteral("/instance-999999");
+        QDir().mkdir(orphanedInstanceDir);
+        const QString orphanedLock = orphanedInstanceDir + QStringLiteral("/recovery-audit.lock");
+        {
+            QFile lockFile(orphanedLock);
+            verify(lockFile.open(QIODevice::WriteOnly), "orphaned lock placeholder created");
+        }
+        const QString journalPath = orphanedInstanceDir + QStringLiteral("/linear-crash-v1.json");
+        {
+            QFile jFile(journalPath);
+            verify(jFile.open(QIODevice::WriteOnly) && jFile.write("{\"schema\": 1}\n") > 0,
+                   "orphaned instance crash journal fixture written");
+        }
+
+        // Primary instance opens and inspects recovery root
+        BatchRenameRecoveryGate primaryGate(lockRoot.path());
+        verify(primaryGate.mutationsBlocked(),
+               "primary gate blocks mutations when orphaned instance directory contains crash journal");
+        verify(primaryGate.audit().entries.size() == 1,
+               "primary audit includes the orphaned crash journal");
+        verify(QFileInfo::exists(orphanedInstanceDir),
+               "orphaned instance directory with journal is strictly protected from deletion");
+        verify(QFileInfo::exists(journalPath),
+               "crash journal in orphaned instance directory is preserved");
+        verify(BatchRenameRecoveryJournal::pendingJournal(lockRoot.path()) == journalPath,
+               "pendingJournal discovers journal in instance subdirectory");
+
+        // Simulate crash recovery resolution: journal removed
+        verify(QFile::remove(journalPath), "crash journal resolved and removed");
+
+        // Primary instance re-audits: clean orphaned directory is safely cleaned up
+        primaryGate.refresh();
+        verify(!primaryGate.mutationsBlocked(),
+               "mutations unblocked after orphaned journal is resolved");
+        verify(primaryGate.audit().entries.isEmpty(),
+               "audit entries are empty after resolution");
+        verify(!QFileInfo::exists(orphanedInstanceDir),
+               "clean orphaned instance directory without journals is safely cleaned up");
+    }
+
     qInfo("PASS: %d assertions, Icons/List/Details/Compact, both panes; KIO dispatch intercepted", checks);
 }

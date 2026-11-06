@@ -311,6 +311,45 @@ static void testRepeatedDriveMenuOpenClose()
     }
 }
 
+static void testToolbarOverflowPaletteIntegrity()
+{
+    ThisPcWindow window(kThisPcUrl, false);
+    window.resize(350, 400);
+    window.show();
+    settle();
+
+    auto *toolbar = window.findChild<QToolBar *>(QStringLiteral("fileCommandToolbar"));
+    verify(toolbar != nullptr, "fileCommandToolbar found");
+
+    QToolButton *ext = nullptr;
+    for (auto *child : toolbar->children()) {
+        if (child->inherits("QToolBarExtension")) {
+            ext = qobject_cast<QToolButton *>(child);
+            break;
+        }
+    }
+    verify(ext != nullptr, "QToolBarExtension found");
+    verify(ext->isVisible(), "QToolBarExtension is visible when window is narrow");
+
+    const QColor expectedWindowColor = window.palette().color(QPalette::Window);
+    verify(toolbar->palette().color(QPalette::Window) == expectedWindowColor,
+           "toolbar palette window color matches main window background before click");
+
+    QTimer::singleShot(50, [ext]() {
+        ext->showMenu();
+    });
+    QTimer::singleShot(150, [&]() {
+        if (auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget())) {
+            menu->close();
+        }
+    });
+    QTest::qWait(250);
+    settle();
+
+    verify(toolbar->palette().color(QPalette::Window) == expectedWindowColor,
+           "toolbar palette window color matches main window background after overflow interaction");
+}
+
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
@@ -324,6 +363,7 @@ int main(int argc, char **argv)
         qInfo("PASS: %d sidebar drive menu assertions", checks);
         return 0;
     }
+    testToolbarOverflowPaletteIntegrity();
     testScrollableSidebar();
     testLongLabels();
     testResizePersistenceAndRebuildScroll();

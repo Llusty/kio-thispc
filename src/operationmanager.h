@@ -1302,9 +1302,12 @@ private:
         }
 
         int archivalHistoryCount = 0;
+        int savedHistoryTotalCount = 0;
         TransferHistoryManager *histMgr = historyManager();
         if (histMgr) {
+            histMgr->syncWithDiskIfNeeded();
             const QList<TransferHistoryRecord> allHistory = histMgr->records();
+            savedHistoryTotalCount = allHistory.size();
             for (const auto &rec : allHistory) {
                 if (!activeOrRecentHistoryUuids.contains(rec.uuid)) {
                     ++archivalHistoryCount;
@@ -1312,7 +1315,8 @@ private:
             }
         }
 
-        const int totalHistoryCount = completed + queueFinished + archivalHistoryCount;
+        const int sessionFinishedCount = completed + queueFinished;
+        const int totalHistoryCount = sessionFinishedCount + archivalHistoryCount;
 
         const bool empty = m_items.isEmpty();
 
@@ -1350,14 +1354,25 @@ private:
                                   : QStringLiteral("Queued: %1").arg(queueQueued)));
                 }
             } else if (totalHistoryCount > 0) {
-                m_popup->m_emptyLabel->setText(
-                    isPolish()
-                        ? QStringLiteral("Brak aktywnych operacji plikowych.\nZapisana historia: %1 (kliknij przycisk powyżej).").arg(totalHistoryCount)
-                        : QStringLiteral("No active file operations.\nSaved history: %1 (click the button above).").arg(totalHistoryCount));
-                m_popup->m_summaryLabel->setText(
-                    isPolish()
-                        ? QStringLiteral("Historia: %1").arg(totalHistoryCount)
-                        : QStringLiteral("History: %1").arg(totalHistoryCount));
+                if (savedHistoryTotalCount > 0) {
+                    m_popup->m_emptyLabel->setText(
+                        isPolish()
+                            ? QStringLiteral("Brak aktywnych operacji plikowych.\nZapisana historia: %1 (kliknij przycisk powyżej).").arg(totalHistoryCount)
+                            : QStringLiteral("No active file operations.\nSaved history: %1 (click the button above).").arg(totalHistoryCount));
+                    m_popup->m_summaryLabel->setText(
+                        isPolish()
+                            ? QStringLiteral("Historia: %1").arg(totalHistoryCount)
+                            : QStringLiteral("History: %1").arg(totalHistoryCount));
+                } else {
+                    m_popup->m_emptyLabel->setText(
+                        isPolish()
+                            ? QStringLiteral("Brak aktywnych operacji plikowych.\nZakończone w tej sesji: %1 (kliknij przycisk powyżej).").arg(sessionFinishedCount)
+                            : QStringLiteral("No active file operations.\nFinished in this session: %1 (click the button above).").arg(sessionFinishedCount));
+                    m_popup->m_summaryLabel->setText(
+                        isPolish()
+                            ? QStringLiteral("Zakończone: %1").arg(sessionFinishedCount)
+                            : QStringLiteral("Completed: %1").arg(sessionFinishedCount));
+                }
             } else {
                 m_popup->m_emptyLabel->setText(
                     trLocal("Brak operacji plikowych i historii.", "No file operations or history."));
@@ -1880,7 +1895,9 @@ public:
         m_clearHistoryButton->setText(trLocal("Wyczyść historię", "Clear History"));
         m_clearHistoryButton->setToolButtonStyle(Qt::ToolButtonIconOnly);
         m_clearHistoryButton->setToolTip(trLocal("Wyczyść historię zakończonych operacji", "Clear history of finished operations"));
-        connect(m_clearHistoryButton, &QToolButton::clicked, this, &OperationWindow::clearHistory);
+        connect(m_clearHistoryButton, &QToolButton::clicked, this, [this] {
+            clearHistory(true);
+        });
         headerLayout->addWidget(m_clearHistoryButton);
 
         m_settingsToggleButton = new QToolButton(this);
@@ -2066,20 +2083,24 @@ public:
     QToolButton *clearHistoryButton() const { return m_clearHistoryButton; }
     bool hasQueueTab() const { return m_tabs && m_tabs->indexOf(m_queuePage) >= 0; }
 
-    void clearHistory()
+    void clearHistory(bool promptConfirmation = false)
     {
+        if (promptConfirmation && !promptClearHistoryConfirmation(this)) {
+            return;
+        }
+
         if (m_queueController) {
             for (const auto &task : m_queueController->snapshot().tasks) {
                 if (task.terminal && !task.historyUuid.isEmpty()) {
                     m_dismissedHistoryUuids.insert(task.historyUuid);
                 }
             }
-            m_queueController->clearFinished();
-        }
-        if (TransferHistoryManager *histMgr = historyManager()) {
+            m_queueController->clearHistory(true);
+        } else if (TransferHistoryManager *histMgr = historyManager()) {
             for (const auto &rec : histMgr->records()) {
                 m_dismissedHistoryUuids.insert(rec.uuid);
             }
+            histMgr->clear(true);
         }
         if (m_manager) {
             m_manager->clearFinished();
@@ -2195,6 +2216,11 @@ public:
                         this, [this] {
                             if (isVisible()) scheduleRebuild();
                         });
+                connect(controller->historyManager(), &TransferHistoryManager::historyCleared,
+                        this, [this] {
+                            m_dismissedHistoryUuids.clear();
+                            if (isVisible()) scheduleRebuild();
+                        });
             }
             connect(controller, &TransferQueueController::historyManagerChanged,
                     this, [this](TransferHistoryManager *hm) {
@@ -2202,6 +2228,11 @@ public:
                             disconnect(hm, nullptr, this, nullptr);
                             connect(hm, &TransferHistoryManager::recordsChanged,
                                     this, [this] { if (isVisible()) scheduleRebuild(); });
+                            connect(hm, &TransferHistoryManager::historyCleared,
+                                    this, [this] {
+                                        m_dismissedHistoryUuids.clear();
+                                        if (isVisible()) scheduleRebuild();
+                                    });
                         }
                         if (isVisible()) scheduleRebuild();
                     });
@@ -2228,6 +2259,10 @@ public:
                     this, [this](quint64, TransferPriority) {
                         if (isVisible()) scheduleRebuild();
                     });
+            connect(controller, &TransferQueueController::historySettingsChanged,
+                    this, [this](bool, int) {
+                        if (isVisible()) scheduleRebuild();
+                    });
             connect(controller, &TransferQueueController::taskProgressChanged,
                     this, [this](quint64 id, quint64 processed, quint64 total, int percent) {
                         updateQueueTaskProgressInPlace(id, processed, total, percent);
@@ -2247,6 +2282,11 @@ public:
         if (m_explicitHistoryManager) {
             connect(m_explicitHistoryManager, &TransferHistoryManager::recordsChanged,
                     this, [this] { if (isVisible()) scheduleRebuild(); });
+            connect(m_explicitHistoryManager, &TransferHistoryManager::historyCleared,
+                    this, [this] {
+                        m_dismissedHistoryUuids.clear();
+                        if (isVisible()) scheduleRebuild();
+                    });
         }
         if (isVisible()) scheduleRebuild();
     }
@@ -2562,6 +2602,7 @@ public:
         QList<TransferHistoryRecord> archivalRecords;
         TransferHistoryManager *histMgr = historyManager();
         if (histMgr) {
+            histMgr->syncWithDiskIfNeeded();
             const QList<TransferHistoryRecord> allHistory = histMgr->records();
             for (const auto &rec : allHistory) {
                 if (activeOrRecentHistoryUuids.contains(rec.uuid)) {
@@ -3795,6 +3836,11 @@ inline void OperationManager::setHistoryManager(TransferHistoryManager *manager)
     if (m_historyManager) {
         connect(m_historyManager, &TransferHistoryManager::recordsChanged,
                 this, [this] { updateSummary(); });
+        connect(m_historyManager, &TransferHistoryManager::historyCleared,
+                this, [this] {
+                    clearFinished();
+                    updateSummary();
+                });
     }
     if (m_detailedWindow) {
         m_detailedWindow->setHistoryManager(manager);
@@ -3877,6 +3923,11 @@ inline void OperationManager::setQueueController(TransferQueueController *contro
             disconnect(m_queueController->historyManager(), nullptr, this, nullptr);
             connect(m_queueController->historyManager(), &TransferHistoryManager::recordsChanged,
                     this, [this] { updateSummary(); });
+            connect(m_queueController->historyManager(), &TransferHistoryManager::historyCleared,
+                    this, [this] {
+                        clearFinished();
+                        updateSummary();
+                    });
         }
         connect(m_queueController, &TransferQueueController::historyManagerChanged,
                 this, [this](TransferHistoryManager *hm) {
@@ -3884,6 +3935,11 @@ inline void OperationManager::setQueueController(TransferQueueController *contro
                         disconnect(hm, nullptr, this, nullptr);
                         connect(hm, &TransferHistoryManager::recordsChanged,
                                 this, [this] { updateSummary(); });
+                        connect(hm, &TransferHistoryManager::historyCleared,
+                                this, [this] {
+                                    clearFinished();
+                                    updateSummary();
+                                });
                     }
                     updateSummary();
                 });

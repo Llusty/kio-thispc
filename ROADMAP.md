@@ -484,7 +484,7 @@ When standard operations receive permission denied errors, provide targeted `adm
   - Standard `DefaultEvent` fallback and `data/org.kde.thispcview.notifyrc` specification matching desktop-entry `org.kde.thispcview`;
   - 13/13 automated test scenarios pass (74 assertions), full regression suite 78/78 PASS;
   - Manual acceptance: 7/7 PASS (A: background copy, B: active suppression, C: minimized window, D: error notification, E: cancel suppression, F: settings toggle & restart persistence, G: 6-task batch coalescing).
-- **Stage 2 — Persistent / Extended Operation History:** (In Progress)
+- **Stage 2 — Persistent / Extended Operation History:** ✅ CLOSED / IMPLEMENTED / AUTOMATED PASS / MANUAL ACCEPTED
   - **Stage 2.1 — Persistent History Model & Safe Storage:** ✅ IMPLEMENTED / AUTOMATED PASS (20/20 test suites, 1637 assertions)
     - Value-type descriptor `TransferHistoryRecord` and thread-safe, non-blocking `TransferHistoryManager`;
     - JSON serialization with schema versioning (`schemaVersion: 1`), XDG State location (`~/.local/state/kio-thispc/thispc-view/operations_history.json`);
@@ -520,10 +520,27 @@ When standard operations receive permission denied errors, provide targeted `adm
     - Preserved compact popup geometry and bounded height (~180–200 px in resting state);
     - Automated test suite: 8 new test suites (54 total history suites, 1897 assertions PASS), full regression 79/79 PASS;
     - Manual acceptance 6/6 PASS: A (7 archival records correctly displayed on start), B (open OperationWindow from popup with 7 matching cards), C (live update during active transfers, badge, counters, copying 2 files), D (full restart restoration of 9 records), E (clean empty history profile correctly shows no operations), F (dual-view consistency and 9-record store integrity).
-  - **Stage 2.5 — History Settings, Retention Policy & Multi-Instance Final Acceptance:** (Planned)
-    - Configurable history retention limits and clear-history action;
-    - Multi-instance concurrent synchronization verification;
-    - Final end-to-end regression and manual acceptance closure of Stage 2.
+  - **Stage 2.5 — History Settings, Retention Policy & Multi-Instance Final Acceptance:** ✅ CLOSED / ACCEPTED / BACKED UP / COMMITTED / PUSHED (8/8 PASS)
+    - History settings integration in `TransferQueueSettingsWidget` ("Record operation history" toggle, retention limits 50/100/200/500, "Clear history…" action);
+    - Safe confirmation dialog (`promptClearHistoryConfirmation`) ensuring user awareness that only history logs are removed and actual files on disk remain untouched;
+    - Strict resurrection prevention: completed tasks purged from queue memory and storage cannot be re-saved or resurrected (`historyEpoch` tracking);
+    - Hard size ceiling (2 MiB) with oldest-record trimming priority over record count;
+    - Multi-instance concurrency synchronization with `QLockFile` and epoch tracking (Security Gate A);
+    - Real-time cross-process synchronization using `QFileSystemWatcher` with 150 ms debouncing and async background reload (`QtConcurrent::run`), resilient to atomic inode renames by `QSaveFile`;
+    - Counter consistency and cleanup integrity: `TransferQueueController` clears terminal session tasks from past epochs upon `historyCleared()`, eliminating zombie cards, and `OperationPopup` strictly prevents false "Saved history: 1" displays when the persistent store is empty;
+    - Toolbar overflow palette fix (`applicationstyle.cpp`): eliminated washed-out background when expanding hidden buttons in dark/isolated themes (`background: palette(window)`);
+    - Batch Rename multi-instance recovery audit and fix (`batchrenamerecovery.h`): per-PID instance directories (`instance-<PID>`) preventing lock contention while preserving orphaned recovery journals;
+    - Full automated verification: 13 new history test suites (67 history suites / 2008 assertions PASS), `transfer_queue` (2335 checks PASS), `notifications` (13/13 PASS), `operations` (57 assertions PASS), full regression 77 suites PASS;
+    - Full user manual acceptance (8/8 PASS — Nov 6, 2026):
+      - Scenario A (history settings defaults and persistence): PASS;
+      - Scenario B (retention limits 50/100/200/500): PASS;
+      - Scenario C (disable and re-enable history recording): PASS;
+      - Scenario D (clear history confirmation, cancel, data integrity): PASS;
+      - Scenario E (OperationPopup, OperationWindow and persistent store consistency): PASS;
+      - Scenario F (two independent processes, live sync, historyEpoch, zero resurrection): PASS;
+      - Scenario G (Copy, Move and KDE Plasma notifications): PASS;
+      - Scenario H (full restart, 3 records restored, data integrity, zero staging leftovers, smooth GUI): PASS.
+    - All Stage 2 Persistent History capabilities are fully implemented, manually accepted, backed up and committed.
 - **Stage 3 — Safe Retry for Eligible Operations:** (Planned)
   - Safe retry for eligible failed operations.
 - **Stage 4 — Show in Folder Action:** (Planned)

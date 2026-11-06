@@ -24,6 +24,8 @@ struct TransferQueueConfig
     int bandwidthLimitValue = 1;
     bool closeWindowOnComplete = false;
     bool desktopNotificationsEnabled = true;
+    bool historyEnabled = true;
+    int historyMaxRecords = 200;
 
     bool operator==(const TransferQueueConfig &) const = default;
 };
@@ -40,6 +42,8 @@ public:
     static constexpr const char *BandwidthLimitValueKey = "BandwidthLimitValue";
     static constexpr const char *CloseWindowOnCompleteKey = "CloseWindowOnComplete";
     static constexpr const char *DesktopNotificationsEnabledKey = "DesktopNotificationsEnabled";
+    static constexpr const char *HistoryEnabledKey = "HistoryEnabled";
+    static constexpr const char *HistoryMaxRecordsKey = "HistoryMaxRecords";
 
     static int clampLimit(int limit)
     {
@@ -129,6 +133,22 @@ public:
             config.desktopNotificationsEnabled = notifVar.toBool();
         }
 
+        const QVariant histEnabledVar = settings.value(QLatin1String(HistoryEnabledKey));
+        if (histEnabledVar.isValid()) {
+            config.historyEnabled = histEnabledVar.toBool();
+        }
+
+        const QVariant histMaxVar = settings.value(QLatin1String(HistoryMaxRecordsKey));
+        if (histMaxVar.isValid()) {
+            bool ok = false;
+            const int maxRec = histMaxVar.toInt(&ok);
+            if (ok && (maxRec == 50 || maxRec == 100 || maxRec == 200 || maxRec == 500)) {
+                config.historyMaxRecords = maxRec;
+            } else if (ok && maxRec > 0) {
+                config.historyMaxRecords = std::clamp(maxRec, 1, 5000);
+            }
+        }
+
         settings.endGroup();
         return config;
     }
@@ -144,6 +164,8 @@ public:
         settings.setValue(QLatin1String(BandwidthLimitValueKey), config.bandwidthLimitValue);
         settings.setValue(QLatin1String(CloseWindowOnCompleteKey), config.closeWindowOnComplete);
         settings.setValue(QLatin1String(DesktopNotificationsEnabledKey), config.desktopNotificationsEnabled);
+        settings.setValue(QLatin1String(HistoryEnabledKey), config.historyEnabled);
+        settings.setValue(QLatin1String(HistoryMaxRecordsKey), config.historyMaxRecords);
         settings.endGroup();
     }
 };

@@ -23,6 +23,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QFileSystemWatcher>
 #include <QFuture>
 #include <QFutureWatcher>
 #include <QJsonArray>
@@ -459,15 +460,30 @@ public:
         : QObject(parent)
         , m_filePath(filePath.isEmpty() ? defaultHistoryFilePath() : filePath)
         , m_debounceTimer(new QTimer(this))
+        , m_reloadDebounceTimer(new QTimer(this))
     {
         m_debounceTimer->setSingleShot(true);
         connect(m_debounceTimer, &QTimer::timeout, this, [this]() {
             saveAsyncInternal();
         });
+
+        m_reloadDebounceTimer->setSingleShot(true);
+        m_reloadDebounceTimer->setInterval(150);
+        connect(m_reloadDebounceTimer, &QTimer::timeout, this, [this]() {
+            reloadFromDiskAsync();
+        });
+
+        setupWatcher();
     }
 
     ~TransferHistoryManager() override
     {
+        if (m_reloadDebounceTimer) {
+            m_reloadDebounceTimer->stop();
+        }
+        if (m_activeReloadFuture.isRunning()) {
+            m_activeReloadFuture.waitForFinished();
+        }
         flushSync();
     }
 
@@ -498,22 +514,79 @@ public:
 
     void setFilePath(const QString &path)
     {
-        QMutexLocker locker(&m_mutex);
-        flushSyncLocked();
-        m_filePath = path.isEmpty() ? defaultHistoryFilePath() : path;
-        m_loaded = false;
-        m_dirty = false;
-        m_records.clear();
-        m_locallyAddedUuids.clear();
-        m_locallyDeletedUuids.clear();
-        m_clearRequested = false;
-        m_historyEpoch = 1;
+        {
+            QMutexLocker locker(&m_mutex);
+            flushSyncLocked();
+            m_filePath = path.isEmpty() ? defaultHistoryFilePath() : path;
+            m_loaded = false;
+            m_dirty = false;
+            m_records.clear();
+            m_locallyAddedUuids.clear();
+            m_locallyDeletedUuids.clear();
+            m_clearRequested = false;
+            m_historyEpoch = 1;
+            m_lastDiskMtimeUtc = QDateTime();
+            m_lastDiskFileSize = -1;
+        }
+        updateWatcherRegistration();
+    }
+
+    bool syncWithDiskIfNeeded()
+    {
+        {
+            QMutexLocker locker(&m_mutex);
+            if (m_saveWorkerRunning || m_dirty) {
+                return false;
+            }
+            QFileInfo fi(m_filePath);
+            if (!fi.exists()) {
+                if (!m_records.isEmpty() && m_lastDiskFileSize > 0) {
+                    m_records.clear();
+                    m_locallyAddedUuids.clear();
+                    m_locallyDeletedUuids.clear();
+                    m_lastDiskMtimeUtc = QDateTime();
+                    m_lastDiskFileSize = 0;
+                    locker.unlock();
+                    Q_EMIT historyCleared();
+                    Q_EMIT recordsChanged();
+                    return true;
+                }
+                return false;
+            }
+            if (m_loaded && fi.lastModified() == m_lastDiskMtimeUtc && fi.size() == m_lastDiskFileSize) {
+                return false;
+            }
+        }
+        return loadSync();
     }
 
     int maxRecords() const
     {
         QMutexLocker locker(&m_mutex);
         return m_maxRecords;
+    }
+
+    bool isEnabled() const
+    {
+        QMutexLocker locker(&m_mutex);
+        return m_enabled;
+    }
+
+    void setEnabled(bool enabled)
+    {
+        bool changed = false;
+        int currentMax = 0;
+        {
+            QMutexLocker locker(&m_mutex);
+            if (m_enabled != enabled) {
+                m_enabled = enabled;
+                changed = true;
+            }
+            currentMax = m_maxRecords;
+        }
+        if (changed) {
+            Q_EMIT settingsChanged(enabled, currentMax);
+        }
     }
 
     quint64 historyEpoch() const
@@ -524,9 +597,55 @@ public:
 
     void setMaxRecords(int count)
     {
-        QMutexLocker locker(&m_mutex);
-        m_maxRecords = std::clamp(count, 1, 5000);
-        trimRecordsLocked();
+        bool changed = false;
+        bool enabled = true;
+        int newMax = 0;
+        {
+            QMutexLocker locker(&m_mutex);
+            const int clamped = std::clamp(count, 1, 5000);
+            if (m_maxRecords != clamped) {
+                m_maxRecords = clamped;
+                trimRecordsLocked();
+                m_dirty = true;
+                changed = true;
+                scheduleSaveAsyncLocked();
+            }
+            enabled = m_enabled;
+            newMax = m_maxRecords;
+        }
+        if (changed) {
+            Q_EMIT recordsChanged();
+            Q_EMIT settingsChanged(enabled, newMax);
+        }
+    }
+
+    void loadSettings(QSettings &settings)
+    {
+        settings.beginGroup(QStringLiteral("TransferHistory"));
+        const QVariant enabledVar = settings.value(QStringLiteral("HistoryEnabled"));
+        const QVariant maxVar = settings.value(QStringLiteral("HistoryMaxRecords"));
+        settings.endGroup();
+
+        if (enabledVar.isValid()) {
+            setEnabled(enabledVar.toBool());
+        }
+        if (maxVar.isValid()) {
+            bool ok = false;
+            const int maxRec = maxVar.toInt(&ok);
+            if (ok && (maxRec == 50 || maxRec == 100 || maxRec == 200 || maxRec == 500)) {
+                setMaxRecords(maxRec);
+            } else if (ok && maxRec > 0) {
+                setMaxRecords(std::clamp(maxRec, 1, 5000));
+            }
+        }
+    }
+
+    void saveSettings(QSettings &settings) const
+    {
+        settings.beginGroup(QStringLiteral("TransferHistory"));
+        settings.setValue(QStringLiteral("HistoryEnabled"), isEnabled());
+        settings.setValue(QStringLiteral("HistoryMaxRecords"), maxRecords());
+        settings.endGroup();
     }
 
     int count() const
@@ -572,6 +691,9 @@ public:
         TransferHistoryRecord recCopy = record;
         {
             QMutexLocker locker(&m_mutex);
+            if (!m_enabled) {
+                return;
+            }
             ensureLoadedLocked();
 
             // Check if record already exists by UUID
@@ -655,8 +777,20 @@ public:
 
     bool loadSync(QString *errorDiagnostic = nullptr, HistoryStorageStatus *statusOut = nullptr)
     {
-        QMutexLocker locker(&m_mutex);
-        return loadSyncLocked(errorDiagnostic, statusOut);
+        bool changed = false;
+        bool cleared = false;
+        bool ok = false;
+        {
+            QMutexLocker locker(&m_mutex);
+            ok = loadSyncLocked(&changed, &cleared, errorDiagnostic, statusOut);
+        }
+        if (cleared) {
+            Q_EMIT historyCleared();
+        }
+        if (changed) {
+            Q_EMIT recordsChanged();
+        }
+        return ok;
     }
 
     bool saveSync(QString *errorDiagnostic = nullptr, HistoryStorageStatus *statusOut = nullptr)
@@ -696,6 +830,7 @@ Q_SIGNALS:
     void historyCleared();
     void storageError(HistoryStorageStatus status, const QString &diagnostic);
     void saveCompleted(bool success);
+    void settingsChanged(bool enabled, int maxRecords);
 
 private:
     void ensureLoadedLocked() const
@@ -736,6 +871,15 @@ private:
 
     void updateMemoryAfterSaveLocked(const QList<TransferHistoryRecord> &merged, quint64 newEpoch)
     {
+        QFileInfo fi(m_filePath);
+        if (fi.exists()) {
+            m_lastDiskMtimeUtc = fi.lastModified();
+            m_lastDiskFileSize = fi.size();
+        }
+        if (m_fileWatcher && fi.exists() && !fi.isSymLink() && !m_fileWatcher->files().contains(fi.absoluteFilePath())) {
+            m_fileWatcher->addPath(fi.absoluteFilePath());
+        }
+
         if (newEpoch > m_historyEpoch) {
             // An external clear was observed; drop obsolete local pending operations
             m_records = merged;
@@ -855,7 +999,8 @@ private:
         watcher->setFuture(m_activeSaveFuture);
     }
 
-    bool loadSyncLocked(QString *errorDiagnostic = nullptr, HistoryStorageStatus *statusOut = nullptr)
+    bool loadSyncLocked(bool *outChanged = nullptr, bool *outCleared = nullptr,
+                        QString *errorDiagnostic = nullptr, HistoryStorageStatus *statusOut = nullptr)
     {
         m_loaded = true;
         QString diag;
@@ -874,11 +1019,56 @@ private:
         }
 
         if (status == HistoryStorageStatus::Ok || status == HistoryStorageStatus::FileNotFound) {
-            m_records = loaded;
-            m_historyEpoch = epoch;
-            m_locallyAddedUuids.clear();
-            m_locallyDeletedUuids.clear();
+            QFileInfo fi(m_filePath);
+            if (fi.exists()) {
+                m_lastDiskMtimeUtc = fi.lastModified();
+                m_lastDiskFileSize = fi.size();
+            } else {
+                m_lastDiskMtimeUtc = QDateTime();
+                m_lastDiskFileSize = 0;
+            }
+
+            const QList<TransferHistoryRecord> oldRecords = m_records;
+            const quint64 oldEpoch = m_historyEpoch;
+
+            if (epoch > oldEpoch) {
+                m_records = loaded;
+                m_historyEpoch = epoch;
+                m_locallyAddedUuids.clear();
+                m_locallyDeletedUuids.clear();
+            } else {
+                QSet<QString> diskUuids;
+                QList<TransferHistoryRecord> merged;
+                for (const auto &rec : loaded) {
+                    if (!m_locallyDeletedUuids.contains(rec.uuid)) {
+                        merged.append(rec);
+                        diskUuids.insert(rec.uuid);
+                    }
+                }
+                for (const auto &memRec : m_records) {
+                    if (m_locallyAddedUuids.contains(memRec.uuid) && !diskUuids.contains(memRec.uuid)) {
+                        merged.prepend(memRec);
+                        diskUuids.insert(memRec.uuid);
+                    }
+                }
+                std::sort(merged.begin(), merged.end(), [](const TransferHistoryRecord &a, const TransferHistoryRecord &b) {
+                    if (a.endTimeUtc != b.endTimeUtc) return a.endTimeUtc > b.endTimeUtc;
+                    return a.startTimeUtc > b.startTimeUtc;
+                });
+                m_records = merged;
+                m_historyEpoch = epoch;
+            }
             trimRecordsLocked();
+
+            const bool changed = (oldRecords != m_records);
+            const bool cleared = (epoch > oldEpoch && m_records.isEmpty() && !oldRecords.isEmpty());
+
+            if (m_fileWatcher && fi.exists() && !fi.isSymLink() && !m_fileWatcher->files().contains(fi.absoluteFilePath())) {
+                m_fileWatcher->addPath(fi.absoluteFilePath());
+            }
+
+            if (outCleared) *outCleared = cleared;
+            if (outChanged) *outChanged = changed;
             return true;
         }
 
@@ -1140,13 +1330,6 @@ private:
             merged.removeLast();
         }
 
-        if (outMergedRecords) {
-            *outMergedRecords = merged;
-        }
-        if (outNewEpoch) {
-            *outNewEpoch = diskEpoch;
-        }
-
         // 5. Serialize JSON
         QJsonObject rootObj;
         rootObj[QStringLiteral("schemaVersion")] = THISPC_HISTORY_SCHEMA_VERSION;
@@ -1157,12 +1340,31 @@ private:
         }
         rootObj[QStringLiteral("records")] = arr;
 
-        const QByteArray jsonBytes = QJsonDocument(rootObj).toJson(QJsonDocument::Compact);
+        QByteArray jsonBytes = QJsonDocument(rootObj).toJson(QJsonDocument::Compact);
         if (jsonBytes.size() > THISPC_HISTORY_MAX_FILE_SIZE) {
-            lock.unlock();
-            if (status) *status = HistoryStorageStatus::FileSizeExceeded;
-            if (diagnostic) *diagnostic = QStringLiteral("Payload size (%1 B) exceeds 2 MiB limit").arg(jsonBytes.size());
-            return false;
+            // Stage 2.5: Enforce hard size limit (2 MiB) with oldest-record trimming priority.
+            while (merged.size() > 1 && jsonBytes.size() > THISPC_HISTORY_MAX_FILE_SIZE) {
+                merged.removeLast();
+                QJsonArray smallerArr;
+                for (const auto &r : merged) {
+                    smallerArr.append(r.toJson());
+                }
+                rootObj[QStringLiteral("records")] = smallerArr;
+                jsonBytes = QJsonDocument(rootObj).toJson(QJsonDocument::Compact);
+            }
+            if (jsonBytes.size() > THISPC_HISTORY_MAX_FILE_SIZE) {
+                lock.unlock();
+                if (status) *status = HistoryStorageStatus::FileSizeExceeded;
+                if (diagnostic) *diagnostic = QStringLiteral("Payload size (%1 B) exceeds 2 MiB limit").arg(jsonBytes.size());
+                return false;
+            }
+        }
+
+        if (outMergedRecords) {
+            *outMergedRecords = merged;
+        }
+        if (outNewEpoch) {
+            *outNewEpoch = diskEpoch;
         }
 
         // 6. Write atomically with QSaveFile
@@ -1204,8 +1406,197 @@ private:
         return true;
     }
 
+    void setupWatcher()
+    {
+        if (!m_fileWatcher) {
+            m_fileWatcher = new QFileSystemWatcher(this);
+            connect(m_fileWatcher, &QFileSystemWatcher::fileChanged, this, [this](const QString &path) {
+                onFileSystemChanged(path);
+            });
+            connect(m_fileWatcher, &QFileSystemWatcher::directoryChanged, this, [this](const QString &path) {
+                onFileSystemChanged(path);
+            });
+        }
+        updateWatcherRegistration();
+    }
+
+    void updateWatcherRegistration()
+    {
+        if (!m_fileWatcher) return;
+
+        const QStringList watchedFiles = m_fileWatcher->files();
+        if (!watchedFiles.isEmpty()) m_fileWatcher->removePaths(watchedFiles);
+        const QStringList watchedDirs = m_fileWatcher->directories();
+        if (!watchedDirs.isEmpty()) m_fileWatcher->removePaths(watchedDirs);
+
+        QString path;
+        {
+            QMutexLocker locker(&m_mutex);
+            path = m_filePath;
+        }
+
+        QFileInfo fi(path);
+        QDir dir = fi.dir();
+        if (dir.exists()) {
+            m_fileWatcher->addPath(dir.absolutePath());
+        }
+        if (fi.exists() && !fi.isSymLink()) {
+            m_fileWatcher->addPath(fi.absoluteFilePath());
+        }
+    }
+
+    void onFileSystemChanged(const QString &changedPath)
+    {
+        Q_UNUSED(changedPath)
+        {
+            QMutexLocker locker(&m_mutex);
+            if (m_saveWorkerRunning) {
+                return;
+            }
+        }
+
+        QString path;
+        {
+            QMutexLocker locker(&m_mutex);
+            path = m_filePath;
+        }
+
+        QFileInfo fi(path);
+        if (fi.exists() && !fi.isSymLink() && m_fileWatcher && !m_fileWatcher->files().contains(fi.absoluteFilePath())) {
+            m_fileWatcher->addPath(fi.absoluteFilePath());
+        }
+
+        if (fi.exists()) {
+            QMutexLocker locker(&m_mutex);
+            if (m_loaded && fi.lastModified() == m_lastDiskMtimeUtc && fi.size() == m_lastDiskFileSize) {
+                return;
+            }
+        }
+
+        if (m_reloadDebounceTimer && !m_reloadDebounceTimer->isActive()) {
+            m_reloadDebounceTimer->start();
+        }
+    }
+
+    void reloadFromDiskAsync()
+    {
+        QString path;
+        quint64 currentEpoch = 1;
+        QList<TransferHistoryRecord> currentRecords;
+        QSet<QString> locallyAdded;
+        QSet<QString> locallyDeleted;
+        int maxRecs = THISPC_HISTORY_DEFAULT_MAX_RECORDS;
+        {
+            QMutexLocker locker(&m_mutex);
+            if (m_saveWorkerRunning || m_reloadWorkerRunning || m_dirty) {
+                return;
+            }
+            QFileInfo fi(m_filePath);
+            if (fi.exists() && m_loaded && fi.lastModified() == m_lastDiskMtimeUtc && fi.size() == m_lastDiskFileSize) {
+                return;
+            }
+            m_reloadWorkerRunning = true;
+            path = m_filePath;
+            currentEpoch = m_historyEpoch;
+            currentRecords = m_records;
+            locallyAdded = m_locallyAddedUuids;
+            locallyDeleted = m_locallyDeletedUuids;
+            maxRecs = m_maxRecords;
+        }
+
+        m_activeReloadFuture = QtConcurrent::run([path, currentEpoch, currentRecords, locallyAdded, locallyDeleted, maxRecs]()
+            -> std::tuple<bool, QList<TransferHistoryRecord>, quint64, QDateTime, qint64> {
+            QString diag;
+            HistoryStorageStatus status = HistoryStorageStatus::Ok;
+            quint64 diskEpoch = 1;
+            QList<TransferHistoryRecord> diskRecords = executeDiskLoad(path, &diag, &status, &diskEpoch);
+            if (status != HistoryStorageStatus::Ok && status != HistoryStorageStatus::FileNotFound) {
+                return {false, {}, currentEpoch, QDateTime(), -1};
+            }
+            QFileInfo fi(path);
+            QDateTime mtime = fi.exists() ? fi.lastModified() : QDateTime();
+            qint64 size = fi.exists() ? fi.size() : 0;
+
+            QList<TransferHistoryRecord> merged;
+            if (diskEpoch > currentEpoch) {
+                merged = diskRecords;
+            } else {
+                QSet<QString> diskUuids;
+                for (const auto &rec : diskRecords) {
+                    if (!locallyDeleted.contains(rec.uuid)) {
+                        merged.append(rec);
+                        diskUuids.insert(rec.uuid);
+                    }
+                }
+                for (const auto &memRec : currentRecords) {
+                    if (locallyAdded.contains(memRec.uuid) && !diskUuids.contains(memRec.uuid)) {
+                        merged.prepend(memRec);
+                        diskUuids.insert(memRec.uuid);
+                    }
+                }
+            }
+            std::sort(merged.begin(), merged.end(), [](const TransferHistoryRecord &a, const TransferHistoryRecord &b) {
+                if (a.endTimeUtc != b.endTimeUtc) return a.endTimeUtc > b.endTimeUtc;
+                return a.startTimeUtc > b.startTimeUtc;
+            });
+            while (merged.size() > maxRecs) {
+                merged.removeLast();
+            }
+            return {true, merged, diskEpoch, mtime, size};
+        });
+
+        auto watcher = new QFutureWatcher<std::tuple<bool, QList<TransferHistoryRecord>, quint64, QDateTime, qint64>>(this);
+        connect(watcher, &QFutureWatcher<std::tuple<bool, QList<TransferHistoryRecord>, quint64, QDateTime, qint64>>::finished,
+                this, [this, watcher]() {
+            auto [ok, merged, diskEpoch, mtime, size] = watcher->result();
+            watcher->deleteLater();
+
+            bool hasChanged = false;
+            bool cleared = false;
+            QString currentPath;
+            {
+                QMutexLocker locker(&m_mutex);
+                m_reloadWorkerRunning = false;
+                if (ok) {
+                    m_lastDiskMtimeUtc = mtime;
+                    m_lastDiskFileSize = size;
+                    m_loaded = true;
+                    if (diskEpoch > m_historyEpoch) {
+                        m_historyEpoch = diskEpoch;
+                        m_locallyAddedUuids.clear();
+                        m_locallyDeletedUuids.clear();
+                        m_records = merged;
+                        hasChanged = true;
+                        cleared = true;
+                    } else {
+                        if (m_records != merged) {
+                            m_records = merged;
+                            hasChanged = true;
+                        }
+                        m_historyEpoch = diskEpoch;
+                    }
+                }
+                currentPath = m_filePath;
+            }
+
+            QFileInfo fi(currentPath);
+            if (fi.exists() && !fi.isSymLink() && m_fileWatcher && !m_fileWatcher->files().contains(fi.absoluteFilePath())) {
+                m_fileWatcher->addPath(fi.absoluteFilePath());
+            }
+
+            if (cleared) {
+                Q_EMIT historyCleared();
+            }
+            if (hasChanged) {
+                Q_EMIT recordsChanged();
+            }
+        });
+        watcher->setFuture(m_activeReloadFuture);
+    }
+
     mutable QMutex m_mutex;
     QString m_filePath;
+    bool m_enabled = true;
     int m_maxRecords = THISPC_HISTORY_DEFAULT_MAX_RECORDS;
     quint64 m_historyEpoch = 1;
     QList<TransferHistoryRecord> m_records;
@@ -1217,9 +1608,16 @@ private:
 
     bool m_saveWorkerRunning = false;
     bool m_savePendingAfterWorker = false;
+    bool m_reloadWorkerRunning = false;
 
     QTimer *m_debounceTimer = nullptr;
+    QTimer *m_reloadDebounceTimer = nullptr;
+    QFileSystemWatcher *m_fileWatcher = nullptr;
+    QDateTime m_lastDiskMtimeUtc;
+    qint64 m_lastDiskFileSize = -1;
+
     QFuture<std::tuple<bool, HistoryStorageStatus, QString, QList<TransferHistoryRecord>, quint64>> m_activeSaveFuture;
+    QFuture<std::tuple<bool, QList<TransferHistoryRecord>, quint64, QDateTime, qint64>> m_activeReloadFuture;
 
     HistoryStorageStatus m_lastStatus = HistoryStorageStatus::Ok;
     QString m_lastDiagnostic;

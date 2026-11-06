@@ -8,6 +8,7 @@
 #include "batchrename.h"
 
 #include <QCryptographicHash>
+#include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -625,16 +626,52 @@ public:
     ~BatchRenameRecoveryGate() {
 #ifdef Q_OS_UNIX
         if (m_lockFd >= 0) ::close(m_lockFd);
+        if (m_isInstanceRoot && !m_root.isEmpty()) {
+            const QDir dir(m_root);
+            const QFileInfoList files = dir.entryInfoList(
+                {QStringLiteral("cycle-*.json"), QStringLiteral("linear-*.json"),
+                 QStringLiteral("swap-*.json"), QStringLiteral("*.tmp")},
+                QDir::Files | QDir::NoSymLinks | QDir::NoDotAndDotDot);
+            if (files.isEmpty()) {
+                QDir(m_root).removeRecursively();
+            }
+        }
 #endif
     }
-    static BatchRenameRecoveryGate &instance(const QString &root = {}) {
-        QString selected = root;
+    static QString resolveRecoveryRoot(const QString &requestedRoot = {}) {
+        QString base = requestedRoot;
 #ifdef THISPC_BATCH_RENAME_TEST_HOOKS
-        if (selected.isEmpty()) selected = QString::fromLocal8Bit(qgetenv("THISPC_RECOVERY_ROOT"));
+        if (base.isEmpty()) base = QString::fromLocal8Bit(qgetenv("THISPC_RECOVERY_ROOT"));
 #endif
-        static BatchRenameRecoveryGate gate(selected.isEmpty()
-            ? QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)
-                + QStringLiteral("/thispc-view/batch-rename-recovery") : selected, true);
+        if (base.isEmpty()) {
+            base = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)
+                + QStringLiteral("/thispc-view/batch-rename-recovery");
+        }
+#ifdef Q_OS_UNIX
+        // In multi-process usage, if the primary root's recovery-audit.lock is held
+        // by another live ThisPC instance, secondary instances allocate their own
+        // instance-specific recovery directory so file mutations are not blocked.
+        const int rootFd = BatchRenameRecoveryDetail::openPrivateRecoveryRoot(base);
+        if (rootFd >= 0) {
+            const int lockFd = ::openat(rootFd, "recovery-audit.lock",
+                                        O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, 0600);
+            ::close(rootFd);
+            if (lockFd >= 0) {
+                const int rc = ::flock(lockFd, LOCK_EX | LOCK_NB);
+                if (rc == 0) {
+                    ::flock(lockFd, LOCK_UN);
+                    ::close(lockFd);
+                    return base;
+                }
+                ::close(lockFd);
+                return base + QStringLiteral("/instance-%1").arg(QCoreApplication::applicationPid());
+            }
+        }
+#endif
+        return base;
+    }
+    static BatchRenameRecoveryGate &instance(const QString &root = {}) {
+        static BatchRenameRecoveryGate gate(resolveRecoveryRoot(root), true);
         s_processGate = &gate;
         return gate;
     }
@@ -790,7 +827,9 @@ private:
         return result;
     }
     BatchRenameRecoveryGate(QString root, bool deferStartupScan)
-        : m_root(std::move(root)), m_startupScanPending(deferStartupScan)
+        : m_root(std::move(root)),
+          m_isInstanceRoot(m_root.contains(QStringLiteral("/instance-"))),
+          m_startupScanPending(deferStartupScan)
     {
         if (deferStartupScan) {
             m_audit.root = m_root;
@@ -877,6 +916,103 @@ private:
             QLockFile staleCleanup(dir.filePath(QStringLiteral("cycle.lock")));
             if (staleCleanup.tryLock(0)) m_audit.writerLock = BatchRenameRecoveryLock::None;
         }
+        const QString baseDir = m_isInstanceRoot ? QFileInfo(m_root).dir().absolutePath() : m_root;
+        if (m_isInstanceRoot) {
+            const QDir parentDir(baseDir);
+            const QFileInfo parentLockInfo(parentDir.filePath(QStringLiteral("cycle.lock")));
+            if (parentLockInfo.exists()) {
+                QFile pLock(parentLockInfo.absoluteFilePath());
+                if (parentLockInfo.isSymLink() || !pLock.open(QIODevice::ReadOnly)) {
+                    m_audit.writerLock = BatchRenameRecoveryLock::Ambiguous;
+                } else {
+                    bool ok = false;
+                    const qint64 pid = QString::fromLatin1(pLock.readLine()).trimmed().toLongLong(&ok);
+#ifdef Q_OS_UNIX
+                    if (!ok || pid <= 1) m_audit.writerLock = BatchRenameRecoveryLock::Ambiguous;
+                    else if (::kill(pid_t(pid), 0) == 0 || errno == EPERM) m_audit.writerLock = BatchRenameRecoveryLock::Live;
+                    else if (errno == ESRCH) m_audit.writerLock = BatchRenameRecoveryLock::Stale;
+                    else m_audit.writerLock = BatchRenameRecoveryLock::Ambiguous;
+#endif
+                }
+            }
+            const QFileInfoList baseFiles = parentDir.entryInfoList(
+                QDir::Files | QDir::System | QDir::Hidden | QDir::NoSymLinks | QDir::NoDotAndDotDot, QDir::Name);
+            for (const QFileInfo &file : baseFiles) {
+                const QString name = file.fileName();
+                if (name == QStringLiteral("cycle.lock") || name == QStringLiteral("recovery-audit.lock")) continue;
+                if (name.startsWith(QStringLiteral("cycle-")) || name.startsWith(QStringLiteral("linear-"))
+                    || name.startsWith(QStringLiteral("swap-")))
+                    m_audit.entries.append(parseBatchRenameRecoveryJournal(file.absoluteFilePath()));
+                else if (name.contains(QStringLiteral("journal"), Qt::CaseInsensitive)
+                         || name.endsWith(QStringLiteral(".tmp")) || name.startsWith(QLatin1Char('.'))) {
+                    BatchRenameRecoveryEntry entry; entry.path = file.absoluteFilePath();
+                    entry.kind = BatchRenameRecoveryKind::SuspiciousTemporary;
+                    entry.error = QStringLiteral("Suspicious recovery artifact in base directory.");
+                    m_audit.entries.append(entry);
+                }
+            }
+        }
+        const QFileInfoList subdirs = QDir(baseDir).entryInfoList(
+            {QStringLiteral("instance-*")},
+            QDir::Dirs | QDir::NoSymLinks | QDir::NoDotAndDotDot, QDir::Name);
+        for (const QFileInfo &sub : subdirs) {
+            if (sub.isSymLink() || !sub.isDir()) continue;
+            if (sub.absoluteFilePath() == m_root) continue;
+            bool ok = false;
+            const qint64 pid = sub.fileName().mid(9).toLongLong(&ok);
+            if (!ok || pid <= 1) continue;
+
+            bool processAlive = false;
+#ifdef Q_OS_UNIX
+            if (::kill(pid_t(pid), 0) == 0 || errno == EPERM) processAlive = true;
+#endif
+            bool hasLockHeld = false;
+#ifdef Q_OS_UNIX
+            const QString lockPath = QDir(sub.absoluteFilePath()).filePath(QStringLiteral("recovery-audit.lock"));
+            if (QFile::exists(lockPath)) {
+                const int subLockFd = ::open(QFile::encodeName(lockPath).constData(),
+                                             O_RDWR | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+                if (subLockFd >= 0) {
+                    if (::flock(subLockFd, LOCK_EX | LOCK_NB) != 0) {
+                        hasLockHeld = true;
+                        processAlive = true;
+                    } else {
+                        ::flock(subLockFd, LOCK_UN);
+                    }
+                    ::close(subLockFd);
+                }
+            }
+#endif
+            const QFileInfoList subFiles = QDir(sub.absoluteFilePath()).entryInfoList(
+                QDir::Files | QDir::System | QDir::Hidden | QDir::NoSymLinks | QDir::NoDotAndDotDot, QDir::Name);
+            bool hasRecoveryArtifacts = false;
+            for (const QFileInfo &subFile : subFiles) {
+                const QString name = subFile.fileName();
+                if (name == QStringLiteral("recovery-audit.lock")) continue;
+                if (name == QStringLiteral("cycle.lock")) {
+                    hasRecoveryArtifacts = true;
+                    if (!processAlive) m_audit.writerLock = BatchRenameRecoveryLock::Stale;
+                    else m_audit.writerLock = BatchRenameRecoveryLock::Live;
+                    continue;
+                }
+                if (name.startsWith(QStringLiteral("cycle-")) || name.startsWith(QStringLiteral("linear-"))
+                    || name.startsWith(QStringLiteral("swap-"))) {
+                    hasRecoveryArtifacts = true;
+                    m_audit.entries.append(parseBatchRenameRecoveryJournal(subFile.absoluteFilePath()));
+                } else if (name.contains(QStringLiteral("journal"), Qt::CaseInsensitive)
+                           || name.endsWith(QStringLiteral(".tmp")) || name.startsWith(QLatin1Char('.'))) {
+                    hasRecoveryArtifacts = true;
+                    BatchRenameRecoveryEntry entry;
+                    entry.path = subFile.absoluteFilePath();
+                    entry.kind = BatchRenameRecoveryKind::SuspiciousTemporary;
+                    entry.error = QStringLiteral("Suspicious recovery artifact in instance directory.");
+                    m_audit.entries.append(entry);
+                }
+            }
+            if (!m_isInstanceRoot && m_audit.inspectorLockHeld && !processAlive && !hasLockHeld && !hasRecoveryArtifacts) {
+                QDir(sub.absoluteFilePath()).removeRecursively();
+            }
+        }
         // Automatic policy-B recovery accepts exactly one strict linear v2
         // journal with at least two entries and never changes its direction.
         // v1, cycles, corrupt/unknown files and multi-journal states
@@ -892,7 +1028,8 @@ private:
                 == QStringLiteral("linear")
             && m_audit.writerLock != BatchRenameRecoveryLock::Live
             && m_audit.writerLock != BatchRenameRecoveryLock::Ambiguous) {
-            QLockFile recoveryLock(dir.filePath(QStringLiteral("cycle.lock")));
+            const QString journalDir = QFileInfo(m_audit.entries.first().path).absolutePath();
+            QLockFile recoveryLock(QDir(journalDir).filePath(QStringLiteral("cycle.lock")));
             if (recoveryLock.tryLock(0)) {
                 QString recoveryError;
                 const QString recoveryDirection = m_audit.entries.first().direction;
@@ -913,6 +1050,7 @@ private:
                 if (BatchRenameRecoveryDetail::recoverLinearV2(m_audit.entries.first(),
                                                                 &recoveryError)) {
                     m_lastCompletedDirection = recoveryDirection;
+                    recoveryLock.unlock();
                     m_audit.entries.clear();
                     m_audit.writerLock = BatchRenameRecoveryLock::None;
                 } else {
@@ -941,6 +1079,7 @@ private:
         }
     }
     QString m_root;
+    bool m_isInstanceRoot = false;
     BatchRenameRecoveryAudit m_audit;
     QString m_lastCompletedDirection;
     int m_lockFd = -1;

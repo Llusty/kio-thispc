@@ -215,6 +215,7 @@ QToolButton#crumbButton:focus {
 }
 
 QToolBar#fileCommandToolbar {
+    background: palette(window);
     border-top: 1px solid palette(mid);
     border-bottom: 1px solid palette(mid);
     spacing: 4px;

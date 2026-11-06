@@ -47,17 +47,29 @@ public:
 
     static QString defaultRoot()
     {
-        return QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)
-            + QStringLiteral("/thispc-view/batch-rename-recovery");
+        return BatchRenameRecoveryGate::instance().root();
     }
 
     static QString pendingJournal(const QString &root = defaultRoot())
     {
-        const QFileInfoList files = QDir(root).entryInfoList(
+        const QDir dir(root);
+        const QFileInfoList files = dir.entryInfoList(
             {QStringLiteral("cycle-*.json"), QStringLiteral("linear-*.json"),
              QStringLiteral("swap-*.json")},
             QDir::Files | QDir::NoSymLinks | QDir::NoDotAndDotDot, QDir::Name);
-        return files.isEmpty() ? QString() : files.first().absoluteFilePath();
+        if (!files.isEmpty()) return files.first().absoluteFilePath();
+
+        const QFileInfoList subdirs = dir.entryInfoList(
+            {QStringLiteral("instance-*")},
+            QDir::Dirs | QDir::NoSymLinks | QDir::NoDotAndDotDot, QDir::Name);
+        for (const QFileInfo &sub : subdirs) {
+            const QFileInfoList subFiles = QDir(sub.absoluteFilePath()).entryInfoList(
+                {QStringLiteral("cycle-*.json"), QStringLiteral("linear-*.json"),
+                 QStringLiteral("swap-*.json")},
+                QDir::Files | QDir::NoSymLinks | QDir::NoDotAndDotDot, QDir::Name);
+            if (!subFiles.isEmpty()) return subFiles.first().absoluteFilePath();
+        }
+        return QString();
     }
 
     bool begin(const BatchRenamePlan &plan, const QList<int> &cycle, QString *error = nullptr)

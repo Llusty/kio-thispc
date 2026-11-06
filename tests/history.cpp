@@ -2374,6 +2374,740 @@ static void testOperationPopupCorruptedStoreResilience(const QString &tempDir)
                   "Corrupted history safely falls back to 'Brak historii'");
 }
 
+// ======================================================================
+// Stage 2.5 History Settings, Retention & Multi-Instance Final Tests
+// ======================================================================
+
+static void testStage25DefaultSettings(const QString &tempDir)
+{
+    ScopedProductionDispatch prodGuard(true);
+    const QString filePath = tempDir + QStringLiteral("/s25_defaults.json");
+    TransferHistoryManager histMgr(filePath);
+
+    verifyHistory(histMgr.isEnabled(), "TransferHistoryManager is enabled by default");
+    verifyHistory(histMgr.maxRecords() == 200, "TransferHistoryManager maxRecords is 200 by default");
+
+    TransferQueueConfig cfg;
+    verifyHistory(cfg.historyEnabled, "TransferQueueConfig historyEnabled is true by default");
+    verifyHistory(cfg.historyMaxRecords == 200, "TransferQueueConfig historyMaxRecords is 200 by default");
+
+    TransferQueueController controller;
+    verifyHistory(controller.isHistoryEnabled(), "TransferQueueController isHistoryEnabled is true by default");
+    verifyHistory(controller.historyMaxRecords() == 200, "TransferQueueController historyMaxRecords is 200 by default");
+
+    TransferQueueSettingsWidget widget;
+    verifyHistory(widget.historyEnabledCheckBox()->isChecked(), "SettingsWidget historyEnabledCheckBox is checked by default");
+    verifyHistory(widget.historyRetentionCombo()->currentData().toInt() == 200, "SettingsWidget historyRetentionCombo is 200 by default");
+}
+
+static void testStage25SettingsPersistence(const QString &tempDir)
+{
+    const QString iniPath = tempDir + QStringLiteral("/s25_settings.ini");
+    auto store = std::make_shared<QSettings>(iniPath, QSettings::IniFormat);
+
+    TransferQueueConfig cfg;
+    cfg.historyEnabled = false;
+    cfg.historyMaxRecords = 50;
+
+    TransferQueueSettings::save(*store, cfg);
+    store->sync();
+
+    TransferQueueConfig loaded = TransferQueueSettings::load(*store);
+    verifyHistory(!loaded.historyEnabled, "Loaded historyEnabled is false");
+    verifyHistory(loaded.historyMaxRecords == 50, "Loaded historyMaxRecords is 50");
+
+    TransferHistoryManager histMgr(tempDir + QStringLiteral("/s25_hist_settings.json"));
+    histMgr.setEnabled(false);
+    histMgr.setMaxRecords(100);
+    histMgr.saveSettings(*store);
+    store->sync();
+
+    TransferHistoryManager histMgr2(tempDir + QStringLiteral("/s25_hist_settings2.json"));
+    histMgr2.loadSettings(*store);
+    verifyHistory(!histMgr2.isEnabled(), "histMgr2 loaded disabled status");
+    verifyHistory(histMgr2.maxRecords() == 100, "histMgr2 loaded maxRecords 100");
+}
+
+static void testStage25DisableAndReenableHistory(const QString &tempDir)
+{
+    ScopedProductionDispatch prodGuard(true);
+    const QString filePath = tempDir + QStringLiteral("/s25_disable_reenable.json");
+    TransferHistoryManager histMgr(filePath);
+
+    // 1. Add 2 initial records
+    auto r1 = TransferHistoryRecord::createNew(TransferOperationType::Copy, TransferBackendKind::LocalNative, TransferTaskState::Completed, {QUrl(QStringLiteral("file:///file1.txt"))});
+    auto r2 = TransferHistoryRecord::createNew(TransferOperationType::Copy, TransferBackendKind::LocalNative, TransferTaskState::Completed, {QUrl(QStringLiteral("file:///file2.txt"))});
+    histMgr.addRecord(r1, false);
+    histMgr.addRecord(r2, false);
+    histMgr.saveSync();
+    verifyHistory(histMgr.count() == 2, "2 initial records saved");
+
+    TransferQueueController controller;
+    controller.setHistoryManager(&histMgr);
+
+    // 2. Disable history recording
+    controller.setHistoryEnabled(false);
+    verifyHistory(!controller.isHistoryEnabled(), "Controller reflects history disabled");
+    verifyHistory(!histMgr.isEnabled(), "History manager reflects disabled");
+
+    // Existing records preserved
+    verifyHistory(histMgr.count() == 2, "Existing records are not deleted when history is disabled");
+
+    // addRecord should be ignored when disabled
+    auto rIgnored = TransferHistoryRecord::createNew(TransferOperationType::Copy, TransferBackendKind::LocalNative, TransferTaskState::Completed, {QUrl(QStringLiteral("file:///ignored.txt"))});
+    histMgr.addRecord(rIgnored, false);
+    verifyHistory(histMgr.count() == 2, "addRecord ignored while disabled");
+
+    // Queue task completion while disabled
+    HistoryTestJob *job1 = nullptr;
+    auto desc1 = makeQueueTestDescriptor(
+        TransferOperationType::Copy,
+        {QUrl(QStringLiteral("file:///task_disabled.txt"))},
+        QUrl(QStringLiteral("file:///dest/")),
+        [&job1]() -> KJob* {
+            job1 = new HistoryTestJob(false);
+            return job1;
+        }
+    );
+    controller.enqueue(desc1);
+    QCoreApplication::processEvents();
+    if (job1) {
+        job1->complete(1024, 1024);
+        QCoreApplication::processEvents();
+    }
+    histMgr.flushSync();
+    verifyHistory(histMgr.count() == 2, "Queue task finished while disabled did not add to history");
+
+    // 3. Re-enable history recording
+    controller.setHistoryEnabled(true);
+    verifyHistory(controller.isHistoryEnabled(), "Controller reflects history re-enabled");
+    verifyHistory(histMgr.isEnabled(), "History manager reflects re-enabled");
+
+    // New task should now be recorded
+    HistoryTestJob *job2 = nullptr;
+    auto desc2 = makeQueueTestDescriptor(
+        TransferOperationType::Copy,
+        {QUrl(QStringLiteral("file:///task_enabled.txt"))},
+        QUrl(QStringLiteral("file:///dest/")),
+        [&job2]() -> KJob* {
+            job2 = new HistoryTestJob(false);
+            return job2;
+        }
+    );
+    controller.enqueue(desc2);
+    QCoreApplication::processEvents();
+    if (job2) {
+        job2->complete(1024, 1024);
+        QCoreApplication::processEvents();
+    }
+    histMgr.flushSync();
+
+    verifyHistory(histMgr.count() == 3, "New task recorded after re-enabling history");
+}
+
+static void testStage25RetentionLimitsTrimming(const QString &tempDir)
+{
+    const QString filePath = tempDir + QStringLiteral("/s25_retention_trimming.json");
+    TransferHistoryManager histMgr(filePath);
+    histMgr.setMaxRecords(200);
+
+    const auto baseTime = QDateTime::currentDateTimeUtc();
+    for (int i = 0; i < 70; ++i) {
+        auto r = TransferHistoryRecord::createNew(TransferOperationType::Copy, TransferBackendKind::LocalNative, TransferTaskState::Completed,
+                                                 {QUrl(QStringLiteral("file:///item_%1.txt").arg(i))},
+                                                 QUrl(),
+                                                 baseTime.addSecs(i * 10),
+                                                 baseTime.addSecs(i * 10 + 5));
+        histMgr.addRecord(r, false);
+    }
+    histMgr.saveSync();
+    verifyHistory(histMgr.count() == 70, "70 initial records in history");
+
+    // Change retention limit to 50
+    bool signalEmitted = false;
+    QObject::connect(&histMgr, &TransferHistoryManager::recordsChanged, [&signalEmitted]() {
+        signalEmitted = true;
+    });
+
+    histMgr.setMaxRecords(50);
+    verifyHistory(histMgr.count() == 50, "Immediately trimmed to 50 in memory");
+    verifyHistory(signalEmitted, "recordsChanged emitted when trimmed by maxRecords");
+
+    histMgr.saveSync();
+
+    // Reload from disk in a fresh instance to ensure persistence trimmed it to 50
+    TransferHistoryManager histMgrReloaded(filePath);
+    histMgrReloaded.loadSync();
+    verifyHistory(histMgrReloaded.count() == 50, "Disk file trimmed to 50 records");
+
+    // Verify newest records are kept
+    auto recs = histMgrReloaded.records();
+    verifyHistory(recs.first().sourceUrls.first().fileName() == QStringLiteral("item_69.txt"),
+                  "Newest record item_69.txt is retained");
+}
+
+static void testStage25HardSizeLimitTrimmingPriority(const QString &tempDir)
+{
+    const QString filePath = tempDir + QStringLiteral("/s25_size_trimming.json");
+    TransferHistoryManager histMgr(filePath);
+    histMgr.setMaxRecords(500);
+
+    const QString largeTitle = QStringLiteral("LargePayload_").repeated(10);
+    QString largeError;
+    largeError.fill(QLatin1Char('X'), 3500);
+
+    const auto baseTime = QDateTime::currentDateTimeUtc();
+    for (int i = 0; i < 40; ++i) {
+        auto r = TransferHistoryRecord::createNew(TransferOperationType::Copy, TransferBackendKind::LocalNative, TransferTaskState::Failed,
+                                                 {QUrl(QStringLiteral("file:///large_%1.txt").arg(i))},
+                                                 QUrl(QStringLiteral("file:///dst_%1/").arg(i)),
+                                                 baseTime.addSecs(i * 10),
+                                                 baseTime.addSecs(i * 10 + 5),
+                                                 5000, 1024, 1024, std::nullopt, 100, largeError, largeTitle);
+        histMgr.addRecord(r, false);
+    }
+    verifyHistory(histMgr.saveSync(), "Saved records within size limit");
+
+    QFileInfo fi(filePath);
+    verifyHistory(fi.size() <= THISPC_HISTORY_MAX_FILE_SIZE, "File size strictly within 2 MiB ceiling");
+
+    TransferHistoryManager histMgrCheck(filePath);
+    verifyHistory(histMgrCheck.loadSync(), "History file loaded without error");
+}
+
+static void testStage25ClearHistoryAccepted(const QString &tempDir)
+{
+    ScopedProductionDispatch prodGuard(true);
+    const QString filePath = tempDir + QStringLiteral("/s25_clear_accepted.json");
+    TransferHistoryManager histMgr(filePath);
+
+    for (int i = 0; i < 5; ++i) {
+        auto r = TransferHistoryRecord::createNew(TransferOperationType::Copy, TransferBackendKind::LocalNative, TransferTaskState::Completed, {QUrl(QStringLiteral("file:///clear_%1.txt").arg(i))});
+        histMgr.addRecord(r, false);
+    }
+    histMgr.saveSync();
+    verifyHistory(histMgr.count() == 5, "5 records before clear");
+    const quint64 oldEpoch = histMgr.historyEpoch();
+
+    bool clearedSignal = false;
+    bool recordsChangedSignal = false;
+    QObject::connect(&histMgr, &TransferHistoryManager::historyCleared, [&clearedSignal]() {
+        clearedSignal = true;
+    });
+    QObject::connect(&histMgr, &TransferHistoryManager::recordsChanged, [&recordsChangedSignal]() {
+        recordsChangedSignal = true;
+    });
+
+    TransferQueueController controller;
+    controller.setHistoryManager(&histMgr);
+
+    // Enqueue 1 terminal task and 1 running task
+    HistoryTestJob *job1 = nullptr;
+    auto d1 = makeQueueTestDescriptor(
+        TransferOperationType::Copy,
+        {QUrl(QStringLiteral("file:///f1.txt"))},
+        QUrl(QStringLiteral("file:///dest/")),
+        [&job1]() -> KJob* {
+            job1 = new HistoryTestJob(false);
+            return job1;
+        }
+    );
+    quint64 t1 = controller.enqueue(d1).id;
+    QCoreApplication::processEvents();
+    if (job1) {
+        job1->complete(1024, 1024);
+        QCoreApplication::processEvents();
+    }
+
+    HistoryTestJob *job2 = nullptr;
+    auto d2 = makeQueueTestDescriptor(
+        TransferOperationType::Copy,
+        {QUrl(QStringLiteral("file:///active.txt"))},
+        QUrl(QStringLiteral("file:///dest/")),
+        [&job2]() -> KJob* {
+            job2 = new HistoryTestJob(false);
+            return job2;
+        }
+    );
+    quint64 t2 = controller.enqueue(d2).id;
+    QCoreApplication::processEvents();
+
+    controller.clearHistory(true);
+    histMgr.flushSync();
+
+    verifyHistory(clearedSignal, "historyCleared signal emitted");
+    verifyHistory(recordsChangedSignal, "recordsChanged signal emitted on clear");
+    verifyHistory(histMgr.count() == 0, "TransferHistoryManager is empty after clear");
+    verifyHistory(histMgr.historyEpoch() > oldEpoch, "historyEpoch was incremented by clear");
+
+    verifyHistory(controller.taskSnapshot(t2).has_value(), "Active task was NOT removed or cancelled by clearHistory");
+    verifyHistory(!controller.taskSnapshot(t1).has_value(), "Finished task was cleared from controller");
+
+    if (job2) {
+        job2->complete(1024, 1024);
+        QCoreApplication::processEvents();
+    }
+
+    TransferHistoryManager histMgrReload(filePath);
+    histMgrReload.loadSync();
+    verifyHistory(histMgrReload.count() == 0, "Disk file is empty after clear");
+}
+
+static void testStage25ClearHistoryCancelled(const QString &tempDir)
+{
+    ScopedProductionDispatch prodGuard(true);
+    const QString filePath = tempDir + QStringLiteral("/s25_clear_cancelled.json");
+    TransferHistoryManager histMgr(filePath);
+
+    for (int i = 0; i < 3; ++i) {
+        auto r = TransferHistoryRecord::createNew(TransferOperationType::Copy, TransferBackendKind::LocalNative, TransferTaskState::Completed, {QUrl(QStringLiteral("file:///cancel_item_%1.txt").arg(i))});
+        histMgr.addRecord(r, false);
+    }
+    histMgr.saveSync();
+    verifyHistory(histMgr.count() == 3, "3 records present before test");
+
+    TransferQueueController controller;
+    controller.setHistoryManager(&histMgr);
+
+    QMainWindow win;
+    QToolBar tb(&win);
+    OperationManager opMgr(&win, &tb, &win);
+    opMgr.setQueueController(&controller);
+    opMgr.showDetailedWindow();
+
+    OperationWindow *opWin = opMgr.detailedWindow();
+    verifyHistory(opWin != nullptr, "Detailed window exists");
+
+    // Clear cancelled via prompt rejection
+    clearHistoryPromptOverrideForTest() = false;
+    opWin->clearHistory(true);
+    clearHistoryPromptOverrideForTest().reset();
+
+    // History remains intact when clear is cancelled/rejected
+    verifyHistory(histMgr.count() == 3, "History count remains 3 when clear is cancelled");
+    verifyHistory(controller.historyManager()->count() == 3, "Controller history remains 3");
+}
+
+static void testStage25ClearPreventsQueueResurrection(const QString &tempDir)
+{
+    ScopedProductionDispatch prodGuard(true);
+    const QString filePath = tempDir + QStringLiteral("/s25_clear_no_resurrect.json");
+    TransferHistoryManager histMgr(filePath);
+
+    TransferQueueController controller;
+    controller.setHistoryManager(&histMgr);
+
+    // Add and finish a task
+    HistoryTestJob *job1 = nullptr;
+    auto d1 = makeQueueTestDescriptor(
+        TransferOperationType::Copy,
+        {QUrl(QStringLiteral("file:///resurrect_test.txt"))},
+        QUrl(QStringLiteral("file:///dest/")),
+        [&job1]() -> KJob* {
+            job1 = new HistoryTestJob(false);
+            return job1;
+        }
+    );
+    quint64 t1 = controller.enqueue(d1).id;
+    QCoreApplication::processEvents();
+    if (job1) {
+        job1->complete(1024, 1024);
+        QCoreApplication::processEvents();
+    }
+    histMgr.flushSync();
+    verifyHistory(histMgr.count() == 1, "1 record in history before clear");
+
+    controller.clearHistory(true);
+    histMgr.flushSync();
+    verifyHistory(histMgr.count() == 0, "History empty after clear");
+
+    // Add brand new task and finish it
+    HistoryTestJob *job2 = nullptr;
+    auto d2 = makeQueueTestDescriptor(
+        TransferOperationType::Copy,
+        {QUrl(QStringLiteral("file:///brand_new.txt"))},
+        QUrl(QStringLiteral("file:///dest/")),
+        [&job2]() -> KJob* {
+            job2 = new HistoryTestJob(false);
+            return job2;
+        }
+    );
+    quint64 t2 = controller.enqueue(d2).id;
+    QCoreApplication::processEvents();
+    if (job2) {
+        job2->complete(1024, 1024);
+        QCoreApplication::processEvents();
+    }
+    histMgr.flushSync();
+
+    verifyHistory(histMgr.count() == 1, "Only 1 record present (the new task)");
+    verifyHistory(histMgr.records().first().sourceUrls.first().fileName() == QStringLiteral("brand_new.txt"),
+                  "New task recorded; old cleared task was not resurrected");
+}
+
+static void testStage25MultiInstanceConcurrencyAndSync(const QString &tempDir)
+{
+    const QString filePath = tempDir + QStringLiteral("/s25_multi_instance.json");
+    TransferHistoryManager instA(filePath);
+    TransferHistoryManager instB(filePath);
+
+    // Instance A adds recA
+    auto recA = TransferHistoryRecord::createNew(TransferOperationType::Copy, TransferBackendKind::LocalNative, TransferTaskState::Completed, {QUrl(QStringLiteral("file:///recA.txt"))});
+    instA.addRecord(recA, false);
+    verifyHistory(instA.saveSync(), "Instance A saved");
+
+    // Instance B adds recB
+    auto recB = TransferHistoryRecord::createNew(TransferOperationType::Copy, TransferBackendKind::LocalNative, TransferTaskState::Completed, {QUrl(QStringLiteral("file:///recB.txt"))});
+    instB.addRecord(recB, false);
+    verifyHistory(instB.saveSync(), "Instance B saved");
+
+    // Both should be merged on disk
+    TransferHistoryManager instC(filePath);
+    instC.loadSync();
+    verifyHistory(instC.count() == 2, "Both instances merged on disk (count == 2)");
+
+    // Instance A clears history
+    instA.clear(true);
+    instA.flushSync();
+    verifyHistory(instA.count() == 0, "Instance A cleared history");
+
+    // Instance B (holding stale epoch 1) saves -> Security Gate A drops pre-clear records and adopts epoch 2
+    verifyHistory(instB.saveSync(), "Instance B syncs after A cleared");
+    verifyHistory(instB.count() == 0, "Instance B discarded stale pre-clear records");
+    verifyHistory(instB.historyEpoch() == 2, "Instance B adopted epoch 2");
+
+    // Now Instance B adds recB2 under epoch 2 and saves
+    auto recB2 = TransferHistoryRecord::createNew(TransferOperationType::Copy, TransferBackendKind::LocalNative, TransferTaskState::Completed, {QUrl(QStringLiteral("file:///recB2.txt"))});
+    instB.addRecord(recB2, false);
+    verifyHistory(instB.saveSync(), "Instance B saved recB2 under epoch 2");
+
+    // On disk, recA and recB must NOT be resurrected; only recB2 should exist!
+    TransferHistoryManager instD(filePath);
+    instD.loadSync();
+    verifyHistory(instD.count() == 1, "Only recB2 exists; stale records were not resurrected by B");
+    verifyHistory(instD.records().first().sourceUrls.first().fileName() == QStringLiteral("recB2.txt"),
+                  "Verified only recB2 is on disk");
+}
+
+static void testStage25TransferQueueSettingsWidgetIntegration(const QString &tempDir)
+{
+    ScopedProductionDispatch prodGuard(true);
+    const QString iniPath = tempDir + QStringLiteral("/s25_widget_test.ini");
+    auto store = std::make_shared<QSettings>(iniPath, QSettings::IniFormat);
+
+    TransferHistoryManager histMgr(tempDir + QStringLiteral("/s25_widget_history.json"));
+    TransferQueueController controller;
+    controller.setHistoryManager(&histMgr);
+
+    TransferQueueSettingsWidget widget;
+    widget.setIsolatedSettings(store);
+    widget.setController(&controller);
+
+    verifyHistory(widget.historyEnabledCheckBox() != nullptr, "historyEnabledCheckBox exists");
+    verifyHistory(widget.historyRetentionCombo() != nullptr, "historyRetentionCombo exists");
+    verifyHistory(widget.clearHistoryButton() != nullptr, "clearHistoryButton exists");
+
+    // Toggle historyEnabled
+    widget.historyEnabledCheckBox()->setChecked(false);
+    verifyHistory(!controller.isHistoryEnabled(), "Controller history disabled via widget");
+    verifyHistory(!widget.historyRetentionCombo()->isEnabled(), "Retention combo disabled when history disabled");
+
+    widget.historyEnabledCheckBox()->setChecked(true);
+    verifyHistory(controller.isHistoryEnabled(), "Controller history re-enabled via widget");
+    verifyHistory(widget.historyRetentionCombo()->isEnabled(), "Retention combo enabled when history enabled");
+
+    // Select 100 max records
+    const int idx100 = widget.historyRetentionCombo()->findData(100);
+    verifyHistory(idx100 >= 0, "Index for 100 found");
+    widget.historyRetentionCombo()->setCurrentIndex(idx100);
+    verifyHistory(controller.historyMaxRecords() == 100, "Controller max records set to 100 via widget");
+}
+
+static void testStage25OperationWindowAndPopupSyncAcrossSettings(const QString &tempDir)
+{
+    ScopedProductionDispatch prodGuard(true);
+    const QString filePath = tempDir + QStringLiteral("/s25_window_popup_sync.json");
+    TransferHistoryManager histMgr(filePath);
+
+    auto r = TransferHistoryRecord::createNew(TransferOperationType::Copy, TransferBackendKind::LocalNative, TransferTaskState::Completed, {QUrl(QStringLiteral("file:///sync_test.txt"))});
+    histMgr.addRecord(r, false);
+    histMgr.saveSync();
+
+    TransferQueueController controller;
+    controller.setHistoryManager(&histMgr);
+
+    QMainWindow win;
+    QToolBar tb(&win);
+    OperationManager opMgr(&win, &tb, &win);
+    opMgr.setQueueController(&controller);
+    opMgr.updateSummary();
+
+    OperationPopup *popup = opMgr.popup();
+    auto *summaryLbl = popup->findChild<QLabel *>(QStringLiteral("operationSummaryLabel"));
+    verifyHistory(summaryLbl != nullptr, "Summary label found in popup");
+    verifyHistory(summaryLbl->text().contains(QStringLiteral("Historia: 1")) || summaryLbl->text().contains(QStringLiteral("History: 1")),
+                  "Popup shows 'Historia: 1'");
+
+    opMgr.showDetailedWindow();
+    OperationWindow *opWin = opMgr.detailedWindow();
+    verifyHistory(opWin != nullptr, "Detailed window exists");
+
+    // Clear history
+    controller.clearHistory(true);
+    histMgr.flushSync();
+    QCoreApplication::processEvents();
+
+    verifyHistory(summaryLbl->text() == QStringLiteral("Brak historii") || summaryLbl->text() == QStringLiteral("No history"),
+                  "Popup updated to 'Brak historii' after clearHistory");
+}
+
+static void testStage25CrossProcessSyncAndLiveUpdates(const QString &tempDir, const QString &appPath)
+{
+    ScopedProductionDispatch prodGuard(true);
+    const QString filePath = tempDir + QStringLiteral("/cross_process_live.json");
+
+    // 1. Instance A starts and seeds 2 initial records
+    TransferHistoryManager histMgrA(filePath);
+    const QString uuid1 = QStringLiteral("11111111-aaaa-bbbb-cccc-000000000001");
+    const QString uuid2 = QStringLiteral("22222222-aaaa-bbbb-cccc-000000000002");
+    auto rec1 = TransferHistoryRecord::createNew(TransferOperationType::Copy, TransferBackendKind::LocalNative, TransferTaskState::Completed, {QUrl(QStringLiteral("file:///initial_1.txt"))}, QUrl(), QDateTime::currentDateTimeUtc(), QDateTime::currentDateTimeUtc(), 10, 100, 100, std::nullopt, 0, QString(), QStringLiteral("Initial 1"));
+    rec1.uuid = uuid1;
+    auto rec2 = TransferHistoryRecord::createNew(TransferOperationType::Copy, TransferBackendKind::LocalNative, TransferTaskState::Completed, {QUrl(QStringLiteral("file:///initial_2.txt"))}, QUrl(), QDateTime::currentDateTimeUtc(), QDateTime::currentDateTimeUtc(), 10, 100, 100, std::nullopt, 0, QString(), QStringLiteral("Initial 2"));
+    rec2.uuid = uuid2;
+    histMgrA.addRecord(rec1, false);
+    histMgrA.addRecord(rec2, false);
+    verifyHistory(histMgrA.saveSync(), "Instance A saved initial 2 records");
+    verifyHistory(histMgrA.count() == 2, "Instance A has 2 records");
+
+    // 2. Setup Instance A UI: TransferQueueController, OperationManager, OperationWindow, OperationPopup
+    TransferQueueController controllerA;
+    controllerA.setHistoryManager(&histMgrA);
+
+    QMainWindow win;
+    QToolBar tb(&win);
+    OperationManager opMgr(&win, &tb, &win);
+    opMgr.setQueueController(&controllerA);
+    opMgr.updateSummary();
+
+    OperationPopup *popup = opMgr.popup();
+    auto *summaryLbl = popup->findChild<QLabel *>(QStringLiteral("operationSummaryLabel"));
+    verifyHistory(summaryLbl != nullptr, "Summary label found in popup");
+    verifyHistory(summaryLbl->text().contains(QStringLiteral("Historia: 2")) || summaryLbl->text().contains(QStringLiteral("History: 2")),
+                  "Popup shows 'Historia: 2' initially in Instance A");
+
+    opMgr.showDetailedWindow();
+    OperationWindow *opWin = opMgr.detailedWindow();
+    verifyHistory(opWin != nullptr, "Detailed window exists");
+    auto initialCards = opWin->findChildren<QFrame *>(QStringLiteral("operationRow"));
+    verifyHistory(initialCards.size() == 2, "Detailed window has exactly 2 cards initially");
+
+    // 3. Launch independent OS process (Instance B) to add Record 3 via QSaveFile
+    const QString uuid3 = QStringLiteral("33333333-aaaa-bbbb-cccc-000000000003");
+    QProcess childProc1;
+    childProc1.start(appPath, {QStringLiteral("history"), QStringLiteral("--subproc-add"),
+                              filePath, uuid3, QStringLiteral("MultiInstance Copy B")});
+    verifyHistory(childProc1.waitForFinished(10000), "Child process 1 (Instance B) must finish within 10s");
+    verifyHistory(childProc1.exitCode() == 0, "Child process 1 must exit with code 0");
+
+    // 4. Wait for Instance A QFileSystemWatcher and debounce timer to process live external update
+    QElapsedTimer timer;
+    timer.start();
+    while (histMgrA.count() < 3 && timer.elapsed() < 3000) {
+        QTest::qWait(50);
+    }
+
+    verifyHistory(histMgrA.count() == 3, "Instance A automatically noticed external addition (count == 3)");
+    verifyHistory(histMgrA.findRecord(uuid3).has_value(), "Instance A has Record 3 from Instance B");
+
+    // Verify UI in Instance A reactively updated
+    verifyHistory(summaryLbl->text().contains(QStringLiteral("Historia: 3")) || summaryLbl->text().contains(QStringLiteral("History: 3")),
+                  "Popup summary label updated reactively to 'Historia: 3'");
+
+    timer.restart();
+    while (opWin->findChildren<QFrame *>(QStringLiteral("operationRow")).size() < 3 && timer.elapsed() < 3000) {
+        QTest::qWait(50);
+    }
+    auto updatedCards = opWin->findChildren<QFrame *>(QStringLiteral("operationRow"));
+    verifyHistory(updatedCards.size() == 3, "Detailed window cards automatically updated to 3 cards");
+
+    // 5. Launch independent OS process (Instance B) to clear history
+    QProcess childProc2;
+    childProc2.start(appPath, {QStringLiteral("history"), QStringLiteral("--subproc-clear"), filePath});
+    verifyHistory(childProc2.waitForFinished(10000), "Child process 2 (Instance B clear) must finish within 10s");
+    verifyHistory(childProc2.exitCode() == 0, "Child process 2 must exit with code 0");
+
+    timer.restart();
+    while (histMgrA.count() > 0 && timer.elapsed() < 3000) {
+        QTest::qWait(50);
+    }
+
+    verifyHistory(histMgrA.count() == 0, "Instance A automatically noticed external clear (count == 0)");
+    verifyHistory(summaryLbl->text() == QStringLiteral("Brak historii") || summaryLbl->text() == QStringLiteral("No history"),
+                  "Popup updated reactively to 'Brak historii'");
+
+    timer.restart();
+    while (!opWin->findChildren<QFrame *>(QStringLiteral("operationRow")).isEmpty() && timer.elapsed() < 3000) {
+        QTest::qWait(50);
+    }
+    auto clearedCards = opWin->findChildren<QFrame *>(QStringLiteral("operationRow"));
+    verifyHistory(clearedCards.isEmpty(), "Detailed window has 0 cards after external clear");
+
+    // 6. Instance A performs a brand new transfer (Record 4) under the new epoch
+    const QString uuid4 = QStringLiteral("44444444-aaaa-bbbb-cccc-000000000004");
+    auto rec4 = TransferHistoryRecord::createNew(TransferOperationType::Copy, TransferBackendKind::LocalNative, TransferTaskState::Completed, {QUrl(QStringLiteral("file:///new_task_after_clear.txt"))}, QUrl(), QDateTime::currentDateTimeUtc(), QDateTime::currentDateTimeUtc(), 10, 100, 100, std::nullopt, 0, QString(), QStringLiteral("New Task 4"));
+    rec4.uuid = uuid4;
+    histMgrA.addRecord(rec4, false);
+    verifyHistory(histMgrA.saveSync(), "Instance A saved Record 4 after clear");
+
+    // Verify on disk: ONLY Record 4 exists, old records were never resurrected
+    TransferHistoryManager diskVerifier(filePath);
+    diskVerifier.loadSync();
+    verifyHistory(diskVerifier.count() == 1, "Disk file contains exactly 1 record");
+    verifyHistory(diskVerifier.findRecord(uuid4).has_value(), "Only Record 4 exists on disk");
+    verifyHistory(!diskVerifier.findRecord(uuid1).has_value() && !diskVerifier.findRecord(uuid2).has_value() && !diskVerifier.findRecord(uuid3).has_value(),
+                  "Old records 1, 2, 3 were strictly not resurrected");
+
+    // Verify Instance A UI updated
+    verifyHistory(summaryLbl->text().contains(QStringLiteral("Historia: 1")) || summaryLbl->text().contains(QStringLiteral("History: 1")),
+                  "Popup updated to 'Historia: 1'");
+
+    timer.restart();
+    while (opWin->findChildren<QFrame *>(QStringLiteral("operationRow")).size() < 1 && timer.elapsed() < 3000) {
+        QTest::qWait(50);
+    }
+    auto finalCards = opWin->findChildren<QFrame *>(QStringLiteral("operationRow"));
+    verifyHistory(finalCards.size() == 1, "Detailed window has exactly 1 card for Record 4");
+}
+
+static void testStage25MultiProcessFinishedTaskClearedAndNewTransfer(const QString &tempDir, const QString &appPath)
+{
+    ScopedProductionDispatch prodGuard(true);
+    const QString filePath = tempDir + QStringLiteral("/s25_f2_multiprocess.json");
+
+    // 1. Setup Instance B with UI
+    TransferHistoryManager histMgrB(filePath);
+    TransferQueueController controllerB;
+    controllerB.setHistoryManager(&histMgrB);
+
+    QMainWindow winB;
+    QToolBar tbB(&winB);
+    OperationManager opMgrB(&winB, &tbB, &winB);
+    opMgrB.setQueueController(&controllerB);
+    opMgrB.showDetailedWindow();
+
+    OperationWindow *opWinB = opMgrB.detailedWindow();
+    verifyHistory(opWinB != nullptr, "Instance B OperationWindow exists");
+    OperationPopup *popupB = opMgrB.popup();
+    auto *emptyLblB = popupB->findChild<QLabel *>(QStringLiteral("operationEmptyLabel"));
+    auto *summaryLblB = popupB->findChild<QLabel *>(QStringLiteral("operationSummaryLabel"));
+    verifyHistory(emptyLblB != nullptr && summaryLblB != nullptr, "Instance B popup labels found");
+
+    // 2. Instance B runs and completes Task 1 (10 MiB copy)
+    HistoryTestJob *job1 = nullptr;
+    auto d1 = makeQueueTestDescriptor(
+        TransferOperationType::Copy,
+        {QUrl(QStringLiteral("file:///file_10mib.bin"))},
+        QUrl(QStringLiteral("file:///dest/")),
+        [&job1]() -> KJob* {
+            job1 = new HistoryTestJob(false);
+            return job1;
+        }
+    );
+    controllerB.enqueue(d1);
+    QCoreApplication::processEvents();
+    if (job1) {
+        job1->complete(10485760, 10485760);
+        QCoreApplication::processEvents();
+    }
+    histMgrB.flushSync();
+    verifyHistory(histMgrB.count() == 1, "Task 1 saved to disk history (count == 1)");
+    verifyHistory(controllerB.snapshot().tasks.size() == 1, "Controller B has 1 finished task");
+
+    // Let Instance B UI update
+    QElapsedTimer timer;
+    timer.start();
+    while (opWinB->findChildren<QFrame *>(QStringLiteral("operationRow")).size() < 1 && timer.elapsed() < 3000) {
+        QTest::qWait(50);
+    }
+    auto cardsBeforeClear = opWinB->findChildren<QFrame *>(QStringLiteral("operationRow"));
+    verifyHistory(cardsBeforeClear.size() == 1, "Instance B window shows 1 completed task card before clear");
+    verifyHistory(summaryLblB->text().contains(QStringLiteral("Historia: 1")) || summaryLblB->text().contains(QStringLiteral("History: 1")),
+                  "Instance B popup shows 'Historia: 1' before clear");
+    verifyHistory(emptyLblB->text().contains(QStringLiteral("Zapisana historia: 1")) || emptyLblB->text().contains(QStringLiteral("Saved history: 1")),
+                  "Instance B popup shows 'Zapisana historia: 1' when 1 record is actually on disk");
+
+    // 3. Independent child OS process (representing Instance A) clears history
+    QProcess childProc;
+    childProc.start(appPath, {QStringLiteral("history"), QStringLiteral("--subproc-clear"), filePath});
+    verifyHistory(childProc.waitForFinished(10000), "Instance A subprocess must finish within 10s");
+    verifyHistory(childProc.exitCode() == 0, "Instance A subprocess exit code 0");
+
+    // 4. Instance B synchronizes with external clear
+    timer.restart();
+    while (histMgrB.count() > 0 && timer.elapsed() < 3000) {
+        QTest::qWait(50);
+    }
+    verifyHistory(histMgrB.count() == 0, "Instance B noticed disk history count is now 0");
+
+    // Wait for Instance B UI to synchronize
+    timer.restart();
+    while (!opWinB->findChildren<QFrame *>(QStringLiteral("operationRow")).isEmpty() && timer.elapsed() < 3000) {
+        QTest::qWait(50);
+    }
+    auto cardsAfterClear = opWinB->findChildren<QFrame *>(QStringLiteral("operationRow"));
+    verifyHistory(cardsAfterClear.isEmpty(), "Instance B OperationWindow has 0 cards after external clear");
+    verifyHistory(controllerB.snapshot().tasks.isEmpty(), "Controller B cleared terminal session tasks on historyCleared");
+
+    // Popup in Instance B must show 'Brak historii' and NEVER 'Zapisana historia: 1'
+    verifyHistory(summaryLblB->text() == QStringLiteral("Brak historii") || summaryLblB->text() == QStringLiteral("No history"),
+                  "Instance B popup summary is 'Brak historii'");
+    verifyHistory(!emptyLblB->text().contains(QStringLiteral("Zapisana historia")) && !emptyLblB->text().contains(QStringLiteral("Saved history")),
+                  "Instance B popup empty label strictly does NOT claim 'Zapisana historia' when store has 0 records");
+
+    // 5. Instance B executes a brand new transfer (Task 2, 5 MiB)
+    HistoryTestJob *job2 = nullptr;
+    auto d2 = makeQueueTestDescriptor(
+        TransferOperationType::Copy,
+        {QUrl(QStringLiteral("file:///file_new_5mib.bin"))},
+        QUrl(QStringLiteral("file:///dest/")),
+        [&job2]() -> KJob* {
+            job2 = new HistoryTestJob(false);
+            return job2;
+        }
+    );
+    controllerB.enqueue(d2);
+    QCoreApplication::processEvents();
+    if (job2) {
+        job2->complete(5242880, 5242880);
+        QCoreApplication::processEvents();
+    }
+    histMgrB.flushSync();
+
+    // Verify on disk: ONLY Task 2 exists, Task 1 was strictly not resurrected
+    TransferHistoryManager diskVerifier(filePath);
+    diskVerifier.loadSync();
+    verifyHistory(diskVerifier.count() == 1, "Disk contains exactly 1 record after new transfer");
+    verifyHistory(diskVerifier.records().first().sourceUrls.first().fileName() == QStringLiteral("file_new_5mib.bin"),
+                  "Only new Task 2 is on disk");
+
+    // Verify Instance B UI updated
+    timer.restart();
+    while (opWinB->findChildren<QFrame *>(QStringLiteral("operationRow")).size() < 1 && timer.elapsed() < 3000) {
+        QTest::qWait(50);
+    }
+    auto cardsAfterNew = opWinB->findChildren<QFrame *>(QStringLiteral("operationRow"));
+    verifyHistory(cardsAfterNew.size() == 1, "Instance B OperationWindow has 1 card for new Task 2");
+    verifyHistory(summaryLblB->text().contains(QStringLiteral("Historia: 1")) || summaryLblB->text().contains(QStringLiteral("History: 1")),
+                  "Instance B popup summary updated to 'Historia: 1'");
+
+    // 6. Independent manager (representing Instance A) loads and syncs with disk
+    TransferHistoryManager histMgrA(filePath);
+    histMgrA.loadSync();
+    verifyHistory(histMgrA.count() == 1, "Instance A sees exactly 1 record");
+    verifyHistory(histMgrA.records().first().sourceUrls.first().fileName() == QStringLiteral("file_new_5mib.bin"),
+                  "Instance A sees new Task 2; old Task 1 is permanently gone");
+}
+
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
@@ -2398,6 +3132,13 @@ int main(int argc, char **argv)
                 100, 1024, 1024, std::nullopt, 0, QString(), itemTitle);
             rec.uuid = itemUuid;
             mgr.addRecord(rec, false);
+            return mgr.saveSync() ? 0 : 1;
+        }
+        if (QString::fromLatin1(argv[i]) == QStringLiteral("--subproc-clear") && i + 1 < argc) {
+            const QString targetPath = QString::fromLatin1(argv[i + 1]);
+            TransferHistoryManager mgr(targetPath);
+            mgr.loadSync();
+            mgr.clear(false);
             return mgr.saveSync() ? 0 : 1;
         }
     }
@@ -2469,6 +3210,21 @@ int main(int argc, char **argv)
     testOperationPopupShowDetailsButtonOpensWindow(path);
     testOperationPopupCorruptedStoreResilience(path);
 
-    qDebug("PASS: [history] %d assertions verified across 54 test suites", s_historyChecks);
+    // Stage 2.5 History Settings, Retention & Multi-Instance Final Tests
+    testStage25DefaultSettings(path);
+    testStage25SettingsPersistence(path);
+    testStage25DisableAndReenableHistory(path);
+    testStage25RetentionLimitsTrimming(path);
+    testStage25HardSizeLimitTrimmingPriority(path);
+    testStage25ClearHistoryAccepted(path);
+    testStage25ClearHistoryCancelled(path);
+    testStage25ClearPreventsQueueResurrection(path);
+    testStage25MultiInstanceConcurrencyAndSync(path);
+    testStage25TransferQueueSettingsWidgetIntegration(path);
+    testStage25OperationWindowAndPopupSyncAcrossSettings(path);
+    testStage25CrossProcessSyncAndLiveUpdates(path, appPath);
+    testStage25MultiProcessFinishedTaskClearedAndNewTransfer(path, appPath);
+
+    qDebug("PASS: [history] %d assertions verified across 67 test suites", s_historyChecks);
     return 0;
 }

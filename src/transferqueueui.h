@@ -529,6 +529,52 @@ inline void enqueueDemoTasks(TransferQueueController *controller)
     controller->enqueue(t5);
 }
 
+#ifdef THISPC_TEST_HARNESS
+inline std::optional<bool> &clearHistoryPromptOverrideForTest()
+{
+    static std::optional<bool> s_override;
+    return s_override;
+}
+#endif
+
+inline bool promptClearHistoryConfirmation(QWidget *parent = nullptr)
+{
+#ifdef THISPC_TEST_HARNESS
+    if (clearHistoryPromptOverrideForTest().has_value()) {
+        return *clearHistoryPromptOverrideForTest();
+    }
+#endif
+    if (qEnvironmentVariableIsSet("THISPC_TEST_HARNESS") || QGuiApplication::platformName() == QStringLiteral("offscreen")) {
+        return true;
+    }
+    QMessageBox msgBox(parent);
+    msgBox.setObjectName(QStringLiteral("clearHistoryConfirmationBox"));
+    msgBox.setIcon(QMessageBox::Question);
+    msgBox.setWindowTitle(isPolish() ? QStringLiteral("Wyczyść historię operacji")
+                                     : QStringLiteral("Clear Operation History"));
+    msgBox.setText(isPolish()
+        ? QStringLiteral("Czy na pewno chcesz wyczyścić zapisaną historię operacji?")
+        : QStringLiteral("Are you sure you want to clear the saved operation history?"));
+    msgBox.setInformativeText(isPolish()
+        ? QStringLiteral("Usunięte zostaną wyłącznie wpisy z dziennika historii transferów.\nŻadne pliki na dysku (ani źródłowe, ani docelowe) nie zostaną usunięte ani zmodyfikowane.")
+        : QStringLiteral("Only history log entries will be removed.\nNo actual files on disk (neither source nor destination) will be deleted or modified."));
+
+    auto *confirmBtn = msgBox.addButton(
+        isPolish() ? QStringLiteral("Wyczyść historię") : QStringLiteral("Clear History"),
+        QMessageBox::AcceptRole);
+    confirmBtn->setObjectName(QStringLiteral("confirmClearHistoryButton"));
+
+    auto *cancelBtn = msgBox.addButton(
+        isPolish() ? QStringLiteral("Anuluj") : QStringLiteral("Cancel"),
+        QMessageBox::RejectRole);
+    cancelBtn->setObjectName(QStringLiteral("cancelClearHistoryButton"));
+
+    msgBox.setDefaultButton(cancelBtn);
+
+    msgBox.exec();
+    return msgBox.clickedButton() == confirmBtn;
+}
+
 class TransferQueueSettingsWidget final : public QWidget
 {
     Q_OBJECT
@@ -665,6 +711,51 @@ public:
                     "Displays KDE Plasma notifications when background transfers complete and on errors"));
         groupLayout->addWidget(m_desktopNotificationsCheckBox);
 
+        // Stage 2.5: History settings row
+        auto *historyRow = new QHBoxLayout;
+        historyRow->setContentsMargins(0, 0, 0, 0);
+        historyRow->setSpacing(8);
+
+        m_historyEnabledCheckBox = new QCheckBox(
+            trLocal("Zapisuj historię operacji", "Save operation history"), m_groupBox);
+        m_historyEnabledCheckBox->setObjectName(QStringLiteral("historyEnabledCheckBox"));
+        m_historyEnabledCheckBox->setChecked(true);
+        m_historyEnabledCheckBox->setToolTip(
+            trLocal("Trwały zapis zakończonych operacji plikowych w historii",
+                    "Persistent recording of completed file operations in history"));
+        historyRow->addWidget(m_historyEnabledCheckBox);
+
+        m_historyRetentionLabel = new QLabel(
+            trLocal("Maksymalna liczba:", "Max operations:"), m_groupBox);
+        m_historyRetentionLabel->setObjectName(QStringLiteral("historyRetentionLabel"));
+        historyRow->addWidget(m_historyRetentionLabel);
+
+        m_historyRetentionCombo = new QComboBox(m_groupBox);
+        m_historyRetentionCombo->setObjectName(QStringLiteral("historyRetentionCombo"));
+        m_historyRetentionCombo->addItem(QStringLiteral("50"), 50);
+        m_historyRetentionCombo->addItem(QStringLiteral("100"), 100);
+        m_historyRetentionCombo->addItem(QStringLiteral("200"), 200);
+        m_historyRetentionCombo->addItem(QStringLiteral("500"), 500);
+        m_historyRetentionCombo->setCurrentIndex(2); // 200 default
+        m_historyRetentionCombo->setFixedWidth(64);
+        m_historyRetentionCombo->setMinimumHeight(20);
+        m_historyRetentionCombo->setToolTip(
+            trLocal("Limit operacji w historii (50, 100, 200, 500)",
+                    "Limit of operations in history (50, 100, 200, 500)"));
+        historyRow->addWidget(m_historyRetentionCombo);
+
+        m_clearHistoryButton = new QPushButton(
+            trLocal("Wyczyść historię…", "Clear history…"), m_groupBox);
+        m_clearHistoryButton->setObjectName(QStringLiteral("settingsClearHistoryButton"));
+        m_clearHistoryButton->setMinimumHeight(20);
+        m_clearHistoryButton->setToolTip(
+            trLocal("Wyczyść zapisaną historię operacji (wymaga potwierdzenia)",
+                    "Clear saved operation history (requires confirmation)"));
+        historyRow->addWidget(m_clearHistoryButton);
+
+        historyRow->addStretch(1);
+        groupLayout->addLayout(historyRow);
+
         m_drainingLabel = new QLabel(m_groupBox);
         m_drainingLabel->setObjectName(QStringLiteral("transferQueueDrainingLabel"));
         m_drainingLabel->setWordWrap(true);
@@ -736,6 +827,31 @@ public:
             }
         });
 
+        connect(m_historyEnabledCheckBox, &QCheckBox::toggled, this, [this](bool checked) {
+            m_historyRetentionLabel->setEnabled(checked);
+            m_historyRetentionCombo->setEnabled(checked);
+            if (!m_updating && m_controller) {
+                m_controller->setHistoryEnabled(checked);
+                persistSettings();
+            }
+        });
+
+        connect(m_historyRetentionCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
+            if (!m_updating && m_controller) {
+                const int val = m_historyRetentionCombo->currentData().toInt();
+                m_controller->setHistoryMaxRecords(val);
+                persistSettings();
+            }
+        });
+
+        connect(m_clearHistoryButton, &QPushButton::clicked, this, [this] {
+            if (m_controller) {
+                if (promptClearHistoryConfirmation(this)) {
+                    m_controller->clearHistory(true);
+                }
+            }
+        });
+
         m_parallelRadio->setChecked(true);
     }
 
@@ -763,6 +879,9 @@ public:
                 refreshFromController();
             });
             connect(m_controller, &TransferQueueController::desktopNotificationsEnabledChanged, this, [this](bool) {
+                refreshFromController();
+            });
+            connect(m_controller, &TransferQueueController::historySettingsChanged, this, [this](bool, int) {
                 refreshFromController();
             });
             connect(m_controller, &TransferQueueController::drainingChanged, this, [this](bool) {
@@ -816,6 +935,13 @@ public:
         m_closeOnCompleteCheckBox->setChecked(m_controller->closeWindowOnComplete());
         m_desktopNotificationsCheckBox->setChecked(m_controller->desktopNotificationsEnabled());
 
+        m_historyEnabledCheckBox->setChecked(m_controller->isHistoryEnabled());
+        const int maxRec = m_controller->historyMaxRecords();
+        const int idx = m_historyRetentionCombo->findData(maxRec);
+        if (idx >= 0) m_historyRetentionCombo->setCurrentIndex(idx);
+        m_historyRetentionLabel->setEnabled(m_controller->isHistoryEnabled());
+        m_historyRetentionCombo->setEnabled(m_controller->isHistoryEnabled());
+
         m_updating = false;
         updateDrainingState();
     }
@@ -852,6 +978,8 @@ public:
         config.bandwidthLimitBytesPerSec = bandwidthToBytesPerSec(config.bandwidthLimitValue, config.bandwidthLimitUnit);
         config.closeWindowOnComplete = m_closeOnCompleteCheckBox->isChecked();
         config.desktopNotificationsEnabled = m_desktopNotificationsCheckBox->isChecked();
+        config.historyEnabled = m_historyEnabledCheckBox->isChecked();
+        config.historyMaxRecords = m_historyRetentionCombo->currentData().toInt();
         TransferQueueSettings::save(settings, config);
     }
 
@@ -879,6 +1007,12 @@ public:
         m_closeOnCompleteCheckBox->setChecked(config.closeWindowOnComplete);
         m_desktopNotificationsCheckBox->setChecked(config.desktopNotificationsEnabled);
 
+        m_historyEnabledCheckBox->setChecked(config.historyEnabled);
+        const int histIdx = m_historyRetentionCombo->findData(config.historyMaxRecords);
+        if (histIdx >= 0) m_historyRetentionCombo->setCurrentIndex(histIdx);
+        m_historyRetentionLabel->setEnabled(config.historyEnabled);
+        m_historyRetentionCombo->setEnabled(config.historyEnabled);
+
         m_updating = false;
 
         if (m_controller) {
@@ -901,12 +1035,16 @@ public:
     QLabel *bandwidthInfoLabel() const { return m_bandwidthInfoLabel; }
     QCheckBox *closeOnCompleteCheckBox() const { return m_closeOnCompleteCheckBox; }
     QCheckBox *desktopNotificationsCheckBox() const { return m_desktopNotificationsCheckBox; }
+    QCheckBox *historyEnabledCheckBox() const { return m_historyEnabledCheckBox; }
+    QLabel *historyRetentionLabel() const { return m_historyRetentionLabel; }
+    QComboBox *historyRetentionCombo() const { return m_historyRetentionCombo; }
+    QPushButton *clearHistoryButton() const { return m_clearHistoryButton; }
     QLabel *drainingLabel() const { return m_drainingLabel; }
     QGroupBox *groupBox() const { return m_groupBox; }
 
     QSize sizeHint() const override
     {
-        int h = 118;
+        int h = 142;
         if (m_drainingLabel && m_drainingLabel->isVisible()) {
             h += m_drainingLabel->sizeHint().height() + 6;
         }
@@ -961,6 +1099,10 @@ private:
     QLabel *m_bandwidthInfoLabel = nullptr;
     QCheckBox *m_closeOnCompleteCheckBox = nullptr;
     QCheckBox *m_desktopNotificationsCheckBox = nullptr;
+    QCheckBox *m_historyEnabledCheckBox = nullptr;
+    QLabel *m_historyRetentionLabel = nullptr;
+    QComboBox *m_historyRetentionCombo = nullptr;
+    QPushButton *m_clearHistoryButton = nullptr;
     QLabel *m_drainingLabel = nullptr;
     bool m_updating = false;
 };
@@ -1558,7 +1700,9 @@ public:
             "Removes completed and cancelled tasks from the history view"));
         connect(m_clearHistoryButton, &QToolButton::clicked, this, [this] {
             if (m_controller) {
-                m_controller->clearFinished();
+                if (promptClearHistoryConfirmation(this)) {
+                    m_controller->clearHistory(true);
+                }
             }
         });
         globalControlsRow->addWidget(m_clearHistoryButton);

@@ -87,6 +87,12 @@ public:
                     Q_EMIT bandwidthLimitChanged(enabled, bytesPerSec);
                     markQueueChanged();
                 });
+        if (m_ownedHistoryManager) {
+            connect(m_ownedHistoryManager, &TransferHistoryManager::historyCleared,
+                    this, [this] {
+                        clearFinished();
+                    });
+        }
     }
 
     ~TransferQueueController() override
@@ -366,6 +372,8 @@ public:
                 cfg.bandwidthLimitBytesPerSec = configuredBandwidthLimitBytesPerSec();
             }
         }
+        cfg.historyEnabled = m_historyManager ? m_historyManager->isEnabled() : m_historyEnabled;
+        cfg.historyMaxRecords = m_historyManager ? m_historyManager->maxRecords() : m_historyMaxRecords;
         return cfg;
     }
 
@@ -383,6 +391,12 @@ public:
         m_desktopNotificationsEnabled = config.desktopNotificationsEnabled;
         m_bandwidthLimitUnit = config.bandwidthLimitUnit;
         m_bandwidthLimitValue = config.bandwidthLimitValue > 0 ? config.bandwidthLimitValue : 1;
+        m_historyEnabled = config.historyEnabled;
+        m_historyMaxRecords = config.historyMaxRecords;
+        if (m_historyManager) {
+            m_historyManager->setEnabled(config.historyEnabled);
+            m_historyManager->setMaxRecords(config.historyMaxRecords);
+        }
 
         if (m_bandwidthLimiter) {
             m_bandwidthLimiter->setLimit(config.bandwidthLimitEnabled, config.bandwidthLimitBytesPerSec);
@@ -423,13 +437,56 @@ public:
         TransferQueueSettings::save(settings, exportConfig());
     }
 
-    TransferHistoryManager *historyManager() const { return m_historyManager; }
+    TransferHistoryManager *historyManager() const { return m_historyManager.data(); }
     void setHistoryManager(TransferHistoryManager *manager)
     {
         if (m_historyManager == manager) return;
+        if (m_historyManager) {
+            disconnect(m_historyManager, &TransferHistoryManager::historyCleared, this, nullptr);
+        }
         m_historyManager = manager;
-        Q_EMIT historyManagerChanged(m_historyManager);
+        if (m_historyManager) {
+            m_historyManager->setEnabled(m_historyEnabled);
+            m_historyManager->setMaxRecords(m_historyMaxRecords);
+            connect(m_historyManager, &TransferHistoryManager::historyCleared,
+                    this, [this] {
+                        clearFinished();
+                    });
+        }
+        Q_EMIT historyManagerChanged(m_historyManager.data());
     }
+
+    bool isHistoryEnabled() const { return m_historyManager ? m_historyManager->isEnabled() : m_historyEnabled; }
+    void setHistoryEnabled(bool enabled)
+    {
+        m_historyEnabled = enabled;
+        if (m_historyManager) {
+            m_historyManager->setEnabled(enabled);
+        }
+        markQueueChanged();
+        Q_EMIT historySettingsChanged(enabled, historyMaxRecords());
+    }
+
+    int historyMaxRecords() const { return m_historyManager ? m_historyManager->maxRecords() : m_historyMaxRecords; }
+    void setHistoryMaxRecords(int count)
+    {
+        m_historyMaxRecords = std::clamp(count, 1, 5000);
+        if (m_historyManager) {
+            m_historyManager->setMaxRecords(m_historyMaxRecords);
+        }
+        markQueueChanged();
+        Q_EMIT historySettingsChanged(isHistoryEnabled(), m_historyMaxRecords);
+    }
+
+    void clearHistory(bool clearPersistentStore = true)
+    {
+        clearFinished();
+        if (clearPersistentStore && m_historyManager) {
+            m_historyManager->clear(true);
+        }
+    }
+
+#ifdef THISPC_TEST_HARNESS
     // Diagnostic/test helper to set historyUuid on an existing task for deduplication testing
     void setTaskHistoryUuid(quint64 id, const QString &uuid)
     {
@@ -438,6 +495,7 @@ public:
             it->second->historyUuid = uuid;
         }
     }
+#endif
 
     // Stops STARTING further tasks; running tasks are untouched. This is not
     // a transfer pause.
@@ -956,6 +1014,7 @@ Q_SIGNALS:
     void closeWindowOnCompleteChanged(bool close);
     void desktopNotificationsEnabledChanged(bool enabled);
     void historyManagerChanged(TransferHistoryManager *manager);
+    void historySettingsChanged(bool enabled, int maxRecords);
 
 private:
     struct Task {
@@ -1509,7 +1568,7 @@ private:
         }
         task->historyRecorded = true;
 
-        if (!m_historyManager) {
+        if (!m_historyManager || !m_historyManager->isEnabled()) {
             return;
         }
 
@@ -1931,6 +1990,8 @@ private:
     bool m_queueChangedPending = false;
     bool m_wasIdle = true;
     bool m_lastDraining = false;
+    bool m_historyEnabled = true;
+    int m_historyMaxRecords = 200;
     TransferHistoryManager *m_ownedHistoryManager = nullptr;
-    TransferHistoryManager *m_historyManager = nullptr;
+    QPointer<TransferHistoryManager> m_historyManager;
 };
