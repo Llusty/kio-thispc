@@ -541,11 +541,25 @@ When standard operations receive permission denied errors, provide targeted `adm
       - Scenario G (Copy, Move and KDE Plasma notifications): PASS;
       - Scenario H (full restart, 3 records restored, data integrity, zero staging leftovers, smooth GUI): PASS.
     - All Stage 2 Persistent History capabilities are fully implemented, manually accepted, backed up and committed.
-- **Stage 3 — Safe Retry for Eligible Operations:** (Planned)
-  - Safe retry for eligible failed operations.
+- **Stage 3 — Safe Retry for Eligible Operations:** ✅ IMPLEMENTED / AUTOMATED PASS / MANUAL ACCEPTED (A–H 8/8 + UX 6/6) / GIT CLOSURE PENDING
+  - Safe retry for eligible failed operations (Copy and Move) in current session;
+  - Safety preflight validation: source file existence, source identity (device/inode) immutability, target directory write permissions, destination conflict detection (including `.thispc-part` staging detection);
+  - Archival cards after application restart strictly keep Retry disabled with descriptive tooltip;
+  - Automated test coverage: 43 Stage 3 retry contract tests (71 assertions), full regression 77/77 suites PASS, Stage 3 XDG isolation 9/9 PASS;
+  - Manual Acceptance: Scenarios A–H 8/8 PASS; UX Follow-up UX.1–UX.6 6/6 PASS;
+  - **Dynamic Live Retry Eligibility Monitoring:**
+    - Event-driven monitoring via `QFileSystemWatcher` with 150 ms debounce for failed tasks in open `OperationWindow`;
+    - Automatically updates button availability (`isEnabled()`) and tooltip on disk events (chmod, restore missing file, remove conflict/part) without reopening window;
+    - Strictly bound resource caps (max 50 dirs, 100 files), zero polling, active only when window is visible;
+    - Automated unit tests UX.1–UX.6 PASS (87 `operations` assertions).
 - **Stage 4 — Show in Folder Action:** (Planned)
   - "Show in folder" action upon task completion where applicable.
 - **Stage 5 — Polish, Packaging & Release 0.45.0:** (Planned)
+
+### 0.45.0 — Security Release Gate
+- Prior to official release, a mandatory comprehensive security audit is required, covering unauthorized code execution, potential backdoors, administrative privilege escalation, third-party dependencies, installer integrity, and file operation safety;
+- Any unresolved critical or high-severity vulnerabilities are strict release blockers;
+- This policy applies unconditionally to 0.45.0 and all future releases.
 
 #### Tracked UX Backlog Items (0.45.0 Scope):
 - **UX Item A — Default Size of "File Operations" Window:**
@@ -555,9 +569,16 @@ When standard operations receive permission denied errors, provide targeted `adm
 - **UX Item C — History Consistency Between Popup and Detailed Window:**
   Ensure toolbar `OperationPopup` does not display "No history" while in-session completed operations exist in the detailed `OperationWindow`.
 
-### 0.46.0 — Extensions / Service Actions
-- Leverage KDE Service Actions and clean extension contracts instead of building a redundant bespoke plugin ecosystem;
-- Support adding custom context actions and integrations without editing core window sources.
+### 0.46.0 — Standalone Architecture & Security Audit
+- Comprehensive audit of KDE Frameworks and Qt dependencies;
+- Design of an independent ThisPC core decoupled from desktop-specific runtime requirements;
+- Optional, loosely coupled KDE integrations;
+- Alternative Linux backends for cross-desktop environments;
+- Desktop compatibility analysis (Linux Mint / Cinnamon, Pop!_OS / COSMIC, XFCE, etc.);
+- Formal application threat model;
+- Secure packaging, deployment, and update verification models;
+- Staged migration plan preserving all safety and transactional guarantees without regression.
+*(Note: Design and planning phase; architectural implementation is not yet started.)*
 
 ### 0.47.0 — Advanced Split Sync
 - Optional recursive comparison and synchronization;
@@ -590,6 +611,10 @@ Valuable features to consider, with no assigned version or delivery date.
 - Quick in-place filtering of the current folder: a valuable separate mechanism, not recursive search; define its own view/filter semantics.
 - Search by file content: a separate capability requiring format/backend, performance, and safety review.
 - Advanced query logic AND/OR/NOT: separate from the simple AND between active filters and alternatives within one filter shipped in 0.41.0.
+
+### Extensions / Service Actions — No Assigned Version
+- Leverage KDE Service Actions and clean extension contracts instead of building a redundant bespoke plugin ecosystem;
+- Support adding custom context actions and integrations without editing core window sources.
 
 ### Ark → ThisPC Drag & Drop Interoperability
 - Accept external Drag & Drop from Ark / KDE archive views into standard ThisPC folders for single- and multi-item selections;

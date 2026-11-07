@@ -180,6 +180,9 @@ struct TransferTaskDescriptor {
     // Optional extra revalidation immediately before the job is created.
     // Returns an empty string when the task may start, else a diagnostic.
     std::function<QString()> preflight;
+
+    // Stage 3 (Safe Retry): task linkage
+    quint64 retryOfTaskId = 0;
 };
 
 // Strict weak ordering used by the scheduler: higher priority first, then
@@ -221,6 +224,7 @@ struct TransferTaskSnapshot {
     TransferBackendKind backend = TransferBackendKind::Unknown;
     QList<QUrl> sources;
     QUrl destination;
+    QList<QUrl> targetUrls;
     TransferPriority priority = TransferPriority::Normal;
     int queuePosition = 0;  // 1-based among Queued tasks, 0 otherwise
     TransferTaskState state = TransferTaskState::Queued;
@@ -252,6 +256,10 @@ struct TransferTaskSnapshot {
     QUrl currentSourceUrl;
     QUrl currentDestinationUrl;
     QString historyUuid;
+    quint64 retryOfTaskId = 0;
+    quint64 retriedAsTaskId = 0;
+    bool canRetry = false;
+    QString retryRejectionReason;
 };
 
 // Stage 5: Global Queue Control States

@@ -1249,6 +1249,21 @@ public:
             }
         });
         topRow->addWidget(m_removeButton);
+
+        m_retryButton = new QToolButton(this);
+        m_retryButton->setObjectName(QStringLiteral("transferQueueTaskRetryButton"));
+        m_retryButton->setIcon(themedIcon(QStringLiteral("view-refresh"), QStringLiteral("edit-redo")));
+        m_retryButton->setText(trLocal("Ponów", "Retry"));
+        m_retryButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        m_retryButton->setAutoRaise(true);
+        connect(m_retryButton, &QToolButton::clicked, this, [this] {
+            if (m_controller) {
+                m_retryButton->setEnabled(false);
+                m_retryButton->setText(trLocal("Ponawianie…", "Retrying…"));
+                m_controller->retryTask(m_id);
+            }
+        });
+        topRow->addWidget(m_retryButton);
         contentLayout->addLayout(topRow);
 
         m_waitReasonLabel = new TransferQueueElidedLabel(this, Qt::ElideRight);
@@ -1287,6 +1302,31 @@ public:
 
         contentLayout->addLayout(progressRow);
         mainLayout->addLayout(contentLayout, 1);
+
+        if (m_controller) {
+            connect(m_controller, &TransferQueueController::retryEligibilityChanged,
+                    this, [this](quint64 taskId, bool eligible, const QString &reason) {
+                        if (taskId == m_id && m_retryButton) {
+                            const auto snap = m_controller->taskSnapshot(m_id);
+                            if (snap && snap->retriedAsTaskId != 0) {
+                                m_retryButton->setEnabled(false);
+                                m_retryButton->setToolTip(trLocal("Zadanie zostało już ponowione (jako zadanie #%1)",
+                                                                  "Task has already been retried (as task #%1)").arg(snap->retriedAsTaskId));
+                            } else if (eligible) {
+                                m_retryButton->setEnabled(true);
+                                m_retryButton->setText(trLocal("Ponów", "Retry"));
+                                m_retryButton->setToolTip(trLocal("Ponów tę nieudaną operację", "Retry this failed operation"));
+                            } else {
+                                m_retryButton->setEnabled(false);
+                                m_retryButton->setText(trLocal("Ponów", "Retry"));
+                                const QString r = !reason.isEmpty()
+                                    ? reason
+                                    : trLocal("Ponowienie tej operacji nie jest możliwe", "Retrying this operation is not possible");
+                                m_retryButton->setToolTip(trLocal("Ponowienie niedostępne: %1", "Retry unavailable: %1").arg(r));
+                            }
+                        }
+                    });
+        }
 
         updateFromSnapshot(snapshot);
     }
@@ -1404,6 +1444,27 @@ public:
         m_cancelButton->setVisible(!snapshot.terminal);
         m_removeButton->setEnabled(snapshot.terminal);
         m_removeButton->setVisible(snapshot.terminal);
+
+        const bool isFailed = (snapshot.state == TransferTaskState::Failed);
+        m_retryButton->setVisible(isFailed);
+        if (isFailed) {
+            if (snapshot.retriedAsTaskId != 0) {
+                m_retryButton->setEnabled(false);
+                m_retryButton->setToolTip(trLocal("Zadanie zostało już ponowione (jako zadanie #%1)",
+                                                  "Task has already been retried (as task #%1)").arg(snapshot.retriedAsTaskId));
+            } else if (snapshot.canRetry) {
+                m_retryButton->setEnabled(true);
+                m_retryButton->setText(trLocal("Ponów", "Retry"));
+                m_retryButton->setToolTip(trLocal("Ponów tę nieudaną operację", "Retry this failed operation"));
+            } else {
+                m_retryButton->setEnabled(false);
+                m_retryButton->setText(trLocal("Ponów", "Retry"));
+                const QString reason = !snapshot.retryRejectionReason.isEmpty()
+                    ? snapshot.retryRejectionReason
+                    : trLocal("Ponowienie tej operacji nie jest możliwe", "Retrying this operation is not possible");
+                m_retryButton->setToolTip(trLocal("Ponowienie niedostępne: %1", "Retry unavailable: %1").arg(reason));
+            }
+        }
     }
 
     void updateProgress(quint64 processed, quint64 total, int percent)
@@ -1555,6 +1616,7 @@ private:
     QLabel *m_percentLabel = nullptr;
     QToolButton *m_cancelButton = nullptr;
     QToolButton *m_removeButton = nullptr;
+    QToolButton *m_retryButton = nullptr;
 };
 
 struct TransferQueueCounts {

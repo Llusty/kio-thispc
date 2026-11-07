@@ -19,6 +19,7 @@
 #include <KIO/CopyJob>
 
 #include <QFrame>
+#include <QFileSystemWatcher>
 #include <QFontMetrics>
 #include <QElapsedTimer>
 #include <QGuiApplication>
@@ -1821,6 +1822,7 @@ public:
         if (m_manager && !m_manager->detailedWindow()) {
             m_manager->setDetailedWindow(this);
         }
+        setupRetryWatcher();
         setMinimumSize(480, 260);
         QSettings settings;
         const QByteArray savedGeom = settings.value(QStringLiteral("operationWindow/geometry")).toByteArray();
@@ -2047,6 +2049,7 @@ public:
 
     ~OperationWindow() override
     {
+        clearRetryWatcher();
         if (m_manager && m_manager->detailedWindow() == this) {
             m_manager->setDetailedWindow(nullptr);
         }
@@ -2266,6 +2269,10 @@ public:
             connect(controller, &TransferQueueController::taskProgressChanged,
                     this, [this](quint64 id, quint64 processed, quint64 total, int percent) {
                         updateQueueTaskProgressInPlace(id, processed, total, percent);
+                    });
+            connect(controller, &TransferQueueController::retryEligibilityChanged,
+                    this, [this](quint64 taskId, bool eligible, const QString &reason) {
+                        updateRetryButtonForTask(taskId, eligible, reason);
                     });
         }
         updateTabTitles();
@@ -2690,11 +2697,67 @@ public:
         m_listLayout->addStretch(1);
         m_scrollArea->verticalScrollBar()->setValue(prevScroll);
         m_lastOperationCount = totalActive;
+        if (isVisible()) {
+            refreshRetryWatcherPaths();
+        }
+    }
+
+public:
+    void triggerRetryWatcherCheckNow()
+    {
+        if (m_retryDebounceTimer && m_retryDebounceTimer->isActive()) {
+            m_retryDebounceTimer->stop();
+        }
+        updateRetryEligibilityForFailedTasks();
+    }
+
+    bool isRetryButtonEnabledForTask(quint64 taskId) const
+    {
+        const auto rows = m_listWidget->findChildren<QFrame *>(
+            QStringLiteral("operationRow"), Qt::FindDirectChildrenOnly);
+        for (QFrame *row : rows) {
+            if (row->property("taskId").toULongLong() == taskId) {
+                auto *retry = row->findChild<QToolButton *>(QStringLiteral("detailedOperationRetryButton"));
+                if (retry) {
+                    return retry->isEnabled();
+                }
+            }
+        }
+        return false;
+    }
+
+    QString retryButtonToolTipForTask(quint64 taskId) const
+    {
+        const auto rows = m_listWidget->findChildren<QFrame *>(
+            QStringLiteral("operationRow"));
+        for (QFrame *row : rows) {
+            if (row->property("taskId").toULongLong() == taskId) {
+                auto *retry = row->findChild<QToolButton *>(QStringLiteral("detailedOperationRetryButton"));
+                if (retry) {
+                    return retry->toolTip();
+                }
+            }
+        }
+        return {};
     }
 
 protected:
+    void showEvent(QShowEvent *event) override
+    {
+        QWidget::showEvent(event);
+        scheduleRebuild();
+        refreshRetryWatcherPaths();
+    }
+
+    void hideEvent(QHideEvent *event) override
+    {
+        clearRetryWatcher();
+        QWidget::hideEvent(event);
+    }
+
     void closeEvent(QCloseEvent *event) override
     {
+        clearRetryWatcher();
         QSettings settings;
         settings.setValue(QStringLiteral("operationWindow/geometry"), saveGeometry());
         if (m_manager) {
@@ -2790,6 +2853,194 @@ public:
     }
 
 private:
+
+    void setupRetryWatcher()
+    {
+        if (!m_retryWatcher) {
+            m_retryWatcher = new QFileSystemWatcher(this);
+            connect(m_retryWatcher, &QFileSystemWatcher::fileChanged,
+                    this, [this](const QString &) {
+                        scheduleRetryEligibilityCheck();
+                    });
+            connect(m_retryWatcher, &QFileSystemWatcher::directoryChanged,
+                    this, [this](const QString &) {
+                        scheduleRetryEligibilityCheck();
+                    });
+        }
+        if (!m_retryDebounceTimer) {
+            m_retryDebounceTimer = new QTimer(this);
+            m_retryDebounceTimer->setSingleShot(true);
+            m_retryDebounceTimer->setInterval(150);
+            connect(m_retryDebounceTimer, &QTimer::timeout,
+                    this, [this] {
+                        updateRetryEligibilityForFailedTasks();
+                    });
+        }
+    }
+
+    void clearRetryWatcher()
+    {
+        if (m_retryDebounceTimer && m_retryDebounceTimer->isActive()) {
+            m_retryDebounceTimer->stop();
+        }
+        if (m_retryWatcher) {
+            const QStringList dirs = m_retryWatcher->directories();
+            if (!dirs.isEmpty()) {
+                m_retryWatcher->removePaths(dirs);
+            }
+            const QStringList files = m_retryWatcher->files();
+            if (!files.isEmpty()) {
+                m_retryWatcher->removePaths(files);
+            }
+        }
+    }
+
+    void scheduleRetryEligibilityCheck()
+    {
+        if (!isVisible()) {
+            return;
+        }
+        if (m_retryDebounceTimer) {
+            m_retryDebounceTimer->start(150);
+        }
+    }
+
+    void updateRetryEligibilityForFailedTasks()
+    {
+        if (!isVisible() || !m_queueController) {
+            return;
+        }
+        m_queueController->recheckAllFailedTasksRetryEligibility();
+        refreshRetryWatcherPaths();
+    }
+
+    void refreshRetryWatcherPaths()
+    {
+        if (!m_retryWatcher || !m_queueController) {
+            return;
+        }
+
+        QSet<QString> dirsToWatch;
+        QSet<QString> filesToWatch;
+
+        const auto snapshot = m_queueController->snapshot();
+        for (const auto &task : snapshot.tasks) {
+            if (task.state != TransferTaskState::Failed || task.retriedAsTaskId != 0) {
+                continue;
+            }
+            if (task.sources.isEmpty() || !task.destination.isValid()) {
+                continue;
+            }
+
+            // Sources
+            for (int i = 0; i < task.sources.size(); ++i) {
+                const QUrl &srcUrl = task.sources.at(i);
+                if (srcUrl.isLocalFile()) {
+                    const QString srcPath = srcUrl.toLocalFile();
+                    const QFileInfo srcInfo(srcPath);
+                    if (srcInfo.exists() && srcInfo.isReadable()) {
+                        filesToWatch.insert(srcPath);
+                    }
+                    const QString srcDir = srcInfo.dir().absolutePath();
+                    if (QDir(srcDir).exists()) {
+                        dirsToWatch.insert(srcDir);
+                    }
+
+                    // Corresponding destination target path / .thispc-part
+                    QUrl targetUrl;
+                    if (!task.targetUrls.isEmpty() && i < task.targetUrls.size()) {
+                        targetUrl = task.targetUrls.at(i);
+                    } else if (task.destination.isLocalFile()) {
+                        targetUrl = QUrl::fromLocalFile(QDir(task.destination.toLocalFile()).filePath(srcInfo.fileName()));
+                    }
+
+                    if (targetUrl.isLocalFile()) {
+                        const QString targetPath = targetUrl.toLocalFile();
+                        if (QFileInfo::exists(targetPath)) {
+                            filesToWatch.insert(targetPath);
+                        }
+                        const QString partPath = targetPath + QStringLiteral(".thispc-part");
+                        if (QFileInfo::exists(partPath)) {
+                            filesToWatch.insert(partPath);
+                        }
+                    }
+                }
+            }
+
+            // Destination directory
+            if (task.destination.isLocalFile()) {
+                const QString dstDir = task.destination.toLocalFile();
+                if (QDir(dstDir).exists()) {
+                    dirsToWatch.insert(dstDir);
+                }
+            }
+
+            // Enforce caps to protect inotify descriptor limits
+            if (dirsToWatch.size() >= 50 || filesToWatch.size() >= 100) {
+                break;
+            }
+        }
+
+        // Synchronize watched directories
+        const QStringList currentDirs = m_retryWatcher->directories();
+        for (const QString &dir : currentDirs) {
+            if (!dirsToWatch.contains(dir)) {
+                m_retryWatcher->removePath(dir);
+            }
+        }
+        for (const QString &dir : dirsToWatch) {
+            if (!currentDirs.contains(dir)) {
+                m_retryWatcher->addPath(dir);
+            }
+        }
+
+        // Synchronize watched files
+        const QStringList currentFiles = m_retryWatcher->files();
+        for (const QString &file : currentFiles) {
+            if (!filesToWatch.contains(file)) {
+                m_retryWatcher->removePath(file);
+            }
+        }
+        for (const QString &file : filesToWatch) {
+            if (!currentFiles.contains(file)) {
+                m_retryWatcher->addPath(file);
+            }
+        }
+    }
+
+    void updateRetryButtonForTask(quint64 taskId, bool eligible, const QString &rejectionReason)
+    {
+        const auto rows = m_listWidget->findChildren<QFrame *>(
+            QStringLiteral("operationRow"), Qt::FindDirectChildrenOnly);
+        for (QFrame *row : rows) {
+            if (row->property("taskId").toULongLong() == taskId) {
+                auto *retry = row->findChild<QToolButton *>(QStringLiteral("detailedOperationRetryButton"));
+                if (retry) {
+                    if (m_queueController) {
+                        const auto snap = m_queueController->taskSnapshot(taskId);
+                        if (snap && snap->retriedAsTaskId != 0) {
+                            retry->setEnabled(false);
+                            retry->setToolTip(trLocal("Zadanie zostało już ponowione (jako zadanie #%1)",
+                                                      "Task has already been retried (as task #%1)").arg(snap->retriedAsTaskId));
+                            return;
+                        }
+                    }
+                    retry->setEnabled(eligible);
+                    if (eligible) {
+                        retry->setText(trLocal("Ponów", "Retry"));
+                        retry->setToolTip(trLocal("Ponów tę nieudaną operację", "Retry this failed operation"));
+                    } else {
+                        retry->setText(trLocal("Ponów", "Retry"));
+                        const QString reason = !rejectionReason.isEmpty()
+                            ? rejectionReason
+                            : trLocal("Ponowienie tej operacji nie jest możliwe", "Retrying this operation is not possible");
+                        retry->setToolTip(trLocal("Ponowienie niedostępne: %1", "Retry unavailable: %1").arg(reason));
+                    }
+                }
+                break;
+            }
+        }
+    }
 
     void protectInteraction(QToolButton *button)
     {
@@ -2981,6 +3232,19 @@ private:
         detailsToggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
         detailsToggle->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
         topLine->addWidget(detailsToggle, 0);
+
+        if (rec.terminalState == TransferTaskState::Failed) {
+            auto *retry = new QToolButton(content);
+            retry->setObjectName(QStringLiteral("detailedOperationHistoryRetryButton"));
+            retry->setIcon(themedIcon(QStringLiteral("view-refresh"), QStringLiteral("edit-redo")));
+            retry->setText(trLocal("Ponów", "Retry"));
+            retry->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+            retry->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+            retry->setEnabled(false);
+            retry->setToolTip(trLocal("Ponowienie z trwałego magazynu po restarcie jest niedostępne (brak pełnego kontekstu wykonawczego)",
+                                      "Retry from persistent history after restart is unavailable (lacks full task execution context)"));
+            topLine->addWidget(retry, 0);
+        }
 
         auto *dismiss = new QToolButton(content);
         dismiss->setObjectName(QStringLiteral("detailedOperationDismissButton"));
@@ -3225,6 +3489,20 @@ private:
             }
         }
 
+        if (task.retryOfTaskId != 0) {
+            auto *retryBadge = new QLabel(trLocal("Ponowienie #%1", "Retry #%1").arg(task.retryOfTaskId), content);
+            retryBadge->setObjectName(QStringLiteral("transferQueueTaskRetryBadge"));
+            retryBadge->setStyleSheet(badgeStyle);
+            topLine->addWidget(retryBadge, 0);
+        }
+
+        if (task.state == TransferTaskState::Failed && task.retriedAsTaskId != 0) {
+            auto *retriedBadge = new QLabel(trLocal("Ponowiono jako #%1", "Retried as #%1").arg(task.retriedAsTaskId), content);
+            retriedBadge->setObjectName(QStringLiteral("transferQueueTaskRetriedAsBadge"));
+            retriedBadge->setStyleSheet(badgeStyle);
+            topLine->addWidget(retriedBadge, 0);
+        }
+
         auto *stateLabel = new QLabel(transferTaskStateText(task.state), content);
         stateLabel->setObjectName(QStringLiteral("operationDetailsLabel"));
         stateLabel->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
@@ -3269,6 +3547,42 @@ private:
             if (m_queueController) m_queueController->cancelTask(id);
         });
         topLine->addWidget(cancel, 0);
+
+        if (task.state == TransferTaskState::Failed) {
+            auto *retry = new QToolButton(content);
+            retry->setObjectName(QStringLiteral("detailedOperationRetryButton"));
+            retry->setIcon(themedIcon(QStringLiteral("view-refresh"), QStringLiteral("edit-redo")));
+            retry->setText(trLocal("Ponów", "Retry"));
+            retry->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+            retry->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+            protectInteraction(retry);
+
+            if (task.retriedAsTaskId != 0) {
+                retry->setEnabled(false);
+                retry->setToolTip(trLocal("Zadanie zostało już ponowione (jako zadanie #%1)",
+                                          "Task has already been retried (as task #%1)").arg(task.retriedAsTaskId));
+            } else if (task.canRetry) {
+                retry->setEnabled(true);
+                retry->setToolTip(trLocal("Ponów tę nieudaną operację", "Retry this failed operation"));
+            } else {
+                retry->setEnabled(false);
+                const QString reason = !task.retryRejectionReason.isEmpty()
+                    ? task.retryRejectionReason
+                    : trLocal("Ponowienie tej operacji nie jest możliwe", "Retrying this operation is not possible");
+                retry->setToolTip(trLocal("Ponowienie niedostępne: %1", "Retry unavailable: %1").arg(reason));
+            }
+
+            connect(retry, &QToolButton::clicked, this, [this, id = task.id, retry] {
+                retry->setEnabled(false);
+                retry->setText(trLocal("Ponawianie…", "Retrying…"));
+                retry->setToolTip(trLocal("Trwa ponawianie operacji…", "Retrying operation…"));
+                if (m_queueController) {
+                    m_queueController->retryTask(id);
+                    scheduleRebuild();
+                }
+            });
+            topLine->addWidget(retry, 0);
+        }
 
         auto *remove = new QToolButton(content);
         remove->setObjectName(QStringLiteral("detailedOperationRemoveButton"));
@@ -3759,6 +4073,8 @@ private:
     QPointer<TransferHistoryManager> m_explicitHistoryManager;
     bool m_rebuildScheduled = false;
     bool m_pointerInteraction = false;
+    QFileSystemWatcher *m_retryWatcher = nullptr;
+    QTimer *m_retryDebounceTimer = nullptr;
 };
 
 

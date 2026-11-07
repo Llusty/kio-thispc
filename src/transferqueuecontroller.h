@@ -33,6 +33,8 @@
 
 #pragma once
 
+#include "batchrenamerecovery.h"
+#include "kiostagedtransferjob.h"
 #include "localfilecopyjob.h"
 #include "transferbandwidthlimiter.h"
 #include "transferhistorymanager.h"
@@ -51,6 +53,7 @@
 #include <QMetaType>
 #include <QObject>
 #include <QPointer>
+#include <QStorageInfo>
 #include <QString>
 #include <QStringList>
 #include <QTimer>
@@ -61,6 +64,11 @@
 #include <optional>
 
 Q_DECLARE_METATYPE(TransferTaskState)
+
+struct TransferRetryEligibility {
+    bool eligible = false;
+    QString rejectionReason;
+};
 
 class TransferQueueController final : public QObject
 {
@@ -164,6 +172,7 @@ public:
         }
         descriptor.id = m_nextId++;
         descriptor.submissionSequence = m_nextSequence++;
+        task->retryOfTaskId = descriptor.retryOfTaskId;
         task->desc = std::move(descriptor);
         task->waitReason = TransferWaitReason::SlotLimit;
 
@@ -898,6 +907,270 @@ public:
     }
 
     // ------------------------------------------------------------------
+    // Safe Retry (Stage 3)
+    // ------------------------------------------------------------------
+
+    TransferRetryEligibility checkRetryEligibility(quint64 taskId) const
+    {
+        TransferRetryEligibility result;
+        auto reject = [&result](const QString &reason) {
+            result.eligible = false;
+            result.rejectionReason = reason;
+            return result;
+        };
+
+        if (m_shuttingDown) {
+            return reject(trLocal("Kolejka transferów jest zamykana", "Transfer queue is shutting down"));
+        }
+
+        const Task *task = find(taskId);
+        if (!task) {
+            return reject(trLocal("Zadanie nie zostało odnalezione", "Task not found"));
+        }
+
+        // Rule: Only Failed tasks can be retried
+        if (task->state != TransferTaskState::Failed) {
+            if (task->state == TransferTaskState::Completed) {
+                return reject(trLocal("Zadanie zostało pomyślnie ukończone — ponowienie jest niedozwolone",
+                                      "Task completed successfully — retry is not permitted"));
+            }
+            if (task->state == TransferTaskState::Cancelled) {
+                return reject(trLocal("Zadanie zostało anulowane przez użytkownika — ponowienie jest niedozwolone",
+                                      "Task was cancelled by user — retry is not permitted"));
+            }
+            return reject(trLocal("Zadanie jest aktywne lub oczekuje w kolejce — ponowienie jest niedozwolone",
+                                  "Task is active or queued — retry is not permitted"));
+        }
+
+        // Rule: Double-retry prevention
+        if (task->retriedAsTaskId != 0) {
+            return reject(trLocal("To zadanie zostało już ponowione",
+                                  "This task has already been retried"));
+        }
+
+        // Rule: Must have a valid descriptor and job factory
+        if (!task->desc.jobFactory) {
+            return reject(trLocal("Brak fabryki zadania — brak możliwości odtworzenia transferu",
+                                  "Missing job factory — cannot recreate transfer"));
+        }
+
+        // Rule: Backend must be supported
+        if (task->desc.backend == TransferBackendKind::Unknown) {
+            return reject(trLocal("Nieznany backend transferu", "Unknown transfer backend"));
+        }
+
+        // Rule: Admin scheme is forbidden
+        if (containsAdminScheme(task->desc)) {
+            return reject(trLocal("Operacje administracyjne nie mogą być kolejkowane",
+                                  "Admin operations cannot be queued"));
+        }
+
+        // Rule: MTP Move is strictly rejected (RefusedUnsupported)
+        const bool isMove = (task->desc.type == TransferOperationType::Move);
+        const bool isMtpDst = MtpMoveSafety::isMtpSchemeUrl(task->desc.destination);
+        bool isMtpSrc = false;
+        for (const QUrl &src : task->desc.sources) {
+            if (MtpMoveSafety::isMtpSchemeUrl(src)) {
+                isMtpSrc = true;
+                break;
+            }
+        }
+        if (isMove && (isMtpDst || isMtpSrc)) {
+            return reject(trLocal("Przenoszenie plików MTP jest zablokowane ze względów bezpieczeństwa (MtpMoveVerdict::RefusedUnsupported)",
+                                  "MTP file move is blocked for safety (MtpMoveVerdict::RefusedUnsupported)"));
+        }
+
+        // Rule: Recovery gate check
+        auto &recoveryGate = BatchRenameRecoveryGate::instance();
+        recoveryGate.refresh();
+        if (recoveryGate.mutationsBlocked()) {
+            return reject(trLocal("Modyfikacje plików są zablokowane przez proces odzyskiwania po awarii",
+                                  "File mutations are blocked by crash recovery"));
+        }
+
+        // Rule: Check sources and destination URLs
+        if (task->desc.sources.isEmpty() || !task->desc.destination.isValid() || task->desc.destination.isEmpty()) {
+            return reject(trLocal("Brak zdefiniowanych źródeł lub katalogu docelowego",
+                                  "Sources or destination directory missing"));
+        }
+
+        // Local filesystem verification
+        if (task->desc.destination.isLocalFile()) {
+            const QString dstDir = task->desc.destination.toLocalFile();
+            const QFileInfo dstInfo(dstDir);
+            if (!dstInfo.exists()) {
+                return reject(trLocal("Katalog docelowy nie istnieje", "Destination directory does not exist"));
+            }
+            if (!dstInfo.isDir()) {
+                return reject(trLocal("Ścieżka docelowa nie jest katalogiem", "Destination path is not a directory"));
+            }
+            if (!dstInfo.isWritable()) {
+                return reject(trLocal("Brak uprawnień do zapisu w katalogu docelowym", "No write permission in destination directory"));
+            }
+
+            const QStorageInfo storage(dstDir);
+            if (!storage.isValid() || !storage.isReady()) {
+                return reject(trLocal("Nośnik docelowy jest niedostępny lub odłączony",
+                                      "Destination medium is not ready or disconnected"));
+            }
+            if (storage.isReadOnly()) {
+                return reject(trLocal("Nośnik docelowy jest w trybie tylko do odczytu",
+                                      "Destination medium is read-only"));
+            }
+
+            quint64 requiredBytes = 0;
+            for (const QUrl &src : task->desc.sources) {
+                if (src.isLocalFile()) {
+                    const QFileInfo si(src.toLocalFile());
+                    if (si.exists() && si.isFile()) {
+                        requiredBytes += static_cast<quint64>(si.size());
+                    }
+                }
+            }
+            if (requiredBytes > 0 && static_cast<quint64>(storage.bytesAvailable()) < requiredBytes) {
+                return reject(trLocal("Brak wystarczającego miejsca na dysku docelowym",
+                                      "Insufficient free disk space on destination"));
+            }
+        }
+
+        for (int i = 0; i < task->desc.sources.size(); ++i) {
+            const QUrl &src = task->desc.sources.at(i);
+            if (src.isLocalFile()) {
+                const QString srcPath = src.toLocalFile();
+                const QFileInfo srcInfo(srcPath);
+                if (!srcInfo.exists()) {
+                    return reject(trLocal("Plik źródłowy nie istnieje: %1",
+                                          "Source file does not exist: %1").arg(srcInfo.fileName()));
+                }
+                if (!srcInfo.isReadable()) {
+                    return reject(trLocal("Brak uprawnień do odczytu pliku źródłowego: %1",
+                                          "No read permission for source file: %1").arg(srcInfo.fileName()));
+                }
+
+                // Verify source identity didn't change (e.g. replaced by different inode)
+                for (const auto &claim : task->reservation.claims) {
+                    if (claim.key == srcPath.toCaseFolded() && claim.exists && claim.inode != 0) {
+                        struct stat currentStat {};
+                        if (::lstat(QFile::encodeName(srcPath).constData(), &currentStat) == 0) {
+                            if (static_cast<quint64>(currentStat.st_ino) != claim.inode
+                                || static_cast<quint64>(currentStat.st_dev) != claim.device) {
+                                return reject(trLocal("Tożsamość pliku źródłowego uległa zmianie (plik został podmieniony)",
+                                                      "Source file identity changed (file was replaced)"));
+                            }
+                        }
+                        break;
+                    }
+                }
+
+                // Check destination target file conflicts and .thispc-part staging leftovers
+                QUrl targetUrl;
+                if (!task->desc.targetUrls.isEmpty() && i < task->desc.targetUrls.size()) {
+                    targetUrl = task->desc.targetUrls.at(i);
+                } else if (task->desc.destination.isLocalFile()) {
+                    targetUrl = QUrl::fromLocalFile(QDir(task->desc.destination.toLocalFile()).filePath(srcInfo.fileName()));
+                }
+
+                if (targetUrl.isLocalFile()) {
+                    const QString targetPath = targetUrl.toLocalFile();
+                    const QString partPath = targetPath + QStringLiteral(".thispc-part");
+
+                    if (QFileInfo::exists(partPath)) {
+                        return reject(trLocal("Wykryto pozostałość pliku tymczasowego (.thispc-part) — ponowienie wstrzymane dla bezpieczeństwa",
+                                              "Temporary staging file (.thispc-part) exists — retry refused for safety"));
+                    }
+
+                    const QFileInfo targetInfo(targetPath);
+                    if (targetInfo.exists()) {
+                        if (targetInfo.isDir()) {
+                            return reject(trLocal("W miejscu docelowym istnieje katalog o tej samej nazwie",
+                                                  "A directory with the same name exists at destination"));
+                        }
+                        for (const auto &claim : task->reservation.claims) {
+                            if (claim.mode == ReservationMode::ExclusiveWrite && claim.key == targetPath.toCaseFolded()) {
+                                if (!claim.exists) {
+                                    return reject(trLocal("W katalogu docelowym pojawił się plik o tej samej nazwie (konflikt)",
+                                                          "A file with the same name now exists at destination (conflict)"));
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Check path reservation overlap with active tasks in queue
+        const ReservationRequest newReq = TransferReservation::build(
+            task->desc.type, task->desc.sources, task->desc.destination, task->desc.targetUrls);
+        if (!newReq.valid) {
+            return reject(trLocal("Nie można utworzyć rezerwacji ścieżki dla zadania",
+                                  "Cannot build path reservation for task"));
+        }
+        if (const auto conflict = m_registry.findConflict(newReq)) {
+            return reject(trLocal("Ścieżka transferu koliduje z aktywnym zadaniem #%1",
+                                  "Transfer path conflicts with active task #%1").arg(conflict->holder));
+        }
+
+        result.eligible = true;
+        return result;
+    }
+
+    TransferEnqueueResult retryTask(quint64 taskId)
+    {
+        OperationScope scope(this);
+        TransferEnqueueResult result;
+        auto reject = [&result](TransferEnqueueRejection kind, const QString &text) {
+            result.rejection = kind;
+            result.diagnostic = text;
+            return result;
+        };
+
+        const TransferRetryEligibility eligibility = checkRetryEligibility(taskId);
+        if (!eligibility.eligible) {
+            return reject(TransferEnqueueRejection::InvalidRequest, eligibility.rejectionReason);
+        }
+
+        Task *failedTask = find(taskId);
+        if (!failedTask) {
+            return reject(TransferEnqueueRejection::InvalidRequest,
+                          trLocal("Zadanie nie istnieje", "Task does not exist"));
+        }
+
+        TransferTaskDescriptor newDesc = failedTask->desc;
+        newDesc.id = 0;
+        newDesc.submissionSequence = 0;
+        newDesc.retryOfTaskId = taskId;
+
+        result = enqueue(std::move(newDesc));
+        if (result.accepted()) {
+            failedTask->retriedAsTaskId = result.id;
+            markQueueChanged();
+            Q_EMIT taskRetried(taskId, result.id);
+        }
+        return result;
+    }
+
+    TransferRetryEligibility recheckRetryEligibility(quint64 taskId)
+    {
+        const auto elig = checkRetryEligibility(taskId);
+        Q_EMIT retryEligibilityChanged(taskId, elig.eligible, elig.rejectionReason);
+        return elig;
+    }
+
+    void recheckAllFailedTasksRetryEligibility()
+    {
+        QList<quint64> failedIds;
+        for (const auto &entry : m_tasks) {
+            if (entry.second && entry.second->state == TransferTaskState::Failed && entry.second->retriedAsTaskId == 0) {
+                failedIds.append(entry.second->desc.id);
+            }
+        }
+        for (quint64 id : failedIds) {
+            recheckRetryEligibility(id);
+        }
+    }
+
+    // ------------------------------------------------------------------
     // Snapshots
     // ------------------------------------------------------------------
 
@@ -1015,6 +1288,8 @@ Q_SIGNALS:
     void desktopNotificationsEnabledChanged(bool enabled);
     void historyManagerChanged(TransferHistoryManager *manager);
     void historySettingsChanged(bool enabled, int maxRecords);
+    void taskRetried(quint64 originalTaskId, quint64 newTaskId);
+    void retryEligibilityChanged(quint64 taskId, bool eligible, const QString &reason);
 
 private:
     struct Task {
@@ -1054,6 +1329,8 @@ private:
         QDateTime endTimeUtc;
         bool historyRecorded = false;
         QString historyUuid;
+        quint64 retryOfTaskId = 0;
+        quint64 retriedAsTaskId = 0;
     };
 
     struct Event {
@@ -1214,6 +1491,7 @@ private:
         snap.backend = task.desc.backend;
         snap.sources = task.desc.sources;
         snap.destination = task.desc.destination;
+        snap.targetUrls = task.desc.targetUrls;
         snap.priority = task.desc.priority;
         snap.state = task.state;
         snap.terminal = isTerminalTransferState(task.state);
@@ -1254,6 +1532,11 @@ private:
         snap.currentSourceUrl = task.currentSourceUrl;
         snap.currentDestinationUrl = task.currentDestinationUrl;
         snap.historyUuid = task.historyUuid;
+        snap.retryOfTaskId = task.retryOfTaskId;
+        snap.retriedAsTaskId = task.retriedAsTaskId;
+        const auto elig = checkRetryEligibility(task.desc.id);
+        snap.canRetry = elig.eligible;
+        snap.retryRejectionReason = elig.rejectionReason;
         return snap;
     }
 

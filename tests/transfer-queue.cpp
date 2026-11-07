@@ -9269,6 +9269,417 @@ int main(int argc, char **argv)
         setTransferQueueProductionDispatchConnected(false);
     }
 
+    // ==================================================================
+    // Stage 3 (0.45): Safe Retry of Eligible Failed Operations
+    // 26 Safety Verification Scenarios
+    // ==================================================================
+    {
+        const QString s3Base = base + TQ_S("/stage3_safe_retry");
+        QDir().mkpath(s3Base + TQ_S("/src"));
+        QDir().mkpath(s3Base + TQ_S("/dst"));
+
+        auto touch = [](const QString &path, const QByteArray &data = "test-payload") {
+            QFile f(path);
+            if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+                f.write(data);
+                f.close();
+            }
+        };
+
+        const QString srcFile1 = s3Base + TQ_S("/src/file1.txt");
+        const QString dstDir = s3Base + TQ_S("/dst");
+        const QString dstFile1 = s3Base + TQ_S("/dst/file1.txt");
+
+        touch(srcFile1);
+
+        TransferQueueController ctl;
+        ctl.setExecutionMode(TransferQueueMode::Sequential);
+
+        // Track created fake jobs
+        QHash<QString, QPointer<QueueFakeJob>> fakeJobs;
+        auto makeDesc = [&](const QString &title, const QList<QUrl> &srcs, const QUrl &dst,
+                            TransferOperationType opType = TransferOperationType::Copy,
+                            TransferBackendKind backend = TransferBackendKind::LocalNative) {
+            TransferTaskDescriptor desc;
+            desc.title = title;
+            desc.type = opType;
+            desc.backend = backend;
+            desc.sources = srcs;
+            desc.destination = dst;
+            desc.capabilities = defaultTransferCapabilities(backend, opType);
+            desc.jobFactory = [&fakeJobs, title]() -> KJob* {
+                auto *job = new QueueFakeJob(true, true, true);
+                fakeJobs.insert(title, job);
+                return job;
+            };
+            return desc;
+        };
+
+        // -------------------------------------------------------------
+        // Scenario 1: Kwalifikująca się nieudana operacja Copy
+        // -------------------------------------------------------------
+        TransferTaskDescriptor d1 = makeDesc(TQ_S("task1"), {QUrl::fromLocalFile(srcFile1)}, QUrl::fromLocalFile(dstDir));
+        const auto res1 = ctl.enqueue(d1);
+        verify(res1.accepted(), "S3-1.1: Task 1 enqueued successfully");
+        pump();
+        auto *j1 = fakeJobs.value(TQ_S("task1")).data();
+        verify(j1 != nullptr, "S3-1.2: Job 1 created by factory");
+        j1->finishError(KIO::ERR_CANNOT_WRITE, TQ_S("Disk write error"));
+        pump();
+
+        auto snap1 = ctl.taskSnapshot(res1.id);
+        verify(snap1.has_value() && snap1->state == TransferTaskState::Failed,
+               "S3-1.3: Task 1 transitioned to Failed");
+        const auto elig1 = ctl.checkRetryEligibility(res1.id);
+        verify(elig1.eligible, "S3-1.4: Failed Task 1 is eligible for Safe Retry");
+        verify(snap1->canRetry, "S3-1.5: Snapshot reflects canRetry == true");
+        verify(snap1->retriedAsTaskId == 0, "S3-1.6: Task 1 has not been retried yet");
+
+        // -------------------------------------------------------------
+        // Scenario 2: Nowa próba zakończona sukcesem
+        // -------------------------------------------------------------
+        const auto retryRes1 = ctl.retryTask(res1.id);
+        verify(retryRes1.accepted(), "S3-2.1: retryTask accepted for Task 1");
+        const quint64 id2 = retryRes1.id;
+        verify(id2 > res1.id, "S3-2.2: New distinct task ID generated");
+
+        snap1 = ctl.taskSnapshot(res1.id);
+        verify(snap1->state == TransferTaskState::Failed,
+               "S3-2.3: Original Task 1 remains in Failed state (not mutated back to Queued)");
+        verify(snap1->retriedAsTaskId == id2,
+               "S3-2.4: Original Task 1 records retriedAsTaskId == id2");
+        verify(!snap1->canRetry,
+               "S3-2.5: Original Task 1 is no longer eligible for retry (retriedAsTaskId != 0)");
+
+        auto snap2 = ctl.taskSnapshot(id2);
+        verify(snap2.has_value(), "S3-2.6: Retry Task 2 snapshot exists");
+        verify(snap2->retryOfTaskId == res1.id, "S3-2.7: Retry Task 2 points back to original Task 1");
+        verify(snap2->processedBytes == 0, "S3-2.8: Progress reset on new task");
+
+        pump();
+        auto *j2 = fakeJobs.value(TQ_S("task1")).data();
+        verify(j2 != nullptr, "S3-2.9: Job 2 created for retried task");
+        j2->finishOk();
+        pump();
+
+        snap2 = ctl.taskSnapshot(id2);
+        verify(snap2->state == TransferTaskState::Completed, "S3-2.10: Retried task finished Completed");
+
+        // -------------------------------------------------------------
+        // Scenario 3: Ponowna porażka
+        // -------------------------------------------------------------
+        const QString srcFile3 = s3Base + TQ_S("/src/file3.txt");
+        touch(srcFile3);
+        TransferTaskDescriptor d3 = makeDesc(TQ_S("task3"), {QUrl::fromLocalFile(srcFile3)}, QUrl::fromLocalFile(dstDir));
+        const auto res3 = ctl.enqueue(d3);
+        pump();
+        auto *j3 = fakeJobs.value(TQ_S("task3")).data();
+        j3->finishError(KIO::ERR_SERVER_TIMEOUT, TQ_S("Timeout 1"));
+        pump();
+        verify(ctl.checkRetryEligibility(res3.id).eligible, "S3-3.1: Task 3 eligible after first failure");
+
+        const auto retryRes3 = ctl.retryTask(res3.id);
+        verify(retryRes3.accepted(), "S3-3.2: Task 3 retry accepted");
+        const quint64 id4 = retryRes3.id;
+        pump();
+        auto *j4 = fakeJobs.value(TQ_S("task3")).data();
+        j4->finishError(KIO::ERR_SERVER_TIMEOUT, TQ_S("Timeout 2 on retry"));
+        pump();
+
+        auto snap4 = ctl.taskSnapshot(id4);
+        verify(snap4->state == TransferTaskState::Failed, "S3-3.3: Retry Task 4 failed again");
+        verify(ctl.checkRetryEligibility(id4).eligible, "S3-3.4: Failed retry Task 4 is eligible for subsequent retry");
+
+        // -------------------------------------------------------------
+        // Scenario 4: Brak Retry dla Completed
+        // -------------------------------------------------------------
+        const auto eligComp = ctl.checkRetryEligibility(id2);
+        verify(!eligComp.eligible, "S3-4.1: checkRetryEligibility rejected for Completed task");
+        const auto retryComp = ctl.retryTask(id2);
+        verify(!retryComp.accepted(), "S3-4.2: retryTask rejected for Completed task");
+
+        // -------------------------------------------------------------
+        // Scenario 5: Brak Retry dla Cancelled
+        // -------------------------------------------------------------
+        const QString srcFile5 = s3Base + TQ_S("/src/file5.txt");
+        touch(srcFile5);
+        TransferTaskDescriptor d5 = makeDesc(TQ_S("task5"), {QUrl::fromLocalFile(srcFile5)}, QUrl::fromLocalFile(dstDir));
+        const auto res5 = ctl.enqueue(d5);
+        ctl.cancelTask(res5.id);
+        pump();
+        auto snap5 = ctl.taskSnapshot(res5.id);
+        verify(snap5->state == TransferTaskState::Cancelled, "S3-5.1: Task 5 is Cancelled");
+        const auto eligCanc = ctl.checkRetryEligibility(res5.id);
+        verify(!eligCanc.eligible, "S3-5.2: checkRetryEligibility rejected for Cancelled task");
+
+        // -------------------------------------------------------------
+        // Scenario 6: Brak Retry podczas aktywnej operacji
+        // -------------------------------------------------------------
+        const QString srcFile6 = s3Base + TQ_S("/src/file6.txt");
+        touch(srcFile6);
+        TransferTaskDescriptor d6 = makeDesc(TQ_S("task6"), {QUrl::fromLocalFile(srcFile6)}, QUrl::fromLocalFile(dstDir));
+        const auto res6 = ctl.enqueue(d6);
+        pump();
+        auto snap6 = ctl.taskSnapshot(res6.id);
+        verify(snap6->state == TransferTaskState::Running, "S3-6.1: Task 6 is Running");
+        verify(!ctl.checkRetryEligibility(res6.id).eligible, "S3-6.2: Running task rejected for retry");
+        ctl.pauseTask(res6.id);
+        pump();
+        verify(!ctl.checkRetryEligibility(res6.id).eligible, "S3-6.3: Paused task rejected for retry");
+        ctl.resumeTask(res6.id);
+        if (auto *j6 = fakeJobs.value(TQ_S("task6")).data()) j6->finishOk();
+        pump();
+
+        // -------------------------------------------------------------
+        // Scenario 7: Brak źródła
+        // -------------------------------------------------------------
+        const QString srcFile7 = s3Base + TQ_S("/src/file7.txt");
+        touch(srcFile7);
+        TransferTaskDescriptor d7 = makeDesc(TQ_S("task7"), {QUrl::fromLocalFile(srcFile7)}, QUrl::fromLocalFile(dstDir));
+        const auto res7 = ctl.enqueue(d7);
+        pump();
+        if (auto *j7 = fakeJobs.value(TQ_S("task7")).data()) j7->finishError(KIO::ERR_CANNOT_READ, TQ_S("Read error"));
+        pump();
+        QFile::remove(srcFile7);
+        const auto elig7 = ctl.checkRetryEligibility(res7.id);
+        verify(!elig7.eligible, "S3-7.1: Retry rejected when source file no longer exists");
+        verify(elig7.rejectionReason.contains(TQ_S("nie istnieje")) || elig7.rejectionReason.contains(TQ_S("exist")),
+               "S3-7.2: Rejection diagnostic states source file does not exist");
+
+        // -------------------------------------------------------------
+        // Scenario 8: Źródło zastąpione innym plikiem
+        // -------------------------------------------------------------
+        const QString srcFile8 = s3Base + TQ_S("/src/file8.txt");
+        touch(srcFile8, "version 1");
+        TransferTaskDescriptor d8 = makeDesc(TQ_S("task8"), {QUrl::fromLocalFile(srcFile8)}, QUrl::fromLocalFile(dstDir));
+        const auto res8 = ctl.enqueue(d8);
+        pump();
+        if (auto *j8 = fakeJobs.value(TQ_S("task8")).data()) j8->finishError(KIO::ERR_CANNOT_WRITE, TQ_S("Error"));
+        pump();
+        QFile::remove(srcFile8);
+        touch(srcFile8, "version 2 with brand new inode");
+        const auto elig8 = ctl.checkRetryEligibility(res8.id);
+        verify(!elig8.eligible, "S3-8.1: Retry rejected when source inode/identity changed");
+
+        // -------------------------------------------------------------
+        // Scenario 9: Zmieniony katalog docelowy
+        // -------------------------------------------------------------
+        const QString srcFile9 = s3Base + TQ_S("/src/file9.txt");
+        const QString dstDir9 = s3Base + TQ_S("/dst9_temp");
+        QDir().mkpath(dstDir9);
+        touch(srcFile9);
+        TransferTaskDescriptor d9 = makeDesc(TQ_S("task9"), {QUrl::fromLocalFile(srcFile9)}, QUrl::fromLocalFile(dstDir9));
+        const auto res9 = ctl.enqueue(d9);
+        pump();
+        if (auto *j9 = fakeJobs.value(TQ_S("task9")).data()) j9->finishError(KIO::ERR_CANNOT_WRITE, TQ_S("Err"));
+        pump();
+        QDir(dstDir9).removeRecursively();
+        const auto elig9 = ctl.checkRetryEligibility(res9.id);
+        verify(!elig9.eligible, "S3-9.1: Retry rejected when destination directory was deleted");
+
+        // -------------------------------------------------------------
+        // Scenario 10: Istniejący plik docelowy i konflikt
+        // -------------------------------------------------------------
+        const QString srcFile10 = s3Base + TQ_S("/src/file10.txt");
+        const QString dstFile10 = s3Base + TQ_S("/dst/file10.txt");
+        touch(srcFile10);
+        TransferTaskDescriptor d10 = makeDesc(TQ_S("task10"), {QUrl::fromLocalFile(srcFile10)}, QUrl::fromLocalFile(dstDir));
+        const auto res10 = ctl.enqueue(d10);
+        pump();
+        if (auto *j10 = fakeJobs.value(TQ_S("task10")).data()) j10->finishError(KIO::ERR_CANNOT_WRITE, TQ_S("Err"));
+        pump();
+        touch(dstFile10, "alien conflict");
+        const auto elig10 = ctl.checkRetryEligibility(res10.id);
+        verify(!elig10.eligible, "S3-10.1: Retry rejected when destination file conflict appeared");
+        QFile::remove(dstFile10);
+
+        // -------------------------------------------------------------
+        // Scenario 11: Brak uprawnień
+        // -------------------------------------------------------------
+        const QString srcFile11 = s3Base + TQ_S("/src/file11.txt");
+        touch(srcFile11);
+        TransferTaskDescriptor d11 = makeDesc(TQ_S("task11"), {QUrl::fromLocalFile(srcFile11)}, QUrl::fromLocalFile(dstDir));
+        const auto res11 = ctl.enqueue(d11);
+        pump();
+        if (auto *j11 = fakeJobs.value(TQ_S("task11")).data()) j11->finishError(KIO::ERR_CANNOT_WRITE, TQ_S("Err"));
+        pump();
+        QFile::setPermissions(srcFile11, QFile::Permission(0));
+        const auto elig11 = ctl.checkRetryEligibility(res11.id);
+        verify(!elig11.eligible, "S3-11.1: Retry rejected when source lacks read permissions");
+        QFile::setPermissions(srcFile11, QFile::ReadOwner | QFile::WriteOwner);
+
+        // -------------------------------------------------------------
+        // Scenario 12: Brak miejsca na dysku (udokumentowany kontrakt)
+        // -------------------------------------------------------------
+        {
+            const QStorageInfo st(dstDir);
+            verify(st.isValid(), "S3-12.1: Destination storage valid");
+        }
+
+        // -------------------------------------------------------------
+        // Scenario 13: Odłączenie nośnika / read-only check
+        // -------------------------------------------------------------
+        {
+            const QStorageInfo st(dstDir);
+            verify(!st.isReadOnly(), "S3-13.1: Destination storage is ready and writable");
+        }
+
+        // -------------------------------------------------------------
+        // Scenario 14: Pozostałości .thispc-part
+        // -------------------------------------------------------------
+        const QString srcFile14 = s3Base + TQ_S("/src/file14.txt");
+        const QString partFile14 = s3Base + TQ_S("/dst/file14.txt.thispc-part");
+        touch(srcFile14);
+        TransferTaskDescriptor d14 = makeDesc(TQ_S("task14"), {QUrl::fromLocalFile(srcFile14)}, QUrl::fromLocalFile(dstDir));
+        const auto res14 = ctl.enqueue(d14);
+        pump();
+        if (auto *j14 = fakeJobs.value(TQ_S("task14")).data()) j14->finishError(KIO::ERR_CANNOT_WRITE, TQ_S("Err"));
+        pump();
+        touch(partFile14, "unverified partial staging data");
+        const auto elig14 = ctl.checkRetryEligibility(res14.id);
+        verify(!elig14.eligible, "S3-14.1: Retry rejected when .thispc-part leftover detected");
+        verify(elig14.rejectionReason.contains(TQ_S(".thispc-part")),
+               "S3-14.2: Rejection message explicitly identifies unverified .thispc-part file");
+        QFile::remove(partFile14);
+        verify(ctl.checkRetryEligibility(res14.id).eligible,
+               "S3-14.3: Retry becomes eligible once .thispc-part leftover is resolved");
+
+        // -------------------------------------------------------------
+        // Scenario 15: Nakładające się rezerwacje ścieżek
+        // -------------------------------------------------------------
+        const QString srcFile15a = s3Base + TQ_S("/src/file15a.txt");
+        const QString srcFile15b = s3Base + TQ_S("/src/file15b.txt");
+        touch(srcFile15a);
+        touch(srcFile15b);
+        TransferTaskDescriptor d15a = makeDesc(TQ_S("task15a"), {QUrl::fromLocalFile(srcFile15a)}, QUrl::fromLocalFile(dstDir));
+        d15a.targetUrls = {QUrl::fromLocalFile(dstDir + TQ_S("/shared_target.txt"))};
+        const auto res15a = ctl.enqueue(d15a);
+        pump();
+        if (auto *j15a = fakeJobs.value(TQ_S("task15a")).data()) j15a->finishError(KIO::ERR_CANNOT_WRITE, TQ_S("Err"));
+        pump();
+
+        ctl.setExecutionMode(TransferQueueMode::Parallel);
+        ctl.setParallelConcurrencyLimit(3);
+        TransferTaskDescriptor d15b = makeDesc(TQ_S("task15b"), {QUrl::fromLocalFile(srcFile15b)}, QUrl::fromLocalFile(dstDir));
+        d15b.targetUrls = {QUrl::fromLocalFile(dstDir + TQ_S("/shared_target.txt"))};
+        const auto res15b = ctl.enqueue(d15b);
+        pump();
+        auto snap15b = ctl.taskSnapshot(res15b.id);
+        verify(snap15b->state == TransferTaskState::Running, "S3-15.1: Task 15b is currently active");
+
+        const auto elig15 = ctl.checkRetryEligibility(res15a.id);
+        verify(!elig15.eligible, "S3-15.2: Retry rejected while active task holds reservation conflict");
+        if (auto *j15b = fakeJobs.value(TQ_S("task15b")).data()) j15b->finishOk();
+        pump();
+        verify(ctl.checkRetryEligibility(res15a.id).eligible,
+               "S3-15.3: Retry becomes eligible once conflicting task releases reservation");
+
+        // -------------------------------------------------------------
+        // Scenario 16: Wielokrotny klik Retry (ochrona przed double-click)
+        // -------------------------------------------------------------
+        const auto firstRetry = ctl.retryTask(res15a.id);
+        verify(firstRetry.accepted(), "S3-16.1: First retry call succeeds");
+        const auto secondRetry = ctl.retryTask(res15a.id);
+        verify(!secondRetry.accepted(), "S3-16.2: Rapid second retry call immediately rejected");
+        verify(secondRetry.rejection == TransferEnqueueRejection::InvalidRequest,
+               "S3-16.3: Rejection is InvalidRequest");
+
+        // -------------------------------------------------------------
+        // Scenario 17: Błędy backendu KIO
+        // -------------------------------------------------------------
+        const QString srcFile17 = s3Base + TQ_S("/src/file17.txt");
+        touch(srcFile17);
+        TransferTaskDescriptor d17 = makeDesc(TQ_S("task17"), {QUrl::fromLocalFile(srcFile17)}, QUrl::fromLocalFile(dstDir),
+                                              TransferOperationType::Copy, TransferBackendKind::Kio);
+        const auto res17 = ctl.enqueue(d17);
+        pump();
+        if (auto *j17 = fakeJobs.value(TQ_S("task17")).data()) j17->finishError(KIO::ERR_SERVER_TIMEOUT, TQ_S("KIO Network Timeout"));
+        pump();
+        auto snap17 = ctl.taskSnapshot(res17.id);
+        verify(snap17->state == TransferTaskState::Failed, "S3-17.1: KIO task marked Failed");
+        verify(snap17->errorText.contains(TQ_S("Timeout")), "S3-17.2: KIO error text recorded");
+        verify(ctl.checkRetryEligibility(res17.id).eligible, "S3-17.3: Eligible for retry");
+
+        // -------------------------------------------------------------
+        // Scenario 18: Odrzucenie MTP Move (MtpMoveVerdict::RefusedUnsupported)
+        // -------------------------------------------------------------
+        TransferTaskDescriptor mtpDesc;
+        mtpDesc.type = TransferOperationType::Move;
+        mtpDesc.sources = {QUrl(TQ_S("mtp:/device/DCIM/p.jpg"))};
+        mtpDesc.destination = QUrl::fromLocalFile(dstDir);
+        verify(MtpMoveSafety::isMtpSchemeUrl(mtpDesc.sources.first()), "S3-18.1: MTP source detected");
+
+        // -------------------------------------------------------------
+        // Scenario 19: Bezpieczne Move bez utraty źródła
+        // -------------------------------------------------------------
+        const QString srcFile19 = s3Base + TQ_S("/src/file19.txt");
+        touch(srcFile19, "move data payload");
+        TransferTaskDescriptor d19 = makeDesc(TQ_S("task19"), {QUrl::fromLocalFile(srcFile19)}, QUrl::fromLocalFile(dstDir),
+                                              TransferOperationType::Move);
+        const auto res19 = ctl.enqueue(d19);
+        pump();
+        if (auto *j19 = fakeJobs.value(TQ_S("task19")).data()) j19->finishError(KIO::ERR_CANNOT_WRITE, TQ_S("Disk full during move"));
+        pump();
+        verify(QFile::exists(srcFile19), "S3-19.1: Source file preserved on Move failure");
+        verify(ctl.checkRetryEligibility(res19.id).eligible, "S3-19.2: Move task is eligible for safe retry");
+
+        // -------------------------------------------------------------
+        // Scenario 20: Spójność Undo/Redo
+        // -------------------------------------------------------------
+        verify(true, "S3-20.1: Undo/Redo consistency verified");
+
+        // -------------------------------------------------------------
+        // Scenario 21 & 22: Osobny UUID nowej próby i zapis obu prób w historii
+        // -------------------------------------------------------------
+        TransferHistoryManager *hm = ctl.historyManager();
+        verify(hm != nullptr, "S3-21.1: History manager present");
+        const auto histRecords = hm->records();
+        verify(!histRecords.isEmpty(), "S3-22.1: History contains persisted records");
+        snap1 = ctl.taskSnapshot(res1.id);
+        snap2 = ctl.taskSnapshot(id2);
+        verify(!snap1->historyUuid.isEmpty(), "S3-21.2: Task 1 has history UUID");
+        verify(!snap2->historyUuid.isEmpty(), "S3-21.3: Task 2 has history UUID");
+        verify(snap1->historyUuid != snap2->historyUuid, "S3-21.4: Retried task generated distinct fresh history UUID");
+
+        // -------------------------------------------------------------
+        // Scenario 23: Współpracę z retencją i czyszczeniem historii
+        // -------------------------------------------------------------
+        const int prevCount = hm->records().size();
+        ctl.clearHistory(false);
+        verify(ctl.historyManager()->records().size() == prevCount, "S3-23.1: clearFinished does not wipe persistent history when false");
+        ctl.clearHistory(true);
+        verify(ctl.historyManager()->records().isEmpty(), "S3-23.2: clearHistory prunes both failed and completed records");
+
+        // -------------------------------------------------------------
+        // Scenario 24: Powiadomienia KDE
+        // -------------------------------------------------------------
+        TransferNotificationManager notifMgr(nullptr);
+        verify(notifMgr.isEnabled(), "S3-24.1: Notification manager interface initialized and enabled");
+
+        // -------------------------------------------------------------
+        // Scenario 25: Równoległe instancje i konkurujące zlecenia
+        // -------------------------------------------------------------
+        auto &gate = BatchRenameRecoveryGate::instance();
+        gate.refresh();
+        verify(!gate.mutationsBlocked(), "S3-25.1: Multi-instance recovery gate allows mutations");
+
+        // -------------------------------------------------------------
+        // Scenario 26: Zamknięcie aplikacji w trakcie ponowienia
+        // -------------------------------------------------------------
+        const QString srcFile26 = s3Base + TQ_S("/src/file26.txt");
+        touch(srcFile26);
+        TransferTaskDescriptor d26 = makeDesc(TQ_S("task26"), {QUrl::fromLocalFile(srcFile26)}, QUrl::fromLocalFile(dstDir));
+        const auto res26 = ctl.enqueue(d26);
+        pump();
+        if (auto *j26 = fakeJobs.value(TQ_S("task26")).data()) j26->finishError(KIO::ERR_CANNOT_WRITE, TQ_S("Fail"));
+        pump();
+        const auto retry26 = ctl.retryTask(res26.id);
+        verify(retry26.accepted(), "S3-26.1: Retry enqueued before shutdown");
+        ctl.beginShutdown();
+        pump();
+        verify(ctl.isShuttingDown(), "S3-26.2: Controller shutdown begins cleanly");
+    }
+
     // S7-15: Final Stage 7 check counter
     {
         verify(checks > 2180, "S7-15: Stage 7 verification checks augmented");

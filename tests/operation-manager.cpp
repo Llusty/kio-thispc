@@ -56,6 +56,12 @@ protected:
     }
 
 public:
+    void finishError(int code, const QString &text)
+    {
+        setError(code);
+        setErrorText(text);
+        emitResult();
+    }
     bool killed = false;
     bool paused = false;
 };
@@ -395,6 +401,204 @@ int main(int argc, char **argv)
         // Clean up job1
         manager.finish(&job1, false, false, {});
         manager.clearFinished();
+        qunsetenv("THISPC_TRANSFER_QUEUE_PRODUCTION");
+    }
+
+    // ==================================================================
+    // Stage 3 Safe Retry UX Follow-up: Live update in open OperationWindow
+    // ==================================================================
+    {
+        qputenv("THISPC_TRANSFER_QUEUE_PRODUCTION", "1");
+        QTemporaryDir tempDir;
+        verify(tempDir.isValid(), "UX Follow-up: QTemporaryDir is valid");
+
+        const QString srcDir = tempDir.path() + QStringLiteral("/src");
+        const QString dstDir = tempDir.path() + QStringLiteral("/dst");
+        QDir().mkpath(srcDir);
+        QDir().mkpath(dstDir);
+
+        const QString srcFilePath = srcDir + QStringLiteral("/source.txt");
+        const QString dstFilePath = dstDir + QStringLiteral("/source.txt");
+        {
+            QFile f(srcFilePath);
+            verify(f.open(QIODevice::WriteOnly), "UX Follow-up: Created test source file");
+            f.write("safe-retry-ux-data");
+            f.close();
+        }
+
+        TransferQueueController qc;
+        manager.setQueueController(&qc);
+        manager.showDetailedWindow();
+        verify(manager.m_detailedWindow != nullptr, "UX Follow-up: detailed window exists");
+        verify(manager.m_detailedWindow->isVisible(), "UX Follow-up: detailed window is visible");
+
+        QPointer<TestOperationJob> fakeJob;
+        TransferTaskDescriptor desc;
+        desc.title = QStringLiteral("UX Test Copy");
+        desc.type = TransferOperationType::Copy;
+        desc.backend = TransferBackendKind::LocalNative;
+        desc.sources = {QUrl::fromLocalFile(srcFilePath)};
+        desc.destination = QUrl::fromLocalFile(dstDir);
+        desc.capabilities = defaultTransferCapabilities(desc.backend, desc.type);
+        desc.jobFactory = [&fakeJob]() -> KJob* {
+            fakeJob = new TestOperationJob(true, true);
+            return fakeJob.data();
+        };
+
+        const auto enqRes = qc.enqueue(desc);
+        verify(enqRes.accepted(), "UX Follow-up: Task enqueued");
+        QCoreApplication::processEvents();
+
+        // Simulate initial failure due to read permission error (chmod 000)
+        QFile::setPermissions(srcFilePath, QFileDevice::Permissions{});
+        if (fakeJob) {
+            fakeJob->finishError(KIO::ERR_CANNOT_READ, QStringLiteral("Permission denied"));
+        }
+        QCoreApplication::processEvents();
+        manager.m_detailedWindow->rebuild();
+
+        auto snap = qc.taskSnapshot(enqRes.id);
+        verify(snap.has_value() && snap->state == TransferTaskState::Failed,
+               "UX Follow-up: Task entered Failed state");
+        verify(!manager.m_detailedWindow->isRetryButtonEnabledForTask(enqRes.id),
+               "UX.1: Initial chmod 000 -> Retry button disabled in open window");
+        {
+            const QString tt = manager.m_detailedWindow->retryButtonToolTipForTask(enqRes.id);
+            verify(tt.contains(QStringLiteral("uprawnie")) || tt.contains(QStringLiteral("permission")),
+                   "UX.1: Tooltip references read permissions");
+        }
+
+        // UX.1: chmod 000 -> 644 enables button without closing window
+        QFile::setPermissions(srcFilePath, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ReadGroup | QFileDevice::ReadOther);
+        manager.m_detailedWindow->triggerRetryWatcherCheckNow();
+        verify(manager.m_detailedWindow->isRetryButtonEnabledForTask(enqRes.id),
+               "UX.1: chmod 644 -> Retry button enabled in open window without reopening");
+        {
+            const QString tt = manager.m_detailedWindow->retryButtonToolTipForTask(enqRes.id);
+            verify(tt.contains(QStringLiteral("Ponów")) || tt.contains(QStringLiteral("Retry")),
+                   "UX.1: Tooltip updated to ready state");
+        }
+
+        // UX.2: chmod 644 -> 000 disables button
+        QFile::setPermissions(srcFilePath, QFileDevice::Permissions{});
+        manager.m_detailedWindow->triggerRetryWatcherCheckNow();
+        verify(!manager.m_detailedWindow->isRetryButtonEnabledForTask(enqRes.id),
+               "UX.2: chmod 000 -> Retry button disabled again");
+
+        // Restore permissions for subsequent checks
+        QFile::setPermissions(srcFilePath, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ReadGroup | QFileDevice::ReadOther);
+        manager.m_detailedWindow->triggerRetryWatcherCheckNow();
+        verify(manager.m_detailedWindow->isRetryButtonEnabledForTask(enqRes.id),
+               "UX.2: Restored permissions re-enables button");
+
+        // UX.3: source removal disables retry, restoring re-enables
+        const QString srcBackupPath = srcFilePath + QStringLiteral(".bak");
+        verify(QFile::rename(srcFilePath, srcBackupPath), "UX.3: Renamed source file");
+        manager.m_detailedWindow->triggerRetryWatcherCheckNow();
+        verify(!manager.m_detailedWindow->isRetryButtonEnabledForTask(enqRes.id),
+               "UX.3: Missing source file disables retry");
+        {
+            const QString tt = manager.m_detailedWindow->retryButtonToolTipForTask(enqRes.id);
+            verify(tt.contains(QStringLiteral("nie istnieje")) || tt.contains(QStringLiteral("exist")),
+                   "UX.3: Tooltip indicates source file missing");
+        }
+
+        verify(QFile::rename(srcBackupPath, srcFilePath), "UX.3: Restored source file");
+        manager.m_detailedWindow->triggerRetryWatcherCheckNow();
+        verify(manager.m_detailedWindow->isRetryButtonEnabledForTask(enqRes.id),
+               "UX.3: Restoring source file re-enables retry button");
+
+        // UX.5: target conflict creation blocks retry, removal restores availability
+        {
+            QFile conflictFile(dstFilePath);
+            verify(conflictFile.open(QIODevice::WriteOnly), "UX.5: Created conflict file");
+            conflictFile.write("target-conflict");
+            conflictFile.close();
+        }
+        manager.m_detailedWindow->triggerRetryWatcherCheckNow();
+        verify(!manager.m_detailedWindow->isRetryButtonEnabledForTask(enqRes.id),
+               "UX.5: Target conflict blocks retry in open window");
+        {
+            const QString tt = manager.m_detailedWindow->retryButtonToolTipForTask(enqRes.id);
+            verify(tt.contains(QStringLiteral("konflikt")) || tt.contains(QStringLiteral("conflict")),
+                   "UX.5: Tooltip indicates conflict");
+        }
+
+        verify(QFile::remove(dstFilePath), "UX.5: Removed target conflict file");
+        manager.m_detailedWindow->triggerRetryWatcherCheckNow();
+        verify(manager.m_detailedWindow->isRetryButtonEnabledForTask(enqRes.id),
+               "UX.5: Removing target conflict restores retry availability");
+
+        // UX.5b: .thispc-part temporary file blocks retry, removal restores availability
+        const QString partFilePath = dstFilePath + QStringLiteral(".thispc-part");
+        {
+            QFile partFile(partFilePath);
+            verify(partFile.open(QIODevice::WriteOnly), "UX.5b: Created .thispc-part file");
+            partFile.write("staged-data");
+            partFile.close();
+        }
+        manager.m_detailedWindow->triggerRetryWatcherCheckNow();
+        verify(!manager.m_detailedWindow->isRetryButtonEnabledForTask(enqRes.id),
+               "UX.5b: .thispc-part blocks retry");
+        {
+            const QString tt = manager.m_detailedWindow->retryButtonToolTipForTask(enqRes.id);
+            verify(tt.contains(QStringLiteral(".thispc-part")),
+                   "UX.5b: Tooltip indicates .thispc-part staging file");
+        }
+
+        verify(QFile::remove(partFilePath), "UX.5b: Removed .thispc-part file");
+        manager.m_detailedWindow->triggerRetryWatcherCheckNow();
+        verify(manager.m_detailedWindow->isRetryButtonEnabledForTask(enqRes.id),
+               "UX.5b: Removing .thispc-part restores retry availability");
+
+        // UX.4: inode swap leaves retry disabled
+        verify(QFile::remove(srcFilePath), "UX.4: Removed original source file");
+        {
+            QFile newFile(srcFilePath);
+            verify(newFile.open(QIODevice::WriteOnly), "UX.4: Created replacement file with new inode");
+            newFile.write("new-inode-data");
+            newFile.close();
+        }
+        manager.m_detailedWindow->triggerRetryWatcherCheckNow();
+        verify(!manager.m_detailedWindow->isRetryButtonEnabledForTask(enqRes.id),
+               "UX.4: Inode swap permanently blocks retry for original task");
+        {
+            const QString tt = manager.m_detailedWindow->retryButtonToolTipForTask(enqRes.id);
+            verify(tt.contains(QStringLiteral("podmieniony")) || tt.contains(QStringLiteral("replaced")),
+                   "UX.4: Tooltip indicates source replacement");
+        }
+
+        // UX.6: Archival card after restart remains strictly disabled
+        TransferHistoryRecord archRec = TransferHistoryRecord::createNew(
+            TransferOperationType::Copy,
+            TransferBackendKind::LocalNative,
+            TransferTaskState::Failed,
+            {QUrl::fromLocalFile(srcFilePath)},
+            QUrl::fromLocalFile(dstDir),
+            QDateTime::currentDateTimeUtc().addSecs(-10),
+            QDateTime::currentDateTimeUtc(),
+            10000,
+            1024,
+            0,
+            std::nullopt,
+            100,
+            QStringLiteral("Old disk error"),
+            QStringLiteral("Archival failed task"));
+        archRec.uuid = QStringLiteral("archival-test-uuid-ux6");
+        if (qc.historyManager()) {
+            qc.historyManager()->addRecord(archRec, false);
+            manager.m_detailedWindow->rebuild();
+
+            auto *archRetryBtn = manager.m_detailedWindow->findChild<QToolButton *>(
+                QStringLiteral("detailedOperationHistoryRetryButton"));
+            verify(archRetryBtn != nullptr, "UX.6: Archival retry button exists");
+            verify(!archRetryBtn->isEnabled(), "UX.6: Archival retry button strictly disabled");
+            verify(archRetryBtn->toolTip().contains(QStringLiteral("restar"), Qt::CaseInsensitive),
+                   "UX.6: Archival retry button explains restart context limitation");
+        }
+
+        qc.clearFinished();
+        manager.m_detailedWindow->close();
         qunsetenv("THISPC_TRANSFER_QUEUE_PRODUCTION");
     }
 

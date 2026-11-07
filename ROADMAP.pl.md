@@ -643,11 +643,25 @@ Gdy zwykła operacja plikowa zakończy się błędem braku uprawnień (Permissio
       - Scenariusz G (kopiowanie, przenoszenie i powiadomienia KDE Plasma): PASS;
       - Scenariusz H (ponowny start, trwałość trzech rekordów, integralność danych, brak staging leftovers, płynność GUI, brak zawieszeń i crashy): PASS.
     - Wszystkie funkcjonalności Etapu 2 (Trwała historia transferów) zostały w pełni zrealizowane, zaakceptowane manualnie i formalnie zamknięte w repozytorium.
-- **Etap 3 — Bezpieczne ponawianie operacji kwalifikujących się do powtórzenia:** (Planowane)
-  - Bezpieczne ponawianie dla nieudanych operacji kwalifikujących się do powtórzenia.
+- **Etap 3 — Bezpieczne ponawianie operacji kwalifikujących się do powtórzenia:** ✅ IMPLEMENTED / AUTOMATED PASS / MANUAL ACCEPTED (A–H 8/8 + UX 6/6) / GIT CLOSURE PENDING
+  - Bezpieczne, świadome ponawianie nieudanych operacji Kopiuj i Przenieś bieżącej sesji;
+  - Rygorystyczna wstępna walidacja bezpieczeństwa: istnienie źródeł, niezmienność tożsamości pliku źródłowego (device/inode), uprawnienia do zapisu w katalogu docelowym, wykrywanie konfliktów w miejscu docelowym (w tym plików roboczych `.thispc-part`);
+  - Karty archiwalne z trwałej historii po restarcie aplikacji mają przycisk „Ponów” bezwzględnie zablokowany z informacyjnym tooltipem;
+  - Pokrycie testami automatycznymi: 43 testy kontraktu Etapu 3 (71 asercji), pełna regresja 77/77 zestawów PASS, izolacja środowiskowa XDG Stage 3 9/9 PASS;
+  - Odbiór manualny użytkownika: Scenariusze A–H 8/8 PASS; Dopięcie UX UX.1–UX.6 6/6 PASS;
+  - **Dynamiczne monitorowanie kwalifikowalności ponowienia na żywo:**
+    - Reaktywne monitorowanie oparte o zdarzenia jądra (`QFileSystemWatcher`) z debouncingiem 150 ms dla nieudanych zadań w otwartym oknie `OperationWindow`;
+    - Automatyczne odświeżanie dostępności przycisku („Ponów” staje się aktywny/wyszarzony) oraz podpowiedzi (tooltip) natychmiast po zmianach na dysku (przywrócenie uprawnień, odtworzenie pliku, usunięcie konfliktu/part) bez konieczności ponownego otwierania okna;
+    - Sztywne limity zasobów (maks. 50 katalogów, 100 plików), zero odpytywania (zero-polling), obserwator aktywny wyłącznie przy widocznym oknie;
+    - Testy jednostkowe UX.1–UX.6 PASS (87 asercji zestawu `operations`).
 - **Etap 4 — Akcja „Pokaż w folderze”:** (Planowane)
   - Akcja „Pokaż w folderze” po zakończeniu zadania tam, gdzie ma to zastosowanie.
 - **Etap 5 — Szlif końcowy, pakietyzacja i wydanie 0.45.0:** (Planowane)
+
+### 0.45.0 — Bezpieczeństwo i bramka wydaniowa (Security Release Gate)
+- Przed oficjalnym wydaniem wymagany jest kompleksowy audyt bezpieczeństwa obejmujący: zabezpieczenie przed nieautoryzowanym wykonywaniem kodu, brak podatności typu backdoor, kontrolę uprawnień administracyjnych i brak ich nieuprawnionej eskalacji, weryfikację zależności zewnętrznych, integralność instalatora oraz bezpieczeństwo wszystkich operacji plikowych;
+- Wystąpienie jakiejkolwiek nierozwiązanej luki krytycznej lub wysokiego ryzyka bezwzględnie blokuje wydanie wersji;
+- Zasada obowiązuje bezwarunkowo dla wydania 0.45.0 oraz wszystkich przyszłych wydań.
 
 #### Rejestr zagadnień UX (zakres 0.45.0):
 - **Zagadnienie UX A — Domyślny rozmiar okna „Operacje plikowe”:**
@@ -657,9 +671,16 @@ Gdy zwykła operacja plikowa zakończy się błędem braku uprawnień (Permissio
 - **Zagadnienie UX C — Spójność historii operacji:**
   Zapewnienie, że panel podręczny `OperationPopup` nie raportuje „Brak historii”, gdy w oknie szczegółowym `OperationWindow` znajdują się ukończone operacje bieżącej sesji.
 
-### 0.46.0 — Rozszerzenia i akcje usług (Extensions / Service Actions)
-- Preferować wykorzystanie KDE Service Actions i prostego kontraktu rozszerzeń zamiast budowania pełnego własnego ekosystemu wtyczek bez konkretnej potrzeby;
-- Pozwolić dodawać nowe akcje menu kontekstowego i integracje bez edycji kodu źródłowego głównego okna.
+### 0.46.0 — Niezależna architektura i audyt bezpieczeństwa (Standalone Architecture & Security Audit)
+- Kompleksowy audyt zależności od KDE Frameworks i bibliotek Qt;
+- Projekt koncepcyjny i architektoniczny niezależnego rdzenia ThisPC, odseparowanego od specyficznych wymagań konkretnego środowiska graficznego;
+- Opcjonalne, luźno powiązane integracje ze środowiskiem KDE Plasma;
+- Alternatywne backendy linuksowe dla środowisk wielopulpitowych;
+- Analiza kompatybilności ze środowiskami Linux Mint / Cinnamon, Pop!_OS / COSMIC, XFCE itp.;
+- Formalny model zagrożeń (threat model);
+- Bezpieczny model pakietowania, dystrybucji i weryfikacji aktualizacji;
+- Plan etapowej migracji architektonicznej bez utraty wypracowanych dotąd gwarancji bezpieczeństwa i integralności danych.
+*(Uwaga: Faza analityczno-projektowa; prace implementacyjne nie zostały jeszcze rozpoczęte.)*
 
 ### 0.47.0 — Zaawansowana synchronizacja paneli (Advanced Split Sync)
 - Opcjonalne rekurencyjne porównywanie i synchronizacja katalogów w Split View;
@@ -692,6 +713,10 @@ Wartościowe funkcje do rozważenia, bez przypisanej wersji ani ustalonego termi
 - Szybki filtr bieżącego folderu w miejscu (in-place): wartościowy osobny mechanizm, bez wyszukiwania rekurencyjnego; wymaga własnej semantyki widoku i filtrowania.
 - Wyszukiwanie po zawartości plików: osobna funkcja wymagająca przeglądu formatów/backendów, wydajności i bezpieczeństwa.
 - Zaawansowana logika zapytań AND/OR/NOT: osobna od prostego łączenia aktywnych filtrów przez AND oraz alternatyw wewnątrz jednego filtra wydanych w 0.41.0.
+
+### Rozszerzenia i akcje usług (Extensions / Service Actions) — bez przypisanej wersji
+- Preferować wykorzystanie KDE Service Actions i prostego kontraktu rozszerzeń zamiast budowania pełnego własnego ekosystemu wtyczek bez konkretnej potrzeby;
+- Pozwolić dodawać nowe akcje menu kontekstowego i integracje bez edycji kodu źródłowego głównego okna.
 
 ### Interoperacyjność przeciągania i upuszczania Ark → ThisPC — audyt i plan
 - Przyjmowanie zewnętrznego przeciągania i upuszczania (Drag & Drop) z widoków archiwów Ark/KDE do zwykłego folderu w ThisPC dla pojedynczych i wielu zaznaczonych plików oraz folderów;
