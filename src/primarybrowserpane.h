@@ -69,6 +69,11 @@ public:
     QUrl requestedListingUrl() const { return m_listingCore.requestedUrl(); }
     void setStatusText(const QString &);
     QLabel *statusLabel() const { return m_directoryStatus; }
+    void setPendingSelectionForNextLoad(const DirectorySelectionSnapshot &selection)
+    {
+        m_explicitPendingSelection = selection;
+        m_explicitSelectionReadyToConsume = false;
+    }
 #ifdef THISPC_TEST_HARNESS
     DirectoryListingCore &listingCoreForTesting() { return m_listingCore; }
 #endif
@@ -86,5 +91,7 @@ private:
     DirectoryListingCore m_listingCore;
     DirectorySelectionSnapshot m_pendingSelection;
     std::optional<DirectoryViewStateSnapshot> m_pendingViewState;
+    std::optional<DirectorySelectionSnapshot> m_explicitPendingSelection;
+    bool m_explicitSelectionReadyToConsume = false;
     DirectoryPreviewAdapter *m_previewAdapter = nullptr;
 };

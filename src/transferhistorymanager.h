@@ -90,6 +90,7 @@ struct TransferHistoryRecord {
 
     QList<QUrl> sourceUrls;
     QUrl destinationUrl;
+    QList<QUrl> targetUrls;
 
     QDateTime startTimeUtc;
     QDateTime endTimeUtc;
@@ -194,7 +195,7 @@ struct TransferHistoryRecord {
             dur = std::max<qint64>(0, startUtc.msecsTo(endUtc));
         }
 
-        return createNew(
+        TransferHistoryRecord rec = createNew(
             snapshot.type,
             snapshot.backend,
             snapshot.state,
@@ -209,6 +210,8 @@ struct TransferHistoryRecord {
             snapshot.errorCode,
             snapshot.errorText,
             snapshot.title);
+        rec.targetUrls = sanitizeUrls(snapshot.targetUrls);
+        return rec;
     }
 
     bool isValid() const
@@ -261,6 +264,14 @@ struct TransferHistoryRecord {
 
         if (destinationUrl.isValid()) {
             obj[QStringLiteral("destination")] = sanitizeUrl(destinationUrl).toString();
+        }
+
+        if (!targetUrls.isEmpty()) {
+            QJsonArray tgtArr;
+            for (const QUrl &u : targetUrls) {
+                tgtArr.append(sanitizeUrl(u).toString());
+            }
+            obj[QStringLiteral("targetUrls")] = tgtArr;
         }
 
         if (startTimeUtc.isValid()) {
@@ -356,6 +367,18 @@ struct TransferHistoryRecord {
             }
         }
 
+        if (obj.contains(QStringLiteral("targetUrls")) && obj.value(QStringLiteral("targetUrls")).isArray()) {
+            const QJsonArray tgtArr = obj.value(QStringLiteral("targetUrls")).toArray();
+            for (const QJsonValue &item : tgtArr) {
+                if (item.isString()) {
+                    const QString str = item.toString();
+                    if (str.length() <= THISPC_HISTORY_MAX_STRING_LENGTH) {
+                        rec.targetUrls.append(sanitizeUrl(QUrl(str)));
+                    }
+                }
+            }
+        }
+
         if (obj.contains(QStringLiteral("startTime")) && obj.value(QStringLiteral("startTime")).isString()) {
             const QString startStr = obj.value(QStringLiteral("startTime")).toString();
             if (!startStr.isEmpty()) {
@@ -433,6 +456,7 @@ struct TransferHistoryRecord {
             && terminalState == other.terminalState
             && sourceUrls == other.sourceUrls
             && destinationUrl == other.destinationUrl
+            && targetUrls == other.targetUrls
             && startTimeUtc == other.startTimeUtc
             && endTimeUtc == other.endTimeUtc
             && durationMs == other.durationMs
@@ -450,6 +474,310 @@ struct TransferHistoryRecord {
         return !(*this == other);
     }
 };
+
+// ------------------------------------------------------------------
+// Stage 4: Show in Folder ("Pokaż w folderze") eligibility & resolution
+// ------------------------------------------------------------------
+
+enum class ShowInFolderIneligibilityReason {
+    None = 0,
+    NotCompleted,
+    InvalidDestination,
+    RemoteLocationUnsupported,
+    DisconnectedOrMtpMedia,
+    UnsupportedScheme,
+    UnsafePath,
+    CorruptedRecord,
+    DestinationDirectoryMissing,
+    TargetItemMissing
+};
+
+struct ShowInFolderResolution {
+    bool eligible = false;
+    ShowInFolderIneligibilityReason reason = ShowInFolderIneligibilityReason::None;
+    QUrl folderUrl;
+    QList<QUrl> selectUrls;
+    QString message;
+};
+
+namespace ShowInFolderHelper {
+
+inline bool containsDotOrDotDotSegment(const QString &rawPath)
+{
+    const QString normalized = QString(rawPath).replace(QLatin1Char('\\'), QLatin1Char('/'));
+    const QStringList parts = normalized.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    for (const QString &part : parts) {
+        if (part == QLatin1String("..") || part == QLatin1String(".")) {
+            return true;
+        }
+    }
+    return false;
+}
+
+inline bool containsDotOrDotDotSegment(const QUrl &url)
+{
+    if (!url.isValid() || url.isEmpty()) {
+        return false;
+    }
+    const QString rawPath = url.isLocalFile() ? url.toLocalFile() : url.path(QUrl::FullyDecoded);
+    return containsDotOrDotDotSegment(rawPath) || containsDotOrDotDotSegment(url.path(QUrl::FullyDecoded));
+}
+
+inline QString extractSafeEntryName(const QUrl &url)
+{
+    if (!url.isValid() || url.isEmpty() || containsDotOrDotDotSegment(url)) {
+        return {};
+    }
+    const QString rawPath = url.isLocalFile() ? url.toLocalFile() : url.path();
+    if (rawPath.isEmpty() || containsDotOrDotDotSegment(rawPath)) {
+        return {};
+    }
+    if (url.isLocalFile() && !QDir::isAbsolutePath(rawPath)) {
+        return {};
+    }
+    QString trimmed = rawPath;
+    while (trimmed.size() > 1 && trimmed.endsWith(QLatin1Char('/'))) {
+        trimmed.chop(1);
+    }
+    if (trimmed.isEmpty() || trimmed == QLatin1String("/")) {
+        return {};
+    }
+    const int slash = trimmed.lastIndexOf(QLatin1Char('/'));
+    const QString name = (slash >= 0) ? trimmed.mid(slash + 1) : trimmed;
+    if (name.isEmpty()
+        || name == QLatin1String(".")
+        || name == QLatin1String("..")
+        || name.contains(QLatin1Char('/'))
+        || name.contains(QLatin1Char('\\'))
+        || name.contains(QChar(0))) {
+        return {};
+    }
+    return name;
+}
+
+} // namespace ShowInFolderHelper
+
+inline ShowInFolderResolution resolveShowInFolder(
+    TransferTaskState state,
+    const QList<QUrl> &sourceUrls,
+    const QUrl &destinationUrl,
+    const QList<QUrl> &targetUrls,
+    int itemCount)
+{
+    ShowInFolderResolution res;
+    auto reject = [&res](ShowInFolderIneligibilityReason reason, const QString &msg) {
+        res.eligible = false;
+        res.reason = reason;
+        res.message = msg;
+        return res;
+    };
+
+    // Rule 1: Only Completed operations are eligible.
+    if (state != TransferTaskState::Completed) {
+        return reject(ShowInFolderIneligibilityReason::NotCompleted,
+                      trLocal("Akcja „Pokaż w folderze” jest dostępna wyłącznie dla pomyślnie zakończonych operacji",
+                              "\"Show in folder\" is only available for successfully completed operations"));
+    }
+
+    if (!destinationUrl.isValid() || destinationUrl.isEmpty()) {
+        return reject(ShowInFolderIneligibilityReason::InvalidDestination,
+                      trLocal("Brak prawidłowego katalogu docelowego w zapisie operacji",
+                              "No valid destination directory in operation record"));
+    }
+
+    const QString scheme = destinationUrl.scheme().toLower();
+    if (scheme == QLatin1String("mtp")) {
+        return reject(ShowInFolderIneligibilityReason::DisconnectedOrMtpMedia,
+                      trLocal("Lokalizacje MTP nie wspierają bezpośredniego otwarcia i zaznaczenia pliku",
+                              "MTP locations do not support direct folder opening and file selection"));
+    }
+
+    if (RemoteUrlHelper::isRemoteUrl(destinationUrl)
+        || scheme == QLatin1String("fish")
+        || scheme == QLatin1String("nfs")
+        || scheme == QLatin1String("ssh")) {
+        return reject(ShowInFolderIneligibilityReason::RemoteLocationUnsupported,
+                      trLocal("Lokalizacje zdalne (%1://) nie wspierają bezpiecznego otwarcia i zaznaczenia elementu",
+                              "Remote locations (%1://) do not support safe folder opening and item selection")
+                          .arg(scheme));
+    }
+
+    if (!destinationUrl.isLocalFile()) {
+        return reject(ShowInFolderIneligibilityReason::UnsupportedScheme,
+                      trLocal("Nieobsługiwany schemat docelowy (%1:) dla akcji „Pokaż w folderze”",
+                              "Unsupported destination scheme (%1:) for \"Show in folder\"")
+                          .arg(scheme.isEmpty() ? QStringLiteral("unknown") : scheme));
+    }
+
+    const QString rawDst = destinationUrl.toLocalFile();
+    if (rawDst.isEmpty()
+        || !QDir::isAbsolutePath(rawDst)
+        || ShowInFolderHelper::containsDotOrDotDotSegment(destinationUrl)
+        || ShowInFolderHelper::containsDotOrDotDotSegment(rawDst)) {
+        return reject(ShowInFolderIneligibilityReason::UnsafePath,
+                      trLocal("Ścieżka docelowa jest względna lub zawiera niedozwolone segmenty „..”",
+                              "Destination path is relative or contains forbidden \"..\" segments"));
+    }
+
+    const QString cleanDst = QDir::cleanPath(rawDst);
+    if (cleanDst.isEmpty() || !QDir::isAbsolutePath(cleanDst)) {
+        return reject(ShowInFolderIneligibilityReason::UnsafePath,
+                      trLocal("Nieprawidłowa ścieżka katalogu docelowego",
+                              "Invalid destination directory path"));
+    }
+
+#ifndef Q_OS_WIN
+    struct stat dstSt {};
+    if (::lstat(QFile::encodeName(cleanDst).constData(), &dstSt) != 0) {
+        return reject(ShowInFolderIneligibilityReason::DestinationDirectoryMissing,
+                      trLocal("Katalog docelowy nie istnieje lub nośnik został odłączony",
+                              "Destination directory does not exist or medium was disconnected"));
+    }
+    if (S_ISLNK(dstSt.st_mode)) {
+        return reject(ShowInFolderIneligibilityReason::UnsafePath,
+                      trLocal("Katalog docelowy jest dowiązaniem symbolicznym — nawigacja zablokowana dla bezpieczeństwa",
+                              "Destination directory is a symbolic link — navigation refused for safety"));
+    }
+    if (!S_ISDIR(dstSt.st_mode)) {
+        return reject(ShowInFolderIneligibilityReason::DestinationDirectoryMissing,
+                      trLocal("Ścieżka docelowa nie jest katalogiem",
+                              "Destination path is not a directory"));
+    }
+#endif
+
+    // Validate sourceUrls and itemCount consistency
+    if (sourceUrls.isEmpty() || itemCount <= 0 || itemCount != sourceUrls.size()) {
+        return reject(ShowInFolderIneligibilityReason::CorruptedRecord,
+                      trLocal("Rekord historii operacji jest niekompletny lub uszkodzony",
+                              "Operation history record is incomplete or corrupted"));
+    }
+
+    if (!targetUrls.isEmpty() && targetUrls.size() != sourceUrls.size()) {
+        return reject(ShowInFolderIneligibilityReason::CorruptedRecord,
+                      trLocal("Rekord docelowych ścieżek operacji jest niespójny",
+                              "Operation target paths record is inconsistent"));
+    }
+
+    QStringList candidateTargetPaths;
+    candidateTargetPaths.reserve(sourceUrls.size());
+
+    for (int i = 0; i < sourceUrls.size(); ++i) {
+        const QString srcName = ShowInFolderHelper::extractSafeEntryName(sourceUrls.at(i));
+        if (srcName.isEmpty()) {
+            return reject(ShowInFolderIneligibilityReason::CorruptedRecord,
+                          trLocal("Nieprawidłowa ścieżka elementu źródłowego w zapisie operacji",
+                                  "Invalid source item path in operation record"));
+        }
+
+        QString targetPath;
+        if (!targetUrls.isEmpty()) {
+            const QUrl &tgtUrl = targetUrls.at(i);
+            if (!tgtUrl.isValid() || !tgtUrl.isLocalFile()) {
+                return reject(ShowInFolderIneligibilityReason::CorruptedRecord,
+                              trLocal("Nieprawidłowy docelowy URL elementu",
+                                      "Invalid target item URL"));
+            }
+            const QString rawTgt = tgtUrl.toLocalFile();
+            if (rawTgt.isEmpty()
+                || !QDir::isAbsolutePath(rawTgt)
+                || ShowInFolderHelper::containsDotOrDotDotSegment(rawTgt)) {
+                return reject(ShowInFolderIneligibilityReason::UnsafePath,
+                              trLocal("Docelowa ścieżka elementu zawiera niedozwolone segmenty",
+                                      "Target item path contains forbidden segments"));
+            }
+            const QString tgtName = ShowInFolderHelper::extractSafeEntryName(tgtUrl);
+            if (tgtName.isEmpty()) {
+                return reject(ShowInFolderIneligibilityReason::CorruptedRecord,
+                              trLocal("Nieprawidłowa nazwa pliku docelowego",
+                                      "Invalid target file name"));
+            }
+            const QString cleanTgt = QDir::cleanPath(rawTgt);
+            const QString parentDir = QDir::cleanPath(QFileInfo(cleanTgt).path());
+            if (parentDir != cleanDst) {
+                return reject(ShowInFolderIneligibilityReason::UnsafePath,
+                              trLocal("Ścieżka docelowego pliku wykracza poza katalog docelowy",
+                                      "Target file path escapes destination directory"));
+            }
+            targetPath = cleanTgt;
+        } else {
+            targetPath = QDir(cleanDst).filePath(srcName);
+        }
+
+        if (targetPath.endsWith(QStringLiteral(".thispc-part"))) {
+            return reject(ShowInFolderIneligibilityReason::TargetItemMissing,
+                          trLocal("Wskazany element jest niekompletnym plikiem tymczasowym (.thispc-part)",
+                                  "Target item is an incomplete temporary staging file (.thispc-part)"));
+        }
+
+        candidateTargetPaths.append(targetPath);
+    }
+
+    // Rule 2: Single-item transfer -> verify the exact target item exists (regular file, dir, or symlink)
+    if (candidateTargetPaths.size() == 1) {
+        const QString &itemPath = candidateTargetPaths.first();
+#ifndef Q_OS_WIN
+        struct stat itemSt {};
+        if (::lstat(QFile::encodeName(itemPath).constData(), &itemSt) != 0) {
+            return reject(ShowInFolderIneligibilityReason::TargetItemMissing,
+                          trLocal("Plik lub katalog docelowy nie istnieje już w folderze docelowym",
+                                  "Target file or directory no longer exists in destination folder"));
+        }
+#endif
+        res.eligible = true;
+        res.reason = ShowInFolderIneligibilityReason::None;
+        res.folderUrl = QUrl::fromLocalFile(cleanDst);
+        res.selectUrls = {QUrl::fromLocalFile(itemPath)};
+        res.message = trLocal("Otwórz folder docelowy i zaznacz przeniesiony/skopiowany element",
+                              "Open destination folder and select transferred item");
+        return res;
+    }
+
+    // Rule 3: Multi-item transfer -> open destination directory without selecting a single random item,
+    // provided at least one transferred item still exists in the destination directory.
+    bool anyItemExists = false;
+#ifndef Q_OS_WIN
+    for (const QString &itemPath : candidateTargetPaths) {
+        struct stat itemSt {};
+        if (::lstat(QFile::encodeName(itemPath).constData(), &itemSt) == 0) {
+            anyItemExists = true;
+            break;
+        }
+    }
+#endif
+    if (!anyItemExists) {
+        return reject(ShowInFolderIneligibilityReason::TargetItemMissing,
+                      trLocal("Żaden z przetransferowanych elementów nie znajduje się już w katalogu docelowym",
+                              "None of the transferred items exist in the destination directory anymore"));
+    }
+
+    res.eligible = true;
+    res.reason = ShowInFolderIneligibilityReason::None;
+    res.folderUrl = QUrl::fromLocalFile(cleanDst);
+    res.selectUrls.clear();
+    res.message = trLocal("Otwórz folder docelowy operacji wieloelementowej",
+                          "Open destination folder of multi-item operation");
+    return res;
+}
+
+inline ShowInFolderResolution resolveShowInFolder(const TransferTaskSnapshot &task)
+{
+    return resolveShowInFolder(
+        task.state,
+        task.sources,
+        task.destination,
+        task.targetUrls,
+        static_cast<int>(task.sources.size()));
+}
+
+inline ShowInFolderResolution resolveShowInFolder(const TransferHistoryRecord &rec)
+{
+    return resolveShowInFolder(
+        rec.terminalState,
+        rec.sourceUrls,
+        rec.destinationUrl,
+        rec.targetUrls,
+        rec.itemCount);
+}
 
 class TransferHistoryManager final : public QObject
 {

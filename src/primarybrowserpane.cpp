@@ -105,10 +105,15 @@ void PrimaryBrowserPane::loadDirectory(const QUrl &url, bool preserveStatusMessa
                     m_previewAdapter->setCurrentDirectoryUrl(effectiveUrl);
                 }
             }
+            if (m_explicitPendingSelection.has_value()) {
+                m_explicitSelectionReadyToConsume = true;
+            }
             render(job ? job->property("thispcPreserveStatusMessage").toBool() : false);
             Q_EMIT listingFinished(effectiveUrl, true);
         },
         [this, url, reportError, isQuietRefresh](const QString &error) {
+            m_explicitPendingSelection.reset();
+            m_explicitSelectionReadyToConsume = false;
             m_directoryList->clear();
             m_directoryDetails->clear();
             if (m_previewAdapter) {
@@ -183,7 +188,16 @@ QIcon PrimaryBrowserPane::iconForFile(const FileInfo &file,
 void PrimaryBrowserPane::renderDirectoryItems(const RenderOptions &options)
 {
     DirectoryViewStateSnapshot viewState;
-    if (m_pendingViewState.has_value()) {
+    bool scrollToCurrent = false;
+    if (m_explicitPendingSelection.has_value() && m_explicitSelectionReadyToConsume) {
+        viewState.selection = *m_explicitPendingSelection;
+        viewState.currentUrl = m_explicitPendingSelection->currentUrl;
+        scrollToCurrent = true;
+        m_explicitPendingSelection.reset();
+        m_explicitSelectionReadyToConsume = false;
+        m_pendingViewState.reset();
+        m_pendingSelection = {};
+    } else if (m_pendingViewState.has_value()) {
         viewState = m_pendingViewState.value();
         m_pendingViewState.reset();
         const DirectoryViewStateSnapshot liveState =
@@ -245,6 +259,24 @@ void PrimaryBrowserPane::renderDirectoryItems(const RenderOptions &options)
 
     if (m_directoryList) m_directoryList->setUpdatesEnabled(listUpdates);
     if (m_directoryDetails) m_directoryDetails->setUpdatesEnabled(detailsUpdates);
+
+    if (scrollToCurrent) {
+        if (viewState.selection.urls.isEmpty()) {
+            if (m_directoryList && m_directoryList->selectionModel()) {
+                m_directoryList->selectionModel()->clearCurrentIndex();
+            }
+            if (m_directoryDetails) {
+                m_directoryDetails->setCurrentItem(nullptr);
+            }
+        } else {
+            if (m_directoryList && m_directoryList->currentIndex().isValid()) {
+                m_directoryList->scrollTo(m_directoryList->currentIndex(), QAbstractItemView::PositionAtCenter);
+            }
+            if (m_directoryDetails && m_directoryDetails->currentItem()) {
+                m_directoryDetails->scrollToItem(m_directoryDetails->currentItem(), QAbstractItemView::PositionAtCenter);
+            }
+        }
+    }
 
     if (options.updateStatus) options.updateStatus(prepared.visibleCount, prepared.totalCount);
     if (m_previewAdapter) m_previewAdapter->scheduleUpdate();

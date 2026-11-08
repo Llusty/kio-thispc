@@ -968,6 +968,8 @@ public:
 Q_SIGNALS:
     void operationsChanged();
     void closeOnCompleteChanged(bool close);
+    void showInFolderRequested(const QUrl &folderUrl, const QList<QUrl> &selectUrls);
+    void showInFolderFailed(const QString &reason);
 
 private:
     struct FileOperationItem
@@ -2741,6 +2743,150 @@ public:
         return {};
     }
 
+    bool hasShowInFolderButtonForTask(quint64 taskId) const
+    {
+        const auto rows = m_listWidget->findChildren<QFrame *>(
+            QStringLiteral("operationRow"), Qt::FindDirectChildrenOnly);
+        for (QFrame *row : rows) {
+            if (row->property("taskId").toULongLong() == taskId) {
+                return row->findChild<QToolButton *>(QStringLiteral("detailedOperationShowInFolderButton")) != nullptr;
+            }
+        }
+        return false;
+    }
+
+    bool isShowInFolderButtonEnabledForTask(quint64 taskId) const
+    {
+        const auto rows = m_listWidget->findChildren<QFrame *>(
+            QStringLiteral("operationRow"), Qt::FindDirectChildrenOnly);
+        for (QFrame *row : rows) {
+            if (row->property("taskId").toULongLong() == taskId) {
+                if (auto *btn = row->findChild<QToolButton *>(QStringLiteral("detailedOperationShowInFolderButton"))) {
+                    return btn->isEnabled();
+                }
+            }
+        }
+        return false;
+    }
+
+    QString showInFolderButtonToolTipForTask(quint64 taskId) const
+    {
+        const auto rows = m_listWidget->findChildren<QFrame *>(
+            QStringLiteral("operationRow"), Qt::FindDirectChildrenOnly);
+        for (QFrame *row : rows) {
+            if (row->property("taskId").toULongLong() == taskId) {
+                if (auto *btn = row->findChild<QToolButton *>(QStringLiteral("detailedOperationShowInFolderButton"))) {
+                    return btn->toolTip();
+                }
+            }
+        }
+        return {};
+    }
+
+    bool triggerShowInFolderForTask(quint64 taskId)
+    {
+        const auto rows = m_listWidget->findChildren<QFrame *>(
+            QStringLiteral("operationRow"), Qt::FindDirectChildrenOnly);
+        for (QFrame *row : rows) {
+            if (row->property("taskId").toULongLong() == taskId) {
+                if (auto *btn = row->findChild<QToolButton *>(QStringLiteral("detailedOperationShowInFolderButton"))) {
+                    if (btn->isEnabled()) {
+                        btn->click();
+                        return true;
+                    }
+                    const ShowInFolderResolution res = m_queueController
+                        ? m_queueController->checkShowInFolderEligibility(taskId)
+                        : ShowInFolderResolution{};
+                    applyShowInFolderButtonState(btn, res);
+                    if (m_summaryLabel && !res.message.isEmpty()) {
+                        m_summaryLabel->setFullText(res.message, false);
+                        m_summaryLabel->setToolTip(res.message);
+                    }
+                    if (m_manager) {
+                        Q_EMIT m_manager->showInFolderFailed(res.message);
+                    }
+                    return false;
+                }
+            }
+        }
+        return false;
+    }
+
+    bool hasShowInFolderButtonForHistory(const QString &uuid) const
+    {
+        const auto rows = m_listWidget->findChildren<QFrame *>(
+            QStringLiteral("operationRow"), Qt::FindDirectChildrenOnly);
+        for (QFrame *row : rows) {
+            if (row->property("historyUuid").toString() == uuid) {
+                return row->findChild<QToolButton *>(QStringLiteral("detailedOperationHistoryShowInFolderButton")) != nullptr;
+            }
+        }
+        return false;
+    }
+
+    bool isShowInFolderButtonEnabledForHistory(const QString &uuid) const
+    {
+        const auto rows = m_listWidget->findChildren<QFrame *>(
+            QStringLiteral("operationRow"), Qt::FindDirectChildrenOnly);
+        for (QFrame *row : rows) {
+            if (row->property("historyUuid").toString() == uuid) {
+                if (auto *btn = row->findChild<QToolButton *>(QStringLiteral("detailedOperationHistoryShowInFolderButton"))) {
+                    return btn->isEnabled();
+                }
+            }
+        }
+        return false;
+    }
+
+    QString showInFolderButtonToolTipForHistory(const QString &uuid) const
+    {
+        const auto rows = m_listWidget->findChildren<QFrame *>(
+            QStringLiteral("operationRow"), Qt::FindDirectChildrenOnly);
+        for (QFrame *row : rows) {
+            if (row->property("historyUuid").toString() == uuid) {
+                if (auto *btn = row->findChild<QToolButton *>(QStringLiteral("detailedOperationHistoryShowInFolderButton"))) {
+                    return btn->toolTip();
+                }
+            }
+        }
+        return {};
+    }
+
+    bool triggerShowInFolderForHistory(const QString &uuid)
+    {
+        const auto rows = m_listWidget->findChildren<QFrame *>(
+            QStringLiteral("operationRow"), Qt::FindDirectChildrenOnly);
+        for (QFrame *row : rows) {
+            if (row->property("historyUuid").toString() == uuid) {
+                if (auto *btn = row->findChild<QToolButton *>(QStringLiteral("detailedOperationHistoryShowInFolderButton"))) {
+                    if (btn->isEnabled()) {
+                        btn->click();
+                        return true;
+                    }
+                    ShowInFolderResolution res;
+                    if (TransferHistoryManager *histMgr = historyManager()) {
+                        for (const auto &rec : histMgr->records()) {
+                            if (rec.uuid == uuid) {
+                                res = resolveShowInFolder(rec);
+                                break;
+                            }
+                        }
+                    }
+                    applyShowInFolderButtonState(btn, res);
+                    if (m_summaryLabel && !res.message.isEmpty()) {
+                        m_summaryLabel->setFullText(res.message, false);
+                        m_summaryLabel->setToolTip(res.message);
+                    }
+                    if (m_manager) {
+                        Q_EMIT m_manager->showInFolderFailed(res.message);
+                    }
+                    return false;
+                }
+            }
+        }
+        return false;
+    }
+
 protected:
     void showEvent(QShowEvent *event) override
     {
@@ -2905,79 +3051,188 @@ private:
         }
     }
 
-    void updateRetryEligibilityForFailedTasks()
+    static void applyShowInFolderButtonState(QToolButton *button, const ShowInFolderResolution &res)
     {
-        if (!isVisible() || !m_queueController) {
+        if (!button) {
             return;
         }
-        m_queueController->recheckAllFailedTasksRetryEligibility();
+        button->setText(trLocal("Pokaż w folderze", "Show in folder"));
+        button->setEnabled(res.eligible);
+        if (res.eligible) {
+            button->setToolTip(!res.message.isEmpty()
+                ? res.message
+                : trLocal("Otwórz folder docelowy i zaznacz element", "Open destination folder and select item"));
+        } else {
+            const QString reason = !res.message.isEmpty()
+                ? res.message
+                : trLocal("Lokalizacja docelowa jest niedostępna", "Destination location is unavailable");
+            button->setToolTip(trLocal("Pokaż w folderze niedostępne: %1",
+                                       "Show in folder unavailable: %1").arg(reason));
+        }
+    }
+
+    void updateShowInFolderEligibilityForCompletedCards()
+    {
+        const auto rows = m_listWidget->findChildren<QFrame *>(
+            QStringLiteral("operationRow"), Qt::FindDirectChildrenOnly);
+        TransferHistoryManager *histMgr = historyManager();
+        QList<TransferHistoryRecord> historyRecords;
+        if (histMgr) {
+            historyRecords = histMgr->records();
+        }
+        for (QFrame *row : rows) {
+            if (auto *btn = row->findChild<QToolButton *>(QStringLiteral("detailedOperationShowInFolderButton"))) {
+                const quint64 taskId = row->property("taskId").toULongLong();
+                if (taskId != 0 && m_queueController) {
+                    applyShowInFolderButtonState(btn, m_queueController->checkShowInFolderEligibility(taskId));
+                }
+            }
+            if (auto *histBtn = row->findChild<QToolButton *>(QStringLiteral("detailedOperationHistoryShowInFolderButton"))) {
+                const QString uuid = row->property("historyUuid").toString();
+                if (!uuid.isEmpty()) {
+                    for (const auto &rec : historyRecords) {
+                        if (rec.uuid == uuid) {
+                            applyShowInFolderButtonState(histBtn, resolveShowInFolder(rec));
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    void updateRetryEligibilityForFailedTasks()
+    {
+        if (!isVisible()) {
+            return;
+        }
+        if (m_queueController) {
+            m_queueController->recheckAllFailedTasksRetryEligibility();
+        }
+        updateShowInFolderEligibilityForCompletedCards();
         refreshRetryWatcherPaths();
     }
 
     void refreshRetryWatcherPaths()
     {
-        if (!m_retryWatcher || !m_queueController) {
+        if (!m_retryWatcher) {
             return;
         }
 
         QSet<QString> dirsToWatch;
         QSet<QString> filesToWatch;
 
-        const auto snapshot = m_queueController->snapshot();
-        for (const auto &task : snapshot.tasks) {
-            if (task.state != TransferTaskState::Failed || task.retriedAsTaskId != 0) {
-                continue;
+        auto addDestinationAndTargetWatchPaths = [&dirsToWatch, &filesToWatch](
+            const QList<QUrl> &sources,
+            const QUrl &destination,
+            const QList<QUrl> &targetUrls) {
+            if (!destination.isValid() || !destination.isLocalFile()) {
+                return;
             }
-            if (task.sources.isEmpty() || !task.destination.isValid()) {
-                continue;
+            const QString dstDir = QDir::cleanPath(destination.toLocalFile());
+            if (QDir(dstDir).exists()) {
+                dirsToWatch.insert(dstDir);
             }
-
-            // Sources
-            for (int i = 0; i < task.sources.size(); ++i) {
-                const QUrl &srcUrl = task.sources.at(i);
-                if (srcUrl.isLocalFile()) {
-                    const QString srcPath = srcUrl.toLocalFile();
-                    const QFileInfo srcInfo(srcPath);
-                    if (srcInfo.exists() && srcInfo.isReadable()) {
-                        filesToWatch.insert(srcPath);
+            const QString dstParent = QFileInfo(dstDir).dir().absolutePath();
+            if (!dstParent.isEmpty() && QDir(dstParent).exists()) {
+                dirsToWatch.insert(dstParent);
+            }
+            for (int i = 0; i < sources.size(); ++i) {
+                QUrl targetUrl;
+                if (!targetUrls.isEmpty() && i < targetUrls.size()) {
+                    targetUrl = targetUrls.at(i);
+                } else {
+                    const QString entryName = ShowInFolderHelper::extractSafeEntryName(sources.at(i));
+                    if (!entryName.isEmpty()) {
+                        targetUrl = QUrl::fromLocalFile(QDir(dstDir).filePath(entryName));
                     }
-                    const QString srcDir = srcInfo.dir().absolutePath();
-                    if (QDir(srcDir).exists()) {
-                        dirsToWatch.insert(srcDir);
-                    }
-
-                    // Corresponding destination target path / .thispc-part
-                    QUrl targetUrl;
-                    if (!task.targetUrls.isEmpty() && i < task.targetUrls.size()) {
-                        targetUrl = task.targetUrls.at(i);
-                    } else if (task.destination.isLocalFile()) {
-                        targetUrl = QUrl::fromLocalFile(QDir(task.destination.toLocalFile()).filePath(srcInfo.fileName()));
-                    }
-
-                    if (targetUrl.isLocalFile()) {
-                        const QString targetPath = targetUrl.toLocalFile();
-                        if (QFileInfo::exists(targetPath)) {
-                            filesToWatch.insert(targetPath);
-                        }
-                        const QString partPath = targetPath + QStringLiteral(".thispc-part");
-                        if (QFileInfo::exists(partPath)) {
-                            filesToWatch.insert(partPath);
-                        }
+                }
+                if (targetUrl.isLocalFile()) {
+                    const QString targetPath = targetUrl.toLocalFile();
+                    if (QFileInfo::exists(targetPath)) {
+                        filesToWatch.insert(targetPath);
                     }
                 }
             }
+        };
 
-            // Destination directory
-            if (task.destination.isLocalFile()) {
-                const QString dstDir = task.destination.toLocalFile();
-                if (QDir(dstDir).exists()) {
-                    dirsToWatch.insert(dstDir);
+        if (m_queueController) {
+            const auto snapshot = m_queueController->snapshot();
+            for (const auto &task : snapshot.tasks) {
+                if (task.state == TransferTaskState::Completed) {
+                    addDestinationAndTargetWatchPaths(task.sources, task.destination, task.targetUrls);
+                    if (dirsToWatch.size() >= 50 || filesToWatch.size() >= 100) {
+                        break;
+                    }
+                    continue;
+                }
+                if (task.state != TransferTaskState::Failed || task.retriedAsTaskId != 0) {
+                    continue;
+                }
+                if (task.sources.isEmpty() || !task.destination.isValid()) {
+                    continue;
+                }
+
+                // Sources
+                for (int i = 0; i < task.sources.size(); ++i) {
+                    const QUrl &srcUrl = task.sources.at(i);
+                    if (srcUrl.isLocalFile()) {
+                        const QString srcPath = srcUrl.toLocalFile();
+                        const QFileInfo srcInfo(srcPath);
+                        if (srcInfo.exists() && srcInfo.isReadable()) {
+                            filesToWatch.insert(srcPath);
+                        }
+                        const QString srcDir = srcInfo.dir().absolutePath();
+                        if (QDir(srcDir).exists()) {
+                            dirsToWatch.insert(srcDir);
+                        }
+
+                        // Corresponding destination target path / .thispc-part
+                        QUrl targetUrl;
+                        if (!task.targetUrls.isEmpty() && i < task.targetUrls.size()) {
+                            targetUrl = task.targetUrls.at(i);
+                        } else if (task.destination.isLocalFile()) {
+                            targetUrl = QUrl::fromLocalFile(QDir(task.destination.toLocalFile()).filePath(srcInfo.fileName()));
+                        }
+
+                        if (targetUrl.isLocalFile()) {
+                            const QString targetPath = targetUrl.toLocalFile();
+                            if (QFileInfo::exists(targetPath)) {
+                                filesToWatch.insert(targetPath);
+                            }
+                            const QString partPath = targetPath + QStringLiteral(".thispc-part");
+                            if (QFileInfo::exists(partPath)) {
+                                filesToWatch.insert(partPath);
+                            }
+                        }
+                    }
+                }
+
+                // Destination directory
+                if (task.destination.isLocalFile()) {
+                    const QString dstDir = task.destination.toLocalFile();
+                    if (QDir(dstDir).exists()) {
+                        dirsToWatch.insert(dstDir);
+                    }
+                }
+
+                // Enforce caps to protect inotify descriptor limits
+                if (dirsToWatch.size() >= 50 || filesToWatch.size() >= 100) {
+                    break;
                 }
             }
+        }
 
-            // Enforce caps to protect inotify descriptor limits
-            if (dirsToWatch.size() >= 50 || filesToWatch.size() >= 100) {
-                break;
+        if (TransferHistoryManager *histMgr = historyManager()) {
+            const auto allHistory = histMgr->records();
+            for (const auto &rec : allHistory) {
+                if (dirsToWatch.size() >= 50 || filesToWatch.size() >= 100) {
+                    break;
+                }
+                if (rec.terminalState == TransferTaskState::Completed
+                    && !m_dismissedHistoryUuids.contains(rec.uuid)) {
+                    addDestinationAndTargetWatchPaths(rec.sourceUrls, rec.destinationUrl, rec.targetUrls);
+                }
             }
         }
 
@@ -3232,6 +3487,35 @@ private:
         detailsToggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
         detailsToggle->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
         topLine->addWidget(detailsToggle, 0);
+
+        if (rec.terminalState == TransferTaskState::Completed) {
+            auto *showInFolder = new QToolButton(content);
+            showInFolder->setObjectName(QStringLiteral("detailedOperationHistoryShowInFolderButton"));
+            showInFolder->setIcon(themedIcon(QStringLiteral("document-open-folder"), QStringLiteral("folder-open")));
+            showInFolder->setText(trLocal("Pokaż w folderze", "Show in folder"));
+            showInFolder->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+            showInFolder->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+            protectInteraction(showInFolder);
+            applyShowInFolderButtonState(showInFolder, resolveShowInFolder(rec));
+            connect(showInFolder, &QToolButton::clicked, this, [this, rec, showInFolder] {
+                const ShowInFolderResolution currentRes = resolveShowInFolder(rec);
+                applyShowInFolderButtonState(showInFolder, currentRes);
+                if (currentRes.eligible) {
+                    if (m_manager) {
+                        Q_EMIT m_manager->showInFolderRequested(currentRes.folderUrl, currentRes.selectUrls);
+                    }
+                } else {
+                    if (m_summaryLabel && !currentRes.message.isEmpty()) {
+                        m_summaryLabel->setFullText(currentRes.message, false);
+                        m_summaryLabel->setToolTip(currentRes.message);
+                    }
+                    if (m_manager) {
+                        Q_EMIT m_manager->showInFolderFailed(currentRes.message);
+                    }
+                }
+            });
+            topLine->addWidget(showInFolder, 0);
+        }
 
         if (rec.terminalState == TransferTaskState::Failed) {
             auto *retry = new QToolButton(content);
@@ -3547,6 +3831,41 @@ private:
             if (m_queueController) m_queueController->cancelTask(id);
         });
         topLine->addWidget(cancel, 0);
+
+        if (task.state == TransferTaskState::Completed) {
+            auto *showInFolder = new QToolButton(content);
+            showInFolder->setObjectName(QStringLiteral("detailedOperationShowInFolderButton"));
+            showInFolder->setIcon(themedIcon(QStringLiteral("document-open-folder"), QStringLiteral("folder-open")));
+            showInFolder->setText(trLocal("Pokaż w folderze", "Show in folder"));
+            showInFolder->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+            showInFolder->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+            protectInteraction(showInFolder);
+            applyShowInFolderButtonState(showInFolder, resolveShowInFolder(task));
+            connect(showInFolder, &QToolButton::clicked, this, [this, id = task.id, showInFolder] {
+                ShowInFolderResolution currentRes;
+                if (m_queueController) {
+                    currentRes = m_queueController->checkShowInFolderEligibility(id);
+                } else {
+                    currentRes.eligible = false;
+                    currentRes.message = trLocal("Brak kontrolera kolejki", "Queue controller unavailable");
+                }
+                applyShowInFolderButtonState(showInFolder, currentRes);
+                if (currentRes.eligible) {
+                    if (m_manager) {
+                        Q_EMIT m_manager->showInFolderRequested(currentRes.folderUrl, currentRes.selectUrls);
+                    }
+                } else {
+                    if (m_summaryLabel && !currentRes.message.isEmpty()) {
+                        m_summaryLabel->setFullText(currentRes.message, false);
+                        m_summaryLabel->setToolTip(currentRes.message);
+                    }
+                    if (m_manager) {
+                        Q_EMIT m_manager->showInFolderFailed(currentRes.message);
+                    }
+                }
+            });
+            topLine->addWidget(showInFolder, 0);
+        }
 
         if (task.state == TransferTaskState::Failed) {
             auto *retry = new QToolButton(content);

@@ -1171,6 +1171,28 @@ public:
     }
 
     // ------------------------------------------------------------------
+    // Show in Folder (Stage 4)
+    // ------------------------------------------------------------------
+
+    ShowInFolderResolution checkShowInFolderEligibility(quint64 taskId) const
+    {
+        const Task *task = find(taskId);
+        if (!task) {
+            ShowInFolderResolution res;
+            res.eligible = false;
+            res.reason = ShowInFolderIneligibilityReason::CorruptedRecord;
+            res.message = trLocal("Zadanie nie zostało odnalezione", "Task not found");
+            return res;
+        }
+        return resolveShowInFolder(
+            task->state,
+            task->desc.sources,
+            task->desc.destination,
+            task->desc.targetUrls,
+            static_cast<int>(task->desc.sources.size()));
+    }
+
+    // ------------------------------------------------------------------
     // Snapshots
     // ------------------------------------------------------------------
 
@@ -1863,6 +1885,7 @@ private:
         rec.terminalState = terminal;
         rec.sourceUrls = TransferHistoryRecord::sanitizeUrls(task->desc.sources);
         rec.destinationUrl = TransferHistoryRecord::sanitizeUrl(task->desc.destination);
+        rec.targetUrls = TransferHistoryRecord::sanitizeUrls(task->desc.targetUrls);
         rec.startTimeUtc = task->startTimeUtc;
         rec.endTimeUtc = task->endTimeUtc.isValid() ? task->endTimeUtc : QDateTime::currentDateTimeUtc();
 

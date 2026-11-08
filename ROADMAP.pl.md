@@ -643,7 +643,7 @@ Gdy zwykła operacja plikowa zakończy się błędem braku uprawnień (Permissio
       - Scenariusz G (kopiowanie, przenoszenie i powiadomienia KDE Plasma): PASS;
       - Scenariusz H (ponowny start, trwałość trzech rekordów, integralność danych, brak staging leftovers, płynność GUI, brak zawieszeń i crashy): PASS.
     - Wszystkie funkcjonalności Etapu 2 (Trwała historia transferów) zostały w pełni zrealizowane, zaakceptowane manualnie i formalnie zamknięte w repozytorium.
-- **Etap 3 — Bezpieczne ponawianie operacji kwalifikujących się do powtórzenia:** ✅ IMPLEMENTED / AUTOMATED PASS / MANUAL ACCEPTED (A–H 8/8 + UX 6/6) / GIT CLOSURE PENDING
+- **Etap 3 — Bezpieczne ponawianie operacji kwalifikujących się do powtórzenia:** ✅ CLOSED / ACCEPTED / BACKED UP / COMMITTED / PUSHED (A–H 8/8 + UX 6/6, commit `752b56d`)
   - Bezpieczne, świadome ponawianie nieudanych operacji Kopiuj i Przenieś bieżącej sesji;
   - Rygorystyczna wstępna walidacja bezpieczeństwa: istnienie źródeł, niezmienność tożsamości pliku źródłowego (device/inode), uprawnienia do zapisu w katalogu docelowym, wykrywanie konfliktów w miejscu docelowym (w tym plików roboczych `.thispc-part`);
   - Karty archiwalne z trwałej historii po restarcie aplikacji mają przycisk „Ponów” bezwzględnie zablokowany z informacyjnym tooltipem;
@@ -653,9 +653,16 @@ Gdy zwykła operacja plikowa zakończy się błędem braku uprawnień (Permissio
     - Reaktywne monitorowanie oparte o zdarzenia jądra (`QFileSystemWatcher`) z debouncingiem 150 ms dla nieudanych zadań w otwartym oknie `OperationWindow`;
     - Automatyczne odświeżanie dostępności przycisku („Ponów” staje się aktywny/wyszarzony) oraz podpowiedzi (tooltip) natychmiast po zmianach na dysku (przywrócenie uprawnień, odtworzenie pliku, usunięcie konfliktu/part) bez konieczności ponownego otwierania okna;
     - Sztywne limity zasobów (maks. 50 katalogów, 100 plików), zero odpytywania (zero-polling), obserwator aktywny wyłącznie przy widocznym oknie;
-    - Testy jednostkowe UX.1–UX.6 PASS (87 asercji zestawu `operations`).
-- **Etap 4 — Akcja „Pokaż w folderze”:** (Planowane)
-  - Akcja „Pokaż w folderze” po zakończeniu zadania tam, gdzie ma to zastosowanie.
+    - Testy jednostkowe UX.1–UX.6 PASS (91 asercji zestawu `operations`).
+- **Etap 4 — Akcja „Pokaż w folderze”:** ✅ CLOSED / ACCEPTED / BACKED UP / COMMITTED / PUSHED (8/8 PASS)
+  - Wewnętrzna akcja „Pokaż w folderze” dla operacji Kopiuj i Przenieś zakończonych statusem `Completed` — dostępna zarówno dla zadań bieżącej sesji, jak i dla rekordów archiwalnych po restarcie aplikacji (bez uruchamiania zewnętrznego Dolphina ani procesów powłoki);
+  - Operacje jednopierwiastkowe otwierają katalog docelowy w aktywnym panelu ThisPC (`Primary` lub `Split`) oraz automatycznie zaznaczają i przewijają widok do przesłanego pliku, katalogu lub dowiązania symbolicznego (z uwzględnieniem docelowych ścieżek po zmianie nazwy `targetUrls`);
+  - Operacje wieloelementowe otwierają katalog docelowy z wyczyszczonym zaznaczeniem, bez losowego zaznaczania pojedynczego pliku;
+  - Ścisła walidacja bezpieczeństwa w trybie fail-closed (`resolveShowInFolder`): odrzucanie operacji `Failed`, `Cancelled` i aktywnych; odmowa przy brakującym pliku lub katalogu docelowym; blokada katalogów docelowych będących dowiązaniami symbolicznymi (`lstat`), ścieżek względnych i segmentów `..`; odmowa dla odłączonych nośników, `mtp:/`, zdalnych protokołów KIO (`smb://`, `sftp://`, `fish://` itp.) oraz schematów wirtualnych (`trash:/`, `admin:/`, `http://`);
+  - Ścisła niezależność paneli `Primary` i `Split View`: nawigacja i zaznaczenie wykonywane wyłącznie w aktywnym panelu bez naruszania lokalizacji ani zaznaczenia w drugim panelu;
+  - Integracja na żywo z `QFileSystemWatcher` w otwartym oknie `OperationWindow`, aktualizująca stan przycisku i podpowiedź (tooltip) po usunięciu lub przywróceniu pliku lub katalogu docelowego;
+  - Weryfikacja automatyczna: Scenariusze A–L PASS (203 asercje `operations`), pełna regresja 77/77 zestawów PASS, izolacja środowiskowa XDG Stage 4 9/9 PASS;
+  - Odbiór manualny użytkownika (8/8 PASS — 8 listopada 2026 r.): A (Completed Copy pojedynczego pliku), B (Completed Move pojedynczego pliku), C (historia po restarcie aplikacji), D (kopiowanie wielu plików z czystym zaznaczeniem), E (zniknięcie i przywrócenie pliku docelowego na żywo), F (zniknięcie i przywrócenie katalogu docelowego na żywo), G (niezależność Primary/Split View), H (H.1 Failed bez przycisku „Pokaż w folderze” + H.2 kontrolowany Cancelled 32 MiB bez przycisków „Pokaż w folderze” i „Ponów”, potwierdzona integralność dysku, brak pozostałości `.thispc-part` oraz zapisany rekord `Cancelled` w historii).
 - **Etap 5 — Szlif końcowy, pakietyzacja i wydanie 0.45.0:** (Planowane)
 
 ### 0.45.0 — Bezpieczeństwo i bramka wydaniowa (Security Release Gate)

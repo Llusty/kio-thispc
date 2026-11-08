@@ -2509,6 +2509,16 @@ private:
 
         m_operationManager =
             new OperationManager(this, toolbar, this);
+        connect(m_operationManager, &OperationManager::showInFolderRequested,
+                this, [this](const QUrl &folderUrl, const QList<QUrl> &selectUrls) {
+                    revealInFolder(folderUrl, selectUrls);
+                });
+        connect(m_operationManager, &OperationManager::showInFolderFailed,
+                this, [this](const QString &reason) {
+                    if (statusBar()) {
+                        statusBar()->showMessage(reason, 5000);
+                    }
+                });
         {
             QSettings s;
             const bool initialClose = s.value(
@@ -2576,6 +2586,117 @@ private:
                 enqueueDemoTasks(m_queueController);
             }
         }
+    }
+
+    bool revealInFolder(const QUrl &folderUrl, const QList<QUrl> &selectUrls)
+    {
+        if (!folderUrl.isValid() || !folderUrl.isLocalFile()) {
+            if (statusBar()) {
+                statusBar()->showMessage(
+                    trLocal("Nie można otworzyć folderu docelowego: nieobsługiwana lub nieprawidłowa lokalizacja.",
+                            "Cannot open destination folder: unsupported or invalid location."),
+                    5000);
+            }
+            return false;
+        }
+        const QString dirPath = folderUrl.toLocalFile();
+        if (dirPath.isEmpty() || !dirPath.startsWith(QLatin1Char('/'))
+            || ShowInFolderHelper::containsDotOrDotDotSegment(folderUrl)) {
+            if (statusBar()) {
+                statusBar()->showMessage(
+                    trLocal("Odmowa otwarcia folderu: ścieżka zawiera niebezpieczne elementy.",
+                            "Refused to open folder: path contains unsafe segments."),
+                    5000);
+            }
+            return false;
+        }
+        struct stat dirSt{};
+        if (::lstat(QFile::encodeName(dirPath).constData(), &dirSt) != 0
+            || S_ISLNK(dirSt.st_mode) || !S_ISDIR(dirSt.st_mode)) {
+            if (statusBar()) {
+                statusBar()->showMessage(
+                    trLocal("Katalog docelowy już nie istnieje lub jest niedostępny.",
+                            "Destination directory no longer exists or is inaccessible."),
+                    5000);
+            }
+            return false;
+        }
+
+        DirectorySelectionSnapshot selectionSnapshot;
+        for (const QUrl &u : selectUrls) {
+            if (!u.isValid() || !u.isLocalFile()
+                || ShowInFolderHelper::containsDotOrDotDotSegment(u)) {
+                continue;
+            }
+            const QString normStr = normalizedUrl(u).toString();
+            selectionSnapshot.urls.insert(normStr);
+            if (selectionSnapshot.currentUrl.isEmpty()) {
+                selectionSnapshot.currentUrl = normStr;
+            }
+        }
+
+        const QUrl cleanFolderUrl = QUrl::fromLocalFile(QDir::cleanPath(dirPath));
+        const PaneId targetPane = (m_activePane == PaneId::Split && m_splitPane && m_splitPane->isVisible())
+            ? PaneId::Split
+            : PaneId::Primary;
+
+        if (targetPane == PaneId::Split) {
+            m_splitPane->setPendingSelectionForNextLoad(selectionSnapshot);
+            if (sameLocation(m_splitPane->currentUrl(), cleanFolderUrl)
+                && m_splitPane->contentStack()
+                && m_splitPane->contentStack()->currentWidget() != m_splitHomePage) {
+                restoreDirectorySelection(m_splitPane->listView(), m_splitPane->detailsView(), selectionSnapshot);
+                if (selectionSnapshot.urls.isEmpty()) {
+                    if (m_splitPane->listView() && m_splitPane->listView()->selectionModel()) {
+                        m_splitPane->listView()->selectionModel()->clearCurrentIndex();
+                    }
+                    if (m_splitPane->detailsView()) {
+                        m_splitPane->detailsView()->setCurrentItem(nullptr);
+                    }
+                }
+                m_splitPane->refresh(true);
+            } else {
+                m_splitPane->setCurrentUrl(cleanFolderUrl, true);
+            }
+            setActivePane(PaneId::Split);
+            m_splitPane->focusView();
+        } else {
+            m_primaryPane->setPendingSelectionForNextLoad(selectionSnapshot);
+            if (sameLocation(m_navigation.currentUrl(), cleanFolderUrl)
+                && m_contentStack
+                && m_contentStack->currentWidget() == m_directoryPage) {
+                restoreDirectorySelection(m_directoryList, m_directoryDetails, selectionSnapshot);
+                if (selectionSnapshot.urls.isEmpty()) {
+                    if (m_directoryList && m_directoryList->selectionModel()) {
+                        m_directoryList->selectionModel()->clearCurrentIndex();
+                    }
+                    if (m_directoryDetails) {
+                        m_directoryDetails->setCurrentItem(nullptr);
+                    }
+                }
+                loadDirectory(cleanFolderUrl, true, DirectoryReloadMode::QuietRefresh);
+            } else {
+                navigateTo(cleanFolderUrl, true);
+            }
+            setActivePane(PaneId::Primary);
+            focusPrimaryPane();
+        }
+
+        if (statusBar()) {
+            if (selectUrls.size() == 1) {
+                const QString itemName = QFileInfo(selectUrls.first().toLocalFile()).fileName();
+                statusBar()->showMessage(
+                    trLocal("Otwarto folder docelowy i zaznaczono: %1",
+                            "Opened destination folder and selected: %1").arg(itemName),
+                    4000);
+            } else {
+                statusBar()->showMessage(
+                    trLocal("Otwarto folder docelowy: %1",
+                            "Opened destination folder: %1").arg(urlForDisplay(cleanFolderUrl)),
+                    4000);
+            }
+        }
+        return true;
     }
 
     void buildHomePage(PaneId pane, QStackedWidget *stack, QWidget *&homePage,

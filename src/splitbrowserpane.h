@@ -946,6 +946,12 @@ public:
         navigateTo(url, addHistory);
     }
 
+    void setPendingSelectionForNextLoad(const DirectorySelectionSnapshot &selection)
+    {
+        m_explicitPendingSelection = selection;
+        m_explicitSelectionReadyToConsume = false;
+    }
+
     void refresh(bool quiet = false)
     {
         if (!quiet && m_previewAdapter) m_previewAdapter->invalidatePreviews();
@@ -1506,10 +1512,15 @@ private:
                     Q_EMIT locationChanged(m_currentUrl);
                     Q_EMIT stateChanged();
                 }
+                if (m_explicitPendingSelection.has_value()) {
+                    m_explicitSelectionReadyToConsume = true;
+                }
                 renderItems();
                 Q_EMIT listingSucceeded(m_currentUrl);
             },
             [this, url, isQuietRefresh](const QString &error) {
+                m_explicitPendingSelection.reset();
+                m_explicitSelectionReadyToConsume = false;
                 m_list->clear();
                 m_details->clear();
                 if (m_previewAdapter) {
@@ -1537,7 +1548,16 @@ private:
     void renderItems()
     {
         DirectoryViewStateSnapshot viewState;
-        if (m_pendingViewState.has_value()) {
+        bool scrollToCurrent = false;
+        if (m_explicitPendingSelection.has_value() && m_explicitSelectionReadyToConsume) {
+            viewState.selection = *m_explicitPendingSelection;
+            viewState.currentUrl = m_explicitPendingSelection->currentUrl;
+            scrollToCurrent = true;
+            m_explicitPendingSelection.reset();
+            m_explicitSelectionReadyToConsume = false;
+            m_pendingViewState.reset();
+            m_pendingSelection = {};
+        } else if (m_pendingViewState.has_value()) {
             viewState = m_pendingViewState.value();
             m_pendingViewState.reset();
             const DirectoryViewStateSnapshot liveState =
@@ -1635,6 +1655,24 @@ private:
 
         if (m_list) m_list->setUpdatesEnabled(listUpdates);
         if (m_details) m_details->setUpdatesEnabled(detailsUpdates);
+
+        if (scrollToCurrent) {
+            if (viewState.selection.urls.isEmpty()) {
+                if (m_list && m_list->selectionModel()) {
+                    m_list->selectionModel()->clearCurrentIndex();
+                }
+                if (m_details) {
+                    m_details->setCurrentItem(nullptr);
+                }
+            } else {
+                if (m_list && m_list->currentIndex().isValid()) {
+                    m_list->scrollTo(m_list->currentIndex(), QAbstractItemView::PositionAtCenter);
+                }
+                if (m_details && m_details->currentItem()) {
+                    m_details->scrollToItem(m_details->currentItem(), QAbstractItemView::PositionAtCenter);
+                }
+            }
+        }
 
         if (isSearchLocation(m_currentUrl)) {
             m_searchVisibleCount = prepared.visibleCount;
@@ -1885,5 +1923,7 @@ private:
     DirectoryListingCore m_listingCore;
     DirectorySelectionSnapshot m_pendingSelection;
     std::optional<DirectoryViewStateSnapshot> m_pendingViewState;
+    std::optional<DirectorySelectionSnapshot> m_explicitPendingSelection;
+    bool m_explicitSelectionReadyToConsume = false;
     std::function<void(const QUrl &)> m_launchHandler;
 };

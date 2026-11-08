@@ -541,7 +541,7 @@ When standard operations receive permission denied errors, provide targeted `adm
       - Scenario G (Copy, Move and KDE Plasma notifications): PASS;
       - Scenario H (full restart, 3 records restored, data integrity, zero staging leftovers, smooth GUI): PASS.
     - All Stage 2 Persistent History capabilities are fully implemented, manually accepted, backed up and committed.
-- **Stage 3 — Safe Retry for Eligible Operations:** ✅ IMPLEMENTED / AUTOMATED PASS / MANUAL ACCEPTED (A–H 8/8 + UX 6/6) / GIT CLOSURE PENDING
+- **Stage 3 — Safe Retry for Eligible Operations:** ✅ CLOSED / ACCEPTED / BACKED UP / COMMITTED / PUSHED (A–H 8/8 + UX 6/6, commit `752b56d`)
   - Safe retry for eligible failed operations (Copy and Move) in current session;
   - Safety preflight validation: source file existence, source identity (device/inode) immutability, target directory write permissions, destination conflict detection (including `.thispc-part` staging detection);
   - Archival cards after application restart strictly keep Retry disabled with descriptive tooltip;
@@ -551,9 +551,16 @@ When standard operations receive permission denied errors, provide targeted `adm
     - Event-driven monitoring via `QFileSystemWatcher` with 150 ms debounce for failed tasks in open `OperationWindow`;
     - Automatically updates button availability (`isEnabled()`) and tooltip on disk events (chmod, restore missing file, remove conflict/part) without reopening window;
     - Strictly bound resource caps (max 50 dirs, 100 files), zero polling, active only when window is visible;
-    - Automated unit tests UX.1–UX.6 PASS (87 `operations` assertions).
-- **Stage 4 — Show in Folder Action:** (Planned)
-  - "Show in folder" action upon task completion where applicable.
+    - Automated unit tests UX.1–UX.6 PASS (91 `operations` assertions).
+- **Stage 4 — Show in Folder Action:** ✅ CLOSED / ACCEPTED / BACKED UP / COMMITTED / PUSHED (8/8 PASS)
+  - Internal "Show in folder" ("Pokaż w folderze") action for `Completed` Copy and Move operations across both in-session queue cards and archival persistent history cards after restart (never launches external Dolphin or shell processes);
+  - Single-item completed transfers open the destination directory in the active ThisPC pane (`Primary` or `Split`) and select + scroll to the transferred file, directory, or symlink (respecting conflict-renamed `targetUrls`);
+  - Multi-item completed transfers open the destination directory with selection cleared so no arbitrary single item is selected;
+  - Strict fail-closed validation (`resolveShowInFolder`): rejects `Failed`, `Cancelled`, and active tasks; rejects missing/renamed target items or missing destination directories; rejects symlinked destination directories (`lstat`), relative paths, and `..` traversal; rejects disconnected removable media, `mtp:/`, remote KIO (`smb://`, `sftp://`, `fish://`, etc.), and virtual/unsupported schemes (`trash:/`, `admin:/`, `http://`);
+  - Strict pane independence between `Primary` and `Split` views: navigates and updates selection exclusively in the active pane without altering the inactive pane's location or selection;
+  - Live `QFileSystemWatcher` integration in open `OperationWindow` dynamically updates button availability and tooltip when destination files/directories are removed or restored;
+  - Automated verification: Scenarios A–L PASS (203 `operations` assertions), full regression 77/77 suites PASS, Stage 4 XDG isolation 9/9 PASS;
+  - Manual Acceptance (8/8 PASS — Nov 8, 2026): A (Completed Copy single file), B (Completed Move single file), C (archival history after restart), D (multi-file copy with clean selection), E (live target file removal and restoration), F (live destination directory removal and restoration), G (Primary/Split View strict independence), H (H.1 Failed without Show in Folder + H.2 controlled 32 MiB Cancelled without Show in Folder or Retry, verified disk integrity, zero `.thispc-part` leftovers, and persisted `Cancelled` history record).
 - **Stage 5 — Polish, Packaging & Release 0.45.0:** (Planned)
 
 ### 0.45.0 — Security Release Gate
