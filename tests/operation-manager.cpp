@@ -1290,6 +1290,104 @@ int main(int argc, char **argv)
         qunsetenv("THISPC_TRANSFER_QUEUE_PRODUCTION");
     }
 
+    // ------------------------------------------------------------------
+    // Stage 5.3.1: Release Readiness UX A-C Regression Suite
+    // ------------------------------------------------------------------
+    // UX A: Default Size & Geometry of OperationWindow
+    {
+        QMainWindow dummyWinA;
+        QToolBar dummyTbA(&dummyWinA);
+        OperationManager uxManager(&dummyWinA, &dummyTbA, &dummyWinA);
+        TransferQueueController uxController;
+        uxManager.setQueueController(&uxController);
+        OperationWindow uxWindow(&uxManager);
+        uxWindow.setQueueController(&uxController);
+        verify(uxWindow.sizeHint() == QSize(580, 380),
+               "UX A: OperationWindow default sizeHint is 580x380 px");
+        verify(uxWindow.minimumSizeHint() == QSize(480, 260) || uxWindow.minimumSizeHint() == QSize(480, 380),
+               "UX A: OperationWindow minimumSizeHint enforces compact bounds");
+        verify(uxWindow.minimumWidth() >= 480 && uxWindow.minimumHeight() >= 260,
+               "UX A: Window geometry obeys minimum bounds");
+    }
+
+    // UX B: Speed Graph on Fast / Terminal Transfers (samples < 2)
+    {
+        QWidget parent;
+        OperationSpeedGraph fastGraph({}, &parent);
+        verify(!fastGraph.isTerminal(), "UX B: New graph is not terminal initially");
+        fastGraph.setTerminal(true, TransferTaskState::Completed);
+        verify(fastGraph.isTerminal() && fastGraph.terminalState() == TransferTaskState::Completed,
+               "UX B: Completed terminal state marked on fast graph");
+
+        // Test paint event execution on instantaneous transfer
+        QPixmap pix(200, 105);
+        fastGraph.render(&pix);
+        verify(!pix.isNull(), "UX B: Fast transfer graph renders cleanly without crash");
+
+        // Cancelled transfer graph
+        fastGraph.setTerminal(true, TransferTaskState::Cancelled);
+        verify(fastGraph.isTerminal() && fastGraph.terminalState() == TransferTaskState::Cancelled,
+               "UX B: Cancelled terminal state marked on fast graph");
+        fastGraph.render(&pix);
+
+        // Failed transfer graph
+        fastGraph.setTerminal(true, TransferTaskState::Failed);
+        verify(fastGraph.isTerminal() && fastGraph.terminalState() == TransferTaskState::Failed,
+               "UX B: Failed terminal state marked on fast graph");
+        fastGraph.render(&pix);
+    }
+
+    // UX C: History Consistency Between Popup and Detailed Window
+    {
+        QMainWindow dummyWin;
+        QToolBar dummyTb(&dummyWin);
+        OperationManager uxCManager(&dummyWin, &dummyTb, &dummyWin);
+        TransferQueueController uxCController;
+        uxCManager.setQueueController(&uxCController);
+        uxCManager.updateSummary();
+
+        OperationPopup *popup = uxCManager.popup();
+        verify(popup != nullptr, "UX C: OperationPopup exists");
+        auto *summaryLbl = popup->findChild<QLabel *>(QStringLiteral("operationSummaryLabel"));
+        auto *emptyLbl = popup->findChild<QLabel *>(QStringLiteral("operationEmptyLabel"));
+        verify(summaryLbl != nullptr && emptyLbl != nullptr, "UX C: Popup summary and empty labels exist");
+
+        // Initially without operations, summary reports no history
+        verify(summaryLbl->text().contains(QStringLiteral("Brak historii"))
+                   || summaryLbl->text().contains(QStringLiteral("No history")),
+               "UX C: Empty popup correctly reports no history initially");
+
+        // Record a finished task in history
+        TransferHistoryRecord recC = TransferHistoryRecord::createNew(
+            TransferOperationType::Copy,
+            TransferBackendKind::LocalNative,
+            TransferTaskState::Completed,
+            {QUrl::fromLocalFile(QStringLiteral("/tmp/test-uxc.txt"))},
+            QUrl::fromLocalFile(QStringLiteral("/tmp")),
+            QDateTime::currentDateTimeUtc().addSecs(-5),
+            QDateTime::currentDateTimeUtc(),
+            5000,
+            1024);
+        uxCController.historyManager()->addRecord(recC, false);
+        uxCManager.updateSummary();
+
+        // Verify summary label NEVER says 'Brak historii' when completed record exists
+        verify(!summaryLbl->text().contains(QStringLiteral("Brak historii"))
+                   && !summaryLbl->text().contains(QStringLiteral("No history")),
+               "UX C: Summary label MUST NOT say 'Brak historii' when completed records exist");
+        verify(summaryLbl->text().contains(QStringLiteral("Historia: 1"))
+                   || summaryLbl->text().contains(QStringLiteral("History: 1"))
+                   || summaryLbl->text().contains(QStringLiteral("Zakończone: 1"))
+                   || summaryLbl->text().contains(QStringLiteral("Completed: 1")),
+               "UX C: Summary label reports exact completed count");
+
+        uxCController.clearHistory();
+        uxCManager.updateSummary();
+        verify(summaryLbl->text().contains(QStringLiteral("Brak historii"))
+                   || summaryLbl->text().contains(QStringLiteral("No history")),
+               "UX C: Cleared history resets summary label to 'Brak historii'");
+    }
+
     qInfo("PASS: %d OperationManager assertions", checks);
     return 0;
 }

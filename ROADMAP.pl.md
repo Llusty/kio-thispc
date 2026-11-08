@@ -671,7 +671,7 @@ Gdy zwykła operacja plikowa zakończy się błędem braku uprawnień (Permissio
   - **Etap 5.2 — Remediacja bezpieczeństwa i utwardzenie (Security Remediation & Hardening):** ✅ ZAMKNIĘTY / AUTOMATED PASS / MANUAL ACCEPTED (4/4) / BACKED UP / COMMITTED / PUSHED — Wszystkie 8 zgłoszonych podatności (`SEC-045-01`..`SEC-045-08`) naprawione i zweryfikowane:
     - Wyeliminowano `heap-use-after-free` w `OperationWindow` / `TransferQueueViewWidget` poprzez zatrzymywanie timera, liczniki generacji, odpinanie widżetów i `deleteLater()` (`SEC-045-01`);
     - Zaimplementowano atomową funkcję `publishLocalFileNoOverwrite()` z `SYS_renameat2(..., RENAME_NOREPLACE)` bez fallbacku do nadpisującego `rename(2)` (`SEC-045-02`);
-    - Utwardzono wycofywanie (rollback): fallback link/unlink weryfikuje tożsamość `st_dev` i `st_ino` przed usunięciem celu; przenoszenie katalogów bez wsparcia `RENAME_NOREPLACE` kończy się bezpieczną odmową (`EINVAL`) zamiast nieatomowego nadpisania;
+    - Utwardzono wycofywanie (rollback): przenoszenie katalogów bez wsparcia `RENAME_NOREPLACE` kończy się bezpieczną odmową (`EINVAL`/`EOPNOTSUPP`) zamiast nieatomowego nadpisania (początkowy przejściowy fallback link/unlink został w pełni usunięty i zastąpiony bezpieczną odmową fail-closed w Follow-up 5.2.1);
     - Poprawiono błąd use-after-move w `TransferQueueController::enqueue` (`SEC-045-03`);
     - Objęto runtime'owe sprawdzenia `THISPC_TEST_HARNESS` dyrektywą `#ifdef THISPC_TEST_HARNESS` (`SEC-045-04`);
     - Utwardzono wywołania procesów zewnętrznych za pomocą separatora `--` i ścieżek bezwzględnych (`SEC-045-05`);
@@ -688,20 +688,29 @@ Gdy zwykła operacja plikowa zakończy się błędem braku uprawnień (Permissio
       - Weryfikacja automatyczna: `local_transfer` PASS (63 asercje), `local_move` PASS (73 asercje), ASan/UBSan PASS (0 błędów), LSan PASS (0 wycieków w testach transferu; LSan `NOT VERIFIED` w testach widżetów GUI z `detect_leaks=0`), build produkcyjny PASS, pełna regresja 77/77 PASS;
       - Zweryfikowany backup: `/mnt/g/ThisPC backup/ThisPC-0.45.0-Stage5.2.1-FollowUp-2026-11-08/`;
     - **Stan bramki bezpieczeństwa (Security Release Gate):** **`BLOCKED / FINAL RELEASE VERIFICATION PENDING`** (ZABLOKOWANY do końcowej weryfikacji wydania w Etapie 5.3).
-  - **Etap 5.3 — Szlif końcowy, pakietyzacja i wydanie 0.45.0:** (Zaplanowany po zamknięciu Etapu 5.2)
+  - **Etap 5.3 — Szlif końcowy, pakietyzacja i wydanie 0.45.0:**
+    - **Etap 5.3.1 — Gotowość do wydania i domknięcie UX (Release Readiness & UX Closeout):** ✅ CLOSED / AUTOMATED PASS / MANUAL ACCEPTED (3/3) / BACKED UP / COMMITTED / PUSHED:
+      - Przeprowadzono audyt i weryfikację zagadnień UX A–C (domyślny kompaktowy rozmiar okna operacji 580×380 px, stan terminalny wykresu prędkości dla szybkich transferów bez mylących komunikatów oczekiwania, pełna spójność licznika historii między popupem a oknem szczegółowym);
+      - Dodano 14 dedykowanych asercji automatycznych w `tests/operation-manager.cpp` (łącznie 217 asercji zestawu zaliczonych);
+      - Odbiór manualny użytkownika (3/3 FULL PASS — 8 listopada 2026 r.): 1. UX A kompaktowy rozmiar okna i zapamiętywanie geometrii PASS; 2. UX B transfer natychmiastowy pliku 960 B wyświetla „Transfer ukończony natychmiastowo” PASS; 3. UX C spójność licznika w OperationPopup i czyszczenie historii PASS;
+      - Przeprowadzono audyt mechanizmów wydań i skryptu pakietyzacji `scripts/build-rc-archives.py`: dynamiczne pobieranie wersji z `CMakeLists.txt`, bezpieczne izolowane katalogi tymczasowe `tempfile.TemporaryDirectory`, aktualizacja weryfikacji integralności kluczowych plików źródłowych bez przedwczesnego podbijania wersji produkcyjnej;
+      - Opracowano kompleksowy plan testów na rzeczywistych systemach plików (Btrfs, ext4, NTFS-3G / ntfs3, FAT32/vfat, exFAT, nośniki USB);
+      - Usunięto rozbieżność dokumentacji dotyczącą przejściowego fallbacku link/unlink w podsumowaniu Etapu 5.2;
+      - Zweryfikowany backup: `/mnt/g/ThisPC backup/ThisPC-0.45.0-Stage5.3.1-ManualAccepted-2026-11-08/`;
+      - **Stan bramki bezpieczeństwa (Security Release Gate):** **`BLOCKED / FINAL RELEASE VERIFICATION PENDING`** (wersja systemowa 0.44.0 pozostaje nienaruszona; brak tagów gita i publicznego wydania).
 
 ### 0.45.0 — Bezpieczeństwo i bramka wydaniowa (Security Release Gate)
 - Przed oficjalnym wydaniem wymagany jest kompleksowy audyt bezpieczeństwa obejmujący: zabezpieczenie przed nieautoryzowanym wykonywaniem kodu, brak podatności typu backdoor, kontrolę uprawnień administracyjnych i brak ich nieuprawnionej eskalacji, weryfikację zależności zewnętrznych, integralność instalatora oraz bezpieczeństwo wszystkich operacji plikowych;
 - Wystąpienie jakiejkolwiek nierozwiązanej luki krytycznej lub wysokiego ryzyka bezwzględnie blokuje wydanie wersji;
 - Zasada obowiązuje bezwarunkowo dla wydania 0.45.0 oraz wszystkich przyszłych wydań.
 
-#### Rejestr zagadnień UX (zakres 0.45.0):
-- **Zagadnienie UX A — Domyślny rozmiar okna „Operacje plikowe”:**
+#### Rejestr zagadnień UX (zakres 0.45.0 — Domknięte w Etapie 5.3.1):
+- **Zagadnienie UX A — Domyślny rozmiar okna „Operacje plikowe”:** ✅ ZAMKNIĘTE / ZWERYFIKOWANE
   Docelowy kompaktowy rozmiar początkowy (ok. 580×380 px), z pełną widocznością jednej rozwiniętej karty operacji bez nadmiaru pustej przestrzeni, z zachowaniem ręcznego skalowania, przewijania wielu zadań, Wayland oraz skalowania HiDPI.
-- **Zagadnienie UX B — Wykres prędkości po natychmiastowym transferze:**
-  Zakończone operacje z mniej niż 2 próbkami prędkości (transfery poniżej 500 ms) nie mogą wyświetlać komunikatu „Oczekiwanie na próbki prędkości…”; ukrycie wykresu lub czytelny stan ukończenia.
-- **Zagadnienie UX C — Spójność historii operacji:**
-  Zapewnienie, że panel podręczny `OperationPopup` nie raportuje „Brak historii”, gdy w oknie szczegółowym `OperationWindow` znajdują się ukończone operacje bieżącej sesji.
+- **Zagadnienie UX B — Wykres prędkości po natychmiastowym transferze:** ✅ ZAMKNIĘTE / ZWERYFIKOWANE
+  Zakończone operacje z mniej niż 2 próbkami prędkości (transfery poniżej 500 ms) nie wyświetlają komunikatu „Oczekiwanie na próbki prędkości…”; wykres prezentuje czytelny stan ukończenia („Transfer ukończony natychmiastowo”).
+- **Zagadnienie UX C — Spójność historii operacji:** ✅ ZAMKNIĘTE / ZWERYFIKOWANE
+  Panel podręczny `OperationPopup` nie raportuje „Brak historii”, gdy istnieją operacje ukończone w sesji lub zapisane na dysku; podsumowanie podaje dokładną liczbę ukończonych zadań.
 
 ### 0.46.0 — Niezależna architektura i audyt bezpieczeństwa (Standalone Architecture & Security Audit)
 - Kompleksowy audyt zależności od KDE Frameworks i bibliotek Qt;
@@ -822,10 +831,20 @@ Luźne, niewiążące propozycje (**OPTIONAL / UNASSIGNED / NOT COMMITTED**), kt
   - Minimum: `0`; maksimum: do ustalenia na etapie projektowania.
   - Limit dotyczy wyłącznie widocznych pozycji: nie usuwa historii lokalizacji i nie może powodować duplikatów.
   - Osobna propozycja od już istniejącego w backlogu kandydata Ostatnich plików (`Recent Files`).
-- **Split View — dwuklik separatora 50/50 (`OPTIONAL / UNASSIGNED / NOT COMMITTED`):**
-  - Podwójne kliknięcie lewym przyciskiem myszy separatora między panelami natychmiast przywraca proporcje 50/50 (przeniesione z historycznej wzmianki 0.34 do aktywnego backlogu pomysłów przyszłościowych).
-  - Bez wymaganego `Ctrl`, `Alt` ani `Shift`; nie dodawać kombinacji modyfikatorów bez konkretnego dodatkowego zastosowania.
-  - Zachować obecne przeciąganie separatora i niezależne działanie paneli.
+- **Kandydat UX A — Reset rozmiaru OperationWindow (`OPTIONAL / UNASSIGNED / NOT COMMITTED`):**
+  - Możliwość przywrócenia domyślnego rozmiaru okna „Operacje plikowe” (580×380 px) bez ręcznego przeciągania krawędzi.
+  - Preferowany interfejs:
+    - Opcja „Przywróć domyślny rozmiar” w menu ustawień okna;
+    - Możliwa przyszła integracja z globalnym oknem ustawień ThisPC;
+    - Opcjonalny dodatkowy gest (np. Shift + dwuklik) wyłącznie jeżeli okaże się ergonomicznie uzasadniony.
+  - Przywrócony rozmiar domyślny powinien zostać trwale zapisany jako aktualna geometria okna.
+- **Kandydat UX B — Wyrównanie Split View 50/50 (`OPTIONAL / UNASSIGNED / NOT COMMITTED`):**
+  - Dwuklik lewym przyciskiem myszy na separatorze Split View natychmiast wyrównuje szerokości paneli do proporcji 50/50.
+  - Wymagania:
+    - Zwykły pojedynczy dwuklik LPM, bez konieczności używania modyfikatorów klawiaturowych;
+    - Bez zmiany bieżących katalogów, zaznaczeń i stanu wewnętrznego paneli;
+    - Ścisłe poszanowanie minimalnych dopuszczalnych szerokości paneli;
+    - Zachowanie istniejącej możliwości ręcznego przeciągania separatora.
 - **Integracja z telefonem — KDE Connect (`OPTIONAL / UNASSIGNED / NOT COMMITTED`):**
   - Opcjonalna przyszła integracja telefonu:
     - Bezprzewodowe przeglądanie pamięci telefonu;

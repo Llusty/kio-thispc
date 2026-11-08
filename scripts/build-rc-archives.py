@@ -6,12 +6,16 @@ import argparse
 import hashlib
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
 
 def main():
     parser = argparse.ArgumentParser(description="Build and verify ThisPC Release Candidate archives.")
+    parser.add_argument("--version", default="",
+                        help="Target release version (default: parsed from CMakeLists.txt or THISPC_VERSION env).")
     parser.add_argument("--output-dir", default=os.environ.get("THISPC_RC_OUTPUT_DIR", ""),
                         help="Output directory for RC archives and manifests.")
     parser.add_argument("--work-dir", default=os.environ.get("THISPC_RC_WORK_DIR", ""),
@@ -28,7 +32,11 @@ def main():
     work_root = Path(args.work_dir).resolve() if args.work_dir else Path("/tmp")
     work_root.mkdir(parents=True, exist_ok=True)
 
-    version = "0.43.0"
+    cmake_text = (repo_root / "CMakeLists.txt").read_text(encoding="utf-8")
+    cmake_ver_match = re.search(r"^project\(kio-thispc VERSION ([^ ]+)", cmake_text, re.MULTILINE)
+    default_version = cmake_ver_match.group(1) if cmake_ver_match else "0.45.0"
+    version = args.version or os.environ.get("THISPC_VERSION", default_version)
+
     rc_suffix = f"-{args.rc_tag}" if args.rc_tag else "-rc"
     archive_prefix = f"kio-thispc-{version}"
     tar_name = f"kio-thispc-{version}{rc_suffix}.tar.gz"
@@ -46,15 +54,15 @@ def main():
     )
     tracked_files = [Path(line.strip()) for line in result.stdout.splitlines() if line.strip()]
 
-    new_files = [
-        Path("src/adminretrycontract.h"),
-        Path("src/adminretrycontroller.h"),
-        Path("src/adminretryexecutor.h"),
-        Path("tests/admin-retry.cpp"),
-        Path("tests/admin-retry-stage2.cpp"),
-        Path("tests/admin-retry-stage3.cpp"),
-        Path("tests/admin-retry-stage4.cpp"),
-        Path("tests/admin-retry-stage5.cpp"),
+    required_core_files = [
+        Path("CMakeLists.txt"),
+        Path("install.sh"),
+        Path("uninstall.sh"),
+        Path("src/thispcview.cpp"),
+        Path("src/operationmanager.h"),
+        Path("src/transferqueuecontroller.h"),
+        Path("src/localfileoverwrite.h"),
+        Path("docs/SECURITY_AUDIT_045.md"),
     ]
 
     forbidden_prefixes = ("release-artifacts/", "rc-artifacts/", "build/")
@@ -63,16 +71,12 @@ def main():
         rel_str = tf.as_posix()
         if not rel_str.startswith(forbidden_prefixes) and (repo_root / tf).is_file():
             all_files.add(tf)
-    for nf in new_files:
-        if (repo_root / nf).is_file():
-            all_files.add(nf)
 
     print(f"Collected {len(all_files)} files for packaging.")
 
-    # 2. Stage into a clean directory
-    staging_base = work_root / "thispc-rc-staging"
-    if staging_base.exists():
-        shutil.rmtree(staging_base)
+    # 2. Stage into a clean temporary directory to prevent symlink/collision attacks
+    staging_temp = tempfile.TemporaryDirectory(prefix="thispc-rc-staging-", dir=work_root)
+    staging_base = Path(staging_temp.name)
     staging_target = staging_base / archive_prefix
     staging_target.mkdir(parents=True, exist_ok=True)
 
@@ -122,10 +126,15 @@ def main():
     print(f"Wrote SHA256SUMS:\n{sums_file.read_text()}")
 
     # 6. Verify extraction and build
-    verify_dir = work_root / "thispc-rc-verify"
-    if verify_dir.exists():
-        shutil.rmtree(verify_dir)
-    verify_dir.mkdir(parents=True, exist_ok=True)
+    verify_temp = None
+    if not args.keep_verify_dir:
+        verify_temp = tempfile.TemporaryDirectory(prefix="thispc-rc-verify-", dir=work_root)
+        verify_dir = Path(verify_temp.name)
+    else:
+        verify_dir = work_root / f"thispc-rc-verify-{version}"
+        if verify_dir.exists():
+            shutil.rmtree(verify_dir)
+        verify_dir.mkdir(parents=True, exist_ok=True)
 
     print("Extracting tarball for verification build...")
     subprocess.run(
@@ -136,8 +145,8 @@ def main():
     extracted_root = verify_dir / archive_prefix
     assert extracted_root.is_dir(), f"Extracted directory {extracted_root} not found"
 
-    for req_file in new_files:
-        assert (extracted_root / req_file).is_file(), f"Missing new 0.43.0 file in extracted archive: {req_file}"
+    for req_file in required_core_files:
+        assert (extracted_root / req_file).is_file(), f"Missing core file in extracted archive: {req_file}"
 
     print("Configuring extracted build...")
     subprocess.run(
@@ -174,16 +183,16 @@ def main():
         f"- **Zip Archive:** `{zip_name}` (`{zip_path.stat().st_size}` bytes)\n",
         f"- **Extracted Independent Build:** `PASS`\n",
         f"- **Extracted CLI `--version`:** `{ver_out.strip()}` (`PASS`)\n\n",
-        "## Verified 0.43.0 New Files Included (8/8)\n\n",
+        f"## Verified Core Files Included ({len(required_core_files)}/{len(required_core_files)})\n\n",
     ]
-    for nf in new_files:
-        completeness_lines.append(f"- `{archive_prefix}/{nf.as_posix()}` — PRESENT\n")
+    for rf in required_core_files:
+        completeness_lines.append(f"- `{archive_prefix}/{rf.as_posix()}` — PRESENT\n")
     completeness_file.write_text("".join(completeness_lines))
 
     print("SUCCESS: Release Candidate archives created and verified successfully.")
-    shutil.rmtree(staging_base)
-    if not args.keep_verify_dir:
-        shutil.rmtree(verify_dir)
+    staging_temp.cleanup()
+    if verify_temp is not None:
+        verify_temp.cleanup()
 
 if __name__ == "__main__":
     main()

@@ -568,8 +568,8 @@ When standard operations receive permission denied errors, provide targeted `adm
     - **Security Release Gate Verdict (Stage 5.1):** **`BLOCKED`** pending Stage 5.2 remediation and regression verification.
   - **Stage 5.2 — Security Remediation & Hardening:** ✅ CLOSED / AUTOMATED PASS / MANUAL ACCEPTED (4/4) / BACKED UP / COMMITTED / PUSHED — All 8 findings (`SEC-045-01`..`SEC-045-08`) fully addressed:
     - Fixed `heap-use-after-free` in `OperationWindow` / `TransferQueueViewWidget` via dedicated timer cancellation, generation counters, detached widgets, and `deleteLater()` (`SEC-045-01`);
-    - Implemented atomic `publishLocalFileNoOverwrite()` using `SYS_renameat2(..., RENAME_NOREPLACE)` and atomic link/unlink fallback in `LocalFileCopyWorker`, `LocalFileMoveJob`, and `kiostagedtransferjob.h` (`SEC-045-02`);
-    - Hardened atomic rollback: link/unlink fallback verifies `st_dev` and `st_ino` identity before unlinking destination; directory moves without `RENAME_NOREPLACE` fail closed (`EINVAL`) rather than falling back to non-atomic overwrites;
+    - Implemented atomic `publishLocalFileNoOverwrite()` using `SYS_renameat2(..., RENAME_NOREPLACE)` in `LocalFileCopyWorker`, `LocalFileMoveJob`, and `kiostagedtransferjob.h` (`SEC-045-02`; initial transitional `link/unlink` fallback was fully superseded in Follow-up 5.2.1 by strict fail-closed refusal);
+    - Hardened atomic rollback: directory moves without `RENAME_NOREPLACE` fail closed (`EINVAL`/`EOPNOTSUPP`) rather than falling back to non-atomic overwrites;
     - Fixed use-after-move in `TransferQueueController::enqueue` (`SEC-045-03`);
     - Wrapped runtime `THISPC_TEST_HARNESS` checks in `#ifdef THISPC_TEST_HARNESS` (`SEC-045-04`);
     - Hardened external process argument handling with `--` and absolute paths in `thispcview.cpp`, `appwidgets.cpp`, and `selectionmenucontroller.cpp` (`SEC-045-05`);
@@ -586,20 +586,29 @@ When standard operations receive permission denied errors, provide targeted `adm
       - Automated verification: `local_transfer` PASS (63 assertions), `local_move` PASS (73 assertions), ASan/UBSan PASS (0 errors), LSan PASS (0 leaks on transfer suites; LSan `NOT VERIFIED` on Qt GUI widget runs with `detect_leaks=0`), production build PASS, full regression 77/77 PASS;
       - Verified Backup: `/mnt/g/ThisPC backup/ThisPC-0.45.0-Stage5.2.1-FollowUp-2026-11-08/`;
     - **Security Release Gate Status:** **`BLOCKED / FINAL RELEASE VERIFICATION PENDING`** until Stage 5.3 final release verification.
-  - **Stage 5.3 — Final Polish, Packaging & Release 0.45.0:** (Planned after Stage 5.2 closure)
+  - **Stage 5.3 — Final Polish, Packaging & Release 0.45.0:**
+    - **Stage 5.3.1 — Release Readiness & UX Closeout:** ✅ CLOSED / AUTOMATED PASS / MANUAL ACCEPTED (3/3) / BACKED UP / COMMITTED / PUSHED:
+      - Audited and verified UX Items A–C (OperationWindow default compact geometry 580×380 px, instantaneous transfer graph terminal state handling without misleading waiting labels, toolbar popup history count consistency matching detailed window);
+      - Added 14 automated assertions to `tests/operation-manager.cpp` (217 total suite assertions passing);
+      - Manual Acceptance (3/3 FULL PASS — Nov 8, 2026): 1. UX A compact geometry & resize persistence PASS; 2. UX B instantaneous transfer "Transfer ukończony natychmiastowo" PASS; 3. UX C popup/window history count consistency & clear history PASS;
+      - Audited release inventory and packaging script `scripts/build-rc-archives.py`: implemented dynamic version discovery from `CMakeLists.txt`, safe isolated staging via `tempfile.TemporaryDirectory`, and verified core package integrity without prematurely bumping production versions;
+      - Prepared comprehensive multi-filesystem real-world test plan (Btrfs, ext4, NTFS-3G / ntfs3, FAT32/vfat, exFAT, USB storage);
+      - Removed documentation contradiction regarding transitional `link/unlink` fallback in Stage 5.2 summary;
+      - Verified Backup: `/mnt/g/ThisPC backup/ThisPC-0.45.0-Stage5.3.1-ManualAccepted-2026-11-08/`;
+      - **Security Release Gate Status:** **`BLOCKED / FINAL RELEASE VERIFICATION PENDING`** (system version remains 0.44.0 untouched; no git tags or public release created).
 
 ### 0.45.0 — Security Release Gate
 - Prior to official release, a mandatory comprehensive security audit is required, covering unauthorized code execution, potential backdoors, administrative privilege escalation, third-party dependencies, installer integrity, and file operation safety;
 - Any unresolved critical or high-severity vulnerabilities are strict release blockers;
 - This policy applies unconditionally to 0.45.0 and all future releases.
 
-#### Tracked UX Backlog Items (0.45.0 Scope):
-- **UX Item A — Default Size of "File Operations" Window:**
-  Target compact initial geometry (~580×380 px) showing one expanded card fully without excessive vertical blank space, while preserving manual resizing, multi-task scrolling, Wayland, and HiDPI scaling.
-- **UX Item B — Speed Graph on Instantaneous Transfers:**
-  Completed operations with fewer than 2 speed samples (transfers under 500 ms) must not display "Waiting for speed samples…"; suppress graph or display appropriate completed status.
-- **UX Item C — History Consistency Between Popup and Detailed Window:**
-  Ensure toolbar `OperationPopup` does not display "No history" while in-session completed operations exist in the detailed `OperationWindow`.
+#### Tracked UX Backlog Items (0.45.0 Scope — Closed in Stage 5.3.1):
+- **UX Item A — Default Size of "File Operations" Window:** ✅ CLOSED / VERIFIED
+  Compact initial geometry (~580×380 px) showing one expanded card fully without excessive vertical blank space, while preserving manual resizing, multi-task scrolling, Wayland, and HiDPI scaling.
+- **UX Item B — Speed Graph on Instantaneous Transfers:** ✅ CLOSED / VERIFIED
+  Completed operations with fewer than 2 speed samples (transfers under 500 ms) do not display "Waiting for speed samples…"; suppress graph or display appropriate completed terminal status ("Transfer ukończony natychmiastowo").
+- **UX Item C — History Consistency Between Popup and Detailed Window:** ✅ CLOSED / VERIFIED
+  Toolbar `OperationPopup` does not display "No history" while completed operations exist in the session or persistent storage; summary displays exact completed task count.
 
 ### 0.46.0 — Standalone Architecture & Security Audit
 - Comprehensive audit of KDE Frameworks and Qt dependencies;
@@ -719,10 +728,20 @@ Loose, non-binding candidates (**OPTIONAL / UNASSIGNED / NOT COMMITTED**) that m
   - Minimum: `0`; maximum: to be determined during design.
   - The limit applies strictly to visible sidebar items: it must not delete stored location history and must not introduce duplicate entries.
   - Separate proposal from the existing `Recent Files` backlog candidate.
-- **Split View — Separator Double-Click 50/50 Reset (`OPTIONAL / UNASSIGNED / NOT COMMITTED`):**
-  - Double-clicking the splitter handle between panes with the left mouse button immediately restores an equal 50/50 pane ratio (moved from the historical 0.34 polish note into active non-binding candidates).
-  - Requires no `Ctrl`, `Alt`, or `Shift` modifier keys; do not add modifier combinations without a concrete, distinct purpose.
-  - Preserve standard splitter dragging and independent Primary/Split pane operation.
+- **UX Candidate A — OperationWindow Size Reset (`OPTIONAL / UNASSIGNED / NOT COMMITTED`):**
+  - Ability to restore the default size of the "File Operations" window (580×380 px) without manually dragging window edges.
+  - Preferred interface:
+    - Dedicated "Restore default size" option in the window settings menu;
+    - Possible future integration with centralized ThisPC settings dialog;
+    - Optional supplemental gesture (e.g. Shift + double-click) strictly if ergonomically justified.
+  - The restored default geometry must be persistently saved as the active window geometry.
+- **UX Candidate B — Split View Equalize 50/50 (`OPTIONAL / UNASSIGNED / NOT COMMITTED`):**
+  - Double-clicking the splitter handle between panes with the left mouse button immediately equalizes pane widths to 50/50.
+  - Requirements:
+    - Standard single double-click with LMB without requiring keyboard modifiers;
+    - No changes to open directories, selections, or internal pane state;
+    - Full respect for minimum pane width constraints;
+    - Preserves existing manual dragging of the splitter separator.
 - **ThisPC Phone Integration — KDE Connect (`OPTIONAL / UNASSIGNED / NOT COMMITTED`):**
   - Optional future phone integration:
     - Wireless browsing of phone storage;
