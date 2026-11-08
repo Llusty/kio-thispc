@@ -443,3 +443,65 @@ W ramach **Stage 5.2 (Security Remediation & Hardening)** wszystkie 8 zidentyfik
 ### Status Security Release Gate po remediacji Stage 5.2
 - **Stan automatyczny:** **PASS (Wszystkie 8 zgłoszonych podatności naprawione i zweryfikowane automatycznie).**
 - **Stan bramki wydania:** **`BLOCKED` (Formalnie zablokowana do czasu ukończenia procedury odbioru manualnego w środowisku użytkownika).**
+
+---
+
+## 8. Security Follow-up 5.2.1: Atomic Publish Rollback Race & Fail-Closed Remediation
+
+### 1. Weryfikacja podatności wyścigu w awaryjnym mechanizmie `link/unlink` (SEC-045-02.1)
+
+W trakcie ponownej weryfikacji kodu funkcji `publishLocalFileNoOverwrite()` w `src/localfileoverwrite.h` poddano analizie ścieżkę awaryjną (fallback dla systemów plików bez wsparcia `RENAME_NOREPLACE`):
+
+1. **Wyścig w procedurze wycofania (Rollback Race na ścieżce celu `dst`):**
+   - Po udanym wywołaniu `::link(src, dst)` i nieudanym `::unlink(src)` kod podejmował próbę wycofania operacji poprzez:
+     1. `lstat(dst, &dstStat)`
+     2. Porównanie tożsamości: `dstStat.st_dev == srcStat.st_dev && dstStat.st_ino == srcStat.st_ino`
+     3. `unlink(dst)`
+   - **Podatność (TOCTOU CWE-367):** Pomiędzy sprawdzeniem tożsamości (krok 2) a wywołaniem `::unlink(dst)` (krok 3) inny proces, wątek lub atakujący mógł podmienić wpis katalogowy pod `dst` (np. usuwając twarde dowiązanie i tworząc nowy plik, symlink lub twarde dowiązanie do wrażliwego pliku użytkownika). Wywołanie `unlink(dst)` operuje wyłącznie na nazwie ścieżki i usuwa wpis istniejący w momencie wykonania wywołania jądra, co mogło doprowadzić do usunięcia niepowiązanego pliku.
+2. **Wyścig podmiany źródła (Source Substitution Race na ścieżce `src`):**
+   - Pomiędzy udanym `::link(src, dst)` a wywołaniem `::unlink(src)` istniało okno czasowe, w którym zewnętrzny proces mógł zastąpić ścieżkę `src` nowym plikiem (np. przez `rename(foreign_file, src)`). Wywołanie `::unlink(src)` usunęłoby wówczas ten nowy plik bez weryfikacji.
+3. **Niereprezentowalność atomowości link/unlink w przestrzeni użytkownika:**
+   - Standard POSIX i interfejsy Linuksa nie udostępniają operacji typu „unlink if inode matches”. Każda sekwencja oparta na odrębnych wywołaniach `link(2)` i `unlink(2)` jest podatna na wyścigi w przypadku współbieżnych modyfikacji katalogu.
+   - Ponadto systemy plików bez wsparcia dla `RENAME_NOREPLACE` (np. FAT32, exFAT) w ogóle nie obsługują twardych dowiązań (`link(2)` zwraca `EPERM` lub `EINVAL`), co czyniło ten fallback bezużytecznym na nośnikach tego typu.
+
+### 2. Zastosowana bezpieczna remediacja (Fail-Closed)
+
+Zgodnie z zasadą minimalizacji ryzyka i regułą *fail-closed*:
+1. **Całkowite usunięcie fallbacku `link/unlink`:**
+   - Wyeliminowano z `src/localfileoverwrite.h` wywołania `::link` i rollback `::unlink`.
+   - Funkcja `publishLocalFileNoOverwrite()` opiera się wyłącznie na atomowym wywołaniu systemowym jądra `SYS_renameat2(..., RENAME_NOREPLACE)`.
+   - Na wspieranych systemach plików (ext4, btrfs, xfs, f2fs, tmpfs) jądro wykonuje publikację w ramach pojedynczej atomowej transakcji VFS, z całkowitą eliminacją okna TOCTOU i gwarancją, że istniejący cel nigdy nie zostanie nadpisany (`EEXIST`).
+2. **Zasada Fail-Closed dla nieobsługiwanych systemów plików:**
+   - Jeżeli jądro lub system plików nie obsługuje `RENAME_NOREPLACE` (kody `ENOSYS`, `EINVAL`, `EOPNOTSUPP`), funkcja natychmiast odmawia operacji zwracając `false` z odpowiednim kodem błędu (`*outErrorNumber = err ? err : EOPNOTSUPP`) i `collisionDetected = false`.
+3. **Jednoznaczne komunikaty błędów dla użytkownika:**
+   - Zaktualizowano `LocalFileCopyWorker` (`src/localfilecopyjob.h`), `LocalFileMoveJob` (`src/localfilemovejob.h`) oraz `KioStagedTransferJob` (`src/kiostagedtransferjob.h`):
+     - W przypadku odmowy z powodu braku wsparcia zgłaszany jest czytelny, zlokalizowany komunikat:
+       - PL: *„System plików nie obsługuje bezpiecznej atomowej publikacji pliku bez nadpisania.”* / *„System plików nie obsługuje bezpiecznego atomowego przeniesienia bez nadpisania.”*
+       - EN: *„The filesystem does not support atomic file publication without overwrite.”* / *„The filesystem does not support atomic file move without overwrite.”*
+4. **Bezpieczeństwo danych i brak osieroconych artefaktów:**
+   - Przy niepowodzeniu publikacji (zarówno kolizji, jak i braku wsparcia systemowego), plik stagingowy `.thispc-part` jest bezpiecznie usuwany po weryfikacji tożsamości, plik źródłowy pozostaje nienaruszony (z zachowaną sumą SHA-256), a cel pozostaje nienaruszony.
+
+### 3. Wyniki weryfikacji testowej 5.2.1
+
+1. **Deterministyczne testy jednostkowe:**
+   - W `tests/local-file-copy-job.cpp` i `tests/local-file-move-job.cpp` dodano testy:
+     - Symulacji braku wsparcia `RENAME_NOREPLACE` (`EOPNOTSUPP`) za pośrednictwem bezpiecznego hooka `#ifdef THISPC_TEST_HARNESS`: potwierdzono bezpieczną odmowę, właściwe kody błędów, usunięcie stagingu i nienaruszoną sumę SHA-256 źródła.
+     - Ochrony istniejących i współbieżnie podstawionych plików docelowych (`dst`) oraz źródłowych (`src`): potwierdzono, że żaden obcy plik nie może zostać usunięty ani nadpisany.
+   - Wyniki:
+     - `local_transfer`: **PASS (63 asercje)**.
+     - `local_move`: **PASS (73 asercje)**.
+2. **Dynamiczna analiza sanitizera (`AddressSanitizer + UndefinedBehaviorSanitizer`):**
+   - **ASan (AddressSanitizer):** brak wykrytych naruszeń pamięci (0 błędów use-after-free, buffer overflow, use-after-scope) w przebiegach zestawów `local_transfer`, `local_move`, `operations` (203 asercje) oraz `transfer_queue` (2406 asercji).
+   - **UBSan (UndefinedBehaviorSanitizer):** brak zgłoszonych naruszeń niezdefiniowanego zachowania (0 błędów UB).
+   - **LeakSanitizer (LSan):**
+     - W dedykowanych testach operacji transferu (`local_transfer` 63 asercje, `local_move` 73 asercje) uruchomionych z domyślnie aktywnym LeakSanitizerem (`detect_leaks=1`): **PASS (0 wycieków pamięci)**.
+     - W złożonych testach widżetów GUI (`operations`, `transfer_queue`): w przebiegu zbiorczym z `ASAN_OPTIONS=detect_leaks=0` stan LeakSanitizera pozostaje formalnie oznaczony jako **`NOT VERIFIED`** (z powodu globalnych jednorazowych alokacji frameworków Qt6/KF6 przy wyjściu z procesu, takich jak `ExternalRefCountData` czy `JobUiDelegate`).
+3. **Ograniczenia kompatybilności systemów plików:**
+   - Atomowa publikacja bez nadpisywania jest w pełni wspierana na wszystkich natywnych linuksowych systemach plików obsługujących `SYS_renameat2(..., RENAME_NOREPLACE)` (m.in. `ext4`, `btrfs`, `xfs`, `f2fs`, `tmpfs`).
+   - Systemy plików nieobsługujące tej operacji jądra (np. starsze sterowniki sieciowe bez implementacji `RENAME_NOREPLACE` lub specyficzne systemy plików) nie wykonują nieatomowego nadpisania ani wyścigowego `link/unlink`, lecz zwracają jednoznaczną odmowę (*fail-closed* z kodem błędu `EOPNOTSUPP`/`ENOSYS`/`EINVAL`).
+4. **Kompilacja produkcyjna (`./scripts/build.sh`):**
+   - **PASS (0 błędów, 0 ostrzeżeń)**. Weryfikacja `tests/test_safe_uninstall.fish` potwierdziła obecność 0 runtime'owych symboli `THISPC_TEST_HARNESS` w binarium produkcyjnym (12/12 PASS).
+5. **Pełna regresja 77 zestawów (`python3 tests/run-pane-actions.py --all`):**
+   - **77/77 zestawów PASS**.
+6. **Weryfikacja formatowania (`git diff --check`):**
+   - **PASS (0 błędów formatowania)**.

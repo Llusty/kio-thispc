@@ -272,6 +272,8 @@ target_include_directories(pane-test PRIVATE ${LibArchive_INCLUDE_DIRS})
 target_link_libraries(pane-test PRIVATE Qt6::Core Qt6::Concurrent Qt6::Gui Qt6::Widgets Qt6::PrintSupport Qt6::Pdf Qt6::DBus Qt6::Test KF6::KIOCore KF6::KIOGui KF6::KIOWidgets KF6::ItemViews KF6::Solid KF6::FileMetaData KF6::ConfigCore KF6::CoreAddons KF6::Notifications ${LibArchive_LIBRARIES} ZLIB::ZLIB TagLib::TagLib Exiv2::exiv2lib PkgConfig::LIBACL)
 target_compile_definitions(pane-test PRIVATE THISPC_BATCH_RENAME_TEST_HOOKS=1 THISPC_TEST_HARNESS=1)
 '''
+    if os.environ.get("THISPC_TEST_ASAN") == "1":
+        cmake += '\ntarget_compile_options(pane-test PRIVATE -fsanitize=address,undefined)\ntarget_link_options(pane-test PRIVATE -fsanitize=address,undefined)\n'
     (tmp / 'CMakeLists.txt').write_text(cmake)
     subprocess.run(['cmake', '-S', str(tmp), '-B', str(tmp / 'build')], check=True)
     subprocess.run(['cmake', '--build', str(tmp / 'build'), '-j2'], check=True)

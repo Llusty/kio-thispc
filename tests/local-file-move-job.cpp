@@ -282,6 +282,75 @@ int main(int argc, char **argv)
                "SEC-045-02: move partial .thispc-part is cleaned up after collision");
     }
 
+    // SEC-045-02.1: Atomic move (Automatic strategy) destination collision protects foreign file.
+    {
+        const QString secAtomicMoveSrc = temporary.filePath(QStringLiteral("sec045021-atomic-move-src.bin"));
+        const QString secAtomicMoveDst = temporary.filePath(QStringLiteral("sec045021-atomic-move-dst.bin"));
+        verify(writeFile(secAtomicMoveSrc, payload), "SEC-045-02.1: atomic move source created");
+        const QByteArray srcHashBefore = fileHash(secAtomicMoveSrc);
+
+        const QByteArray foreignData("FOREIGN-PRE-EXISTING-MOVE-DEST-045021");
+        verify(writeFile(secAtomicMoveDst, foreignData), "SEC-045-02.1: foreign destination created");
+        const QByteArray foreignHashBefore = fileHash(secAtomicMoveDst);
+
+        LocalFileMoveJob atomicMove(
+            QUrl::fromLocalFile(secAtomicMoveSrc),
+            QUrl::fromLocalFile(secAtomicMoveDst),
+            nullptr,
+            LocalFileMoveStrategy::Automatic,
+            16 * 1024,
+            1,
+            {},
+            false);
+        atomicMove.setAutoDelete(false);
+        QSignalSpy atomicMoveResult(&atomicMove, &KJob::result);
+        atomicMove.start();
+        waitForResult(atomicMoveResult, "SEC-045-02.1: atomic move with pre-existing destination finishes");
+        verify(atomicMove.moveError() == LocalFileMoveError::DestinationExists,
+               "SEC-045-02.1: atomic move detects existing destination and reports DestinationExists");
+        verify(fileHash(secAtomicMoveDst) == foreignHashBefore
+                   && readFile(secAtomicMoveDst) == foreignData,
+               "SEC-045-02.1: pre-existing foreign file is 100% untouched and never unlinked");
+        verify(fileHash(secAtomicMoveSrc) == srcHashBefore,
+               "SEC-045-02.1: move source file is 100% preserved with intact SHA-256");
+    }
+
+    // SEC-045-02.1: Fail-closed atomic move when RENAME_NOREPLACE is unsupported.
+    {
+        const QString secNoRenameSrc = temporary.filePath(QStringLiteral("sec045021-norename-src.bin"));
+        const QString secNoRenameDst = temporary.filePath(QStringLiteral("sec045021-norename-dst.bin"));
+        verify(writeFile(secNoRenameSrc, payload), "SEC-045-02.1: unsupported move source created");
+        const QByteArray srcHashBefore = fileHash(secNoRenameSrc);
+
+        simulateRenameNoReplaceUnsupported() = true;
+
+        LocalFileMoveJob noRenameMove(
+            QUrl::fromLocalFile(secNoRenameSrc),
+            QUrl::fromLocalFile(secNoRenameDst),
+            nullptr,
+            LocalFileMoveStrategy::Automatic,
+            16 * 1024,
+            1,
+            {},
+            false);
+        noRenameMove.setAutoDelete(false);
+        QSignalSpy noRenameResult(&noRenameMove, &KJob::result);
+        noRenameMove.start();
+        waitForResult(noRenameResult, "SEC-045-02.1: unsupported move finishes");
+        verify(noRenameMove.moveError() == LocalFileMoveError::AtomicMove
+                   && noRenameMove.systemError() == EOPNOTSUPP,
+               "SEC-045-02.1: unsupported RENAME_NOREPLACE reports AtomicMove error with EOPNOTSUPP");
+        verify(noRenameMove.errorText().contains(QStringLiteral("nie obsługuje"))
+                   || noRenameMove.errorText().contains(QStringLiteral("does not support")),
+               "SEC-045-02.1: unsupported RENAME_NOREPLACE returns clear descriptive error message");
+        verify(!QFileInfo::exists(secNoRenameDst),
+               "SEC-045-02.1: move destination was never created on unsupported filesystem");
+        verify(fileHash(secNoRenameSrc) == srcHashBefore,
+               "SEC-045-02.1: move source is 100% preserved with intact SHA-256");
+
+        simulateRenameNoReplaceUnsupported() = false;
+    }
+
     qInfo("PASS: %d LocalFileMoveJob/history assertions", checks);
     return 0;
 }

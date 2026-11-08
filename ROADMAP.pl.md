@@ -681,6 +681,12 @@ Gdy zwykła operacja plikowa zakończy się błędem braku uprawnień (Permissio
     - Weryfikacja automatyczna: build produkcyjny PASS, ścisły build GCC 16.2.1 PASS, `clang-tidy` PASS (z udokumentowanymi uwagami informacyjnymi `cert-err33-c`), 19/19 zestawów `ASan + UBSan` PASS (0 błędów), 77/77 pełna regresja PASS, test deinstalacji PASS;
     - Odbiór manualny użytkownika (4/4 FULL PASS — 8 listopada 2026 r.): 1. Stabilność `OperationWindow` przy wielokrotnym klikaniu szczegółów PASS; 2. Rozwiązywanie konfliktów nazw, nienaruszona suma SHA-256 i zero pozostałości `.thispc-part` PASS; 3. Funkcja „Pokaż w folderze” po utwardzeniu PASS; 4. Brak omijania potwierdzenia czyszczenia historii przez `THISPC_TEST_HARNESS=1` w buildzie produkcyjnym PASS;
     - Zweryfikowany backup: `/mnt/g/ThisPC backup/ThisPC-0.45.0-Stage5.2-ManualAccepted-2026-11-08/`;
+    - **Security Follow-up 5.2.1 — Usunięcie wyścigu rollbacku publikacji i utwardzenie Fail-Closed:** ✅ ZAKOŃCZONY / AUTOMATED PASS — Rozwiązanie problemu wyścigów w publikacji awaryjnej:
+      - Całkowicie usunięto niebezpieczny fallback `link(2)`/`unlink(2)` i ryzyko wyścigu TOCTOU przy rollbacku celu lub podmianie źródła (`SEC-045-02.1`);
+      - Wprowadzono ścisłą zasadę *fail-closed* przy braku wsparcia dla `SYS_renameat2(..., RENAME_NOREPLACE)` (`EOPNOTSUPP`/`ENOSYS`/`EINVAL`) wraz z jednoznacznymi komunikatami błędów;
+      - Zagwarantowano brak usuwania obcych plików, nienaruszone sumy SHA-256 źródła i celu oraz sprzątanie plików stagingowych `.thispc-part`;
+      - Weryfikacja automatyczna: `local_transfer` PASS (63 asercje), `local_move` PASS (73 asercje), ASan/UBSan PASS (0 błędów), LSan PASS (0 wycieków w testach transferu; LSan `NOT VERIFIED` w testach widżetów GUI z `detect_leaks=0`), build produkcyjny PASS, pełna regresja 77/77 PASS;
+      - Zweryfikowany backup: `/mnt/g/ThisPC backup/ThisPC-0.45.0-Stage5.2.1-FollowUp-2026-11-08/`;
     - **Stan bramki bezpieczeństwa (Security Release Gate):** **`BLOCKED / FINAL RELEASE VERIFICATION PENDING`** (ZABLOKOWANY do końcowej weryfikacji wydania w Etapie 5.3).
   - **Etap 5.3 — Szlif końcowy, pakietyzacja i wydanie 0.45.0:** (Zaplanowany po zamknięciu Etapu 5.2)
 

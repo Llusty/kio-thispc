@@ -244,9 +244,9 @@ inline QString createExclusiveStagedFile(const QString &finalPath)
     return {};
 }
 
-inline bool atomicPublishNewFile(const QString &partPath, const QString &finalPath, bool *collisionDetected)
+inline bool atomicPublishNewFile(const QString &partPath, const QString &finalPath, bool *collisionDetected = nullptr, int *outError = nullptr)
 {
-    return publishLocalFileNoOverwrite(partPath, finalPath, collisionDetected);
+    return publishLocalFileNoOverwrite(partPath, finalPath, collisionDetected, outError);
 }
 
 inline bool atomicPublishOverwrite(const QString &partPath, const QString &finalPath,
@@ -785,8 +785,17 @@ private:
                 setProperty("thispcDestinationReplaced", true);
             }
         } else {
+            int publishErr = 0;
             published = KioStagedDetail::atomicPublishNewFile(
-                m_currentPartPath, m_currentFinalPath, &collisionDetected);
+                m_currentPartPath, m_currentFinalPath, &collisionDetected, &publishErr);
+            if (!published && (publishErr == EOPNOTSUPP || publishErr == ENOSYS || publishErr == EINVAL)) {
+                setError(KIO::ERR_CANNOT_RENAME);
+                setErrorText(QStringLiteral("System plików nie obsługuje bezpiecznej atomowej publikacji pliku bez nadpisania."));
+                cleanupCurrentPart();
+                m_finished = true;
+                emitResult();
+                return;
+            }
         }
 
         if (!published) {

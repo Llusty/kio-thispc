@@ -162,10 +162,14 @@ private:
                     finish(LocalFileMoveError::DestinationExists,
                            tr("The destination already exists."));
                 } else {
-                    finish(LocalFileMoveError::AtomicMove,
-                           QLocale().language() == QLocale::Polish
-                               ? QStringLiteral("Nie można przenieść pliku atomowo.")
-                               : tr("Could not move the file atomically."));
+                    const QString errorMsg = (moveErr == EOPNOTSUPP || moveErr == ENOSYS || moveErr == EINVAL)
+                        ? (QLocale().language() == QLocale::Polish
+                            ? QStringLiteral("System plików nie obsługuje bezpiecznego atomowego przeniesienia bez nadpisania.")
+                            : tr("The filesystem does not support atomic file move without overwrite."))
+                        : (QLocale().language() == QLocale::Polish
+                            ? QStringLiteral("Nie można przenieść pliku atomowo.")
+                            : tr("Could not move the file atomically."));
+                    finish(LocalFileMoveError::AtomicMove, errorMsg);
                 }
                 return;
             }

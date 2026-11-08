@@ -331,9 +331,14 @@ public Q_SLOTS:
                         tr("The destination already exists."),
                         EEXIST);
                 } else {
+                    const QString errorMsg = (publishErr == EOPNOTSUPP || publishErr == ENOSYS || publishErr == EINVAL)
+                        ? (QLocale().language() == QLocale::Polish
+                            ? QStringLiteral("System plików nie obsługuje bezpiecznej atomowej publikacji pliku bez nadpisania.")
+                            : tr("The filesystem does not support atomic file publication without overwrite."))
+                        : tr("Could not publish the completed file.");
                     finishWithError(
                         LocalTransferError::Publish,
-                        tr("Could not publish the completed file."),
+                        errorMsg,
                         publishErr);
                 }
                 return;

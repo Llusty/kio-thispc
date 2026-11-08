@@ -579,6 +579,12 @@ When standard operations receive permission denied errors, provide targeted `adm
     - Automated verification: production build PASS, strict GCC 16.2.1 build PASS, `clang-tidy` PASS (with accepted informational `cert-err33-c` notes documented), 19/19 `ASan + UBSan` suites PASS (0 errors), 77/77 full regression suites PASS, isolated uninstall tests PASS;
     - Manual Acceptance (4/4 PASS — Nov 8, 2026): 1. `OperationWindow` stability under rapid details toggle PASS; 2. Destination name conflict resolution, intact SHA-256, zero `.thispc-part` leftovers PASS; 3. Show in Folder on hardened transfers PASS; 4. `THISPC_TEST_HARNESS=1` production isolation PASS;
     - Verified Backup: `/mnt/g/ThisPC backup/ThisPC-0.45.0-Stage5.2-ManualAccepted-2026-11-08/`;
+    - **Security Follow-up 5.2.1 — Atomic Publish Rollback Race & Fail-Closed Remediation:** ✅ COMPLETED / AUTOMATED PASS — Addressed race conditions in fallback publish:
+      - Fully removed non-atomic `link(2)`/`unlink(2)` fallback and TOCTOU rollback race (`SEC-045-02.1`);
+      - Enforced strict fail-closed refusal when `SYS_renameat2(..., RENAME_NOREPLACE)` is unsupported (`EOPNOTSUPP`/`ENOSYS`/`EINVAL`), returning clear localized error messages;
+      - Guaranteed zero foreign file deletion, intact source/destination SHA-256, and verified `.thispc-part` staging cleanup;
+      - Automated verification: `local_transfer` PASS (63 assertions), `local_move` PASS (73 assertions), ASan/UBSan PASS (0 errors), LSan PASS (0 leaks on transfer suites; LSan `NOT VERIFIED` on Qt GUI widget runs with `detect_leaks=0`), production build PASS, full regression 77/77 PASS;
+      - Verified Backup: `/mnt/g/ThisPC backup/ThisPC-0.45.0-Stage5.2.1-FollowUp-2026-11-08/`;
     - **Security Release Gate Status:** **`BLOCKED / FINAL RELEASE VERIFICATION PENDING`** until Stage 5.3 final release verification.
   - **Stage 5.3 — Final Polish, Packaging & Release 0.45.0:** (Planned after Stage 5.2 closure)
 

@@ -30,6 +30,13 @@ static QByteArray fileHash(const QString &path)
     return hash.result();
 }
 
+static bool writeFile(const QString &path, const QByteArray &contents)
+{
+    QFile file(path);
+    return file.open(QIODevice::WriteOnly)
+        && file.write(contents) == contents.size();
+}
+
 template<typename Predicate>
 static bool waitUntil(Predicate predicate, int timeoutMilliseconds)
 {
@@ -348,6 +355,64 @@ int main(int argc, char **argv)
                "SEC-045-02: partial .thispc-part file is removed after collision");
         verify(fileHash(sourcePath) == expectedSourceHash,
                "SEC-045-02: source file SHA-256 remains intact");
+    }
+
+    // SEC-045-02.1: Fail-closed behavior when filesystem does not support RENAME_NOREPLACE.
+    {
+        const QByteArray expectedSourceHash = fileHash(sourcePath);
+        const QString unsupportedDstPath = directory.filePath(QStringLiteral("sec045021-unsupported-dst.bin"));
+        simulateRenameNoReplaceUnsupported() = true;
+
+        LocalFileCopyJob unsupportedCopy(
+            QUrl::fromLocalFile(sourcePath), QUrl::fromLocalFile(unsupportedDstPath),
+            nullptr, 16 * 1024, 1, false);
+        unsupportedCopy.setAutoDelete(false);
+        QSignalSpy unsupportedResult(&unsupportedCopy, &KJob::result);
+        unsupportedCopy.start();
+        verify(waitUntil([&] { return unsupportedResult.count() == 1; }, 10000),
+               "SEC-045-02.1: non-overwrite copy finishes when RENAME_NOREPLACE is unsupported");
+        verify(unsupportedCopy.transferError() == LocalTransferError::Publish
+                   && unsupportedCopy.systemError() == EOPNOTSUPP,
+               "SEC-045-02.1: unsupported RENAME_NOREPLACE reports Publish error with EOPNOTSUPP");
+        verify(unsupportedCopy.errorText().contains(QStringLiteral("nie obsługuje"))
+                   || unsupportedCopy.errorText().contains(QStringLiteral("does not support")),
+               "SEC-045-02.1: unsupported RENAME_NOREPLACE provides clear descriptive error message");
+        verify(!QFileInfo::exists(unsupportedDstPath),
+               "SEC-045-02.1: destination file was never created on unsupported filesystem");
+        verify(!QFileInfo::exists(unsupportedCopy.partialPath()),
+               "SEC-045-02.1: staging .thispc-part file is cleanly removed on unsupported filesystem");
+        verify(fileHash(sourcePath) == expectedSourceHash,
+               "SEC-045-02.1: source file SHA-256 remains intact on unsupported filesystem");
+
+        simulateRenameNoReplaceUnsupported() = false;
+    }
+
+    // SEC-045-02.1: Concurrent destination substitution and foreign file integrity verification.
+    {
+        const QByteArray expectedSourceHash = fileHash(sourcePath);
+        const QString foreignDstPath = directory.filePath(QStringLiteral("sec045021-foreign-dst.bin"));
+        const QByteArray sensitiveBytes("FOREIGN-SENSITIVE-COPY-DEST-045021-DO-NOT-DELETE");
+        verify(writeFile(foreignDstPath, sensitiveBytes), "SEC-045-02.1: sensitive foreign destination created");
+        const QByteArray foreignHashBefore = fileHash(foreignDstPath);
+
+        LocalFileCopyJob foreignCopy(
+            QUrl::fromLocalFile(sourcePath), QUrl::fromLocalFile(foreignDstPath),
+            nullptr, 16 * 1024, 1, false);
+        foreignCopy.setAutoDelete(false);
+        QSignalSpy foreignResult(&foreignCopy, &KJob::result);
+        foreignCopy.start();
+        verify(waitUntil([&] { return foreignResult.count() == 1; }, 10000),
+               "SEC-045-02.1: copy to existing foreign destination finishes");
+        verify(foreignCopy.transferError() == LocalTransferError::DestinationExists
+                   && foreignCopy.systemError() == EEXIST,
+               "SEC-045-02.1: copy reports DestinationExists (EEXIST) without touching foreign file");
+        verify(fileHash(foreignDstPath) == foreignHashBefore
+                   && readFile(foreignDstPath) == sensitiveBytes,
+               "SEC-045-02.1: foreign destination file content and SHA-256 are 100% untouched");
+        verify(!QFileInfo::exists(foreignCopy.partialPath()),
+               "SEC-045-02.1: staging .thispc-part file cleaned up after collision");
+        verify(fileHash(sourcePath) == expectedSourceHash,
+               "SEC-045-02.1: source file SHA-256 remains intact");
     }
 
     qInfo("PASS: %d LocalFileCopyJob assertions", checks);
