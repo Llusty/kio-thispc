@@ -2,6 +2,9 @@
 #pragma once
 
 #include "aclprovider.h"
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 class AclController
 {
@@ -27,7 +30,7 @@ public:
         if ((named && mask != 1) || (!named && mask > 1)) return fail(error, QStringLiteral("Extended ACL requires exactly one mask entry."));
         if (!named && mask == 1) return fail(error, QStringLiteral("Minimal ACL must not contain an orphaned mask."));
         acl_t native = build(entries, error); if (!native) return false;
-        const bool valid = acl_valid(native) == 0; if (!valid && error) *error = QString::fromLocal8Bit(strerror(errno)); acl_free(native); return valid;
+        const bool valid = acl_valid(native) == 0; if (!valid && error) *error = qt_error_string(errno); acl_free(native); return valid;
     }
 
     static Result write(const AclData &requested)
@@ -39,16 +42,72 @@ public:
         if (requested.isDirectory && !validateEntries(requested.defaultEntries, true, &error)) { out.errorMessage = error; return out; }
         if (!requested.isDirectory && !requested.defaultEntries.isEmpty()) { out.errorMessage = QStringLiteral("Default ACL is only valid for directories."); return out; }
         const QByteArray path = QFile::encodeName(requested.path);
+        struct stat st {};
+        if (::lstat(path.constData(), &st) != 0) {
+            out.errorMessage = qt_error_string(errno);
+            return out;
+        }
+        if (S_ISLNK(st.st_mode)) {
+            out.errorMessage = QStringLiteral("Refusing to write ACL to a symbolic link.");
+            return out;
+        }
+        if (bool(S_ISDIR(st.st_mode)) != requested.isDirectory) {
+            out.errorMessage = QStringLiteral("Target file type changed before ACL write.");
+            return out;
+        }
         acl_t access = build(requested.accessEntries, &error);
         if (!access) { out.errorMessage = error; return out; }
-        if (acl_set_file(path.constData(), ACL_TYPE_ACCESS, access) != 0) { out.errorMessage = QString::fromLocal8Bit(strerror(errno)); acl_free(access); return out; }
+        if (!requested.isDirectory) {
+            const int fd = ::open(path.constData(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+            if (fd >= 0) {
+                struct stat fst {};
+                if (::fstat(fd, &fst) != 0 || fst.st_dev != st.st_dev || fst.st_ino != st.st_ino || S_ISLNK(fst.st_mode)) {
+                    ::close(fd);
+                    acl_free(access);
+                    out.errorMessage = QStringLiteral("Target identity changed before ACL write.");
+                    return out;
+                }
+                if (acl_set_fd(fd, access) != 0) {
+                    out.errorMessage = qt_error_string(errno);
+                    ::close(fd);
+                    acl_free(access);
+                    return out;
+                }
+                ::close(fd);
+            } else if (errno == ELOOP) {
+                acl_free(access);
+                out.errorMessage = QStringLiteral("Refusing to write ACL to a symbolic link.");
+                return out;
+            } else {
+                struct stat recheck {};
+                if (::lstat(path.constData(), &recheck) != 0 || S_ISLNK(recheck.st_mode)
+                    || recheck.st_dev != st.st_dev || recheck.st_ino != st.st_ino) {
+                    acl_free(access);
+                    out.errorMessage = QStringLiteral("Target identity changed before ACL write.");
+                    return out;
+                }
+                if (acl_set_file(path.constData(), ACL_TYPE_ACCESS, access) != 0) {
+                    out.errorMessage = qt_error_string(errno);
+                    acl_free(access);
+                    return out;
+                }
+            }
+        } else {
+            if (acl_set_file(path.constData(), ACL_TYPE_ACCESS, access) != 0) { out.errorMessage = qt_error_string(errno); acl_free(access); return out; }
+        }
         acl_free(access);
         if (requested.isDirectory) {
+            struct stat dirCheck {};
+            if (::lstat(path.constData(), &dirCheck) != 0 || S_ISLNK(dirCheck.st_mode)
+                || !S_ISDIR(dirCheck.st_mode) || dirCheck.st_dev != st.st_dev || dirCheck.st_ino != st.st_ino) {
+                out.errorMessage = QStringLiteral("Directory identity changed before default ACL write.");
+                return out;
+            }
             if (requested.defaultEntries.isEmpty()) {
-                if (acl_delete_def_file(path.constData()) != 0 && errno != ENODATA) { out.errorMessage = QString::fromLocal8Bit(strerror(errno)); return out; }
+                if (acl_delete_def_file(path.constData()) != 0 && errno != ENODATA) { out.errorMessage = qt_error_string(errno); return out; }
             } else {
                 acl_t def = build(requested.defaultEntries, &error); if (!def) { out.errorMessage = error; return out; }
-                if (acl_set_file(path.constData(), ACL_TYPE_DEFAULT, def) != 0) { out.errorMessage = QString::fromLocal8Bit(strerror(errno)); acl_free(def); return out; } acl_free(def);
+                if (acl_set_file(path.constData(), ACL_TYPE_DEFAULT, def) != 0) { out.errorMessage = qt_error_string(errno); acl_free(def); return out; } acl_free(def);
             }
         }
         out.data = AclProvider::load(requested.path, true, false, requested.isDirectory, false);
@@ -77,7 +136,7 @@ private:
     static bool fail(QString *error, const QString &message) { if (error) *error = message; return false; }
     static acl_t build(const QList<AclEntryData> &entries, QString *error)
     {
-        acl_t acl = acl_init(entries.size()); if (!acl) { if (error) *error = QString::fromLocal8Bit(strerror(errno)); return nullptr; }
+        acl_t acl = acl_init(entries.size()); if (!acl) { if (error) *error = qt_error_string(errno); return nullptr; }
         for (const auto &item : entries) {
             acl_entry_t entry{}; if (acl_create_entry(&acl, &entry) != 0) { acl_free(acl); return nullptr; }
             acl_tag_t tag = ACL_OTHER; switch (item.tag) { case AclTag::UserObject: tag=ACL_USER_OBJ; break; case AclTag::NamedUser: tag=ACL_USER; break; case AclTag::GroupObject: tag=ACL_GROUP_OBJ; break; case AclTag::NamedGroup: tag=ACL_GROUP; break; case AclTag::Mask: tag=ACL_MASK; break; case AclTag::Other: tag=ACL_OTHER; break; }

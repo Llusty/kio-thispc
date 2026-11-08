@@ -246,38 +246,7 @@ inline QString createExclusiveStagedFile(const QString &finalPath)
 
 inline bool atomicPublishNewFile(const QString &partPath, const QString &finalPath, bool *collisionDetected)
 {
-    if (collisionDetected) *collisionDetected = false;
-    const QByteArray partEncoded = QFile::encodeName(partPath);
-    const QByteArray finalEncoded = QFile::encodeName(finalPath);
-
-#if defined(SYS_renameat2)
-    int rc = ::syscall(SYS_renameat2, AT_FDCWD, partEncoded.constData(),
-                       AT_FDCWD, finalEncoded.constData(), RENAME_NOREPLACE);
-    if (rc == 0) {
-        return true;
-    }
-    if (errno == EEXIST || errno == EBUSY) {
-        if (collisionDetected) *collisionDetected = true;
-        return false;
-    }
-#endif
-
-    struct stat st;
-    if (::lstat(finalEncoded.constData(), &st) == 0) {
-        if (collisionDetected) *collisionDetected = true;
-        return false;
-    }
-
-    if (::link(partEncoded.constData(), finalEncoded.constData()) == 0) {
-        ::unlink(partEncoded.constData());
-        return true;
-    }
-    if (errno == EEXIST) {
-        if (collisionDetected) *collisionDetected = true;
-        return false;
-    }
-
-    return (::rename(partEncoded.constData(), finalEncoded.constData()) == 0);
+    return publishLocalFileNoOverwrite(partPath, finalPath, collisionDetected);
 }
 
 inline bool atomicPublishOverwrite(const QString &partPath, const QString &finalPath,
@@ -303,7 +272,7 @@ inline bool atomicPublishOverwrite(const QString &partPath, const QString &final
             return true;
         }
 
-        return (::rename(partEncoded.constData(), finalEncoded.constData()) == 0);
+        return false;
     } else {
         bool collision = false;
         return atomicPublishNewFile(partPath, finalPath, &collision);

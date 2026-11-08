@@ -150,12 +150,23 @@ private:
             == QStorageInfo(destinationInfo.absolutePath()).device();
         if (!m_overwrite && m_strategy == LocalFileMoveStrategy::Automatic && sameStorage) {
             m_usedAtomicMove = true;
-            if (!QFile::rename(m_source.toLocalFile(), m_destination.toLocalFile())) {
-                m_systemError = errno;
-                finish(LocalFileMoveError::AtomicMove,
-                       QLocale().language() == QLocale::Polish
-                           ? QStringLiteral("Nie można przenieść pliku atomowo.")
-                           : tr("Could not move the file atomically."));
+            bool collision = false;
+            int moveErr = 0;
+            if (!publishLocalFileNoOverwrite(
+                    m_source.toLocalFile(),
+                    m_destination.toLocalFile(),
+                    &collision,
+                    &moveErr)) {
+                m_systemError = moveErr;
+                if (collision) {
+                    finish(LocalFileMoveError::DestinationExists,
+                           tr("The destination already exists."));
+                } else {
+                    finish(LocalFileMoveError::AtomicMove,
+                           QLocale().language() == QLocale::Polish
+                               ? QStringLiteral("Nie można przenieść pliku atomowo.")
+                               : tr("Could not move the file atomically."));
+                }
                 return;
             }
             setProcessedAmount(KJob::Bytes, m_sourceSize);
@@ -192,10 +203,13 @@ private:
                     if (m_finished) return;
                     if (completed->error() != KJob::NoError) {
                         m_systemError = m_copyJob->systemError();
-                        finish(completed->error() == KJob::KilledJobError
-                                   ? LocalFileMoveError::Cancelled
-                                   : LocalFileMoveError::Copy,
-                               completed->errorText());
+                        const LocalFileMoveError moveErr =
+                            completed->error() == KJob::KilledJobError
+                                ? LocalFileMoveError::Cancelled
+                                : (m_copyJob->transferError() == LocalTransferError::DestinationExists
+                                       ? LocalFileMoveError::DestinationExists
+                                       : LocalFileMoveError::Copy);
+                        finish(moveErr, completed->errorText());
                         return;
                     }
                     const QFileInfo sourceInfo(m_source.toLocalFile());

@@ -184,7 +184,7 @@ private:
 
     static QString errorText(int error)
     {
-        return QString::fromLocal8Bit(std::strerror(error));
+        return qt_error_string(error);
     }
 
     void finishOpenFailure(ChecksumData &result, int error)

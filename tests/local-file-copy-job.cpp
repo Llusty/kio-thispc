@@ -312,6 +312,44 @@ int main(int argc, char **argv)
                && !QFileInfo::exists(changedWhilePaused.partialPath()),
            "publication refuses a destination changed during transfer and cleans the partial");
 
+    // SEC-045-02: Atomic no-overwrite publication prevents TOCTOU overwrite when destination
+    // appears while a non-overwrite copy is in flight.
+    {
+        const QByteArray expectedSourceHash = fileHash(sourcePath);
+        const QString raceDstPath = directory.filePath(QStringLiteral("sec04502-race-dst.bin"));
+        LocalFileCopyJob raceCopy(
+            QUrl::fromLocalFile(sourcePath), QUrl::fromLocalFile(raceDstPath),
+            nullptr, 16 * 1024, 1, false);
+        raceCopy.setAutoDelete(false);
+        QSignalSpy raceResult(&raceCopy, &KJob::result);
+        raceCopy.start();
+        verify(waitUntil([&] { return raceCopy.processedAmount(KJob::Bytes) >= 128 * 1024; }, 3000)
+                   && raceCopy.suspend(),
+               "SEC-045-02: non-overwrite copy pauses in flight before publication");
+
+        const QByteArray concurrentBytes("concurrent-target-must-never-be-overwritten-04502");
+        QFile raceTarget(raceDstPath);
+        verify(raceTarget.open(QIODevice::WriteOnly | QIODevice::NewOnly)
+                   && raceTarget.write(concurrentBytes) == concurrentBytes.size(),
+               "SEC-045-02: concurrent destination created while copy is in flight");
+        raceTarget.close();
+        const QByteArray expectedRaceTargetHash = fileHash(raceDstPath);
+
+        verify(raceCopy.resume()
+                   && waitUntil([&] { return raceResult.count() == 1; }, 10000),
+               "SEC-045-02: resumed non-overwrite copy finishes with error");
+        verify(raceCopy.transferError() == LocalTransferError::DestinationExists
+                   && raceCopy.systemError() == EEXIST,
+               "SEC-045-02: atomic RENAME_NOREPLACE reports DestinationExists (EEXIST)");
+        verify(fileHash(raceDstPath) == expectedRaceTargetHash
+                   && readFile(raceDstPath) == concurrentBytes,
+               "SEC-045-02: existing destination file SHA-256 and contents are 100% intact");
+        verify(!QFileInfo::exists(raceCopy.partialPath()),
+               "SEC-045-02: partial .thispc-part file is removed after collision");
+        verify(fileHash(sourcePath) == expectedSourceHash,
+               "SEC-045-02: source file SHA-256 remains intact");
+    }
+
     qInfo("PASS: %d LocalFileCopyJob assertions", checks);
     return 0;
 }

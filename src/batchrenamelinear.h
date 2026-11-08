@@ -106,7 +106,7 @@ inline bool batchRenameLinearMove(const BatchRenameEntry &entry, bool towardsOri
     if (::syscall(SYS_renameat2, directoryFd, sourceBytes.constData(),
                   directoryFd, targetBytes.constData(), RENAME_NOREPLACE) != 0) {
         if (error) *error = QStringLiteral("No-overwrite rename failed: ")
-            + QString::fromLocal8Bit(std::strerror(errno));
+            + qt_error_string(errno);
         return false;
     }
     return true;

@@ -163,7 +163,7 @@ private:
             const QByteArray encoded = QFile::encodeName(path);
             if (::lstat(encoded.constData(), &before) != 0 || !S_ISREG(before.st_mode)) {
                 output.disappeared = errno == ENOENT;
-                output.errorMessage = output.disappeared ? QString() : QString::fromLocal8Bit(std::strerror(errno));
+                output.errorMessage = output.disappeared ? QString() : qt_error_string(errno);
                 return output;
             }
             try {

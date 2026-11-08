@@ -75,5 +75,22 @@ int main(int argc, char **argv)
     AclData ro = AclProvider::load(filePath, true, false, false, true); aclVerify(ro.capability == AclCapability::AvailableReadOnly && !AclController::write(ro).success, "read-only ACL cannot write");
     aclVerify(AclProvider::load(temp.filePath("gone"), true, false, false).capability == AclCapability::Disappeared, "disappeared file classified");
     aclVerify(!QFileInfo::exists(temp.filePath("child")), "ACL operations are not recursive");
+
+    // SEC-045-06: Direct symlink rejection in AclController::write()
+    const QString symPath = temp.filePath("symlink_to_file");
+    aclVerify(QFile::link(filePath, symPath), "SEC-045-06: symlink created for ACL rejection test");
+    struct stat beforeSymStat {};
+    aclVerify(::stat(QFile::encodeName(filePath).constData(), &beforeSymStat) == 0, "SEC-045-06: stat target before symlink ACL write");
+    AclData forgedSymAcl = reducedWrite.data;
+    forgedSymAcl.path = symPath;
+    forgedSymAcl.capability = AclCapability::AvailableReadWrite;
+    forgedSymAcl.accessEntries = AclController::minimalFromMode(0777);
+    const auto symWriteRes = AclController::write(forgedSymAcl);
+    aclVerify(!symWriteRes.success, "SEC-045-06: AclController::write refuses symlink even with AvailableReadWrite");
+    struct stat afterSymStat {};
+    aclVerify(::stat(QFile::encodeName(filePath).constData(), &afterSymStat) == 0
+                  && (beforeSymStat.st_mode & 0777) == (afterSymStat.st_mode & 0777),
+              "SEC-045-06: symlink target mode unchanged after rejected ACL write");
+
     qInfo("PASS: %d ACL assertions; native libacl, validation, effective mask, add/remove, default ACL, reread", aclChecks);
 }

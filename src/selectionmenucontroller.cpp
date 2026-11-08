@@ -306,7 +306,9 @@ void SelectionMenuController::printUrl(const QUrl &url) const
     case PrintableKind::Text: printTextUrl(url); return;
     case PrintableKind::Pdf: {
         const QString okular=QStandardPaths::findExecutable(QStringLiteral("okular"));
-        if (okular.isEmpty() || !QProcess::startDetached(okular,{QStringLiteral("--print"),url.toLocalFile()}))
+        const QString absPath=QFileInfo(url.toLocalFile()).absoluteFilePath();
+        if (okular.isEmpty() || absPath.isEmpty() || !absPath.startsWith(QLatin1Char('/'))
+            || !QProcess::startDetached(okular,{QStringLiteral("--print"),QStringLiteral("--"),absPath}))
             QMessageBox::warning(m_parent,trLocal("Drukowanie","Printing"),trLocal("Nie udało się uruchomić okna drukowania PDF w Okularze.","Could not start the PDF print dialog in Okular."));
         return; }
     default: QMessageBox::information(m_parent,trLocal("Drukowanie","Printing"),trLocal("Ten typ pliku nie ma jeszcze obsługi drukowania.","This file type does not have printing support yet."));
@@ -318,6 +320,7 @@ void SelectionMenuController::setAsDesktopWallpaper(const QUrl &url, const std::
     if (!isLocalImageUrl(url,false)) return;
     const QString executable=QStandardPaths::findExecutable(QStringLiteral("plasma-apply-wallpaperimage"));
     if (executable.isEmpty()) { QMessageBox::information(m_parent,trLocal("Tło pulpitu","Desktop wallpaper"),trLocal("Nie znaleziono narzędzia plasma-apply-wallpaperimage.","plasma-apply-wallpaperimage was not found.")); return; }
-    if (!QProcess::startDetached(executable,{url.toLocalFile()})) { QMessageBox::warning(m_parent,trLocal("Tło pulpitu","Desktop wallpaper"),trLocal("Nie udało się ustawić obrazu jako tła pulpitu.","Could not set the image as the desktop wallpaper.")); return; }
+    const QString absPath=QFileInfo(url.toLocalFile()).absoluteFilePath();
+    if (absPath.isEmpty() || !absPath.startsWith(QLatin1Char('/')) || !QProcess::startDetached(executable,{absPath})) { QMessageBox::warning(m_parent,trLocal("Tło pulpitu","Desktop wallpaper"),trLocal("Nie udało się ustawić obrazu jako tła pulpitu.","Could not set the image as the desktop wallpaper.")); return; }
     status(trLocal("Przekazano obraz do ustawienia jako tło pulpitu.","The image was sent to Plasma as the desktop wallpaper."));
 }

@@ -543,10 +543,10 @@ inline bool promptClearHistoryConfirmation(QWidget *parent = nullptr)
     if (clearHistoryPromptOverrideForTest().has_value()) {
         return *clearHistoryPromptOverrideForTest();
     }
-#endif
     if (qEnvironmentVariableIsSet("THISPC_TEST_HARNESS") || QGuiApplication::platformName() == QStringLiteral("offscreen")) {
         return true;
     }
+#endif
     QMessageBox msgBox(parent);
     msgBox.setObjectName(QStringLiteral("clearHistoryConfirmationBox"));
     msgBox.setIcon(QMessageBox::Question);
@@ -1824,6 +1824,16 @@ public:
         mainLayout->addWidget(m_scrollArea, 1);
     }
 
+    ~TransferQueueViewWidget() override
+    {
+        for (const QPointer<TransferQueueTaskItemWidget> &retired : std::as_const(m_retiredItemWidgets)) {
+            if (retired) {
+                delete retired.data();
+            }
+        }
+        m_retiredItemWidgets.clear();
+    }
+
     void setController(TransferQueueController *controller)
     {
         if (m_controller == controller) {
@@ -1903,6 +1913,11 @@ public:
         const bool hasTasks = !snap.tasks.isEmpty();
         m_emptyLabel->setVisible(!hasTasks);
 
+        m_retiredItemWidgets.erase(
+            std::remove_if(m_retiredItemWidgets.begin(), m_retiredItemWidgets.end(),
+                           [](const QPointer<TransferQueueTaskItemWidget> &w) { return w.isNull(); }),
+            m_retiredItemWidgets.end());
+
         QSet<quint64> currentIds;
         for (const auto &taskSnap : snap.tasks) {
             currentIds.insert(taskSnap.id);
@@ -1910,7 +1925,13 @@ public:
 
         for (auto it = m_itemWidgets.begin(); it != m_itemWidgets.end();) {
             if (!currentIds.contains(it.key())) {
-                delete it.value();
+                if (TransferQueueTaskItemWidget *w = it.value()) {
+                    w->hide();
+                    w->setObjectName(QString());
+                    w->setParent(nullptr);
+                    m_retiredItemWidgets.push_back(w);
+                    w->deleteLater();
+                }
                 it = m_itemWidgets.erase(it);
             } else {
                 ++it;
@@ -2163,4 +2184,5 @@ private:
     QVBoxLayout *m_tasksLayout = nullptr;
     QLabel *m_emptyLabel = nullptr;
     QHash<quint64, TransferQueueTaskItemWidget *> m_itemWidgets;
+    QList<QPointer<TransferQueueTaskItemWidget>> m_retiredItemWidgets;
 };

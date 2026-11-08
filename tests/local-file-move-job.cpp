@@ -241,6 +241,47 @@ int main(int argc, char **argv)
         }
     }
 
+    // SEC-045-02: Atomic no-overwrite publication in LocalFileMoveJob (ForceCopyAndRemove)
+    // preserves both source and concurrently created destination when overwrite = false.
+    {
+        const QString raceMoveSrc = temporary.filePath(QStringLiteral("sec04502-move-src.bin"));
+        const QString raceMoveDst = temporary.filePath(QStringLiteral("sec04502-move-dst.bin"));
+        verify(writeFile(raceMoveSrc, payload), "SEC-045-02: move source created");
+        const QByteArray srcHashBefore = fileHash(raceMoveSrc);
+
+        LocalFileMoveJob raceMove(
+            QUrl::fromLocalFile(raceMoveSrc),
+            QUrl::fromLocalFile(raceMoveDst),
+            nullptr,
+            LocalFileMoveStrategy::ForceCopyAndRemove,
+            16 * 1024,
+            1,
+            {},
+            false);
+        raceMove.setAutoDelete(false);
+        QSignalSpy raceMoveResult(&raceMove, &KJob::result);
+        raceMove.start();
+        verify(waitUntil([&] { return raceMove.processedAmount(KJob::Bytes) >= 128 * 1024; }, 3000)
+                   && raceMove.suspend(),
+               "SEC-045-02: non-overwrite move pauses in flight");
+
+        const QByteArray concurrentTargetBytes("concurrent-move-destination-keep-safe-04502");
+        writeFile(raceMoveDst, concurrentTargetBytes);
+        const QByteArray dstHashBefore = fileHash(raceMoveDst);
+
+        verify(raceMove.resume(), "SEC-045-02: non-overwrite move resumes after destination creation");
+        waitForResult(raceMoveResult, "SEC-045-02: non-overwrite move finishes after collision");
+        verify(raceMove.moveError() == LocalFileMoveError::DestinationExists,
+               "SEC-045-02: non-overwrite move reports DestinationExists on publication collision");
+        verify(QFileInfo::exists(raceMoveSrc) && fileHash(raceMoveSrc) == srcHashBefore,
+               "SEC-045-02: move source file is preserved with identical SHA-256 on collision");
+        verify(QFileInfo::exists(raceMoveDst) && fileHash(raceMoveDst) == dstHashBefore
+                   && readFile(raceMoveDst) == concurrentTargetBytes,
+               "SEC-045-02: concurrent destination file is preserved with identical SHA-256");
+        verify(!QFileInfo::exists(raceMoveDst + QStringLiteral(".thispc-part")),
+               "SEC-045-02: move partial .thispc-part is cleaned up after collision");
+    }
+
     qInfo("PASS: %d LocalFileMoveJob/history assertions", checks);
     return 0;
 }

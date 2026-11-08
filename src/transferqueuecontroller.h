@@ -185,7 +185,7 @@ public:
         int insertIdx = m_queuedOrder.size();
         for (int i = 0; i < m_queuedOrder.size(); ++i) {
             const Task *other = find(m_queuedOrder.at(i));
-            if (other && static_cast<int>(other->desc.priority) < static_cast<int>(descriptor.priority)) {
+            if (other && static_cast<int>(other->desc.priority) < static_cast<int>(task->desc.priority)) {
                 insertIdx = i;
                 break;
             }

@@ -117,7 +117,7 @@ public:
             result.partialReason = (err == EACCES || err == EPERM)
                 ? FolderSizePartialReason::PermissionDenied
                 : FolderSizePartialReason::EntryDisappeared;
-            result.errorMessage = QString::fromUtf8(std::strerror(err));
+            result.errorMessage = qt_error_string(err);
             return result;
         }
 
@@ -156,7 +156,7 @@ public:
             result.partialReason = (err == EACCES || err == EPERM)
                 ? FolderSizePartialReason::PermissionDenied
                 : FolderSizePartialReason::EntryDisappeared;
-            result.errorMessage = QString::fromUtf8(std::strerror(err));
+            result.errorMessage = qt_error_string(err);
             return result;
         }
 

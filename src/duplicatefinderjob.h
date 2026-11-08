@@ -139,11 +139,11 @@ private:
 
         m_runId++; // Invalidates callbacks from any running job
 
-        if (m_activeJob) {
-            m_activeJob->disconnect(this);
-            m_activeJob->cancel();
-            m_activeJob->deleteLater();
-            m_activeJob = nullptr;
+        if (ChecksumJob *job = m_activeJob.data()) {
+            m_activeJob.clear();
+            job->disconnect(this);
+            job->cancel();
+            job->deleteLater();
         }
 
         m_queue.clear();

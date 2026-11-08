@@ -513,7 +513,7 @@ inline bool batchRenameAtomicSwap(const BatchRenamePlan &plan, int left, int rig
                   AT_FDCWD, pathB.constData(), RENAME_EXCHANGE) != 0) {
         return fail(trLocal("Atomowa zamiana nie powiodła się: ",
                             "Atomic exchange failed: ")
-                    + QString::fromLocal8Bit(std::strerror(errno)));
+                    + qt_error_string(errno));
     }
     if (batchRenamePathHasOriginalIdentity(a, b.source)
         && batchRenamePathHasOriginalIdentity(b, a.source)) return true;
@@ -572,7 +572,7 @@ inline bool batchRenameRecordedSwap(const BatchRenameEntry &expectedAtLeft,
     if (::syscall(SYS_renameat2, AT_FDCWD, a.constData(),
                   AT_FDCWD, b.constData(), RENAME_EXCHANGE) != 0)
         return fail(trLocal("Nie udało się zamienić nazw: ", "Name exchange failed: ")
-                    + QString::fromLocal8Bit(std::strerror(errno)));
+                    + qt_error_string(errno));
     if (batchRenameSnapshotAt(expectedAtLeft, rightPath)
         && batchRenameSnapshotAt(expectedAtRight, leftPath))
         return true;
@@ -663,7 +663,7 @@ inline bool batchRenameCycleExchange(const BatchRenamePlan &plan, const QList<in
     if (::syscall(SYS_renameat2, AT_FDCWD, pivot.constData(),
                   AT_FDCWD, other.constData(), RENAME_EXCHANGE) != 0) {
         return fail(trLocal("Wymiana w cyklu nie powiodła się: ", "Cycle exchange failed: ")
-                    + QString::fromLocal8Bit(std::strerror(errno)));
+                    + qt_error_string(errno));
     }
     std::swap(state.occupants[0], state.occupants[step + 1]);
     if (!batchRenameCycleMatches(plan, cycle, state)) {

@@ -2040,6 +2040,25 @@ public:
                 });
         }
 
+        m_rebuildTimer = new QTimer(this);
+        m_rebuildTimer->setSingleShot(true);
+        m_rebuildTimer->setInterval(120);
+        connect(m_rebuildTimer, &QTimer::timeout, this, [this] {
+            m_rebuildScheduled = false;
+            if (m_scheduledRebuildGeneration != m_rebuildGeneration) {
+                return;
+            }
+            if (m_pointerInteraction
+                || QGuiApplication::mouseButtons() != Qt::NoButton) {
+                m_rebuildDeferredByPointer = true;
+                scheduleRebuild();
+                return;
+            }
+            if (isVisible()) {
+                rebuild();
+            }
+        });
+
         if (m_manager && m_manager->queueController()) {
             setQueueController(m_manager->queueController());
         }
@@ -2051,7 +2070,19 @@ public:
 
     ~OperationWindow() override
     {
+        if (m_rebuildTimer) {
+            m_rebuildTimer->stop();
+        }
+        m_rebuildScheduled = false;
+        m_rebuildDeferredByPointer = false;
+        m_pointerInteraction = false;
         clearRetryWatcher();
+        for (const QPointer<QWidget> &retired : std::as_const(m_retiredWidgets)) {
+            if (retired) {
+                delete retired.data();
+            }
+        }
+        m_retiredWidgets.clear();
         if (m_manager && m_manager->detailedWindow() == this) {
             m_manager->setDetailedWindow(nullptr);
         }
@@ -2351,10 +2382,29 @@ public:
 
     void rebuild()
     {
+        if (m_rebuildTimer && m_rebuildTimer->isActive()) {
+            m_rebuildTimer->stop();
+        }
+        m_rebuildScheduled = false;
+        m_rebuildDeferredByPointer = false;
+        m_pointerInteraction = false;
+        ++m_rebuildGeneration;
+
+        m_retiredWidgets.erase(
+            std::remove_if(m_retiredWidgets.begin(), m_retiredWidgets.end(),
+                           [](const QPointer<QWidget> &w) { return w.isNull(); }),
+            m_retiredWidgets.end());
+
         const int prevScroll = m_scrollArea->verticalScrollBar()->value();
 
         while (QLayoutItem *child = m_listLayout->takeAt(0)) {
-            delete child->widget();
+            if (QWidget *w = child->widget()) {
+                w->hide();
+                w->setObjectName(QString());
+                w->setParent(nullptr);
+                m_retiredWidgets.push_back(w);
+                w->deleteLater();
+            }
             delete child;
         }
 
@@ -2897,12 +2947,24 @@ protected:
 
     void hideEvent(QHideEvent *event) override
     {
+        if (m_rebuildTimer && m_rebuildTimer->isActive()) {
+            m_rebuildTimer->stop();
+        }
+        m_rebuildScheduled = false;
+        m_rebuildDeferredByPointer = false;
+        m_pointerInteraction = false;
         clearRetryWatcher();
         QWidget::hideEvent(event);
     }
 
     void closeEvent(QCloseEvent *event) override
     {
+        if (m_rebuildTimer && m_rebuildTimer->isActive()) {
+            m_rebuildTimer->stop();
+        }
+        m_rebuildScheduled = false;
+        m_rebuildDeferredByPointer = false;
+        m_pointerInteraction = false;
         clearRetryWatcher();
         QSettings settings;
         settings.setValue(QStringLiteral("operationWindow/geometry"), saveGeometry());
@@ -2919,21 +2981,17 @@ protected:
 public:
     void scheduleRebuild()
     {
-        if (m_rebuildScheduled) {
+        if (m_pointerInteraction) {
+            m_rebuildDeferredByPointer = true;
+        }
+        if (m_rebuildScheduled && m_rebuildTimer && m_rebuildTimer->isActive()) {
             return;
         }
         m_rebuildScheduled = true;
-        QTimer::singleShot(120, this, [this] {
-            m_rebuildScheduled = false;
-            if (m_pointerInteraction
-                || QGuiApplication::mouseButtons() != Qt::NoButton) {
-                scheduleRebuild();
-                return;
-            }
-            if (isVisible()) {
-                rebuild();
-            }
-        });
+        m_scheduledRebuildGeneration = m_rebuildGeneration;
+        if (m_rebuildTimer) {
+            m_rebuildTimer->start(120);
+        }
     }
 
     void updateQueueTaskProgressInPlace(quint64 id, quint64 processed, quint64 total, int percent)
@@ -3310,7 +3368,10 @@ private:
             this,
             [this] {
                 m_pointerInteraction = false;
-                scheduleRebuild();
+                if (m_rebuildDeferredByPointer) {
+                    m_rebuildDeferredByPointer = false;
+                    scheduleRebuild();
+                }
             });
     }
 
@@ -4391,7 +4452,12 @@ private:
     QSet<QString> m_dismissedHistoryUuids;
     QPointer<TransferHistoryManager> m_explicitHistoryManager;
     bool m_rebuildScheduled = false;
+    bool m_rebuildDeferredByPointer = false;
     bool m_pointerInteraction = false;
+    quint64 m_rebuildGeneration = 0;
+    quint64 m_scheduledRebuildGeneration = 0;
+    QTimer *m_rebuildTimer = nullptr;
+    QList<QPointer<QWidget>> m_retiredWidgets;
     QFileSystemWatcher *m_retryWatcher = nullptr;
     QTimer *m_retryDebounceTimer = nullptr;
 };

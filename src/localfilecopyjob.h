@@ -149,16 +149,19 @@ public Q_SLOTS:
                             tr("The destination changed or is the source file."));
             return;
         }
-        if (!m_overwrite && QFileInfo::exists(m_destinationPath)) {
+        if (!m_overwrite
+            && (QFileInfo::exists(m_destinationPath) || QFileInfo(m_destinationPath).isSymLink())) {
             finishWithError(
                 LocalTransferError::DestinationExists,
-                tr("The destination already exists."));
+                tr("The destination already exists."),
+                EEXIST);
             return;
         }
-        if (QFileInfo::exists(m_partialPath)) {
+        if (QFileInfo::exists(m_partialPath) || QFileInfo(m_partialPath).isSymLink()) {
             finishWithError(
                 LocalTransferError::PartialExists,
-                tr("A partial destination already exists."));
+                tr("A partial destination already exists."),
+                EEXIST);
             return;
         }
         if (!destination.open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
@@ -171,6 +174,7 @@ public Q_SLOTS:
                 err);
             return;
         }
+        const LocalFileIdentity partialIdentity = LocalFileIdentity::read(m_partialPath);
 
         const qulonglong total = static_cast<qulonglong>(source.size());
         Q_EMIT totalBytesKnown(total);
@@ -198,7 +202,7 @@ public Q_SLOTS:
                 if (source.error() != QFile::NoError) {
                     const int err = errno;
                     destination.close();
-                    QFile::remove(m_partialPath);
+                    removeVerifiedPartial(m_partialPath, partialIdentity);
                     finishWithError(
                         LocalTransferError::SourceRead,
                         source.errorString(),
@@ -217,7 +221,7 @@ public Q_SLOTS:
                     const int writeErrorNumber = errno;
                     const QString error = destination.errorString();
                     destination.close();
-                    QFile::remove(m_partialPath);
+                    removeVerifiedPartial(m_partialPath, partialIdentity);
                     finishWithError(
                         classifyWriteError(writeErrorNumber),
                         error);
@@ -261,7 +265,7 @@ public Q_SLOTS:
         if (cancelRequested()) {
             destination.close();
             source.close();
-            QFile::remove(m_partialPath);
+            removeVerifiedPartial(m_partialPath, partialIdentity);
             markFinished();
             Q_EMIT cancelled();
             return;
@@ -279,7 +283,7 @@ public Q_SLOTS:
         destination.close();
         source.close();
         if (!metadataApplied) {
-            QFile::remove(m_partialPath);
+            removeVerifiedPartial(m_partialPath, partialIdentity);
             finishWithError(
                 LocalTransferError::Metadata,
                 tr("Could not preserve file metadata."));
@@ -288,7 +292,7 @@ public Q_SLOTS:
         QMutexLocker publicationLocker(&m_mutex);
         if (m_cancelRequested) {
             publicationLocker.unlock();
-            QFile::remove(m_partialPath);
+            removeVerifiedPartial(m_partialPath, partialIdentity);
             markFinished();
             Q_EMIT cancelled();
             return;
@@ -296,7 +300,7 @@ public Q_SLOTS:
         if (m_overwrite) {
             if (!m_originalDestination.matches(m_destinationPath)
                 || !exchangeLocalFiles(m_partialPath, m_destinationPath)) {
-                QFile::remove(m_partialPath);
+                removeVerifiedPartial(m_partialPath, partialIdentity);
                 publicationLocker.unlock();
                 finishWithError(LocalTransferError::Publish,
                                 tr("Could not safely replace the destination; the existing file was retained."));
@@ -307,7 +311,7 @@ public Q_SLOTS:
             if (!m_originalDestination.matches(m_partialPath)
                 || (!m_retainOverwrittenDestination && !QFile::remove(m_partialPath))) {
                 const bool restored = exchangeLocalFiles(m_partialPath, m_destinationPath);
-                if (restored) QFile::remove(m_partialPath);
+                if (restored) removeVerifiedPartial(m_partialPath, partialIdentity);
                 publicationLocker.unlock();
                 finishWithError(LocalTransferError::Publish,
                                 restored
@@ -315,13 +319,25 @@ public Q_SLOTS:
                                     : tr("Could not restore the destination. Recovery data remains at %1.").arg(m_partialPath));
                 return;
             }
-        } else if (!QFile::rename(m_partialPath, m_destinationPath)) {
-            QFile::remove(m_partialPath);
-            publicationLocker.unlock();
-            finishWithError(
-                LocalTransferError::Publish,
-                tr("Could not publish the completed file."));
-            return;
+        } else {
+            bool collision = false;
+            int publishErr = 0;
+            if (!publishLocalFileNoOverwrite(m_partialPath, m_destinationPath, &collision, &publishErr)) {
+                removeVerifiedPartial(m_partialPath, partialIdentity);
+                publicationLocker.unlock();
+                if (collision) {
+                    finishWithError(
+                        LocalTransferError::DestinationExists,
+                        tr("The destination already exists."),
+                        EEXIST);
+                } else {
+                    finishWithError(
+                        LocalTransferError::Publish,
+                        tr("Could not publish the completed file."),
+                        publishErr);
+                }
+                return;
+            }
         }
         m_finished = true;
         m_pauseAcknowledged = false;
@@ -359,6 +375,13 @@ private:
         QFileDevice::FileTime type)
     {
         return !time.isValid() || file.setFileTime(time, type);
+    }
+
+    static void removeVerifiedPartial(const QString &partialPath, const LocalFileIdentity &expectedIdentity)
+    {
+        if (!expectedIdentity.valid || expectedIdentity.sameFile(LocalFileIdentity::read(partialPath))) {
+            QFile::remove(partialPath);
+        }
     }
 
     void finishWithError(LocalTransferError error, const QString &message, int systemError = 0)

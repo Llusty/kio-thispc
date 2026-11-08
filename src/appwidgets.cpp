@@ -38,10 +38,14 @@ void openInDolphin(const QUrl &url)
         return;
     }
 
-    const QString argument =
-        url.isLocalFile() ? url.toLocalFile() : url.toString();
+    const QString argument = url.isLocalFile()
+        ? QFileInfo(url.toLocalFile()).absoluteFilePath()
+        : url.toString();
+    if (argument.isEmpty() || (!url.isLocalFile() && argument.startsWith(QLatin1Char('-')))) {
+        return;
+    }
 
-    if (!QProcess::startDetached(QStringLiteral("dolphin"), {argument})) {
+    if (!QProcess::startDetached(QStringLiteral("dolphin"), {QStringLiteral("--"), argument})) {
         QDesktopServices::openUrl(url);
     }
 }

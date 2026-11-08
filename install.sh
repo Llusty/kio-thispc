@@ -26,8 +26,7 @@ if command -v kbuildsycoca6 >/dev/null 2>&1; then
     kbuildsycoca6 --noincremental >/dev/null 2>&1 || true
 fi
 
-pkill -f '/kf6/kio/thispc' 2>/dev/null || true
-pkill -f 'kio_thispc' 2>/dev/null || true
+pkill -f '(kioworker|kioslave5?).*thispc\.so' 2>/dev/null || true
 
 echo
 echo "Gotowe."

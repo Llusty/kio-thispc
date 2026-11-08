@@ -561,7 +561,26 @@ When standard operations receive permission denied errors, provide targeted `adm
   - Live `QFileSystemWatcher` integration in open `OperationWindow` dynamically updates button availability and tooltip when destination files/directories are removed or restored;
   - Automated verification: Scenarios A–L PASS (203 `operations` assertions), full regression 77/77 suites PASS, Stage 4 XDG isolation 9/9 PASS;
   - Manual Acceptance (8/8 PASS — Nov 8, 2026): A (Completed Copy single file), B (Completed Move single file), C (archival history after restart), D (multi-file copy with clean selection), E (live target file removal and restoration), F (live destination directory removal and restoration), G (Primary/Split View strict independence), H (H.1 Failed without Show in Folder + H.2 controlled 32 MiB Cancelled without Show in Folder or Retry, verified disk integrity, zero `.thispc-part` leftovers, and persisted `Cancelled` history record).
-- **Stage 5 — Polish, Packaging & Release 0.45.0:** (Planned)
+- **Stage 5 — Security Audit, Remediation, Polish, Packaging & Release 0.45.0:** (In Progress)
+  - **Stage 5.1 — Comprehensive Security Audit:** ✅ COMPLETED (`docs/SECURITY_AUDIT_045.md`) — Independent manual and automated security audit (`GCC 16.2.1 -Wall -Wextra -Wformat=2 -Wundef`, `clang-tidy 23.1.4`, `ASan` + `UBSan`) across the entire ThisPC codebase (Areas A–G) and formal 9-vector threat model:
+    - Confirmed **0 `CRITICAL`**, **0 `HIGH`**, and **0 malicious code / backdoor** findings;
+    - Identified **2 `MEDIUM`** findings (`SEC-045-01`: `heap-use-after-free` in `OperationWindow::rebuild()` when an uncancelled 120 ms `scheduleRebuild()` timer overlaps synchronous `rebuild()`; `SEC-045-02`: non-overwrite publication in `LocalFileCopyWorker` and `LocalFileMoveJob` using `QFile::rename` instead of `RENAME_NOREPLACE`) and **6 `LOW`** hardening items (`SEC-045-03`..`SEC-045-08`);
+    - **Security Release Gate Verdict (Stage 5.1):** **`BLOCKED`** pending Stage 5.2 remediation and regression verification.
+  - **Stage 5.2 — Security Remediation & Hardening:** ✅ CLOSED / AUTOMATED PASS / MANUAL ACCEPTED (4/4) / BACKED UP / COMMITTED / PUSHED — All 8 findings (`SEC-045-01`..`SEC-045-08`) fully addressed:
+    - Fixed `heap-use-after-free` in `OperationWindow` / `TransferQueueViewWidget` via dedicated timer cancellation, generation counters, detached widgets, and `deleteLater()` (`SEC-045-01`);
+    - Implemented atomic `publishLocalFileNoOverwrite()` using `SYS_renameat2(..., RENAME_NOREPLACE)` and atomic link/unlink fallback in `LocalFileCopyWorker`, `LocalFileMoveJob`, and `kiostagedtransferjob.h` (`SEC-045-02`);
+    - Hardened atomic rollback: link/unlink fallback verifies `st_dev` and `st_ino` identity before unlinking destination; directory moves without `RENAME_NOREPLACE` fail closed (`EINVAL`) rather than falling back to non-atomic overwrites;
+    - Fixed use-after-move in `TransferQueueController::enqueue` (`SEC-045-03`);
+    - Wrapped runtime `THISPC_TEST_HARNESS` checks in `#ifdef THISPC_TEST_HARNESS` (`SEC-045-04`);
+    - Hardened external process argument handling with `--` and absolute paths in `thispcview.cpp`, `appwidgets.cpp`, and `selectionmenucontroller.cpp` (`SEC-045-05`);
+    - Hardened `AclController::write()` with symlink rejection, descriptor identity checks, and `BatchRenameRecoveryGate` mutation gating (`SEC-045-06`);
+    - Hardened `uninstall.sh` with strict path whitelisting, directory traversal rejection, and staging root support (`SEC-045-07`);
+    - Added `m_details` null check, `m_activeJob` safe cancellation copy, and thread-safe `qt_error_string()` across worker threads (`SEC-045-08`);
+    - Automated verification: production build PASS, strict GCC 16.2.1 build PASS, `clang-tidy` PASS (with accepted informational `cert-err33-c` notes documented), 19/19 `ASan + UBSan` suites PASS (0 errors), 77/77 full regression suites PASS, isolated uninstall tests PASS;
+    - Manual Acceptance (4/4 PASS — Nov 8, 2026): 1. `OperationWindow` stability under rapid details toggle PASS; 2. Destination name conflict resolution, intact SHA-256, zero `.thispc-part` leftovers PASS; 3. Show in Folder on hardened transfers PASS; 4. `THISPC_TEST_HARNESS=1` production isolation PASS;
+    - Verified Backup: `/mnt/g/ThisPC backup/ThisPC-0.45.0-Stage5.2-ManualAccepted-2026-11-08/`;
+    - **Security Release Gate Status:** **`BLOCKED / FINAL RELEASE VERIFICATION PENDING`** until Stage 5.3 final release verification.
+  - **Stage 5.3 — Final Polish, Packaging & Release 0.45.0:** (Planned after Stage 5.2 closure)
 
 ### 0.45.0 — Security Release Gate
 - Prior to official release, a mandatory comprehensive security audit is required, covering unauthorized code execution, potential backdoors, administrative privilege escalation, third-party dependencies, installer integrity, and file operation safety;

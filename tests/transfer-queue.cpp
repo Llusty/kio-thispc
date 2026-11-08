@@ -9680,6 +9680,136 @@ int main(int argc, char **argv)
         verify(ctl.isShuttingDown(), "S3-26.2: Controller shutdown begins cleanly");
     }
 
+    // -----------------------------------------------------------------
+    // Stage 5.2 Security Remediation Regression: SEC-045-01 & SEC-045-03
+    // -----------------------------------------------------------------
+    {
+        // SEC-045-01: Overlapping scheduleRebuild() timer (>120ms) and synchronous rebuild()
+        // followed by button clicks (detailsToggle, remove) must never cause heap-use-after-free.
+        QMainWindow secMainWin;
+        QToolBar secTb(&secMainWin);
+        OperationManager secMgr(&secMainWin, &secTb, &secMainWin);
+        TransferQueueController secCtl;
+        secCtl.setExecutionMode(TransferQueueMode::Sequential);
+        secMgr.setQueueController(&secCtl);
+
+        OperationWindow secWin(&secMgr, &secMainWin);
+        secWin.setQueueController(&secCtl);
+        secWin.show();
+        QCoreApplication::processEvents();
+
+        QList<QueueFakeJob *> secJobs;
+        for (int i = 0; i < 6; ++i) {
+            auto *fj = new QueueFakeJob(true, true, false);
+            secJobs.push_back(fj);
+            secMgr.track(fj, QStringLiteral("SecOp_%1.bin").arg(i));
+        }
+        // Trigger scheduleRebuild() via finish(), then immediately call synchronous rebuild()
+        // and wait 150ms (> 120ms timer window) before clicking detailsToggle.
+        secMgr.finish(secJobs[0], true, false, {});
+        secWin.scheduleRebuild();
+        secWin.rebuild();
+
+        auto *rowBeforeWait = secWin.findChild<QFrame *>(QStringLiteral("operationRow"));
+        verify(rowBeforeWait != nullptr, "SEC-045-01.1: operationRow exists before 150ms timer window");
+        auto *toggleBeforeWait = rowBeforeWait->findChild<QToolButton *>(QStringLiteral("operationDetailsToggleButton"));
+        verify(toggleBeforeWait != nullptr, "SEC-045-01.2: operationDetailsToggleButton exists before 150ms wait");
+
+        QTest::qWait(150);
+        QCoreApplication::processEvents();
+
+        // toggleBeforeWait must still be alive and safe to click because synchronous rebuild()
+        // cancelled the pending 120ms timer and retired old widgets via deleteLater().
+        toggleBeforeWait->click();
+        QCoreApplication::processEvents();
+        QTest::qWait(150);
+        QCoreApplication::processEvents();
+        toggleBeforeWait->click();
+        QCoreApplication::processEvents();
+        verify(secWin.isVisible(), "SEC-045-01.3: OperationWindow survives overlapping rebuild timer and toggle clicks without UAF");
+
+        // Also verify TransferQueueViewWidget::rebuildTasks() safe deferred deletion
+        const QString secSrc1 = base + TQ_S("/sec_q1.bin");
+        const QString secDst1 = base + TQ_S("/sec_dst1");
+        QDir().mkpath(secDst1);
+        {
+            QFile f(secSrc1);
+            verify(f.open(QIODevice::WriteOnly) && f.write("sec") == 3, "SEC-045-01.4a: created sec_q1.bin");
+        }
+        QPointer<QueueFakeJob> qJob1;
+        TransferTaskDescriptor qd1;
+        qd1.title = TQ_S("sec_q1");
+        qd1.type = TransferOperationType::Copy;
+        qd1.backend = TransferBackendKind::LocalNative;
+        qd1.capabilities = defaultTransferCapabilities(qd1.backend, qd1.type);
+        qd1.sources = {QUrl::fromLocalFile(secSrc1)};
+        qd1.destination = QUrl::fromLocalFile(secDst1);
+        qd1.jobFactory = [&qJob1]() -> KJob * {
+            qJob1 = new QueueFakeJob(true, true, true);
+            return qJob1.data();
+        };
+        const auto qr1 = secCtl.enqueue(qd1);
+        verify(qr1.accepted(), "SEC-045-01.4: queue task enqueued for view rebuild test");
+        QCoreApplication::processEvents();
+        if (qJob1) {
+            qJob1->finishOk();
+        }
+        QCoreApplication::processEvents();
+        secCtl.removeFinishedTask(qr1.id);
+        QCoreApplication::processEvents();
+        verify(secWin.queueViewWidget() != nullptr, "SEC-045-01.5: TransferQueueViewWidget rebuilds tasks safely via deleteLater");
+
+        secWin.hide();
+        for (int i = 1; i < secJobs.size(); ++i) {
+            secMgr.finish(secJobs[i], false, true, {});
+        }
+        qDeleteAll(secJobs);
+        QCoreApplication::processEvents();
+
+        // SEC-045-03: Enqueue with rvalue descriptor preserves priority ordering without use-after-move
+        TransferQueueController prioCtl;
+        prioCtl.setDispatchPaused(true);
+        auto makePrioDesc = [&](const QString &name, TransferPriority prio) {
+            const QString pSrc = base + TQ_S("/") + name;
+            const QString pDst = base + TQ_S("/prio_dst_") + name;
+            QDir().mkpath(pDst);
+            QFile f(pSrc);
+            if (f.open(QIODevice::WriteOnly)) {
+                f.write("prio");
+                f.close();
+            }
+            TransferTaskDescriptor d;
+            d.title = name;
+            d.type = TransferOperationType::Copy;
+            d.backend = TransferBackendKind::LocalNative;
+            d.capabilities = defaultTransferCapabilities(d.backend, d.type);
+            d.priority = prio;
+            d.sources = {QUrl::fromLocalFile(pSrc)};
+            d.destination = QUrl::fromLocalFile(pDst);
+            d.jobFactory = []() -> KJob * {
+                return new QueueFakeJob(true, true, true);
+            };
+            return d;
+        };
+        const auto prLow = prioCtl.enqueue(makePrioDesc(TQ_S("low.txt"), TransferPriority::Low));
+        const auto prNorm = prioCtl.enqueue(makePrioDesc(TQ_S("norm.txt"), TransferPriority::Normal));
+        const auto prHigh = prioCtl.enqueue(makePrioDesc(TQ_S("high.txt"), TransferPriority::High));
+        verify(prLow.accepted() && prNorm.accepted() && prHigh.accepted(),
+               "SEC-045-03.1: Low, Normal, High priority descriptors accepted");
+        const auto qSnap = prioCtl.snapshot();
+        verify(qSnap.tasks.size() == 3, "SEC-045-03.2: 3 tasks in snapshot");
+        int posHigh = -1, posNorm = -1, posLow = -1;
+        for (const auto &t : qSnap.tasks) {
+            if (t.id == prHigh.id) posHigh = t.queuePosition;
+            if (t.id == prNorm.id) posNorm = t.queuePosition;
+            if (t.id == prLow.id) posLow = t.queuePosition;
+        }
+        verify(posHigh == 1 && posNorm == 2 && posLow == 3,
+               "SEC-045-03.3: queuePosition strictly ordered High (1) -> Normal (2) -> Low (3) without use-after-move");
+        prioCtl.cancelAll();
+        QCoreApplication::processEvents();
+    }
+
     // S7-15: Final Stage 7 check counter
     {
         verify(checks > 2180, "S7-15: Stage 7 verification checks augmented");

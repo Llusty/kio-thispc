@@ -663,7 +663,26 @@ Gdy zwykła operacja plikowa zakończy się błędem braku uprawnień (Permissio
   - Integracja na żywo z `QFileSystemWatcher` w otwartym oknie `OperationWindow`, aktualizująca stan przycisku i podpowiedź (tooltip) po usunięciu lub przywróceniu pliku lub katalogu docelowego;
   - Weryfikacja automatyczna: Scenariusze A–L PASS (203 asercje `operations`), pełna regresja 77/77 zestawów PASS, izolacja środowiskowa XDG Stage 4 9/9 PASS;
   - Odbiór manualny użytkownika (8/8 PASS — 8 listopada 2026 r.): A (Completed Copy pojedynczego pliku), B (Completed Move pojedynczego pliku), C (historia po restarcie aplikacji), D (kopiowanie wielu plików z czystym zaznaczeniem), E (zniknięcie i przywrócenie pliku docelowego na żywo), F (zniknięcie i przywrócenie katalogu docelowego na żywo), G (niezależność Primary/Split View), H (H.1 Failed bez przycisku „Pokaż w folderze” + H.2 kontrolowany Cancelled 32 MiB bez przycisków „Pokaż w folderze” i „Ponów”, potwierdzona integralność dysku, brak pozostałości `.thispc-part` oraz zapisany rekord `Cancelled` w historii).
-- **Etap 5 — Szlif końcowy, pakietyzacja i wydanie 0.45.0:** (Planowane)
+- **Etap 5 — Audyt bezpieczeństwa, remediacja, szlif końcowy, pakietyzacja i wydanie 0.45.0:** (W toku)
+  - **Etap 5.1 — Kompleksowy audyt bezpieczeństwa (Comprehensive Security Audit):** ✅ UKOŃCZONY (`docs/SECURITY_AUDIT_045.md`) — Niezależny manualny i automatyczny audyt bezpieczeństwa (`GCC 16.2.1 -Wall -Wextra -Wformat=2 -Wundef`, `clang-tidy 23.1.4`, `ASan` + `UBSan`) całej bazy kodowej ThisPC (Obszary A–G) wraz z 9-punktowym modelem zagrożeń:
+    - Potwierdzono **0 luk `CRITICAL`**, **0 luk `HIGH`** oraz **całkowity brak złośliwego kodu / backdoorów**;
+    - Zidentyfikowano **2 znaleziska `MEDIUM`** (`SEC-045-01`: ryzyko `heap-use-after-free` w `OperationWindow::rebuild()` przy nałożeniu się nieanulowanego timera 120 ms z `scheduleRebuild()` na synchroniczne `rebuild()`; `SEC-045-02`: publikacja w trybie bez nadpisywania w `LocalFileCopyWorker` i `LocalFileMoveJob` używająca `QFile::rename` zamiast `RENAME_NOREPLACE`) oraz **6 usprawnień utwardzających `LOW`** (`SEC-045-03`..`SEC-045-08`);
+    - **Werdykt Security Release Gate (Stage 5.1):** **`BLOCKED` (ZABLOKOWANY)** do czasu wdrożenia i weryfikacji poprawek w Etapie 5.2.
+  - **Etap 5.2 — Remediacja bezpieczeństwa i utwardzenie (Security Remediation & Hardening):** ✅ ZAMKNIĘTY / AUTOMATED PASS / MANUAL ACCEPTED (4/4) / BACKED UP / COMMITTED / PUSHED — Wszystkie 8 zgłoszonych podatności (`SEC-045-01`..`SEC-045-08`) naprawione i zweryfikowane:
+    - Wyeliminowano `heap-use-after-free` w `OperationWindow` / `TransferQueueViewWidget` poprzez zatrzymywanie timera, liczniki generacji, odpinanie widżetów i `deleteLater()` (`SEC-045-01`);
+    - Zaimplementowano atomową funkcję `publishLocalFileNoOverwrite()` z `SYS_renameat2(..., RENAME_NOREPLACE)` bez fallbacku do nadpisującego `rename(2)` (`SEC-045-02`);
+    - Utwardzono wycofywanie (rollback): fallback link/unlink weryfikuje tożsamość `st_dev` i `st_ino` przed usunięciem celu; przenoszenie katalogów bez wsparcia `RENAME_NOREPLACE` kończy się bezpieczną odmową (`EINVAL`) zamiast nieatomowego nadpisania;
+    - Poprawiono błąd use-after-move w `TransferQueueController::enqueue` (`SEC-045-03`);
+    - Objęto runtime'owe sprawdzenia `THISPC_TEST_HARNESS` dyrektywą `#ifdef THISPC_TEST_HARNESS` (`SEC-045-04`);
+    - Utwardzono wywołania procesów zewnętrznych za pomocą separatora `--` i ścieżek bezwzględnych (`SEC-045-05`);
+    - Utwardzono zapis ACL przed symlinkami i dodano bramkę `BatchRenameRecoveryGate` (`SEC-045-06`);
+    - Utwardzono `uninstall.sh` o ścisłą białą listę plików, zakaz `..` i wsparcie izolowanego roota testowego (`SEC-045-07`);
+    - Dodano null-check w `m_details`, zabezpieczono anulowanie w `DuplicateFinderJob` i wprowadzono wielowątkowy `qt_error_string()` (`SEC-045-08`);
+    - Weryfikacja automatyczna: build produkcyjny PASS, ścisły build GCC 16.2.1 PASS, `clang-tidy` PASS (z udokumentowanymi uwagami informacyjnymi `cert-err33-c`), 19/19 zestawów `ASan + UBSan` PASS (0 błędów), 77/77 pełna regresja PASS, test deinstalacji PASS;
+    - Odbiór manualny użytkownika (4/4 FULL PASS — 8 listopada 2026 r.): 1. Stabilność `OperationWindow` przy wielokrotnym klikaniu szczegółów PASS; 2. Rozwiązywanie konfliktów nazw, nienaruszona suma SHA-256 i zero pozostałości `.thispc-part` PASS; 3. Funkcja „Pokaż w folderze” po utwardzeniu PASS; 4. Brak omijania potwierdzenia czyszczenia historii przez `THISPC_TEST_HARNESS=1` w buildzie produkcyjnym PASS;
+    - Zweryfikowany backup: `/mnt/g/ThisPC backup/ThisPC-0.45.0-Stage5.2-ManualAccepted-2026-11-08/`;
+    - **Stan bramki bezpieczeństwa (Security Release Gate):** **`BLOCKED / FINAL RELEASE VERIFICATION PENDING`** (ZABLOKOWANY do końcowej weryfikacji wydania w Etapie 5.3).
+  - **Etap 5.3 — Szlif końcowy, pakietyzacja i wydanie 0.45.0:** (Zaplanowany po zamknięciu Etapu 5.2)
 
 ### 0.45.0 — Bezpieczeństwo i bramka wydaniowa (Security Release Gate)
 - Przed oficjalnym wydaniem wymagany jest kompleksowy audyt bezpieczeństwa obejmujący: zabezpieczenie przed nieautoryzowanym wykonywaniem kodu, brak podatności typu backdoor, kontrolę uprawnień administracyjnych i brak ich nieuprawnionej eskalacji, weryfikację zależności zewnętrznych, integralność instalatora oraz bezpieczeństwo wszystkich operacji plikowych;

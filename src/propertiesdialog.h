@@ -1233,6 +1233,13 @@ public:
             bool aclWriteThisApply = false;
 
             if (aclEditor->isDirty()) {
+                auto &recoveryGate = BatchRenameRecoveryGate::instance();
+                recoveryGate.refresh();
+                if (recoveryGate.mutationsBlocked()) {
+                    QMessageBox::warning(dialog, trLocal("Właściwości", "Properties"),
+                                         recoveryGate.message());
+                    return false;
+                }
                 if (recursivePermissions->isChecked()) {
                     QMessageBox::warning(dialog, trLocal("Uprawnienia ACL", "ACL permissions"), trLocal("ACL i rekurencyjna zmiana chmod nie mogą być zapisane razem.", "ACL and recursive chmod cannot be saved together."));
                     return false;

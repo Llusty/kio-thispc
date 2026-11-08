@@ -58,7 +58,7 @@ private:
         const Cancel &cancel, const Hooks &hooks, AggregatePermissionResult &out) {
         const auto &root = item.root;
         const int fd = ::open(root.path.constData(), O_PATH | O_NOFOLLOW | O_CLOEXEC);
-        if (fd < 0) { out.message = QString::fromLocal8Bit(strerror(errno)); return; }
+        if (fd < 0) { out.message = qt_error_string(errno); return; }
         struct Close { int fd; ~Close() { ::close(fd); } } close{fd};
         struct stat opened {}, path {}, parent {};
         struct statvfs fs {};
@@ -82,7 +82,7 @@ private:
             || AggregatePermissionsModel::mountRecord(item.mountId) != item.mountRecord) {
             out.message = QStringLiteral("Cancelled or changed before write"); return;
         }
-        if (hooks.chmod(fd, requested)) { out.message = QString::fromLocal8Bit(strerror(errno)); return; }
+        if (hooks.chmod(fd, requested)) { out.message = qt_error_string(errno); return; }
         out.changed = true;
         struct stat after {};
         if (::fstat(fd, &after) || (after.st_mode & 07777) != requested

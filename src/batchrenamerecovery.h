@@ -516,7 +516,7 @@ inline bool recoverLinearV2(const BatchRenameRecoveryEntry &entry, QString *erro
         if (recoveryRenameat2(dirfd, from.constData(), dirfd, to.constData(),
                              RENAME_NOREPLACE) != 0) {
             ::close(dirfd); return fail(QStringLiteral("Recovery no-overwrite rename failed: ")
-                                        + QString::fromLocal8Bit(std::strerror(errno)));
+                                        + qt_error_string(errno));
         }
         ++done;
         recoveryFaultPoint("after-syscall");
@@ -577,7 +577,7 @@ inline bool recoverSwapV2(const BatchRenameRecoveryEntry &entry, QString *error)
 #endif
         if (recoveryRenameat2(dirfd, left.constData(), dirfd, right.constData(), RENAME_EXCHANGE) != 0)
             return fail(QStringLiteral("Recovery exchange failed: ")
-                        + QString::fromLocal8Bit(std::strerror(errno)));
+                        + qt_error_string(errno));
         recoveryFaultPoint("after-syscall");
 #ifdef THISPC_BATCH_RENAME_TEST_HOOKS
         if (qgetenv("THISPC_RECOVERY_RACE_AFTER_SWAP") == QByteArrayLiteral("1")) {

@@ -226,9 +226,11 @@ public:
 
     void showMessage(QWidget *parent, const QString &title, const QString &text, bool isWarning = false)
     {
+#ifdef THISPC_TEST_HARNESS
         if (qEnvironmentVariableIsSet("THISPC_TEST_HARNESS") || QGuiApplication::platformName() == QStringLiteral("offscreen")) {
             return;
         }
+#endif
         if (isWarning) {
             QMessageBox::warning(parent, title, text);
         } else {

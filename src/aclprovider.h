@@ -95,7 +95,7 @@ private:
     static void setError(AclData &out, int error)
     {
         out.capability = capabilityForErrno(error);
-        out.errorMessage = QString::fromLocal8Bit(strerror(error));
+        out.errorMessage = qt_error_string(error);
     }
     static bool parse(acl_t acl, QList<AclEntryData> *result, QString *error)
     {
@@ -103,7 +103,7 @@ private:
         while (true) {
             const int rc = acl_get_entry(acl, id, &nativeEntry); id = ACL_NEXT_ENTRY;
             if (rc == 0) break;
-            if (rc < 0) { *error = QStringLiteral("acl_get_entry failed: %1").arg(QString::fromLocal8Bit(strerror(errno))); return false; }
+            if (rc < 0) { *error = QStringLiteral("acl_get_entry failed: %1").arg(qt_error_string(errno)); return false; }
             acl_tag_t nativeTag{}; if (acl_get_tag_type(nativeEntry, &nativeTag) != 0) { *error = QStringLiteral("Invalid ACL tag."); return false; }
             AclEntryData item;
             switch (nativeTag) {
