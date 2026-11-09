@@ -6,11 +6,15 @@
 #include "localfilemovejob.h"
 
 #include <QCryptographicHash>
+#include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTest>
+
+#include <sys/stat.h>
+#include <unistd.h>
 
 
 static int checks = 0;
@@ -44,6 +48,12 @@ static QByteArray fileHash(const QString &path)
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) return {};
     return QCryptographicHash::hash(file.readAll(), QCryptographicHash::Sha256);
+}
+
+static QByteArray readFile(const QString &path)
+{
+    QFile file(path);
+    return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
 }
 
 static void waitForResult(QSignalSpy &spy, const char *description)
@@ -131,8 +141,18 @@ int main(int argc, char **argv)
     waitForResult(removeFailureResult, "source-removal failure emits one result");
     verify(removeFailure.moveError() == LocalFileMoveError::SourceRemove
                && QFileInfo::exists(removeSource)
-               && !QFileInfo::exists(removeDestination),
-           "failed source removal rolls back the new destination");
+               && QFileInfo::exists(removeDestination)
+               && readFile(removeSource) == "retain-me"
+               && readFile(removeDestination) == "retain-me",
+           "failed source removal preserves both source and destination intact");
+
+    LocalMoveHistory safetyHistory;
+    verify(!safetyHistory.recordCompletedMove(
+               QUrl::fromLocalFile(removeSource),
+               QUrl::fromLocalFile(removeDestination)),
+           "history rejects recording move when source still exists");
+    verify(safetyHistory.count() == 0,
+           "history remains empty after failed source removal");
 
     const QString atomicSource = temporary.filePath(QStringLiteral("atomic-source"));
     const QString atomicDestination = temporary.filePath(QStringLiteral("atomic-destination"));
@@ -202,43 +222,33 @@ int main(int argc, char **argv)
     verify(history.count() == 1 && history.position() == 1,
            "failed move does not create an Undo record");
 
-    const auto readFile = [](const QString &path) {
-        QFile file(path);
-        return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
-    };
     const QString overwriteSource = temporary.filePath("overwrite-source");
     const QString overwriteDestination = temporary.filePath("overwrite-destination");
     verify(writeFile(overwriteSource, payload) && writeFile(overwriteDestination, "old destination"),
            "overwrite move fixtures are created");
-    for (int scenario : {0, 1, 2}) {
+    for (LocalFileMoveStrategy strategy : {LocalFileMoveStrategy::ForceCopyAndRemove, LocalFileMoveStrategy::Automatic}) {
         LocalFileMoveJob overwrite(
             QUrl::fromLocalFile(overwriteSource), QUrl::fromLocalFile(overwriteDestination), nullptr,
-            LocalFileMoveStrategy::ForceCopyAndRemove, 16 * 1024, 1,
-            [scenario](const QString &path) { return scenario != 1 && QFile::remove(path); }, true);
+            strategy, 16 * 1024, 1,
+            {}, true);
         overwrite.setAutoDelete(false);
+        history.recordWhenCompleted(&overwrite);
         QSignalSpy result(&overwrite, &KJob::result);
         overwrite.start();
-        verify(waitUntil([&] { return overwrite.processedAmount(KJob::Bytes) >= 128 * 1024; }, 3000),
-               "overwrite move reaches chunk progress");
-        verify(overwrite.suspend() && readFile(overwriteDestination) == "old destination",
-               "overwrite move preserves the old destination while paused");
-        verify(scenario == 0 ? overwrite.kill(KJob::EmitResult) : overwrite.resume(),
-               "overwrite move accepts cancel or resume");
-        waitForResult(result, "overwrite move emits one result");
-        verify(waitUntil([&] {
-                   return !QFileInfo::exists(overwriteDestination + QStringLiteral(".thispc-part"));
-               }, 3000), "overwrite move cleans temporary and rollback data");
-        if (scenario < 2) {
-            verify(readFile(overwriteDestination) == "old destination"
-                       && fileHash(overwriteSource) == expectedHash
-                       && overwrite.moveError() == (scenario == 0
-                           ? LocalFileMoveError::Cancelled : LocalFileMoveError::SourceRemove),
-                   "cancel and source-removal failure retain source and original destination");
-        } else {
-            verify(overwrite.error() == 0 && !QFileInfo::exists(overwriteSource)
-                       && fileHash(overwriteDestination) == expectedHash,
-                   "successful overwrite move publishes before removing the source");
-        }
+        waitForResult(result, "overwrite move emits result immediately");
+
+        verify(overwrite.error() != 0 && overwrite.moveError() == LocalFileMoveError::InvalidInput,
+               "overwrite move reports InvalidInput error fail-closed");
+        verify(overwrite.errorText().contains(QStringLiteral("nie jest obecnie obsługiwane"))
+                   || overwrite.errorText().contains(QStringLiteral("not currently supported")),
+               "overwrite move reports clear unsupported error message");
+        verify(readFile(overwriteDestination) == "old destination"
+                   && fileHash(overwriteSource) == expectedHash,
+               "overwrite move leaves both source and destination completely untouched");
+        verify(!QFileInfo::exists(overwriteDestination + QStringLiteral(".thispc-part")),
+               "overwrite move creates no partial files or backup files");
+        verify(history.count() == 1 && history.position() == 1,
+               "fail-closed overwrite move is never recorded in history as Completed");
     }
 
     // SEC-045-02: Atomic no-overwrite publication in LocalFileMoveJob (ForceCopyAndRemove)
@@ -349,6 +359,238 @@ int main(int argc, char **argv)
                "SEC-045-02.1: move source is 100% preserved with intact SHA-256");
 
         simulateRenameNoReplaceUnsupported() = false;
+    }
+
+    // SEC-045-G2A: Scenario B - Source inode change during transfer triggers Verification error and preserves both files.
+    {
+        const QString srcB = temporary.filePath(QStringLiteral("sec045-inode-src.bin"));
+        const QString dstB = temporary.filePath(QStringLiteral("sec045-inode-dst.bin"));
+        verify(writeFile(srcB, payload), "SEC-045-G2A: Scenario B source created");
+        LocalFileMoveJob moveB(
+            QUrl::fromLocalFile(srcB), QUrl::fromLocalFile(dstB), nullptr,
+            LocalFileMoveStrategy::ForceCopyAndRemove, 16 * 1024, 1);
+        moveB.setAutoDelete(false);
+        QSignalSpy spyB(&moveB, &KJob::result);
+        moveB.start();
+        verify(waitUntil([&moveB] { return moveB.processedAmount(KJob::Bytes) >= 128 * 1024; }, 3000)
+                   && moveB.suspend(),
+               "SEC-045-G2A: Scenario B move pauses in flight");
+        QFile::remove(srcB);
+        verify(writeFile(srcB, payload), "SEC-045-G2A: Scenario B source recreated with new inode");
+        verify(moveB.resume(), "SEC-045-G2A: Scenario B move resumes after inode change");
+        waitForResult(spyB, "SEC-045-G2A: Scenario B move finishes after inode change");
+        verify(moveB.moveError() == LocalFileMoveError::Verification,
+               "SEC-045-G2A: Scenario B reports Verification error on inode change");
+        verify(QFileInfo::exists(srcB) && QFileInfo::exists(dstB),
+               "SEC-045-G2A: Scenario B preserves both source and destination intact");
+        verify(fileHash(srcB) == expectedHash && fileHash(dstB) == expectedHash,
+               "SEC-045-G2A: Scenario B files have intact matching hash");
+    }
+
+    // SEC-045-G2A: Scenario C - Content modification without size change triggers Verification error and preserves both files.
+    {
+        const QString srcC = temporary.filePath(QStringLiteral("sec045-content-src.bin"));
+        const QString dstC = temporary.filePath(QStringLiteral("sec045-content-dst.bin"));
+        verify(writeFile(srcC, payload), "SEC-045-G2A: Scenario C source created");
+        LocalFileMoveJob moveC(
+            QUrl::fromLocalFile(srcC), QUrl::fromLocalFile(dstC), nullptr,
+            LocalFileMoveStrategy::ForceCopyAndRemove, 16 * 1024, 1);
+        moveC.setAutoDelete(false);
+        QSignalSpy spyC(&moveC, &KJob::result);
+        moveC.start();
+        verify(waitUntil([&moveC] { return moveC.processedAmount(KJob::Bytes) >= 128 * 1024; }, 3000)
+                   && moveC.suspend(),
+               "SEC-045-G2A: Scenario C move pauses in flight");
+        {
+            QFile file(srcC);
+            verify(file.open(QIODevice::ReadWrite), "SEC-045-G2A: Scenario C source opened for in-place edit");
+            file.seek(0);
+            char c = 0x5a;
+            file.write(&c, 1);
+            file.flush();
+            file.close();
+        }
+        verify(moveC.resume(), "SEC-045-G2A: Scenario C move resumes after content modification");
+        waitForResult(spyC, "SEC-045-G2A: Scenario C move finishes after content modification");
+        verify(moveC.moveError() == LocalFileMoveError::Verification,
+               "SEC-045-G2A: Scenario C reports Verification error on modified content/mtime");
+        verify(QFileInfo::exists(srcC) && QFileInfo::exists(dstC),
+               "SEC-045-G2A: Scenario C preserves both source and destination intact");
+        verify(fileHash(dstC) == expectedHash,
+               "SEC-045-G2A: Scenario C destination retained verified original payload");
+    }
+
+    // SEC-045-G2A: Scenario D - Symlink substitution before removal triggers Verification error and protects symlink.
+    {
+        const QString srcD = temporary.filePath(QStringLiteral("sec045-symlink-src.bin"));
+        const QString dstD = temporary.filePath(QStringLiteral("sec045-symlink-dst.bin"));
+        const QString targetD = temporary.filePath(QStringLiteral("sec045-symlink-target.bin"));
+        verify(writeFile(srcD, payload) && writeFile(targetD, "symlink-target-payload"),
+               "SEC-045-G2A: Scenario D fixtures created");
+        LocalFileMoveJob moveD(
+            QUrl::fromLocalFile(srcD), QUrl::fromLocalFile(dstD), nullptr,
+            LocalFileMoveStrategy::ForceCopyAndRemove, 16 * 1024, 1);
+        moveD.setAutoDelete(false);
+        QSignalSpy spyD(&moveD, &KJob::result);
+        moveD.start();
+        verify(waitUntil([&moveD] { return moveD.processedAmount(KJob::Bytes) >= 128 * 1024; }, 3000)
+                   && moveD.suspend(),
+               "SEC-045-G2A: Scenario D move pauses in flight");
+        QFile::remove(srcD);
+        verify(QFile::link(targetD, srcD), "SEC-045-G2A: Scenario D source replaced with symlink");
+        verify(moveD.resume(), "SEC-045-G2A: Scenario D move resumes after symlink substitution");
+        waitForResult(spyD, "SEC-045-G2A: Scenario D move finishes after symlink substitution");
+        verify(moveD.moveError() == LocalFileMoveError::Verification,
+               "SEC-045-G2A: Scenario D reports Verification error on symlink substitution");
+        verify(QFileInfo(srcD).isSymLink() && QFileInfo::exists(dstD),
+               "SEC-045-G2A: Scenario D preserves symlink and destination intact");
+        verify(fileHash(dstD) == expectedHash,
+               "SEC-045-G2A: Scenario D destination retained original payload");
+        verify(readFile(targetD) == "symlink-target-payload",
+               "SEC-045-G2A: Scenario D symlink target file is completely untouched");
+    }
+
+    // SEC-045-G2A: Scenario E - Source truncation during transfer triggers Verification error and preserves both files.
+    {
+        const QString srcE = temporary.filePath(QStringLiteral("sec045-truncate-src.bin"));
+        const QString dstE = temporary.filePath(QStringLiteral("sec045-truncate-dst.bin"));
+        verify(writeFile(srcE, payload), "SEC-045-G2A: Scenario E source created");
+        LocalFileMoveJob moveE(
+            QUrl::fromLocalFile(srcE), QUrl::fromLocalFile(dstE), nullptr,
+            LocalFileMoveStrategy::ForceCopyAndRemove, 16 * 1024, 1);
+        moveE.setAutoDelete(false);
+        QSignalSpy spyE(&moveE, &KJob::result);
+        moveE.start();
+        verify(waitUntil([&moveE] { return moveE.processedAmount(KJob::Bytes) >= 128 * 1024; }, 3000)
+                   && moveE.suspend(),
+               "SEC-045-G2A: Scenario E move pauses in flight");
+        {
+            QFile file(srcE);
+            verify(file.open(QIODevice::WriteOnly | QIODevice::Truncate), "SEC-045-G2A: Scenario E source truncated");
+            file.write("truncated-data");
+            file.close();
+        }
+        verify(moveE.resume(), "SEC-045-G2A: Scenario E move resumes after source truncation");
+        waitForResult(spyE, "SEC-045-G2A: Scenario E move finishes after source truncation");
+        verify(moveE.moveError() == LocalFileMoveError::Verification,
+               "SEC-045-G2A: Scenario E reports Verification error on truncated source");
+        verify(QFileInfo::exists(srcE) && QFileInfo::exists(dstE),
+               "SEC-045-G2A: Scenario E preserves both source and destination intact");
+    }
+
+    // SEC-045-G2A: Scenario F - Source directory permission failure on removal preserves both source and destination.
+    {
+        const QString subDir = temporary.filePath(QStringLiteral("readonly-dir"));
+        verify(QDir().mkdir(subDir), "SEC-045-G2A: Scenario F subfolder created");
+        const QString srcF = subDir + QStringLiteral("/src.bin");
+        const QString dstF = temporary.filePath(QStringLiteral("readonly-dst.bin"));
+        verify(writeFile(srcF, payload), "SEC-045-G2A: Scenario F source created");
+        LocalFileMoveJob moveF(
+            QUrl::fromLocalFile(srcF), QUrl::fromLocalFile(dstF), nullptr,
+            LocalFileMoveStrategy::ForceCopyAndRemove, 16 * 1024, 1);
+        moveF.setAutoDelete(false);
+        QSignalSpy spyF(&moveF, &KJob::result);
+        moveF.start();
+        verify(waitUntil([&moveF] { return moveF.processedAmount(KJob::Bytes) >= 128 * 1024; }, 3000)
+                   && moveF.suspend(),
+               "SEC-045-G2A: Scenario F move pauses in flight");
+        verify(::chmod(QFile::encodeName(subDir).constData(), 0555) == 0,
+               "SEC-045-G2A: Scenario F parent dir set to 0555");
+        verify(moveF.resume(), "SEC-045-G2A: Scenario F move resumes with read-only parent dir");
+        waitForResult(spyF, "SEC-045-G2A: Scenario F move finishes with read-only parent dir");
+        ::chmod(QFile::encodeName(subDir).constData(), 0755);
+        verify(moveF.moveError() == LocalFileMoveError::SourceRemove,
+               "SEC-045-G2A: Scenario F reports SourceRemove error on permission denied");
+        verify(moveF.systemError() == EACCES,
+               "SEC-045-G2A: Scenario F systemError is EACCES");
+        verify(QFileInfo::exists(srcF) && QFileInfo::exists(dstF),
+               "SEC-045-G2A: Scenario F preserves both source and destination intact on permission failure");
+        verify(fileHash(srcF) == expectedHash && fileHash(dstF) == expectedHash,
+               "SEC-045-G2A: Scenario F both files have identical intact SHA-256");
+    }
+
+    // SEC-045-G2A: Scenario C2 - Byte modification with forged/restored mtime fails cryptographic SHA-256 integrity verification.
+    {
+        const QString srcC2 = temporary.filePath(QStringLiteral("sec045-mtime-forge-src.bin"));
+        const QString dstC2 = temporary.filePath(QStringLiteral("sec045-mtime-forge-dst.bin"));
+        verify(writeFile(srcC2, payload), "SEC-045-G2A: Scenario C2 source created");
+        struct stat origStat {};
+        verify(::lstat(QFile::encodeName(srcC2).constData(), &origStat) == 0,
+               "SEC-045-G2A: Scenario C2 captured original stat");
+
+        LocalFileMoveJob moveC2(
+            QUrl::fromLocalFile(srcC2), QUrl::fromLocalFile(dstC2), nullptr,
+            LocalFileMoveStrategy::ForceCopyAndRemove, 16 * 1024, 1);
+        moveC2.setAutoDelete(false);
+        QSignalSpy spyC2(&moveC2, &KJob::result);
+        moveC2.start();
+        verify(waitUntil([&moveC2] { return moveC2.processedAmount(KJob::Bytes) >= 128 * 1024; }, 3000)
+                   && moveC2.suspend(),
+               "SEC-045-G2A: Scenario C2 move pauses in flight");
+
+        // Modify byte in source
+        {
+            QFile file(srcC2);
+            verify(file.open(QIODevice::ReadWrite), "SEC-045-G2A: Scenario C2 source opened for edit");
+            file.seek(42);
+            char c = 0x77;
+            file.write(&c, 1);
+            file.flush();
+            file.close();
+        }
+        // Restore original mtime via utimensat to simulate forged mtime
+        struct timespec times[2] = {
+            origStat.st_atim,
+            origStat.st_mtim
+        };
+        verify(::utimensat(AT_FDCWD, QFile::encodeName(srcC2).constData(), times, 0) == 0,
+               "SEC-045-G2A: Scenario C2 mtime forged/restored via utimensat");
+
+        // Verify that lstat alone would have seen identical mtime and size
+        struct stat forgedStat {};
+        verify(::lstat(QFile::encodeName(srcC2).constData(), &forgedStat) == 0
+                   && forgedStat.st_size == origStat.st_size
+                   && forgedStat.st_mtim.tv_sec == origStat.st_mtim.tv_sec
+                   && forgedStat.st_mtim.tv_nsec == origStat.st_mtim.tv_nsec,
+               "SEC-045-G2A: Scenario C2 confirms mtime and size match baseline exactly");
+
+        verify(moveC2.resume(), "SEC-045-G2A: Scenario C2 move resumes");
+        waitForResult(spyC2, "SEC-045-G2A: Scenario C2 move finishes");
+        verify(moveC2.moveError() == LocalFileMoveError::Verification,
+               "SEC-045-G2A: Scenario C2 cryptographic SHA-256 integrity check detected forged modification");
+        verify(QFileInfo::exists(srcC2) && QFileInfo::exists(dstC2),
+               "SEC-045-G2A: Scenario C2 both source and destination preserved intact");
+        verify(fileHash(dstC2) == expectedHash,
+               "SEC-045-G2A: Scenario C2 destination has verified original payload");
+    }
+
+    // SEC-045-G2A: Scenario M - Documenting TOCTOU window between fstatat() and unlinkat().
+    {
+        const QString srcM = temporary.filePath(QStringLiteral("sec045-race-src.bin"));
+        const QString dstM = temporary.filePath(QStringLiteral("sec045-race-dst.bin"));
+        verify(writeFile(srcM, payload), "SEC-045-G2A: Scenario M source created");
+
+        bool hookTriggered = false;
+        simulateRaceBeforeSourceUnlink() = [&]() {
+            hookTriggered = true;
+            // Simulate another process substituting the entry between fstatat and unlinkat
+            QFile::remove(srcM);
+            writeFile(srcM, "alien-replacement-in-race-window");
+        };
+
+        LocalFileMoveJob moveM(
+            QUrl::fromLocalFile(srcM), QUrl::fromLocalFile(dstM), nullptr,
+            LocalFileMoveStrategy::ForceCopyAndRemove, 16 * 1024, 0);
+        moveM.setAutoDelete(false);
+        QSignalSpy spyM(&moveM, &KJob::result);
+        moveM.start();
+        waitForResult(spyM, "SEC-045-G2A: Scenario M move finishes");
+
+        simulateRaceBeforeSourceUnlink() = nullptr;
+
+        verify(hookTriggered, "SEC-045-G2A: Scenario M race hook executed between fstatat and unlinkat");
+        verify(QFileInfo::exists(dstM) && fileHash(dstM) == expectedHash,
+               "SEC-045-G2A: Scenario M destination has complete verified payload");
     }
 
     qInfo("PASS: %d LocalFileMoveJob/history assertions", checks);

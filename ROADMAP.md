@@ -665,6 +665,21 @@ When standard operations receive permission denied errors, provide targeted `adm
         - TOCTOU limitations for staging source: because Linux VFS does not support descriptor-based `renameat2` with `AT_EMPTY_PATH`, VFAT publication references the staging entry by directory name. While pre-rename `fstatat` and post-rename checks detect tampering, the trust model assumes no hostile concurrent process running under the same UID in the destination directory;
         - Move and Overwrite on VFAT and NTFS-3G remain restricted;
       - **Security Release Gate Status:** **`BLOCKED / FINAL RELEASE VERIFICATION PENDING`** (system version 0.44.0 untouched).
+    - **Stage 5.3.2G.1 — Move Compatibility & Safety Audit:** ✅ AUDIT COMPLETED:
+      - Comprehensive architectural audit of `LocalFileMoveJob`, `LocalFileCopyJob`, `moveLocalFileNoOverwrite()`, KIO Move, and transfer history;
+      - Identified destructive rollback vulnerability in copy-and-remove fallback: destination unlinking on source removal failure resulted in data loss;
+      - Identified TOCTOU vulnerability in path-based source unlinking without identity re-verification;
+      - Analyzed filesystem characteristics (Btrfs atomic rename, NTFS-3G EINVAL, VFAT atomic rename, ntfs3 kernel driver);
+    - **Stage 5.3.2G.2A — Source Preservation Safety Fix:** ✅ CLOSED / AUTOMATED PASS / BACKED UP / COMMITTED / PUSHED:
+      - **Elimination of Destructive Rollback:** Once destination is published, it is NEVER removed or rolled back on source removal failure or post-copy verification error in non-overwrite mode (`rollbackDestination()` and all destination rollback mechanisms completely removed from `LocalFileMoveJob`);
+      - **Fail-Closed Overwrite Gate:** In `LocalFileMoveJob`, any Move with overwrite is temporarily rejected fail-closed immediately in `begin()` before copying, publishing, exchanging, or touching destination or source, returning `LocalFileMoveError::InvalidInput` with a clear message that safe file move with overwrite is not currently supported;
+      - **Safe Source Verification & Removal (Source Preservation):** Preserved in defined trust model: prior to unlinking source, verifies identity against `m_sourceIdentity` recorded at job start (`st_dev`, `st_ino`, `st_size`, `st_mtim.tv_sec`, `st_mtim.tv_nsec`, non-symlink). Refuses unlinking (`LocalFileMoveError::Verification`, fail-closed) if source was modified or replaced during transfer;
+      - **Cryptographic Data Integrity Check:** Re-reads source on disk and compares its SHA-256 hash against the exact transferred stream checksum (`transferredChecksum()`), detecting in-place byte modifications even if `mtime` was forged/restored via `utimensat`;
+      - **Race-Free Directory Descriptors & Documented TOCTOU Boundary:** Safe unlinking uses parent directory descriptor with `fstatat(..., AT_SYMLINK_NOFOLLOW)` and `unlinkat()`; test harness Scenario M documents that POSIX Linux lacks conditional `unlinkat_if_ino`;
+      - **Genuine Status Reporting & History Safety:** Reports `LocalFileMoveError::SourceRemove`, `Verification`, or `InvalidInput`; transfers with unremoved sources or rejected overwrite moves are rejected by `LocalMoveHistory` and flagged as errors in queue;
+      - **Scope Boundary & Release Gate:** The separate Copy Overwrite path (`LocalFileCopyJob`) remains subject to Final Security Release Gate review;
+      - **Automated Verification:** `local_move` suite: 126 assertions PASS; `local_transfer`: 113/113 PASS; full regression: 77/77 test suites PASS; ASan: clean;
+      - **Security Release Gate Status:** **`BLOCKED / FINAL RELEASE VERIFICATION PENDING`** (system version 0.44.0 untouched).
 
 ### 0.45.0 — Security Release Gate
 - Prior to official release, a mandatory comprehensive security audit is required, covering unauthorized code execution, potential backdoors, administrative privilege escalation, third-party dependencies, installer integrity, and file operation safety;

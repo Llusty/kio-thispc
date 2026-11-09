@@ -11,6 +11,7 @@
 #include "transfertaskdescriptor.h"
 #include <KIO/Job>
 
+#include <QCryptographicHash>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
@@ -118,6 +119,12 @@ public:
         return true;
     }
 
+    QByteArray transferredChecksum() const
+    {
+        QMutexLocker locker(&m_mutex);
+        return m_transferredChecksum;
+    }
+
     bool requestCancel()
     {
         QMutexLocker locker(&m_mutex);
@@ -182,6 +189,7 @@ public Q_SLOTS:
         speedTimer.start();
         qulonglong processed = 0;
         qulonglong speedCheckpoint = 0;
+        QCryptographicHash streamHash(QCryptographicHash::Sha256);
 
         while (true) {
             {
@@ -211,6 +219,7 @@ public Q_SLOTS:
                 }
                 break;
             }
+            streamHash.addData(chunk);
 
             qint64 written = 0;
             while (written < chunk.size()) {
@@ -260,6 +269,11 @@ public Q_SLOTS:
                     break;
                 }
             }
+        }
+
+        {
+            QMutexLocker locker(&m_mutex);
+            m_transferredChecksum = streamHash.result();
         }
 
         if (cancelRequested()) {
@@ -438,13 +452,14 @@ private:
     bool m_overwrite;
     bool m_retainOverwrittenDestination;
     LocalFileIdentity m_originalDestination;
-    QMutex m_mutex;
+    mutable QMutex m_mutex;
     QWaitCondition m_stateChanged;
     bool m_pauseRequested = false;
     bool m_pauseAcknowledged = false;
     bool m_cancelRequested = false;
     bool m_finished = false;
     qulonglong m_processedBytes = 0;
+    QByteArray m_transferredChecksum;
     std::shared_ptr<TransferBandwidthLimiter> m_limiter;
     quint64 m_taskId = 0;
 };
@@ -551,6 +566,10 @@ public:
     QString partialPath() const { return m_partialPath; }
     LocalTransferError transferError() const { return m_transferError; }
     int systemError() const { return m_systemError; }
+    QByteArray transferredChecksum() const
+    {
+        return m_worker ? m_worker->transferredChecksum() : QByteArray();
+    }
 
     Q_INVOKABLE void setBandwidthLimiter(std::shared_ptr<TransferBandwidthLimiter> limiter, quint64 taskId = 0)
     {
@@ -570,6 +589,7 @@ public:
         return m_overwrite && m_originalDestination.matches(m_partialPath)
             && m_publishedDestination.matches(m_destination.toLocalFile())
             && exchangeLocalFiles(m_partialPath, m_destination.toLocalFile())
+            && m_publishedDestination.matches(m_partialPath)
             && QFile::remove(m_partialPath);
     }
 

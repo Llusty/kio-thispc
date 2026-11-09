@@ -67,6 +67,7 @@ public:
         , m_overwrite(overwrite)
         , m_originalDestination(originalDestination.valid
               ? originalDestination : LocalFileIdentity::read(destination.toLocalFile()))
+        , m_hasCustomRemoveSource(static_cast<bool>(removeSource))
         , m_removeSource(removeSource
               ? std::move(removeSource)
               : RemoveSource([](const QString &path) {
@@ -123,27 +124,39 @@ private:
                    tr("The move requires local source and destination URLs."));
             return;
         }
-        const QFileInfo sourceInfo(m_source.toLocalFile());
-        const QFileInfo destinationInfo(m_destination.toLocalFile());
-        if (m_overwrite && !m_originalDestination.matches(m_destination.toLocalFile())) {
-            finish(LocalFileMoveError::DestinationExists,
-                   tr("The destination changed before the move started."));
-            return;
-        }
-        if (!sourceInfo.exists() || !sourceInfo.isFile()
-            || sourceInfo.isSymLink()
-            || !QFileInfo(m_destination.toLocalFile()).dir().exists()) {
+        const QString sourcePath = m_source.toLocalFile();
+        const QString destinationPath = m_destination.toLocalFile();
+        m_sourceIdentity = LocalFileIdentity::read(sourcePath);
+        if (!m_sourceIdentity.valid) {
             finish(LocalFileMoveError::InvalidInput,
                    tr("The source or destination is not valid for a local file move."));
             return;
         }
-        if (!m_overwrite && (destinationInfo.exists() || destinationInfo.isSymLink())) {
+        const QFileInfo sourceInfo(sourcePath);
+        const QFileInfo destinationInfo(destinationPath);
+        if (m_overwrite) {
+            // Fail-closed: Move with overwrite via copy-and-remove is fundamentally non-atomic
+            // and cannot guarantee safe exclusive ownership or non-destructive rollback.
+            finish(LocalFileMoveError::InvalidInput,
+                   QLocale().language() == QLocale::Polish
+                       ? QStringLiteral("Bezpieczne przenoszenie z nadpisywaniem nie jest obecnie obsługiwane.")
+                       : tr("Safe file move with overwrite is not currently supported."));
+            return;
+        }
+        if (!sourceInfo.exists() || !sourceInfo.isFile()
+            || sourceInfo.isSymLink()
+            || !QFileInfo(destinationPath).dir().exists()) {
+            finish(LocalFileMoveError::InvalidInput,
+                   tr("The source or destination is not valid for a local file move."));
+            return;
+        }
+        if (destinationInfo.exists() || destinationInfo.isSymLink()) {
             finish(LocalFileMoveError::DestinationExists,
                    tr("The destination already exists."));
             return;
         }
 
-        m_sourceSize = static_cast<qulonglong>(sourceInfo.size());
+        m_sourceSize = static_cast<qulonglong>(m_sourceIdentity.value.st_size);
         setTotalAmount(KJob::Bytes, m_sourceSize);
         const bool sameStorage =
             QStorageInfo(sourceInfo.absolutePath()).device()
@@ -188,8 +201,8 @@ private:
             this,
             m_chunkSize,
             m_chunkDelayMilliseconds,
-            m_overwrite,
-            m_overwrite,
+            false,
+            false,
             m_originalDestination);
         m_copyJob->setAutoDelete(false);
         connect(m_copyJob, &KJob::processedAmountChanged,
@@ -216,41 +229,130 @@ private:
                         finish(moveErr, completed->errorText());
                         return;
                     }
-                    const QFileInfo sourceInfo(m_source.toLocalFile());
-                    const QFileInfo destinationInfo(m_destination.toLocalFile());
-                    if (!sourceInfo.exists() || !destinationInfo.exists()
-                        || static_cast<qulonglong>(sourceInfo.size()) != m_sourceSize
+
+                    const QString sourcePath = m_source.toLocalFile();
+                    const QString destinationPath = m_destination.toLocalFile();
+                    const QFileInfo destinationInfo(destinationPath);
+
+                    // 1. Verify published destination entry
+                    if (!destinationInfo.exists() || !destinationInfo.isFile()
+                        || destinationInfo.isSymLink()
                         || static_cast<qulonglong>(destinationInfo.size()) != m_sourceSize) {
-                        const bool restored = rollbackDestination();
                         finish(LocalFileMoveError::Verification,
-                               restored
-                                   ? tr("The copied file could not be verified before removing the source.")
-                                   : tr("Verification failed. Recovery data remains at %1.").arg(m_copyJob->partialPath()));
+                               QLocale().language() == QLocale::Polish
+                                   ? QStringLiteral("Nie można zweryfikować pliku docelowego po skopiowaniu; plik źródłowy został zachowany.")
+                                   : tr("The copied destination file could not be verified; the source file has been preserved."));
                         return;
                     }
-                    if (!m_removeSource(m_source.toLocalFile())) {
-                        const bool restored = rollbackDestination();
+
+                    // 2. Verify source identity (device, inode, size, mode, mtime, non-symlink)
+                    if (!m_sourceIdentity.matches(sourcePath)) {
+                        finish(LocalFileMoveError::Verification,
+                               QLocale().language() == QLocale::Polish
+                                   ? QStringLiteral("Plik źródłowy uległ zmianie w trakcie przenoszenia; oba pliki zostały zachowane.")
+                                   : tr("The source file was modified or replaced during the move; both source and destination have been preserved."));
+                        return;
+                    }
+
+                    // 2b. Cryptographic data integrity verification:
+                    // Read the source file from disk and verify that its SHA-256 matches
+                    // the exact stream transferred to destination. This detects any in-place byte
+                    // modification even if mtime was forged/restored via utimensat.
+                    QByteArray currentSourceHash;
+                    {
+                        QFile srcFile(sourcePath);
+                        if (!srcFile.open(QIODevice::ReadOnly)) {
+                            finish(LocalFileMoveError::Verification,
+                                   QLocale().language() == QLocale::Polish
+                                       ? QStringLiteral("Nie można otworzyć źródła w celu weryfikacji integralności; cel zachowano.")
+                                       : tr("Could not open source to verify data integrity; destination preserved."));
+                            return;
+                        }
+                        QCryptographicHash hash(QCryptographicHash::Sha256);
+                        if (!hash.addData(&srcFile)) {
+                            finish(LocalFileMoveError::Verification,
+                                   QLocale().language() == QLocale::Polish
+                                       ? QStringLiteral("Błąd odczytu źródła podczas weryfikacji integralności; cel zachowano.")
+                                       : tr("Failed reading source during integrity check; destination preserved."));
+                            return;
+                        }
+                        currentSourceHash = hash.result();
+                    }
+
+                    if (currentSourceHash.isEmpty() || currentSourceHash != m_copyJob->transferredChecksum()) {
+                        finish(LocalFileMoveError::Verification,
+                               QLocale().language() == QLocale::Polish
+                                   ? QStringLiteral("Wykryto naruszenie integralności danych źródła; cel i źródło zostały zachowane.")
+                                   : tr("Source data integrity verification failed; both source and destination have been preserved."));
+                        return;
+                    }
+
+                    // 3. Safe source removal
+                    const bool removed = m_hasCustomRemoveSource
+                        ? m_removeSource(sourcePath)
+                        : removeSourceVerified();
+
+                    if (!removed) {
+                        // MANDATORY RULE: NEVER delete or rollback published destination on source removal failure.
+                        // Preserve BOTH source and destination intact.
                         finish(LocalFileMoveError::SourceRemove,
-                               restored
-                                   ? tr("The source could not be removed; the copied destination was rolled back.")
-                                   : tr("The source could not be removed. Recovery data remains at %1.").arg(m_copyJob->partialPath()));
+                               QLocale().language() == QLocale::Polish
+                                   ? QStringLiteral("Nie można usunąć pliku źródłowego; plik docelowy został zachowany.")
+                                   : tr("The source could not be removed; the destination file has been preserved."));
                         return;
                     }
-                    if (m_overwrite && !m_copyJob->commitOverwrite()) {
-                        finish(LocalFileMoveError::SourceRemove,
-                               tr("The file was moved, but the old destination remains at %1.").arg(m_copyJob->partialPath()));
-                        return;
-                    }
+
                     setProcessedAmount(KJob::Bytes, m_sourceSize);
                     finish(LocalFileMoveError::None, {});
                 });
         m_copyJob->start();
     }
 
-    bool rollbackDestination()
+    bool removeSourceVerified()
     {
-        return m_overwrite ? m_copyJob->rollbackOverwrite()
-                           : QFile::remove(m_destination.toLocalFile());
+        const QString sourcePath = m_source.toLocalFile();
+        const QFileInfo srcInfo(sourcePath);
+        const QString dirPath = srcInfo.dir().absolutePath();
+        const QString fileName = srcInfo.fileName();
+
+        const int dirFd = ::open(QFile::encodeName(dirPath).constData(), O_DIRECTORY | O_RDONLY | O_CLOEXEC);
+        if (dirFd < 0) {
+            m_systemError = errno;
+            return false;
+        }
+
+        struct stat curStat {};
+        if (::fstatat(dirFd, QFile::encodeName(fileName).constData(), &curStat, AT_SYMLINK_NOFOLLOW) != 0) {
+            m_systemError = errno;
+            ::close(dirFd);
+            return false;
+        }
+
+        if (!S_ISREG(curStat.st_mode)
+            || curStat.st_dev != m_sourceIdentity.value.st_dev
+            || curStat.st_ino != m_sourceIdentity.value.st_ino
+            || curStat.st_size != m_sourceIdentity.value.st_size
+            || curStat.st_mtim.tv_sec != m_sourceIdentity.value.st_mtim.tv_sec
+            || curStat.st_mtim.tv_nsec != m_sourceIdentity.value.st_mtim.tv_nsec) {
+            ::close(dirFd);
+            return false;
+        }
+
+#ifdef THISPC_TEST_HARNESS
+        if (simulateRaceBeforeSourceUnlink()) {
+            simulateRaceBeforeSourceUnlink()();
+        }
+#endif
+
+        const int unlinkRes = ::unlinkat(dirFd, QFile::encodeName(fileName).constData(), 0);
+        const int unlinkErr = (unlinkRes != 0) ? errno : 0;
+        ::close(dirFd);
+
+        if (unlinkRes != 0) {
+            m_systemError = unlinkErr;
+            return false;
+        }
+        return true;
     }
 
     void finish(LocalFileMoveError error, const QString &message)
@@ -279,6 +381,8 @@ private:
     int m_chunkDelayMilliseconds;
     bool m_overwrite;
     LocalFileIdentity m_originalDestination;
+    LocalFileIdentity m_sourceIdentity;
+    bool m_hasCustomRemoveSource = false;
     RemoveSource m_removeSource;
     LocalFileCopyJob *m_copyJob = nullptr;
     qulonglong m_sourceSize = 0;

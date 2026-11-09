@@ -9,6 +9,7 @@
 #include <QString>
 #include <cerrno>
 #include <fcntl.h>
+#include <functional>
 #include <linux/fs.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
@@ -81,6 +82,12 @@ inline bool &simulateFsyncError()
 {
     static bool err = false;
     return err;
+}
+
+inline std::function<void()> &simulateRaceBeforeSourceUnlink()
+{
+    static std::function<void()> hook;
+    return hook;
 }
 #endif
 
