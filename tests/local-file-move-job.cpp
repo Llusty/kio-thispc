@@ -832,6 +832,268 @@ int main(int argc, char **argv)
         simulateNtfs3gFilesystem() = false;
     }
 
+    // =========================================================================
+    // Stage 5.3.2G.3A.1: Durability Gate Final Fix (Scenarios A - L)
+    // =========================================================================
+
+    // Test A: fsync of destination directory returns 0 — standard Move succeeds
+    {
+        const QString srcA = temporary.filePath(QStringLiteral("g3a1-testa-src.bin"));
+        const QString dstA = temporary.filePath(QStringLiteral("g3a1-testa-dst.bin"));
+        verify(writeFile(srcA, payload), "G3A.1 Test A: src created");
+
+        LocalFileMoveJob moveA(
+            QUrl::fromLocalFile(srcA),
+            QUrl::fromLocalFile(dstA),
+            nullptr,
+            LocalFileMoveStrategy::ForceCopyAndRemove,
+            16 * 1024,
+            0);
+        moveA.setAutoDelete(false);
+        LocalMoveHistory histA;
+        histA.recordWhenCompleted(&moveA);
+        QSignalSpy spyA(&moveA, &KJob::result);
+        moveA.start();
+        waitForResult(spyA, "G3A.1 Test A: fsync 0 move finishes");
+
+        verify(moveA.error() == KJob::NoError && moveA.moveError() == LocalFileMoveError::None,
+               "G3A.1 Test A: move reports NoError");
+        verify(moveA.destinationPublished(), "G3A.1 Test A: destination published");
+        verify(moveA.directoryDurabilityConfirmed(), "G3A.1 Test A: directory durability confirmed");
+        verify(!QFileInfo::exists(srcA) && QFileInfo::exists(dstA),
+               "G3A.1 Test A: source unlinked and destination published");
+        verify(fileHash(dstA) == expectedHash, "G3A.1 Test A: destination hash matches");
+        verify(histA.canUndo(), "G3A.1 Test A: successfully recorded in history");
+    }
+
+    // Test B: fsync of directory returns EINVAL — Move preserves source without durability confirmation
+    {
+        const QString srcB = temporary.filePath(QStringLiteral("g3a1-testb-src.bin"));
+        const QString dstB = temporary.filePath(QStringLiteral("g3a1-testb-dst.bin"));
+        verify(writeFile(srcB, payload), "G3A.1 Test B: src created");
+
+        simulateFsyncError() = true;
+        simulatedFsyncErrno() = EINVAL;
+
+        LocalFileMoveJob moveB(
+            QUrl::fromLocalFile(srcB),
+            QUrl::fromLocalFile(dstB),
+            nullptr,
+            LocalFileMoveStrategy::ForceCopyAndRemove,
+            16 * 1024,
+            0);
+        moveB.setAutoDelete(false);
+        LocalMoveHistory histB;
+        histB.recordWhenCompleted(&moveB);
+        QSignalSpy spyB(&moveB, &KJob::result);
+        moveB.start();
+        waitForResult(spyB, "G3A.1 Test B: fsync EINVAL finishes");
+
+        verify(moveB.error() != KJob::NoError && moveB.moveError() == LocalFileMoveError::Durability,
+               "G3A.1 Test B: reports Durability error when directory fsync returns EINVAL");
+        verify(moveB.destinationPublished(), "G3A.1 Test B: destination was published");
+        verify(!moveB.directoryDurabilityConfirmed(), "G3A.1 Test B: directory durability was not confirmed");
+        verify(QFileInfo::exists(srcB) && fileHash(srcB) == expectedHash,
+               "G3A.1 Test B: source file is 100% PRESERVED");
+        verify(QFileInfo::exists(dstB) && fileHash(dstB) == expectedHash,
+               "G3A.1 Test B: published destination is intact (no rollback)");
+        verify(!histB.canUndo(), "G3A.1 Test B/L: history rejects partial move");
+        verify(moveB.property("thispcPartialMoveOutcome").toBool(),
+               "G3A.1 Test B/E: thispcPartialMoveOutcome property set");
+        verify(moveB.errorText().contains(QStringLiteral("trwałości"))
+                   || moveB.errorText().contains(QStringLiteral("durability")),
+               "G3A.1 Test B/E: error message informs user of preserved source");
+
+        simulateFsyncError() = false;
+        simulatedFsyncErrno() = EIO;
+
+        // Test F: Retry after partial outcome does not overwrite existing destination
+        LocalFileMoveJob retryMove(
+            QUrl::fromLocalFile(srcB),
+            QUrl::fromLocalFile(dstB),
+            nullptr,
+            LocalFileMoveStrategy::ForceCopyAndRemove,
+            16 * 1024,
+            0);
+        retryMove.setAutoDelete(false);
+        QSignalSpy retrySpy(&retryMove, &KJob::result);
+        retryMove.start();
+        waitForResult(retrySpy, "G3A.1 Test F: retry finishes");
+        verify(retryMove.error() != KJob::NoError
+                   && retryMove.moveError() == LocalFileMoveError::DestinationExists,
+               "G3A.1 Test F: retry refuses to overwrite published destination");
+        verify(QFileInfo::exists(srcB) && fileHash(srcB) == expectedHash,
+               "G3A.1 Test F: source untouched on retry");
+        verify(QFileInfo::exists(dstB) && fileHash(dstB) == expectedHash,
+               "G3A.1 Test F: destination untouched on retry");
+    }
+
+    // Test C: fsync of directory returns ENOTSUP — identical protection
+    {
+        const QString srcC = temporary.filePath(QStringLiteral("g3a1-testc-src.bin"));
+        const QString dstC = temporary.filePath(QStringLiteral("g3a1-testc-dst.bin"));
+        verify(writeFile(srcC, payload), "G3A.1 Test C: src created");
+
+        simulateFsyncError() = true;
+        simulatedFsyncErrno() = ENOTSUP;
+
+        LocalFileMoveJob moveC(
+            QUrl::fromLocalFile(srcC),
+            QUrl::fromLocalFile(dstC),
+            nullptr,
+            LocalFileMoveStrategy::ForceCopyAndRemove,
+            16 * 1024,
+            0);
+        moveC.setAutoDelete(false);
+        LocalMoveHistory histC;
+        histC.recordWhenCompleted(&moveC);
+        QSignalSpy spyC(&moveC, &KJob::result);
+        moveC.start();
+        waitForResult(spyC, "G3A.1 Test C: fsync ENOTSUP finishes");
+
+        verify(moveC.error() != KJob::NoError && moveC.moveError() == LocalFileMoveError::Durability,
+               "G3A.1 Test C: reports Durability error when directory fsync returns ENOTSUP");
+        verify(moveC.destinationPublished() && !moveC.directoryDurabilityConfirmed(),
+               "G3A.1 Test C: destination published but durability unconfirmed");
+        verify(QFileInfo::exists(srcC) && fileHash(srcC) == expectedHash,
+               "G3A.1 Test C: source file is preserved");
+        verify(QFileInfo::exists(dstC) && fileHash(dstC) == expectedHash,
+               "G3A.1 Test C: destination file is intact");
+        verify(!histC.canUndo(), "G3A.1 Test C/L: history rejects partial move");
+
+        simulateFsyncError() = false;
+        simulatedFsyncErrno() = EIO;
+    }
+
+    // Test D: fsync of directory returns EIO — source preserved, no destructive rollback of destination
+    {
+        const QString srcD = temporary.filePath(QStringLiteral("g3a1-testd-src.bin"));
+        const QString dstD = temporary.filePath(QStringLiteral("g3a1-testd-dst.bin"));
+        verify(writeFile(srcD, payload), "G3A.1 Test D: src created");
+
+        simulateFsyncError() = true;
+        simulatedFsyncErrno() = EIO;
+
+        LocalFileMoveJob moveD(
+            QUrl::fromLocalFile(srcD),
+            QUrl::fromLocalFile(dstD),
+            nullptr,
+            LocalFileMoveStrategy::ForceCopyAndRemove,
+            16 * 1024,
+            0);
+        moveD.setAutoDelete(false);
+        QSignalSpy spyD(&moveD, &KJob::result);
+        moveD.start();
+        waitForResult(spyD, "G3A.1 Test D: fsync EIO finishes");
+
+        verify(moveD.error() != KJob::NoError && moveD.moveError() == LocalFileMoveError::Durability,
+               "G3A.1 Test D: reports Durability error on EIO");
+        verify(moveD.destinationPublished(), "G3A.1 Test D: destination was published");
+        verify(!moveD.directoryDurabilityConfirmed(), "G3A.1 Test D: durability unconfirmed");
+        verify(QFileInfo::exists(srcD) && fileHash(srcD) == expectedHash,
+               "G3A.1 Test D: source preserved on EIO");
+        verify(QFileInfo::exists(dstD) && fileHash(dstD) == expectedHash,
+               "G3A.1 Test D: NO destructive rollback of published destination on EIO");
+
+        simulateFsyncError() = false;
+        simulatedFsyncErrno() = EIO;
+    }
+
+    // Test G: Copy remains fully functional per its contract (completes with NoError even when dir fsync is EINVAL)
+    {
+        const QString srcCopy = temporary.filePath(QStringLiteral("g3a1-copy-src.bin"));
+        const QString dstCopy = temporary.filePath(QStringLiteral("g3a1-copy-dst.bin"));
+        verify(writeFile(srcCopy, payload), "G3A.1 Test G: copy src created");
+
+        simulateFsyncError() = true;
+        simulatedFsyncErrno() = EINVAL;
+
+        LocalFileCopyJob copyJob(
+            QUrl::fromLocalFile(srcCopy),
+            QUrl::fromLocalFile(dstCopy),
+            nullptr,
+            16 * 1024,
+            0);
+        copyJob.setAutoDelete(false);
+        QSignalSpy copySpy(&copyJob, &KJob::result);
+        copyJob.start();
+        waitForResult(copySpy, "G3A.1 Test G: copy with EINVAL finishes");
+
+        verify(copyJob.error() == KJob::NoError,
+               "G3A.1 Test G: Copy completes with NoError on EINVAL directory fsync (tmpfs contract)");
+        verify(copyJob.destinationPublished(), "G3A.1 Test G: copy destination published");
+        verify(!copyJob.directoryDurabilityConfirmed(), "G3A.1 Test G: copy durability unconfirmed flag");
+        verify(QFileInfo::exists(srcCopy) && fileHash(srcCopy) == expectedHash,
+               "G3A.1 Test G: source exists intact");
+        verify(QFileInfo::exists(dstCopy) && fileHash(dstCopy) == expectedHash,
+               "G3A.1 Test G: destination exists with matching SHA-256");
+
+        simulateFsyncError() = false;
+        simulatedFsyncErrno() = EIO;
+    }
+
+    // Test H: Btrfs/native same-volume atomic Move still functions
+    {
+        const QString srcH = temporary.filePath(QStringLiteral("g3a1-atom-src.bin"));
+        const QString dstH = temporary.filePath(QStringLiteral("g3a1-atom-dst.bin"));
+        verify(writeFile(srcH, payload), "G3A.1 Test H: atomic src created");
+
+        LocalFileMoveJob moveAtomic(
+            QUrl::fromLocalFile(srcH),
+            QUrl::fromLocalFile(dstH),
+            nullptr,
+            LocalFileMoveStrategy::Automatic,
+            16 * 1024,
+            0);
+        moveAtomic.setAutoDelete(false);
+        QSignalSpy atomicSpy(&moveAtomic, &KJob::result);
+        moveAtomic.start();
+        waitForResult(atomicSpy, "G3A.1 Test H: atomic move finishes");
+
+        verify(moveAtomic.error() == KJob::NoError && moveAtomic.moveError() == LocalFileMoveError::None,
+               "G3A.1 Test H: atomic move reports NoError");
+        verify(moveAtomic.usedAtomicMove(), "G3A.1 Test H: usedAtomicMove confirmed");
+        verify(moveAtomic.destinationPublished() && moveAtomic.directoryDurabilityConfirmed(),
+               "G3A.1 Test H: destination published and durable");
+        verify(!QFileInfo::exists(srcH) && QFileInfo::exists(dstH),
+               "G3A.1 Test H: source unlinked and destination exists");
+        verify(fileHash(dstH) == expectedHash, "G3A.1 Test H: hash matches");
+    }
+
+    // Test I: NTFS-3G same-volume Move fallback succeeds when directory fsync succeeds
+    {
+        simulateRenameNoReplaceUnsupported() = true;
+        simulateNtfs3gFilesystem() = true;
+
+        const QString srcI = temporary.filePath(QStringLiteral("g3a1-ntfs-src.bin"));
+        const QString dstI = temporary.filePath(QStringLiteral("g3a1-ntfs-dst.bin"));
+        verify(writeFile(srcI, payload), "G3A.1 Test I: ntfs src created");
+
+        LocalFileMoveJob moveNtfs(
+            QUrl::fromLocalFile(srcI),
+            QUrl::fromLocalFile(dstI),
+            nullptr,
+            LocalFileMoveStrategy::Automatic,
+            16 * 1024,
+            0);
+        moveNtfs.setAutoDelete(false);
+        QSignalSpy ntfsSpy(&moveNtfs, &KJob::result);
+        moveNtfs.start();
+        waitForResult(ntfsSpy, "G3A.1 Test I: NTFS-3G move finishes");
+
+        verify(moveNtfs.error() == KJob::NoError && moveNtfs.moveError() == LocalFileMoveError::None,
+               "G3A.1 Test I: NTFS-3G move reports NoError");
+        verify(!moveNtfs.usedAtomicMove(), "G3A.1 Test I: uses copy-and-remove fallback");
+        verify(moveNtfs.destinationPublished() && moveNtfs.directoryDurabilityConfirmed(),
+               "G3A.1 Test I: destination published and durable");
+        verify(!QFileInfo::exists(srcI) && QFileInfo::exists(dstI),
+               "G3A.1 Test I: source unlinked and destination exists");
+        verify(fileHash(dstI) == expectedHash, "G3A.1 Test I: hash matches");
+
+        simulateRenameNoReplaceUnsupported() = false;
+        simulateNtfs3gFilesystem() = false;
+    }
+
     qInfo("PASS: %d LocalFileMoveJob/history assertions", checks);
     return 0;
 }

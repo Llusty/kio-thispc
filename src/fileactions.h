@@ -127,6 +127,13 @@ public:
             return;
         }
 
+        if (cut && isLocalMoveContainmentBlocked(urls, destination, true)) {
+            if (m_showRecoveryFence) {
+                m_showRecoveryFence(moveContainmentErrorMessage());
+            }
+            return;
+        }
+
         const FileOperationContext context = FileOperationContext::create(
             cut ? FileOperationType::Move : FileOperationType::Copy,
             urls, destination);
@@ -191,6 +198,12 @@ public:
         } else {
             if (cut && (MtpMoveSafety::isMtpSchemeUrl(destination)
                         || std::any_of(urls.begin(), urls.end(), MtpMoveSafety::isMtpSchemeUrl))) {
+                return;
+            }
+            if (cut && allLocalSources && destination.isLocalFile()) {
+                if (m_showRecoveryFence) {
+                    m_showRecoveryFence(moveContainmentErrorMessage());
+                }
                 return;
             }
             KIO::CopyJob *cjob =
@@ -1453,6 +1466,13 @@ public:
         if (!checkAndRefuseUnsafeMtpMove(urls, destination, move)) {
             return;
         }
+
+        if (move && isLocalMoveContainmentBlocked(urls, destination, true)) {
+            if (m_showRecoveryFence) {
+                m_showRecoveryFence(moveContainmentErrorMessage());
+            }
+            return;
+        }
         const FileOperationContext context = FileOperationContext::create(
             action == Qt::MoveAction ? FileOperationType::Move : FileOperationType::Copy,
             urls, destination);
@@ -1517,6 +1537,12 @@ public:
         } else {
             if (move && (MtpMoveSafety::isMtpSchemeUrl(destination)
                          || std::any_of(urls.begin(), urls.end(), MtpMoveSafety::isMtpSchemeUrl))) {
+                return;
+            }
+            if (move && allLocalSources && destination.isLocalFile()) {
+                if (m_showRecoveryFence) {
+                    m_showRecoveryFence(moveContainmentErrorMessage());
+                }
                 return;
             }
             KIO::CopyJob *cjob =
@@ -2020,6 +2046,10 @@ private:
             THISPC_TRACE("enqueueProductionTransfer: refused by MTP move safety policy");
             return true;
         }
+        if (move && isLocalMoveContainmentBlocked(sources, destinationDirectory, true)) {
+            THISPC_TRACE("enqueueProductionTransfer: refused by local move safety containment");
+            return false;
+        }
         if (!m_queueController) {
             THISPC_TRACE("enqueueProductionTransfer: m_queueController is NULL!");
             return false;
@@ -2063,13 +2093,17 @@ private:
                     break;
                 }
                 if (!targetInfo.isFile() || targetInfo.isSymLink()) {
-                    if (allLocal) allLocal = false;
+                    if (allLocal) {
+                        if (move) return false;
+                        allLocal = false;
+                    }
                     break;
                 }
                 if (allLocal) {
                     const QFileInfo sourceInfo(sources.first().toLocalFile());
                     if (LocalFileIdentity::read(sourceInfo.absoluteFilePath())
                             .sameFile(LocalFileIdentity::read(destination.toLocalFile()))) {
+                        if (move) return false;
                         allLocal = false;
                         break;
                     }
@@ -2171,10 +2205,9 @@ private:
                 } else {
                     auto *treeJob = new LocalTransferJob(sources, destinationDirectory, move, this);
                     treeJob->setFallbackFactory([this, sources, destinationDirectory, move] {
+                        if (move) return static_cast<KIO::CopyJob *>(nullptr);
                         if (!mutationAllowed()) return static_cast<KIO::CopyJob *>(nullptr);
-                        auto *fallback = move
-                            ? KIO::move(sources, destinationDirectory, KIO::HideProgressInfo)
-                            : KIO::copy(sources, destinationDirectory, KIO::HideProgressInfo);
+                        auto *fallback = KIO::copy(sources, destinationDirectory, KIO::HideProgressInfo);
                         configureInteractiveCopyJob(fallback);
                         if (m_undoController) m_undoController->recordCopyJob(fallback);
                         return fallback;
@@ -2196,8 +2229,9 @@ private:
                 }
                 job = stagedJob;
             } else {
-                // Defense in depth: never invoke KIO::move if any URL is mtp:/
-                if (move && (MtpMoveSafety::isMtpSchemeUrl(destinationDirectory)
+                // Defense in depth: never invoke KIO::move if any URL is mtp:/ or all local
+                if (move && (allLocal
+                             || MtpMoveSafety::isMtpSchemeUrl(destinationDirectory)
                              || std::any_of(sources.begin(), sources.end(), MtpMoveSafety::isMtpSchemeUrl))) {
                     return nullptr;
                 }
@@ -2260,10 +2294,9 @@ private:
             if (!mutationAllowed()) return true;
             auto *job = new LocalTransferJob(sources, destinationDirectory, move, this);
             job->setFallbackFactory([this, sources, destinationDirectory, move] {
+                if (move) return static_cast<KIO::CopyJob *>(nullptr);
                 if (!mutationAllowed()) return static_cast<KIO::CopyJob *>(nullptr);
-                auto *fallback = move
-                    ? KIO::move(sources, destinationDirectory, KIO::HideProgressInfo)
-                    : KIO::copy(sources, destinationDirectory, KIO::HideProgressInfo);
+                auto *fallback = KIO::copy(sources, destinationDirectory, KIO::HideProgressInfo);
                 configureInteractiveCopyJob(fallback);
                 if (m_undoController) m_undoController->recordCopyJob(fallback);
                 return fallback;
@@ -2290,12 +2323,16 @@ private:
             if (!targetInfo.isFile() || targetInfo.isSymLink()
                 || LocalFileIdentity::read(sourceInfo.absoluteFilePath())
                     .sameFile(LocalFileIdentity::read(destination.toLocalFile()))) {
-                // Keep KIO's handling of type conflicts and self-copy, also
-                // when a renamed destination introduces such a conflict.
+                // Keep KIO's handling of type conflicts and self-copy for COPY,
+                // but fail-closed for MOVE!
+                if (move) {
+                    if (m_showRecoveryFence) {
+                        m_showRecoveryFence(moveContainmentErrorMessage());
+                    }
+                    return true;
+                }
                 if (!mutationAllowed()) return true;
-                auto *job = move
-                    ? KIO::moveAs(sources.first(), destination, KIO::HideProgressInfo)
-                    : KIO::copyAs(sources.first(), destination, KIO::HideProgressInfo);
+                auto *job = KIO::copyAs(sources.first(), destination, KIO::HideProgressInfo);
                 configureInteractiveCopyJob(job);
                 if (m_undoController) m_undoController->recordCopyJob(job);
                 FileOperationContext jobCtx = opContext.type != FileOperationType::Custom ? opContext
@@ -2385,6 +2422,11 @@ private:
                             const FileOperationContext &context = {})
     {
         m_watchOperation(job, message, clearClipboard, title, refreshViews, context);
+    }
+
+    void setShowRecoveryFence(std::function<void(const QString &)> cb)
+    {
+        m_showRecoveryFence = std::move(cb);
     }
 
     QWidget *m_parentWidget = nullptr;

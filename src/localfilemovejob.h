@@ -31,6 +31,7 @@ enum class LocalFileMoveError {
     Copy,
     Verification,
     SourceRemove,
+    Durability,
 };
 
 enum class LocalFileMoveStrategy {
@@ -94,6 +95,8 @@ public:
     LocalFileMoveError moveError() const { return m_moveError; }
     bool usedAtomicMove() const { return m_usedAtomicMove; }
     int systemError() const { return m_systemError; }
+    bool destinationPublished() const { return m_destinationPublished; }
+    bool directoryDurabilityConfirmed() const { return m_directoryDurabilityConfirmed; }
 
 protected:
     bool doKill() override
@@ -147,7 +150,9 @@ private:
             || sourceInfo.isSymLink()
             || !QFileInfo(destinationPath).dir().exists()) {
             finish(LocalFileMoveError::InvalidInput,
-                   tr("The source or destination is not valid for a local file move."));
+                   (sourceInfo.isSymLink() || sourceInfo.isDir())
+                       ? moveContainmentErrorMessage()
+                       : tr("The source or destination is not valid for a local file move."));
             return;
         }
         if (destinationInfo.exists() || destinationInfo.isSymLink()) {
@@ -196,6 +201,8 @@ private:
                 finish(LocalFileMoveError::AtomicMove, errorMsg);
                 return;
             }
+            m_destinationPublished = true;
+            m_directoryDurabilityConfirmed = true;
             setProcessedAmount(KJob::Bytes, m_sourceSize);
             finish(LocalFileMoveError::None, {});
             return;
@@ -228,8 +235,26 @@ private:
         connect(m_copyJob, &KJob::result,
                 this, [this](KJob *completed) {
                     if (m_finished) return;
+
+                    m_destinationPublished = m_copyJob->destinationPublished();
+                    m_directoryDurabilityConfirmed = m_copyJob->directoryDurabilityConfirmed();
+                    m_systemError = m_copyJob->systemError();
+
                     if (completed->error() != KJob::NoError) {
-                        m_systemError = m_copyJob->systemError();
+                        if (m_destinationPublished) {
+                            // Stage 5.3.2G.3A.1 Durability Gate:
+                            // Destination was published on disk, but subsequent operation (e.g. directory fsync with EIO) failed.
+                            // CRITICAL RULE: NEVER rollback or delete the published destination!
+                            // CRITICAL RULE: NEVER remove the source file!
+                            const QString errorMsg = (QLocale().language() == QLocale::Polish)
+                                ? QStringLiteral("Plik docelowy został opublikowany, lecz synchronizacja katalogu docelowego zakończyła się błędem (%1). Plik źródłowy i docelowy zostały zachowane.")
+                                      .arg(m_systemError != 0 ? QString::number(m_systemError) : QStringLiteral("EIO"))
+                                : tr("The destination was published, but destination directory synchronization failed (%1). Both source and destination have been preserved.")
+                                      .arg(m_systemError != 0 ? QString::number(m_systemError) : QStringLiteral("EIO"));
+                            finish(LocalFileMoveError::Durability, errorMsg);
+                            return;
+                        }
+
                         const LocalFileMoveError moveErr =
                             completed->error() == KJob::KilledJobError
                                 ? LocalFileMoveError::Cancelled
@@ -329,6 +354,21 @@ private:
                         return;
                     }
 
+                    // 2c. Directory durability verification gate:
+                    // If directory durability was not confirmed (fsync returned EINVAL, ENOTSUP, or failed):
+                    // WE MUST NOT REMOVE THE SOURCE FILE!
+                    if (!m_directoryDurabilityConfirmed) {
+                        const int sysErr = m_systemError != 0 ? m_systemError : EOPNOTSUPP;
+                        m_systemError = sysErr;
+                        const QString errorMsg = (QLocale().language() == QLocale::Polish)
+                            ? QStringLiteral("Nie można potwierdzić trwałości wpisu katalogu docelowego po awarii zasilania (%1). Plik docelowy został opublikowany, a plik źródłowy został zachowany.")
+                                  .arg(sysErr)
+                            : tr("Destination directory durability could not be confirmed (%1). The destination file was published, and the source file has been preserved.")
+                                  .arg(sysErr);
+                        finish(LocalFileMoveError::Durability, errorMsg);
+                        return;
+                    }
+
                     // 3. Safe source removal
                     const bool removed = m_hasCustomRemoveSource
                         ? m_removeSource(sourcePath)
@@ -402,8 +442,14 @@ private:
         if (m_finished) return;
         m_finished = true;
         m_moveError = error;
+        setProperty("thispcMoveError", QVariant::fromValue(error));
         setProperty("thispcDestinationReplaced",
                     m_overwrite && !m_originalDestination.matches(m_destination.toLocalFile()));
+        setProperty("thispcDestinationPublished", m_destinationPublished);
+        setProperty("thispcDirectoryDurabilityConfirmed", m_directoryDurabilityConfirmed);
+        if (error == LocalFileMoveError::Durability) {
+            setProperty("thispcPartialMoveOutcome", true);
+        }
         if (m_systemError != 0) {
             setProperty("thispcSystemError", m_systemError);
         }
@@ -431,6 +477,8 @@ private:
     bool m_started = false;
     bool m_finished = false;
     bool m_usedAtomicMove = false;
+    bool m_destinationPublished = false;
+    bool m_directoryDurabilityConfirmed = false;
     LocalFileMoveError m_moveError = LocalFileMoveError::None;
     int m_systemError = 0;
 };

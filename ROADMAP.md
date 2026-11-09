@@ -694,6 +694,27 @@ When standard operations receive permission denied errors, provide targeted `adm
         - Manual GUI Acceptance on `/mnt/d/ThisPC_FS_Test/`: **3/3 FULL PASS** by user;
         - Full regression: 77/77 test suites PASS; ASan/UBSan clean;
       - **Security Release Gate Status:** **`BLOCKED / FINAL RELEASE VERIFICATION PENDING`** (system version 0.44.0 untouched).
+    - **Stage 5.3.2G.3A — Cross-Filesystem Move Routing & Safety Audit:** ✅ AUDIT COMPLETED:
+      - Resolved routing discrepancy: confirmed single-file cross-filesystem moves route to `LocalFileMoveJob::startCopyAndRemove()`;
+      - Identified critical security containment risks: destructive destination rollback in `LocalTransferJob::transferLink()`, unverified KIO::move fallback on conflicts/unsupported entries, and missing check on destination directory fsync return value in `linkat` publication;
+      - Formulated safety containment requirements for unverified recursive/multi-item moves;
+    - **Stage 5.3.2G.3A.1 — Local Move Safety Containment & Durability Gate:** ✅ CLOSED / AUTOMATED PASS / BACKED UP / COMMITTED / PUSHED:
+      - **Durability Gate Implementation:** Established a strict durability gate in `LocalFileMoveJob` prior to source removal. If parent directory synchronization `fsync(destDirFd)` returns `EINVAL`, `ENOTSUP`, or `EIO`, the source file is preserved and unlinking is refused;
+      - **Partial Outcome & Anti-Rollback Protection:** If destination publication succeeded before a sync failure, destination is preserved without destructive rollback, and a partial result (`LocalFileMoveError::Durability`, `thispcPartialMoveOutcome = true`) is reported to GUI, transfer queue, and history;
+      - **Copy Compatibility Intact:** Normal Copy operations remain functional on filesystems where directory `fsync` is unsupported (`EINVAL`/`ENOTSUP` like tmpfs), completing with verified data while exposing durability status;
+      - **Distinction of Safety Boundaries:**
+        - *Collision Protection:* Atomic `EEXIST` / `RENAME_NOREPLACE` prevents silent overwriting;
+        - *Data Integrity:* Cryptographic SHA-256 validation verifies exact on-disk byte streams before source removal;
+        - *Target Durability:* Directory `fsync` ensures directory metadata durability before unlinking the source;
+        - *TOCTOU Mitigation:* Inode/device identity verification (`fstatat`) restricts substitution risks within POSIX VFS boundaries;
+        - *Power Loss Limits:* Post-crash guarantees remain bounded by hardware write caches, driver implementations, and non-transactional filesystem boundaries. No claim of universal duplicate outcomes or absolute power-cut immunity is made;
+      - **Fail-Closed Move Containment:** Temporarily blocks unverified local moves (multi-item, directory, symlink, overwrite) fail-closed before any filesystem mutation;
+      - **KIO Bypass Prevention:** Intercepted all paths to `KIO::move` / `KIO::moveAs` for local moves; disabled fallback to KIO on conflict or unsupported items in `LocalTransferJob`;
+      - **Elimination of Symlink Rollback:** Removed destructive `QFile::remove(entry.destinationPath)` in `LocalTransferJob::transferLink()`;
+      - **Preservation of Core Functionality:** Regular single-file Move without overwrite and all Copy operations (single, batch, directory, symlink) remain 100% active and functional;
+      - **Automated Verification:** `local_move` suite expanded to 224 assertions PASS (Scenarios A–L); `local_transfer`: 113/113 PASS; `local_tree`: 61/61 PASS; `tree_history`: 17/17 PASS; `actions`: 216/216 PASS; `panes`: 1413/1413 PASS; full regression: 77/77 test suites PASS; ASan/UBSan clean;
+      - **Remaining Open Scope:** Stage 5.3.2G.3B (Cross-Filesystem Directory/Tree Move Verification) remains open;
+      - **Security Release Gate Status:** **`BLOCKED / FINAL RELEASE VERIFICATION PENDING`** (system version 0.44.0 untouched).
 
 ### 0.45.0 — Security Release Gate
 - Prior to official release, a mandatory comprehensive security audit is required, covering unauthorized code execution, potential backdoors, administrative privilege escalation, third-party dependencies, installer integrity, and file operation safety;

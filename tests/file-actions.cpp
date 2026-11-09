@@ -503,5 +503,193 @@ int main(int argc, char **argv)
            "callback after window destruction is ignored safely");
     interceptFileJobs = false;
 
+    // =========================================================================
+    // Stage 5.3.2G.3A.1: Move Routing & Safety Containment Scenarios (A - J)
+    // =========================================================================
+
+    QString lastFenceMessage;
+    actions.setShowRecoveryFence([&lastFenceMessage](const QString &msg) {
+        lastFenceMessage = msg;
+    });
+
+    // Scenario A: Ctrl+X / Ctrl+V of a single regular local file with transfer queue enabled
+    {
+        const QString srcA = files.filePath("queue-single-src.txt");
+        const QString dstA = b + "/queue-single-src.txt";
+        createFixture(srcA, "queue-move-payload");
+        auto *cutMimeA = new QMimeData;
+        cutMimeA->setUrls({QUrl::fromLocalFile(srcA)});
+        cutMimeA->setData(QStringLiteral("application/x-kde-cutselection"), QByteArrayLiteral("1"));
+        app.clipboard()->setMimeData(cutMimeA);
+
+        TransferQueueController queueCtl(&parent);
+        actions.setQueueController(&queueCtl);
+        setTransferQueueProductionDispatchConnected(true);
+
+        actions.pasteClipboardInto(rootB);
+        verify(queueCtl.snapshot().tasks.size() == 1,
+               "Scenario A: single regular file move enqueued to production queue");
+        verify(QTest::qWaitFor([&queueCtl] {
+                   return queueCtl.snapshot().tasks.front().state == TransferTaskState::Completed;
+               }, 5000),
+               "Scenario A: production queue task completes");
+        verify(!QFile::exists(srcA) && readFile(dstA) == "queue-move-payload",
+               "Scenario A: single regular local file moved safely via queue");
+
+        setTransferQueueProductionDispatchConnected(false);
+        actions.setQueueController(nullptr);
+    }
+
+    // Scenario B: Ctrl+X / Ctrl+V of a single regular local file in legacy mode (queue disabled)
+    {
+        const QString srcB = files.filePath("legacy-single-src.txt");
+        const QString dstB = b + "/legacy-single-src.txt";
+        createFixture(srcB, "legacy-move-payload");
+        auto *cutMimeB = new QMimeData;
+        cutMimeB->setUrls({QUrl::fromLocalFile(srcB)});
+        cutMimeB->setData(QStringLiteral("application/x-kde-cutselection"), QByteArrayLiteral("1"));
+        app.clipboard()->setMimeData(cutMimeB);
+
+        const int expectedB = completed + 1;
+        actions.pasteClipboardInto(rootB);
+        waitJob(expectedB);
+        verify(lastNativeMove && !QFile::exists(srcB) && readFile(dstB) == "legacy-move-payload",
+               "Scenario B: single regular local file moved safely via legacy native path");
+    }
+
+    // Scenario C: Drag & Drop with Qt::MoveAction for a single regular file
+    {
+        const QString srcC = files.filePath("dnd-single-src.txt");
+        const QString dstC = b + "/dnd-single-src.txt";
+        createFixture(srcC, "dnd-move-payload");
+        const int expectedC = completed + 1;
+        actions.transfer({QUrl::fromLocalFile(srcC)}, rootB, Qt::MoveAction);
+        waitJob(expectedC);
+        verify(lastNativeMove && !QFile::exists(srcC) && readFile(dstC) == "dnd-move-payload",
+               "Scenario C: single regular local file moved safely via Drag & Drop");
+    }
+
+    // Scenario D: Context menu Cut / Paste of a single regular file
+    {
+        const QString srcD = files.filePath("ctx-single-src.txt");
+        const QString dstD = b + "/ctx-single-src.txt";
+        createFixture(srcD, "ctx-move-payload");
+        auto *cutMimeD = new QMimeData;
+        cutMimeD->setUrls({QUrl::fromLocalFile(srcD)});
+        cutMimeD->setData(QStringLiteral("application/x-kde-cutselection"), QByteArrayLiteral("1"));
+        app.clipboard()->setMimeData(cutMimeD);
+
+        const int expectedD = completed + 1;
+        actions.pasteClipboardInto(rootB);
+        waitJob(expectedD);
+        verify(lastNativeMove && !QFile::exists(srcD) && readFile(dstD) == "ctx-move-payload",
+               "Scenario D: single regular local file moved safely via Cut / Paste menu path");
+    }
+
+    // Scenario E: Single symlink move refusal before modification
+    {
+        const QString targetE = files.filePath("symlink-target.txt");
+        const QString linkE = files.filePath("symlink-src.lnk");
+        createFixture(targetE, "target-payload");
+        verify(::symlink(QFile::encodeName(targetE).constData(), QFile::encodeName(linkE).constData()) == 0,
+               "Scenario E: symlink fixture created");
+        auto *cutMimeE = new QMimeData;
+        cutMimeE->setUrls({QUrl::fromLocalFile(linkE)});
+        cutMimeE->setData(QStringLiteral("application/x-kde-cutselection"), QByteArrayLiteral("1"));
+        app.clipboard()->setMimeData(cutMimeE);
+
+        lastFenceMessage.clear();
+        const int beforeE = completed;
+        actions.pasteClipboardInto(rootB);
+        verify(completed == beforeE && QFileInfo(linkE).isSymLink() && !QFile::exists(b + "/symlink-src.lnk")
+                   && lastFenceMessage == moveContainmentErrorMessage(),
+               "Scenario E: single symlink move refused fail-closed before any modification");
+    }
+
+    // Scenario F: Directory move refusal before modification
+    {
+        const QString dirF = files.filePath("dir-f-src");
+        verify(QDir().mkpath(dirF + "/sub"), "Scenario F: directory fixture created");
+        createFixture(dirF + "/sub/item.txt", "data");
+        auto *cutMimeF = new QMimeData;
+        cutMimeF->setUrls({QUrl::fromLocalFile(dirF)});
+        cutMimeF->setData(QStringLiteral("application/x-kde-cutselection"), QByteArrayLiteral("1"));
+        app.clipboard()->setMimeData(cutMimeF);
+
+        lastFenceMessage.clear();
+        const int beforeF = completed;
+        actions.pasteClipboardInto(rootB);
+        verify(completed == beforeF && QFileInfo::exists(dirF + "/sub/item.txt")
+                   && !QFileInfo::exists(b + "/dir-f-src")
+                   && lastFenceMessage == moveContainmentErrorMessage(),
+               "Scenario F: directory move refused fail-closed before any modification");
+    }
+
+    // Scenario G: Multiple regular files move refusal before modification
+    {
+        const QString fileG1 = files.filePath("multi-g1.txt");
+        const QString fileG2 = files.filePath("multi-g2.txt");
+        createFixture(fileG1, "g1");
+        createFixture(fileG2, "g2");
+        auto *cutMimeG = new QMimeData;
+        cutMimeG->setUrls({QUrl::fromLocalFile(fileG1), QUrl::fromLocalFile(fileG2)});
+        cutMimeG->setData(QStringLiteral("application/x-kde-cutselection"), QByteArrayLiteral("1"));
+        app.clipboard()->setMimeData(cutMimeG);
+
+        lastFenceMessage.clear();
+        const int beforeG = completed;
+        actions.pasteClipboardInto(rootB);
+        verify(completed == beforeG && QFile::exists(fileG1) && QFile::exists(fileG2)
+                   && !QFile::exists(b + "/multi-g1.txt") && !QFile::exists(b + "/multi-g2.txt")
+                   && lastFenceMessage == moveContainmentErrorMessage(),
+               "Scenario G: multiple files move refused fail-closed before any modification");
+    }
+
+    // Scenario H: Conflict during Move - no fallback to KIO
+    {
+        const QString srcH = files.filePath("conflict-h.txt");
+        const QString dstH = b + "/conflict-h.txt";
+        createFixture(srcH, "conflict-source");
+        createFixture(dstH, "conflict-existing");
+        auto *cutMimeH = new QMimeData;
+        cutMimeH->setUrls({QUrl::fromLocalFile(srcH)});
+        cutMimeH->setData(QStringLiteral("application/x-kde-cutselection"), QByteArrayLiteral("1"));
+        app.clipboard()->setMimeData(cutMimeH);
+
+        QTimer::singleShot(0, &parent, [] {
+            if (auto *dialog = qobject_cast<KIO::RenameDialog *>(QApplication::activeModalWidget())) {
+                dialog->skipPressed();
+            }
+        });
+        const int beforeH = completed;
+        actions.pasteClipboardInto(rootB);
+        verify(completed == beforeH && QFile::exists(srcH) && readFile(dstH) == "conflict-existing",
+               "Scenario H: move conflict skipped without KIO fallback; both files preserved");
+    }
+
+    // Scenario I: Ordinary copy of files, directories and symlinks has no regression
+    {
+        const QString copySrc = files.filePath("copy-reg.txt");
+        const QString copyDst = b + "/copy-reg.txt";
+        createFixture(copySrc, "copy-reg-payload");
+        const int expectedI = completed + 1;
+        actions.transfer({QUrl::fromLocalFile(copySrc)}, rootB, Qt::CopyAction);
+        waitJob(expectedI);
+        verify(lastNativeCopy && QFile::exists(copySrc) && readFile(copyDst) == "copy-reg-payload",
+               "Scenario I: ordinary copy of file continues to work natively without regression");
+    }
+
+    // Scenario J: Local move of single file on Btrfs
+    {
+        const QString srcJ = files.filePath("btrfs-single-src.txt");
+        const QString dstJ = b + "/btrfs-single-src.txt";
+        createFixture(srcJ, "btrfs-payload");
+        const int expectedJ = completed + 1;
+        actions.transfer({QUrl::fromLocalFile(srcJ)}, rootB, Qt::MoveAction);
+        waitJob(expectedJ);
+        verify(lastNativeMove && !QFile::exists(srcJ) && readFile(dstJ) == "btrfs-payload",
+               "Scenario J: single regular file move executes cleanly on native filesystem");
+    }
+
     qInfo("PASS: %d FileActions assertions; native local copy/move, KIO fallbacks, conflicts, Undo/Redo", checks);
 }

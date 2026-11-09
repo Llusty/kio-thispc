@@ -82,16 +82,10 @@ int main(int argc, char **argv)
     waitResult(moveResult);
     LocalTreeHistory moves;
     moves.recordCompleted(&move, 20);
-    verify(move.error() == 0 && moves.canUndo() && !QFileInfo::exists(source),
-           "completed merged tree move enters history");
-    verify(waitHistory(moves.undo())->error() == 0 && readFile(source + "/nested/data") == "payload"
-               && readFile(merge + "/source/unrelated") == "keep"
-               && !QFileInfo::exists(merge + "/source/nested"),
-           "move Undo restores sources and preserves the pre-existing merged directory");
-    verify(waitHistory(moves.redo())->error() == 0 && !QFileInfo::exists(source)
-               && readFile(merge + "/source/nested/data") == "payload"
-               && readFile(merge + "/source/unrelated") == "keep",
-           "move Redo reapplies the exact plan without touching unrelated contents");
+    verify(move.error() != 0 && !moves.canUndo() && QFileInfo::exists(source)
+               && !QFileInfo::exists(merge + "/source/nested")
+               && move.errorText() == moveContainmentErrorMessage(),
+           "tree move fails closed under containment and is rejected from history");
     qInfo("PASS: %d LocalTreeHistory assertions", checks);
     return 0;
 }

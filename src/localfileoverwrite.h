@@ -6,8 +6,12 @@
 
 #include <QFile>
 #include <QFileInfo>
+#include <QList>
+#include <QLocale>
+#include <QObject>
 #include <QStorageInfo>
 #include <QString>
+#include <QUrl>
 #include <cerrno>
 #include <fcntl.h>
 #include <functional>
@@ -24,6 +28,36 @@
 #ifndef FUSE_SUPER_MAGIC
 #define FUSE_SUPER_MAGIC 0x65735546
 #endif
+
+inline QString moveContainmentErrorMessage()
+{
+    return QLocale().language() == QLocale::Polish
+        ? QStringLiteral("Przenoszenie tego rodzaju elementów jest tymczasowo niedostępne ze względów bezpieczeństwa danych. Możesz skopiować elementy zamiast je przenosić.")
+        : QObject::tr("Moving this type of item is temporarily unavailable for data safety reasons. You can copy the items instead of moving them.");
+}
+
+inline bool isSingleRegularLocalFile(const QList<QUrl> &urls)
+{
+    if (urls.size() != 1 || !urls.first().isLocalFile()) {
+        return false;
+    }
+    const QFileInfo info(urls.first().toLocalFile());
+    if (info.isDir() || info.isSymLink()) {
+        return false;
+    }
+    return true;
+}
+
+inline bool isLocalMoveContainmentBlocked(const QList<QUrl> &sources, const QUrl &destinationDirectory, bool move)
+{
+    if (!move || !destinationDirectory.isLocalFile()) {
+        return false;
+    }
+    for (const QUrl &u : sources) {
+        if (!u.isLocalFile()) return false;
+    }
+    return !isSingleRegularLocalFile(sources);
+}
 
 struct LocalFileIdentity
 {
@@ -92,6 +126,12 @@ inline bool &simulateNtfs3gFilesystem()
 inline bool &simulateFsyncError()
 {
     static bool err = false;
+    return err;
+}
+
+inline int &simulatedFsyncErrno()
+{
+    static int err = EIO;
     return err;
 }
 
@@ -198,7 +238,9 @@ inline bool publishOwnedStagingNoOverwrite(
     const LocalFileIdentity &expectedStagingIdentity,
     bool *collisionDetected = nullptr,
     int *outErrorNumber = nullptr,
-    bool *stagingUnlinkFailed = nullptr)
+    bool *stagingUnlinkFailed = nullptr,
+    bool *destinationPublished = nullptr,
+    bool *directoryDurabilityConfirmed = nullptr)
 {
     if (collisionDetected) {
         *collisionDetected = false;
@@ -208,6 +250,12 @@ inline bool publishOwnedStagingNoOverwrite(
     }
     if (stagingUnlinkFailed) {
         *stagingUnlinkFailed = false;
+    }
+    if (destinationPublished) {
+        *destinationPublished = false;
+    }
+    if (directoryDurabilityConfirmed) {
+        *directoryDurabilityConfirmed = false;
     }
 
     if (stagingFd < 0 || !expectedStagingIdentity.valid) {
@@ -395,22 +443,33 @@ inline bool publishOwnedStagingNoOverwrite(
             return false;
         }
 
+        if (destinationPublished) {
+            *destinationPublished = true;
+        }
+
         // Parent directory durability
         int fsyncRes = ::fsync(destDirFd);
 #ifdef THISPC_TEST_HARNESS
         if (simulateFsyncError()) {
             fsyncRes = -1;
-            errno = EIO;
+            errno = simulatedFsyncErrno();
         }
 #endif
         if (fsyncRes != 0) {
-            const int syncErr = errno;
+            const int syncErr = errno ? errno : EIO;
+            if (directoryDurabilityConfirmed) {
+                *directoryDurabilityConfirmed = false;
+            }
+            if (outErrorNumber) {
+                *outErrorNumber = syncErr;
+            }
             if (syncErr != EINVAL && syncErr != ENOTSUP) {
                 ::close(destDirFd);
-                if (outErrorNumber) {
-                    *outErrorNumber = syncErr;
-                }
                 return false;
+            }
+        } else {
+            if (directoryDurabilityConfirmed) {
+                *directoryDurabilityConfirmed = true;
             }
         }
 
@@ -430,6 +489,10 @@ inline bool publishOwnedStagingNoOverwrite(
             }
             return false;
         }
+    }
+
+    if (destinationPublished) {
+        *destinationPublished = true;
     }
 
     // Unlink staging link from destination directory
@@ -457,7 +520,30 @@ inline bool publishOwnedStagingNoOverwrite(
     }
 
     // Sync parent directory to persist directory entries (POSIX directory durability)
-    ::fsync(destDirFd);
+    int fsyncRes = ::fsync(destDirFd);
+#ifdef THISPC_TEST_HARNESS
+    if (simulateFsyncError()) {
+        fsyncRes = -1;
+        errno = simulatedFsyncErrno();
+    }
+#endif
+    if (fsyncRes != 0) {
+        const int syncErr = errno ? errno : EIO;
+        if (directoryDurabilityConfirmed) {
+            *directoryDurabilityConfirmed = false;
+        }
+        if (outErrorNumber) {
+            *outErrorNumber = syncErr;
+        }
+        if (syncErr != EINVAL && syncErr != ENOTSUP) {
+            ::close(destDirFd);
+            return false;
+        }
+    } else {
+        if (directoryDurabilityConfirmed) {
+            *directoryDurabilityConfirmed = true;
+        }
+    }
     ::close(destDirFd);
     return true;
 }

@@ -125,6 +125,24 @@ public:
         return m_transferredChecksum;
     }
 
+    bool destinationPublished() const
+    {
+        QMutexLocker locker(&m_mutex);
+        return m_destinationPublished;
+    }
+
+    bool directoryDurabilityConfirmed() const
+    {
+        QMutexLocker locker(&m_mutex);
+        return m_directoryDurabilityConfirmed;
+    }
+
+    int publishSystemError() const
+    {
+        QMutexLocker locker(&m_mutex);
+        return m_publishSystemError;
+    }
+
     bool requestCancel()
     {
         QMutexLocker locker(&m_mutex);
@@ -357,6 +375,8 @@ public Q_SLOTS:
             bool collision = false;
             int publishErr = 0;
             bool unlinkFailed = false;
+            bool destPublished = false;
+            bool dirDurabilityConfirmed = false;
             const bool published = publishOwnedStagingNoOverwrite(
                 stagingFd,
                 m_partialPath,
@@ -364,12 +384,18 @@ public Q_SLOTS:
                 partialIdentity,
                 &collision,
                 &publishErr,
-                &unlinkFailed);
+                &unlinkFailed,
+                &destPublished,
+                &dirDurabilityConfirmed);
 
             if (stagingFd >= 0) {
                 ::close(stagingFd);
                 stagingFd = -1;
             }
+
+            m_destinationPublished = destPublished;
+            m_directoryDurabilityConfirmed = dirDurabilityConfirmed;
+            m_publishSystemError = publishErr;
 
             if (!published) {
                 removeVerifiedPartial(m_partialPath, partialIdentity);
@@ -384,7 +410,11 @@ public Q_SLOTS:
                         ? (QLocale().language() == QLocale::Polish
                             ? QStringLiteral("System plików nie obsługuje bezpiecznej atomowej publikacji pliku bez nadpisania.")
                             : tr("The filesystem does not support atomic file publication without overwrite."))
-                        : tr("Could not publish the completed file.");
+                        : (publishErr == EIO && destPublished)
+                            ? (QLocale().language() == QLocale::Polish
+                                ? QStringLiteral("Plik został opublikowany, lecz synchronizacja katalogu docelowego zakończyła się błędem wejścia/wyjścia (EIO).")
+                                : tr("The file was published, but destination directory synchronization failed with an I/O error (EIO)."))
+                            : tr("Could not publish the completed file.");
                     finishWithError(
                         LocalTransferError::Publish,
                         errorMsg,
@@ -460,6 +490,9 @@ private:
     bool m_finished = false;
     qulonglong m_processedBytes = 0;
     QByteArray m_transferredChecksum;
+    bool m_destinationPublished = false;
+    bool m_directoryDurabilityConfirmed = false;
+    int m_publishSystemError = 0;
     std::shared_ptr<TransferBandwidthLimiter> m_limiter;
     quint64 m_taskId = 0;
 };
@@ -570,6 +603,14 @@ public:
     {
         return m_worker ? m_worker->transferredChecksum() : QByteArray();
     }
+    bool destinationPublished() const
+    {
+        return m_worker ? m_worker->destinationPublished() : false;
+    }
+    bool directoryDurabilityConfirmed() const
+    {
+        return m_worker ? m_worker->directoryDurabilityConfirmed() : false;
+    }
 
     Q_INVOKABLE void setBandwidthLimiter(std::shared_ptr<TransferBandwidthLimiter> limiter, quint64 taskId = 0)
     {
@@ -637,6 +678,11 @@ private:
         m_finished = true;
         setProperty("thispcDestinationReplaced",
                     m_overwrite && !m_originalDestination.matches(m_destination.toLocalFile()));
+        setProperty("thispcDestinationPublished", destinationPublished());
+        setProperty("thispcDirectoryDurabilityConfirmed", directoryDurabilityConfirmed());
+        if (m_systemError == 0 && m_worker && m_worker->publishSystemError() != 0) {
+            m_systemError = m_worker->publishSystemError();
+        }
         if (m_systemError != 0) {
             setProperty("thispcSystemError", m_systemError);
         }

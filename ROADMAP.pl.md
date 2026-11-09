@@ -796,6 +796,27 @@ Gdy zwykła operacja plikowa zakończy się błędem braku uprawnień (Permissio
         - Odbiór ręczny w GUI na `/mnt/d/ThisPC_FS_Test/`: **3/3 FULL PASS** przez użytkownika;
         - Pełna regresja: 77/77 zestawów testowych PASS; ASan/UBSan czyste;
       - **Stan bramki bezpieczeństwa (Security Release Gate):** **`BLOCKED / FINAL RELEASE VERIFICATION PENDING`** (wersja systemowa 0.44.0 nienaruszona).
+    - **Etap 5.3.2G.3A — Audyt routingu i bezpieczeństwa przenoszenia między systemami plików (Cross-Filesystem Move Routing & Safety Audit):** ✅ AUDYT ZAKOŃCZONY:
+      - Rozstrzygnięto rozbieżność w routingu: potwierdzono, że przenoszenie pojedynczych plików cross-fs w kodzie trafia do `LocalFileMoveJob::startCopyAndRemove()`;
+      - Zidentyfikowano krytyczne ryzyka bezpieczeństwa: destrukcyjny rollback opublikowanego celu przy przenoszeniu dowiązań symbolicznych w `LocalTransferJob::transferLink()`, niekontrolowany fallback do KIO::move przy konfliktach/nieobsługiwanych elementach oraz brak kontroli kodu powrotu `fsync(destDirFd)` po publikacji deskryptorowej w `publishOwnedStagingNoOverwrite()`;
+      - Zdefiniowano wymagania bramki izolacyjnej dla niezweryfikowanych operacji rekurencyjnych i wieloelementowych;
+    - **Etap 5.3.2G.3A.1 — Izolacja bezpieczeństwa i bramka trwałości Move (Local Move Safety Containment & Durability Gate):** ✅ ZAMKNIĘTY / AUTOMATED PASS / BACKED UP / COMMITTED / PUSHED:
+      - **Implementacja bramki trwałości (Durability Gate):** Wprowadzono bezwzględną bramkę trwałości w `LocalFileMoveJob` przed usunięciem pliku źródłowego. Jeśli synchronizacja katalogu nadrzędnego `fsync(destDirFd)` zwróci błąd `EINVAL`, `ENOTSUP` lub `EIO`, plik źródłowy zostaje zachowany, a operacja odmawia jego skasowania;
+      - **Wynik częściowy i ochrona przed rollbackiem:** Jeśli cel został opublikowany przed wystąpieniem błędu synchronizacji, cel jest zachowywany bez destrukcyjnego rollbacku, a do GUI, kolejki i historii trafia status błędu częściowego (`LocalFileMoveError::Durability`, flaga `thispcPartialMoveOutcome = true`);
+      - **Zachowanie pełnej zgodności Copy:** Zwykłe operacje kopiowania zachowują pełną funkcjonalność na systemach bez wsparcia `fsync` katalogów (`EINVAL`/`ENOTSUP` np. tmpfs), kończąc się powodzeniem z poprawnymi danymi i jawnym stanem trwałości;
+      - **Rozgraniczenie granic bezpieczeństwa:**
+        - *Ochrona przed nadpisaniem:* Atomowe `EEXIST` / `RENAME_NOREPLACE` wykluczają ciche nadpisanie istniejącego pliku docelowego;
+        - *Integralność danych:* Kryptograficzna weryfikacja SHA-256 potwierdza zgodność strumienia bajtów na dysku przed usunięciem źródła;
+        - *Trwałość opublikowanego celu:* Synchronizacja katalogu (`fsync`) wymusza trwałość metadanych katalogowych przed usunięciem źródła;
+        - *Ryzyko TOCTOU:* Sprawdzanie tożsamości i-węzła/urządzenia (`fstatat`) ogranicza ryzyko podmiany w granicach POSIX VFS;
+        - *Ograniczenia awarii zasilania:* Zachowanie danych po nagłej awarii zasilania podlega ograniczeniom sprzętowych pamięci podręcznych i nietransakcyjnych systemów plików. Projekt nie deklaruje absolutnej odporności na awarie zasilania ani uniwersalnego gwarantowania powstania duplikatu w każdym scenariuszu power-loss;
+      - **Tymczasowe Fail-Closed dla niezweryfikowanego Move:** Przenoszenie wielu plików, katalogów, dowiązań symbolicznych oraz z nadpisywaniem jest tymczasowo blokowane w trybie fail-closed przed jakimikolwiek modyfikacjami;
+      - **Ochrona przed obejściem przez KIO:** Zablokowano wszystkie ścieżki ucieczki do `KIO::move` / `KIO::moveAs` dla transferów lokalnych; wyłączono fallback KIO w `LocalTransferJob`;
+      - **Usunięcie destrukcyjnego rollbacku symlinków:** Trwałe usunięcie `QFile::remove(entry.destinationPath)` w `LocalTransferJob::transferLink()`;
+      - **Zachowanie kluczowych operacji:** Przenoszenie pojedynczych zwykłych plików bez nadpisywania oraz wszystkie operacje Copy (pojedyncze, wsadowe, katalogi, symlinki) pozostają w 100% sprawne;
+      - **Weryfikacja automatyczna:** Pakiet `local_move` rozszerzony do 224 asercji PASS (Scenariusze A–L); `local_transfer`: 113/113 PASS; `local_tree`: 61/61 PASS; `tree_history`: 17/17 PASS; `actions`: 216/216 PASS; `panes`: 1413/1413 PASS; pełna regresja: 77/77 zestawów testowych PASS; ASan/UBSan czysty;
+      - **Pozostały otwarty zakres:** Etap 5.3.2G.3B (Weryfikacja przenoszenia drzew katalogów cross-fs) pozostaje otwarty;
+      - **Stan bramki bezpieczeństwa (Security Release Gate):** **`BLOCKED / FINAL RELEASE VERIFICATION PENDING`** (wersja systemowa 0.44.0 nienaruszona).
 
 ### 0.45.0 — Bezpieczeństwo i bramka wydaniowa (Security Release Gate)
 - Przed oficjalnym wydaniem wymagany jest kompleksowy audyt bezpieczeństwa obejmujący: zabezpieczenie przed nieautoryzowanym wykonywaniem kodu, brak podatności typu backdoor, kontrolę uprawnień administracyjnych i brak ich nieuprawnionej eskalacji, weryfikację zależności zewnętrznych, integralność instalatora oraz bezpieczeństwo wszystkich operacji plikowych;

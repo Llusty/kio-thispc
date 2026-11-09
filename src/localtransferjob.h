@@ -6,6 +6,7 @@
 
 #include "localfilemovejob.h"
 #include "localtransferplan.h"
+#include <QLocale>
 #include <QPointer>
 #include <QSet>
 #include <KIO/CopyJob>
@@ -92,6 +93,10 @@ private:
     void plan()
     {
         if (m_finished) return;
+        if (m_move) {
+            fail(moveContainmentErrorMessage());
+            return;
+        }
         if (m_preplanned) {
             if (!validatePlan()) return;
             setTotalAmount(KJob::Bytes, m_plan.totalBytes);
@@ -162,7 +167,7 @@ private:
 
     bool startFallback()
     {
-        if (m_finished || !m_fallbackFactory || m_preplanned) return false;
+        if (m_finished || !m_fallbackFactory || m_preplanned || m_move) return false;
         if (isSuspended()) { m_fallbackPending = true; return true; }
         auto *job = m_fallbackFactory();
         if (!job) return false;
@@ -317,10 +322,9 @@ private:
             fail(tr("Could not publish the symbolic link: %1").arg(entry.destinationPath));
             return;
         }
-        if (m_move && (readLocalLink(entry.sourcePath) != entry.symbolicLinkContents
-                       || !QFile::remove(entry.sourcePath))) {
-            QFile::remove(entry.destinationPath);
-            fail(tr("Could not remove the source symbolic link: %1").arg(entry.sourcePath));
+        if (m_move) {
+            // Under no circumstances perform destructive rollback of published destination!
+            fail(moveContainmentErrorMessage());
             return;
         }
         m_completedEntries.push_back(entry);
