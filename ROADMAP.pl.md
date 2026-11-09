@@ -782,6 +782,20 @@ Gdy zwykła operacja plikowa zakończy się błędem braku uprawnień (Permissio
       - **Granica zakresu i bramka wydaniowa:** Osobna ścieżka Copy Overwrite (`LocalFileCopyJob`) pozostaje do uwzględnienia przy Final Security Release Gate;
       - **Weryfikacja automatyczna:** Zestaw `local_move`: 126 asercji PASS; `local_transfer`: 113/113 PASS; pełna regresja: 77/77 zestawów testowych PASS; ASan: czysty;
       - **Stan bramki bezpieczeństwa (Security Release Gate):** **`BLOCKED / FINAL RELEASE VERIFICATION PENDING`** (wersja systemowa 0.44.0 nienaruszona).
+    - **Etap 5.3.2G.2B — Bezpieczne przenoszenie wewnątrz woluminu NTFS-3G (Safe Same-Volume NTFS-3G Move):** ✅ CLOSED / AUTOMATED PASS / MANUAL ACCEPTED (3/3) / BACKED UP / COMMITTED / PUSHED:
+      - **Przenoszenie bez nadpisywania na jednym woluminie NTFS-3G:** Bezpieczne przywrócenie operacji przenoszenia pomiędzy katalogami tej samej partycji NTFS-3G w oparciu o staging kopiujący, publikację przez deskryptorowe `linkat()` i bezpieczne usuwanie źródła;
+      - **Weryfikacja montowania NTFS-3G:** Rygorystyczna funkcja `isNtfs3gMount(sourcePath, destinationPath)` potwierdzająca ten sam wolumin (`FUSE_SUPER_MAGIC`, `fuseblk`, weryfikacja fstab/mountinfo ntfs-3g); brak fallbacku wyłącznie na podstawie błędu `EINVAL` ani dla innych systemów FUSE;
+      - **Atomowa ochrona przed kolizją:** Jądrowe `linkat()` zapobiega nadpisaniu istniejącego pliku celu (`EEXIST`); cel i źródło pozostają nienaruszone bit po bicie;
+      - **Kryptograficzna integralność SHA-256 (celu i źródła):** Pełna weryfikacja sumy SHA-256 celu na dysku oraz źródła na dysku względem `transferredChecksum()` przed próbą usunięcia źródła;
+      - **Bezpieczne usuwanie źródła i granice TOCTOU:** Usunięcie źródła przez deskryptor katalogu nadrzędnego `unlinkat()` po weryfikacji tożsamości deskryptorowej `m_sourceIdentity`; udokumentowane ograniczenie TOCTOU w modelu zaufania;
+      - **Brak pozostałości stagingu i ochrona w razie błędów:** Plik stagingowy `.thispc-part` usuwany we wszystkich ścieżkach; opublikowany cel NIGDY nie jest usuwany w razie błędu usunięcia źródła;
+      - **Status przenoszenia z nadpisywaniem:** Pozostaje bezwzględnie **FAIL-CLOSED** we wszystkich ścieżkach Move;
+      - **Weryfikacja i odbiór:**
+        - Testy jednostkowe: zestaw `local_move` rozszerzony do 167 asercji PASS (scenariusze A–I);
+        - Rzeczywisty test integracyjny NTFS-3G na `/mnt/d/ThisPC_FS_Test/stage532g2b_move_test`: PASS (przenoszenie, weryfikacja SHA-256, kolizja EEXIST, brak osieroconych plików stagingowych);
+        - Odbiór ręczny w GUI na `/mnt/d/ThisPC_FS_Test/`: **3/3 FULL PASS** przez użytkownika;
+        - Pełna regresja: 77/77 zestawów testowych PASS; ASan/UBSan czyste;
+      - **Stan bramki bezpieczeństwa (Security Release Gate):** **`BLOCKED / FINAL RELEASE VERIFICATION PENDING`** (wersja systemowa 0.44.0 nienaruszona).
 
 ### 0.45.0 — Bezpieczeństwo i bramka wydaniowa (Security Release Gate)
 - Przed oficjalnym wydaniem wymagany jest kompleksowy audyt bezpieczeństwa obejmujący: zabezpieczenie przed nieautoryzowanym wykonywaniem kodu, brak podatności typu backdoor, kontrolę uprawnień administracyjnych i brak ich nieuprawnionej eskalacji, weryfikację zależności zewnętrznych, integralność instalatora oraz bezpieczeństwo wszystkich operacji plikowych;

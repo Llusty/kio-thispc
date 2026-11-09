@@ -166,24 +166,34 @@ private:
             bool collision = false;
             int moveErr = 0;
             if (!publishLocalFileNoOverwrite(
-                    m_source.toLocalFile(),
-                    m_destination.toLocalFile(),
+                    sourcePath,
+                    destinationPath,
                     &collision,
                     &moveErr)) {
                 m_systemError = moveErr;
                 if (collision) {
                     finish(LocalFileMoveError::DestinationExists,
                            tr("The destination already exists."));
-                } else {
-                    const QString errorMsg = (moveErr == EOPNOTSUPP || moveErr == ENOSYS || moveErr == EINVAL)
-                        ? (QLocale().language() == QLocale::Polish
-                            ? QStringLiteral("System plików nie obsługuje bezpiecznego atomowego przeniesienia bez nadpisania.")
-                            : tr("The filesystem does not support atomic file move without overwrite."))
-                        : (QLocale().language() == QLocale::Polish
-                            ? QStringLiteral("Nie można przenieść pliku atomowo.")
-                            : tr("Could not move the file atomically."));
-                    finish(LocalFileMoveError::AtomicMove, errorMsg);
+                    return;
                 }
+                // Stage 5.3.2G.2B: Safe same-volume NTFS-3G Move fallback.
+                // On NTFS-3G mounts, native RENAME_NOREPLACE returns EINVAL. If both paths reside
+                // on the same verified NTFS-3G volume, safely fall back to Copy + Verify + Publish + Source Removal.
+                if ((moveErr == EINVAL || moveErr == EOPNOTSUPP)
+                    && isNtfs3gMount(sourcePath, destinationPath)) {
+                    m_usedAtomicMove = false;
+                    startCopyAndRemove();
+                    return;
+                }
+
+                const QString errorMsg = (moveErr == EOPNOTSUPP || moveErr == ENOSYS || moveErr == EINVAL)
+                    ? (QLocale().language() == QLocale::Polish
+                        ? QStringLiteral("System plików nie obsługuje bezpiecznego atomowego przeniesienia bez nadpisania.")
+                        : tr("The filesystem does not support atomic file move without overwrite."))
+                    : (QLocale().language() == QLocale::Polish
+                        ? QStringLiteral("Nie można przenieść pliku atomowo.")
+                        : tr("Could not move the file atomically."));
+                finish(LocalFileMoveError::AtomicMove, errorMsg);
                 return;
             }
             setProcessedAmount(KJob::Bytes, m_sourceSize);
@@ -242,6 +252,38 @@ private:
                                QLocale().language() == QLocale::Polish
                                    ? QStringLiteral("Nie można zweryfikować pliku docelowego po skopiowaniu; plik źródłowy został zachowany.")
                                    : tr("The copied destination file could not be verified; the source file has been preserved."));
+                        return;
+                    }
+
+                    // 1b. Cryptographic destination data integrity verification:
+                    // Read the published destination file on disk and verify that its SHA-256 matches
+                    // the exact stream transferred from source. This guarantees actual on-disk data integrity.
+                    QByteArray currentDestHash;
+                    {
+                        QFile dstFile(destinationPath);
+                        if (!dstFile.open(QIODevice::ReadOnly)) {
+                            finish(LocalFileMoveError::Verification,
+                                   QLocale().language() == QLocale::Polish
+                                       ? QStringLiteral("Nie można otworzyć pliku docelowego w celu weryfikacji integralności; cel i źródło zostały zachowane.")
+                                       : tr("Could not open destination file to verify data integrity; destination and source preserved."));
+                            return;
+                        }
+                        QCryptographicHash hash(QCryptographicHash::Sha256);
+                        if (!hash.addData(&dstFile)) {
+                            finish(LocalFileMoveError::Verification,
+                                   QLocale().language() == QLocale::Polish
+                                       ? QStringLiteral("Błąd odczytu pliku docelowego podczas weryfikacji integralności; cel i źródło zostały zachowane.")
+                                       : tr("Failed reading destination file during integrity check; destination and source preserved."));
+                            return;
+                        }
+                        currentDestHash = hash.result();
+                    }
+
+                    if (currentDestHash.isEmpty() || currentDestHash != m_copyJob->transferredChecksum()) {
+                        finish(LocalFileMoveError::Verification,
+                               QLocale().language() == QLocale::Polish
+                                   ? QStringLiteral("Wykryto naruszenie integralności danych pliku docelowego; cel i źródło zostały zachowane.")
+                                   : tr("Destination data integrity verification failed; both source and destination have been preserved."));
                         return;
                     }
 

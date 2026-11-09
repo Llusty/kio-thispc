@@ -6,6 +6,7 @@
 
 #include <QFile>
 #include <QFileInfo>
+#include <QStorageInfo>
 #include <QString>
 #include <cerrno>
 #include <fcntl.h>
@@ -18,6 +19,10 @@
 
 #ifndef MSDOS_SUPER_MAGIC
 #define MSDOS_SUPER_MAGIC 0x4d44
+#endif
+
+#ifndef FUSE_SUPER_MAGIC
+#define FUSE_SUPER_MAGIC 0x65735546
 #endif
 
 struct LocalFileIdentity
@@ -76,6 +81,12 @@ inline bool &simulateVfatFilesystem()
 {
     static bool vfat = false;
     return vfat;
+}
+
+inline bool &simulateNtfs3gFilesystem()
+{
+    static bool ntfs3g = false;
+    return ntfs3g;
 }
 
 inline bool &simulateFsyncError()
@@ -449,4 +460,99 @@ inline bool publishOwnedStagingNoOverwrite(
     ::fsync(destDirFd);
     ::close(destDirFd);
     return true;
+}
+
+// Stage 5.3.2G.2B: Verifies whether source and destination paths reside on the same mounted NTFS-3G filesystem volume.
+// Requires consistent volume identity, FUSE_SUPER_MAGIC superblock, and verified ntfs-3g fstab or mountinfo driver binding.
+inline bool isNtfs3gMount(const QString &sourcePath, const QString &destinationPath)
+{
+#ifdef THISPC_TEST_HARNESS
+    if (simulateNtfs3gFilesystem()) {
+        return true;
+    }
+#endif
+
+    const QFileInfo srcInfo(sourcePath);
+    const QFileInfo dstInfo(destinationPath);
+    const QString srcDir = srcInfo.isDir() ? srcInfo.absoluteFilePath() : srcInfo.dir().absolutePath();
+    const QString dstDir = dstInfo.isDir() ? dstInfo.absoluteFilePath() : dstInfo.dir().absolutePath();
+
+    const QStorageInfo srcStorage(srcDir);
+    const QStorageInfo dstStorage(dstDir);
+    if (!srcStorage.isValid() || !dstStorage.isValid()) {
+        return false;
+    }
+
+    // Both paths must reside on the same mounted filesystem volume
+    if (srcStorage.rootPath() != dstStorage.rootPath()
+        || srcStorage.device() != dstStorage.device()) {
+        return false;
+    }
+
+    // Fast check: verify statfs f_type is FUSE_SUPER_MAGIC
+    struct statfs sfs {};
+    if (::statfs(QFile::encodeName(srcStorage.rootPath()).constData(), &sfs) != 0) {
+        return false;
+    }
+    if (static_cast<unsigned long>(sfs.f_type) != FUSE_SUPER_MAGIC) {
+        return false;
+    }
+
+    const QString rootPath = srcStorage.rootPath();
+
+    // 1. Check /etc/fstab for explicit ntfs / ntfs-3g configuration
+    {
+        QFile fstabFile(QStringLiteral("/etc/fstab"));
+        if (fstabFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            while (!fstabFile.atEnd()) {
+                const QByteArray line = fstabFile.readLine().trimmed();
+                if (line.isEmpty() || line.startsWith('#')) {
+                    continue;
+                }
+                const auto parts = line.split(' ');
+                QByteArrayList tokens;
+                for (const auto &p : parts) {
+                    if (!p.isEmpty()) {
+                        tokens.append(p);
+                    }
+                }
+                if (tokens.size() >= 3) {
+                    const QString mountPoint = QString::fromUtf8(tokens[1]);
+                    const QByteArray type = tokens[2].toLower();
+                    if (mountPoint == rootPath && (type == "ntfs-3g" || type == "ntfs")) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Check /proc/self/mountinfo for fuseblk mount on a block device
+    {
+        QFile mountinfoFile(QStringLiteral("/proc/self/mountinfo"));
+        if (mountinfoFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            while (!mountinfoFile.atEnd()) {
+                const QByteArray line = mountinfoFile.readLine().trimmed();
+                if (line.isEmpty()) {
+                    continue;
+                }
+                const auto parts = line.split(' ');
+                if (parts.size() >= 5) {
+                    const QString mountPoint = QString::fromUtf8(parts[4]);
+                    if (mountPoint == rootPath) {
+                        const int dashIndex = parts.indexOf(QByteArrayLiteral("-"));
+                        if (dashIndex != -1 && parts.size() > dashIndex + 1) {
+                            const QByteArray mntFsType = parts[dashIndex + 1].toLower();
+                            if (mntFsType == "fuseblk" || mntFsType.contains("ntfs")) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    const QByteArray fsType = srcStorage.fileSystemType().toLower();
+    return fsType == "fuseblk" || fsType.contains("ntfs");
 }

@@ -593,6 +593,245 @@ int main(int argc, char **argv)
                "SEC-045-G2A: Scenario M destination has complete verified payload");
     }
 
+    // =========================================================================
+    // Stage 5.3.2G.2B: Safe Same-Volume NTFS-3G Move (Scenarios A - I)
+    // =========================================================================
+
+    // Test A, C, H, I: Safe NTFS-3G Move in Automatic strategy moves file between directories,
+    // verifies SHA-256 integrity, cleans staging, and records in history.
+    {
+        simulateRenameNoReplaceUnsupported() = true; // Native RENAME_NOREPLACE returns EINVAL on NTFS-3G
+        simulateNtfs3gFilesystem() = true;           // Identified as verified same-volume NTFS-3G mount
+
+        const QString subDirA1 = temporary.filePath(QStringLiteral("ntfs3g-dir-a1"));
+        const QString subDirA2 = temporary.filePath(QStringLiteral("ntfs3g-dir-a2"));
+        verify(QDir().mkdir(subDirA1) && QDir().mkdir(subDirA2), "G2B Test A: subdirectories created");
+
+        const QString srcA = subDirA1 + QStringLiteral("/file-a.bin");
+        const QString dstA = subDirA2 + QStringLiteral("/file-a-moved.bin");
+        verify(writeFile(srcA, payload), "G2B Test A: source file created");
+
+        LocalFileMoveJob moveA(
+            QUrl::fromLocalFile(srcA),
+            QUrl::fromLocalFile(dstA),
+            nullptr,
+            LocalFileMoveStrategy::Automatic,
+            16 * 1024,
+            0);
+        moveA.setAutoDelete(false);
+        history.recordWhenCompleted(&moveA);
+        QSignalSpy spyA(&moveA, &KJob::result);
+        moveA.start();
+        waitForResult(spyA, "G2B Test A: NTFS-3G move finishes");
+
+        verify(moveA.error() == KJob::NoError && moveA.moveError() == LocalFileMoveError::None,
+               "G2B Test A: NTFS-3G move reports NoError");
+        verify(!moveA.usedAtomicMove(),
+               "G2B Test A: confirmed fallback to safe Copy+Verify+Publish+Remove engine (not broken atomic rename)");
+        verify(!QFileInfo::exists(srcA),
+               "G2B Test A: source file safely unlinked after verified publication");
+        verify(QFileInfo::exists(dstA),
+               "G2B Test A: destination file published");
+        verify(fileHash(dstA) == expectedHash,
+               "G2B Test A/C: destination file SHA-256 matches payload 100%");
+        verify(!QFileInfo::exists(dstA + QStringLiteral(".thispc-part")),
+               "G2B Test H: no orphaned .thispc-part staging file remains");
+        verify(history.count() == 2 && history.position() == 2,
+               "G2B Test I: successfully completed NTFS-3G move recorded in history");
+
+        simulateRenameNoReplaceUnsupported() = false;
+        simulateNtfs3gFilesystem() = false;
+    }
+
+    // Test B: Collision EEXIST on NTFS-3G Move preserves both existing destination and source
+    {
+        simulateRenameNoReplaceUnsupported() = true;
+        simulateNtfs3gFilesystem() = true;
+
+        const QString srcB = temporary.filePath(QStringLiteral("ntfs3g-col-src.bin"));
+        const QString dstB = temporary.filePath(QStringLiteral("ntfs3g-col-dst.bin"));
+        const QByteArray foreignBytes("FOREIGN_DESTINATION_DO_NOT_OVERWRITE_G2B");
+        verify(writeFile(srcB, payload) && writeFile(dstB, foreignBytes),
+               "G2B Test B: fixtures created");
+
+        LocalFileMoveJob moveB(
+            QUrl::fromLocalFile(srcB),
+            QUrl::fromLocalFile(dstB),
+            nullptr,
+            LocalFileMoveStrategy::Automatic,
+            16 * 1024,
+            0);
+        moveB.setAutoDelete(false);
+        history.recordWhenCompleted(&moveB);
+        QSignalSpy spyB(&moveB, &KJob::result);
+        moveB.start();
+        waitForResult(spyB, "G2B Test B: collision move finishes");
+
+        verify(moveB.moveError() == LocalFileMoveError::DestinationExists,
+               "G2B Test B: collision reports DestinationExists");
+        verify(QFileInfo::exists(srcB) && fileHash(srcB) == expectedHash,
+               "G2B Test B: source file is 100% preserved with intact SHA-256");
+        verify(QFileInfo::exists(dstB) && readFile(dstB) == foreignBytes,
+               "G2B Test B: pre-existing destination is 100% untouched and preserved");
+        verify(!QFileInfo::exists(dstB + QStringLiteral(".thispc-part")),
+               "G2B Test B/H: no orphaned .thispc-part staging file remains");
+        verify(history.count() == 2,
+               "G2B Test B/I: collided move is never recorded in history as Completed");
+
+        simulateRenameNoReplaceUnsupported() = false;
+        simulateNtfs3gFilesystem() = false;
+    }
+
+    // Test D: Source removal failure on NTFS-3G preserves published destination and source
+    {
+        simulateRenameNoReplaceUnsupported() = true;
+        simulateNtfs3gFilesystem() = true;
+
+        const QString srcD = temporary.filePath(QStringLiteral("ntfs3g-rmfail-src.bin"));
+        const QString dstD = temporary.filePath(QStringLiteral("ntfs3g-rmfail-dst.bin"));
+        verify(writeFile(srcD, payload), "G2B Test D: source fixture created");
+
+        LocalFileMoveJob moveD(
+            QUrl::fromLocalFile(srcD),
+            QUrl::fromLocalFile(dstD),
+            nullptr,
+            LocalFileMoveStrategy::Automatic,
+            16 * 1024,
+            0,
+            [](const QString &) { return false; }); // Custom remover simulating unlink failure
+        moveD.setAutoDelete(false);
+        QSignalSpy spyD(&moveD, &KJob::result);
+        moveD.start();
+        waitForResult(spyD, "G2B Test D: move finishes with removal failure");
+
+        verify(moveD.moveError() == LocalFileMoveError::SourceRemove,
+               "G2B Test D: reports SourceRemove error");
+        verify(QFileInfo::exists(srcD) && fileHash(srcD) == expectedHash,
+               "G2B Test D: source file remains intact");
+        verify(QFileInfo::exists(dstD) && fileHash(dstD) == expectedHash,
+               "G2B Test D: published destination is NEVER deleted or rolled back on removal error");
+        verify(!QFileInfo::exists(dstD + QStringLiteral(".thispc-part")),
+               "G2B Test D/H: staging file cleanly unlinked");
+
+        simulateRenameNoReplaceUnsupported() = false;
+        simulateNtfs3gFilesystem() = false;
+    }
+
+    // Test E: Source tampering during transfer on NTFS-3G triggers Verification error
+    {
+        simulateRenameNoReplaceUnsupported() = true;
+        simulateNtfs3gFilesystem() = true;
+
+        const QString srcE = temporary.filePath(QStringLiteral("ntfs3g-tamper-src.bin"));
+        const QString dstE = temporary.filePath(QStringLiteral("ntfs3g-tamper-dst.bin"));
+        verify(writeFile(srcE, payload), "G2B Test E: source fixture created");
+
+        LocalFileMoveJob moveE(
+            QUrl::fromLocalFile(srcE),
+            QUrl::fromLocalFile(dstE),
+            nullptr,
+            LocalFileMoveStrategy::Automatic,
+            16 * 1024,
+            1);
+        moveE.setAutoDelete(false);
+        QSignalSpy spyE(&moveE, &KJob::result);
+        moveE.start();
+        verify(waitUntil([&moveE] { return moveE.processedAmount(KJob::Bytes) >= 128 * 1024; }, 3000)
+                   && moveE.suspend(),
+               "G2B Test E: move pauses in flight");
+
+        // Modify byte in source while paused
+        {
+            QFile file(srcE);
+            verify(file.open(QIODevice::ReadWrite), "G2B Test E: source opened for in-place edit");
+            file.seek(10);
+            char c = 0x33;
+            file.write(&c, 1);
+            file.close();
+        }
+
+        verify(moveE.resume(), "G2B Test E: move resumes");
+        waitForResult(spyE, "G2B Test E: move finishes after tamper");
+
+        verify(moveE.moveError() == LocalFileMoveError::Verification,
+               "G2B Test E: reports Verification error on tampered source");
+        verify(QFileInfo::exists(srcE) && QFileInfo::exists(dstE),
+               "G2B Test E: both source and destination preserved intact");
+
+        simulateRenameNoReplaceUnsupported() = false;
+        simulateNtfs3gFilesystem() = false;
+    }
+
+    // Test F & H: Cancellation before publication cleans up staging and preserves files
+    {
+        simulateRenameNoReplaceUnsupported() = true;
+        simulateNtfs3gFilesystem() = true;
+
+        const QString srcF = temporary.filePath(QStringLiteral("ntfs3g-cancel-src.bin"));
+        const QString dstF = temporary.filePath(QStringLiteral("ntfs3g-cancel-dst.bin"));
+        verify(writeFile(srcF, payload), "G2B Test F: source fixture created");
+
+        LocalFileMoveJob moveF(
+            QUrl::fromLocalFile(srcF),
+            QUrl::fromLocalFile(dstF),
+            nullptr,
+            LocalFileMoveStrategy::Automatic,
+            16 * 1024,
+            1);
+        moveF.setAutoDelete(false);
+        QSignalSpy spyF(&moveF, &KJob::result);
+        moveF.start();
+        verify(waitUntil([&moveF] { return moveF.processedAmount(KJob::Bytes) >= 128 * 1024; }, 3000)
+                   && moveF.kill(KJob::EmitResult),
+               "G2B Test F: move reaches progress and cancels");
+        waitForResult(spyF, "G2B Test F: cancel emits result");
+
+        verify(moveF.error() == KJob::KilledJobError
+                   && moveF.moveError() == LocalFileMoveError::Cancelled,
+               "G2B Test F: reports Cancelled / KilledJobError");
+        verify(QFileInfo::exists(srcF) && fileHash(srcF) == expectedHash,
+               "G2B Test F: source is untouched");
+        verify(!QFileInfo::exists(dstF),
+               "G2B Test F: destination was never published");
+        verify(waitUntil([&dstF] {
+                   return !QFileInfo::exists(dstF + QStringLiteral(".thispc-part"));
+               }, 3000),
+               "G2B Test F/H: staging .thispc-part is cleanly removed on cancel");
+
+        simulateRenameNoReplaceUnsupported() = false;
+        simulateNtfs3gFilesystem() = false;
+    }
+
+    // Test G: Destination on-disk data integrity verification (Step 1b)
+    {
+        simulateRenameNoReplaceUnsupported() = true;
+        simulateNtfs3gFilesystem() = true;
+
+        const QString srcG = temporary.filePath(QStringLiteral("ntfs3g-destverify-src.bin"));
+        const QString dstG = temporary.filePath(QStringLiteral("ntfs3g-destverify-dst.bin"));
+        verify(writeFile(srcG, payload), "G2B Test G: source fixture created");
+
+        LocalFileMoveJob moveG(
+            QUrl::fromLocalFile(srcG),
+            QUrl::fromLocalFile(dstG),
+            nullptr,
+            LocalFileMoveStrategy::Automatic,
+            16 * 1024,
+            0);
+        moveG.setAutoDelete(false);
+        QSignalSpy spyG(&moveG, &KJob::result);
+        moveG.start();
+        waitForResult(spyG, "G2B Test G: move finishes with verified destination integrity");
+
+        verify(moveG.error() == KJob::NoError && moveG.moveError() == LocalFileMoveError::None,
+               "G2B Test G: reports NoError when destination on-disk hash matches");
+        verify(fileHash(dstG) == expectedHash,
+               "G2B Test G: destination SHA-256 verified on disk");
+
+        simulateRenameNoReplaceUnsupported() = false;
+        simulateNtfs3gFilesystem() = false;
+    }
+
     qInfo("PASS: %d LocalFileMoveJob/history assertions", checks);
     return 0;
 }

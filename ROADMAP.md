@@ -680,6 +680,20 @@ When standard operations receive permission denied errors, provide targeted `adm
       - **Scope Boundary & Release Gate:** The separate Copy Overwrite path (`LocalFileCopyJob`) remains subject to Final Security Release Gate review;
       - **Automated Verification:** `local_move` suite: 126 assertions PASS; `local_transfer`: 113/113 PASS; full regression: 77/77 test suites PASS; ASan: clean;
       - **Security Release Gate Status:** **`BLOCKED / FINAL RELEASE VERIFICATION PENDING`** (system version 0.44.0 untouched).
+    - **Stage 5.3.2G.2B — Safe Same-Volume NTFS-3G Move:** ✅ CLOSED / AUTOMATED PASS / MANUAL ACCEPTED (3/3) / BACKED UP / COMMITTED / PUSHED:
+      - **Same-Volume NTFS-3G Non-Overwrite Move:** Safely restores move operations between directories of the same NTFS-3G volume using verified staging copy + publish via descriptor `linkat()` + safe source removal;
+      - **Verified Mount Identification:** Strictly checks `isNtfs3gMount(sourcePath, destinationPath)` to confirm both paths reside on the same mounted NTFS-3G volume (`FUSE_SUPER_MAGIC`, `fuseblk`, fstab/mountinfo ntfs-3g verification); never falls back on arbitrary `EINVAL` or non-NTFS FUSE mounts;
+      - **Atomic Collision Protection:** Kernel `linkat()` prevents overwriting existing destination files (`EEXIST`); destination and source remain bit-for-bit preserved;
+      - **Cryptographic Data Integrity (Source & Destination):** Full SHA-256 verification of destination on disk and source on disk against `transferredChecksum()` before source removal;
+      - **Safe Source Removal & TOCTOU Boundaries:** Source unlinked through parent directory descriptor `unlinkat()` after verifying identity against `m_sourceIdentity`; POSIX TOCTOU boundary documented;
+      - **Zero Leftover Staging & Error Preservation:** Staging `.thispc-part` cleanly removed in all paths; published destination is NEVER rolled back on source removal failure;
+      - **Move with Overwrite Status:** Remains strictly **FAIL-CLOSED** across all Move operations;
+      - **Verification & Acceptance:**
+        - Unit test suite: `local_move` expanded to 167 assertions PASS (Scenarios A–I);
+        - Real NTFS-3G Integration on `/mnt/d/ThisPC_FS_Test/stage532g2b_move_test`: PASS (safe move, SHA-256 integrity, EEXIST collision, zero staging leftovers);
+        - Manual GUI Acceptance on `/mnt/d/ThisPC_FS_Test/`: **3/3 FULL PASS** by user;
+        - Full regression: 77/77 test suites PASS; ASan/UBSan clean;
+      - **Security Release Gate Status:** **`BLOCKED / FINAL RELEASE VERIFICATION PENDING`** (system version 0.44.0 untouched).
 
 ### 0.45.0 — Security Release Gate
 - Prior to official release, a mandatory comprehensive security audit is required, covering unauthorized code execution, potential backdoors, administrative privilege escalation, third-party dependencies, installer integrity, and file operation safety;
