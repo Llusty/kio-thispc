@@ -357,33 +357,70 @@ int main(int argc, char **argv)
                "SEC-045-02: source file SHA-256 remains intact");
     }
 
-    // SEC-045-02.1: Fail-closed behavior when filesystem does not support RENAME_NOREPLACE.
+    // SEC-045-02.1 / SEC-045-02.2: Safe publication when RENAME_NOREPLACE is unsupported (NTFS-3G).
+    // When RENAME_NOREPLACE is unsupported, LocalFileCopyJob successfully falls back to descriptor-based
+    // linkat (AT_EMPTY_PATH / /proc/self/fd) without failing closed if the filesystem supports hard links.
     {
         const QByteArray expectedSourceHash = fileHash(sourcePath);
-        const QString unsupportedDstPath = directory.filePath(QStringLiteral("sec045021-unsupported-dst.bin"));
+        const QString fallbackDstPath = directory.filePath(QStringLiteral("sec045022-fallback-dst.bin"));
         simulateRenameNoReplaceUnsupported() = true;
 
-        LocalFileCopyJob unsupportedCopy(
-            QUrl::fromLocalFile(sourcePath), QUrl::fromLocalFile(unsupportedDstPath),
+        LocalFileCopyJob fallbackCopy(
+            QUrl::fromLocalFile(sourcePath), QUrl::fromLocalFile(fallbackDstPath),
             nullptr, 16 * 1024, 1, false);
-        unsupportedCopy.setAutoDelete(false);
-        QSignalSpy unsupportedResult(&unsupportedCopy, &KJob::result);
-        unsupportedCopy.start();
-        verify(waitUntil([&] { return unsupportedResult.count() == 1; }, 10000),
-               "SEC-045-02.1: non-overwrite copy finishes when RENAME_NOREPLACE is unsupported");
-        verify(unsupportedCopy.transferError() == LocalTransferError::Publish
-                   && unsupportedCopy.systemError() == EOPNOTSUPP,
-               "SEC-045-02.1: unsupported RENAME_NOREPLACE reports Publish error with EOPNOTSUPP");
-        verify(unsupportedCopy.errorText().contains(QStringLiteral("nie obsługuje"))
-                   || unsupportedCopy.errorText().contains(QStringLiteral("does not support")),
-               "SEC-045-02.1: unsupported RENAME_NOREPLACE provides clear descriptive error message");
-        verify(!QFileInfo::exists(unsupportedDstPath),
-               "SEC-045-02.1: destination file was never created on unsupported filesystem");
-        verify(!QFileInfo::exists(unsupportedCopy.partialPath()),
-               "SEC-045-02.1: staging .thispc-part file is cleanly removed on unsupported filesystem");
-        verify(fileHash(sourcePath) == expectedSourceHash,
-               "SEC-045-02.1: source file SHA-256 remains intact on unsupported filesystem");
+        fallbackCopy.setAutoDelete(false);
+        QSignalSpy fallbackResult(&fallbackCopy, &KJob::result);
+        fallbackCopy.start();
+        verify(waitUntil([&] { return fallbackResult.count() == 1; }, 10000),
+               "SEC-045-02.2: copy finishes when RENAME_NOREPLACE is unsupported and linkat succeeds");
+        verify(fallbackCopy.error() == KJob::NoError
+                   && fallbackCopy.transferError() == LocalTransferError::None,
+               "SEC-045-02.2: descriptor linkat fallback succeeds seamlessly");
+        verify(QFileInfo::exists(fallbackDstPath),
+               "SEC-045-02.2: destination file was created via descriptor linkat");
+        verify(fileHash(fallbackDstPath) == expectedSourceHash,
+               "SEC-045-02.2: destination file SHA-256 matches source 100%");
+        verify(!QFileInfo::exists(fallbackCopy.partialPath()),
+               "SEC-045-02.2: staging .thispc-part file is cleanly unlinked after publication");
 
+        // Now test collision with fallback active:
+        LocalFileCopyJob collisionCopy(
+            QUrl::fromLocalFile(sourcePath), QUrl::fromLocalFile(fallbackDstPath),
+            nullptr, 16 * 1024, 1, false);
+        collisionCopy.setAutoDelete(false);
+        QSignalSpy collisionResult(&collisionCopy, &KJob::result);
+        collisionCopy.start();
+        verify(waitUntil([&] { return collisionResult.count() == 1; }, 10000),
+               "SEC-045-02.2: collision test finishes with descriptor fallback");
+        verify(collisionCopy.transferError() == LocalTransferError::DestinationExists
+                   && collisionCopy.systemError() == EEXIST,
+               "SEC-045-02.2: descriptor linkat rejects collision with EEXIST");
+        verify(fileHash(fallbackDstPath) == expectedSourceHash,
+               "SEC-045-02.2: existing destination file remains 100% untouched after collision");
+
+        // Now test fail-closed when BOTH RENAME_NOREPLACE and descriptor linkat are unsupported (e.g. FAT32).
+        simulateDescriptorLinkatUnsupported() = true;
+        const QString allUnsupportedDst = directory.filePath(QStringLiteral("sec045022-all-unsupported-dst.bin"));
+        LocalFileCopyJob allUnsupportedCopy(
+            QUrl::fromLocalFile(sourcePath), QUrl::fromLocalFile(allUnsupportedDst),
+            nullptr, 16 * 1024, 1, false);
+        allUnsupportedCopy.setAutoDelete(false);
+        QSignalSpy allUnsupportedResult(&allUnsupportedCopy, &KJob::result);
+        allUnsupportedCopy.start();
+        verify(waitUntil([&] { return allUnsupportedResult.count() == 1; }, 10000),
+               "SEC-045-02.2: all unsupported finishes");
+        verify(allUnsupportedCopy.transferError() == LocalTransferError::Publish
+                   && allUnsupportedCopy.systemError() == EOPNOTSUPP,
+               "SEC-045-02.2: reports Publish error with EOPNOTSUPP when both methods unsupported");
+        verify(allUnsupportedCopy.errorText().contains(QStringLiteral("nie obsługuje"))
+                   || allUnsupportedCopy.errorText().contains(QStringLiteral("does not support")),
+               "SEC-045-02.2: provides clear descriptive error message");
+        verify(!QFileInfo::exists(allUnsupportedDst),
+               "SEC-045-02.2: destination file was never created");
+        verify(!QFileInfo::exists(allUnsupportedCopy.partialPath()),
+               "SEC-045-02.2: staging file is removed");
+
+        simulateDescriptorLinkatUnsupported() = false;
         simulateRenameNoReplaceUnsupported() = false;
     }
 
@@ -413,6 +450,87 @@ int main(int argc, char **argv)
                "SEC-045-02.1: staging .thispc-part file cleaned up after collision");
         verify(fileHash(sourcePath) == expectedSourceHash,
                "SEC-045-02.1: source file SHA-256 remains intact");
+    }
+
+    // SEC-045-E1: Injected staging substitution test before publication and during cleanup
+    {
+        const QString raceDstPath = directory.filePath(QStringLiteral("sec045e1-staging-subst.bin"));
+        const QString racePartPath = raceDstPath + QStringLiteral(".thispc-part");
+
+        // Test direct publishOwnedStagingNoOverwrite with an alien file injected under staging path
+        // while holding a real stagingFd
+        const QString realStagingPath = directory.filePath(QStringLiteral("sec045e1-real.tmp"));
+        const QByteArray realData("REAL_STAGING_DATA_VERIFIED_IDENTITY");
+        verify(writeFile(realStagingPath, realData), "SEC-045-E1: real staging written");
+        int realFd = ::open(QFile::encodeName(realStagingPath).constData(), O_RDWR | O_CLOEXEC);
+        verify(realFd >= 0, "SEC-045-E1: realFd opened");
+        LocalFileIdentity realIdentity = LocalFileIdentity::read(realStagingPath);
+        verify(realIdentity.valid, "SEC-045-E1: realIdentity is valid");
+
+        // Alien file at racePartPath
+        const QByteArray alienData("ALIEN_ATTACKER_DATA_DO_NOT_PUBLISH_OR_UNLINK");
+        verify(writeFile(racePartPath, alienData), "SEC-045-E1: alien file written under staging path");
+        const QByteArray alienHashBefore = fileHash(racePartPath);
+
+        // Attempting to publish with realFd but passing racePartPath where alien file resides
+        // publishOwnedStagingNoOverwrite compares realFd inode against expectedStagingIdentity
+        bool collision = false;
+        int pubErr = 0;
+        bool unlinkFailed = false;
+        // If someone substituted racePartPath before renameat2, renameat2 would attempt to rename alien file.
+        // But our post-publish check or linkat fallback verifies inode integrity!
+        simulateRenameNoReplaceUnsupported() = true; // force linkat from realFd
+        bool pubOk = publishOwnedStagingNoOverwrite(
+            realFd, racePartPath, raceDstPath, realIdentity, &collision, &pubErr, &unlinkFailed);
+        verify(pubOk, "SEC-045-E1: descriptor linkat published realFd directly to raceDstPath");
+        verify(fileHash(raceDstPath) == fileHash(realStagingPath),
+               "SEC-045-E1: published destination matches real staging data, NOT alien data");
+        // Verify alien file under racePartPath was REFUSED deletion because its inode did not match realFd!
+        verify(unlinkFailed, "SEC-045-E1: unlinking alien file was refused and flagged");
+        verify(QFileInfo::exists(racePartPath) && fileHash(racePartPath) == alienHashBefore,
+               "SEC-045-E1: alien file at staging path was 100% PRESERVED, never unlinked!");
+
+        ::close(realFd);
+        QFile::remove(realStagingPath);
+        QFile::remove(racePartPath);
+        QFile::remove(raceDstPath);
+        simulateRenameNoReplaceUnsupported() = false;
+    }
+
+    // SEC-045-E2: Deterministic test: unsupported descriptor linkat fails closed safely
+    {
+        const QString raceDstPath = directory.filePath(QStringLiteral("sec045e2-native-subst.bin"));
+        const QString racePartPath = raceDstPath + QStringLiteral(".thispc-part");
+
+        const QString realStagingPath = directory.filePath(QStringLiteral("sec045e2-real.tmp"));
+        const QByteArray realData("REAL_STAGING_DATA_DESCRIPTOR_TEST");
+        verify(writeFile(realStagingPath, realData), "SEC-045-E2: real staging written");
+        int realFd = ::open(QFile::encodeName(realStagingPath).constData(), O_RDWR | O_CLOEXEC);
+        verify(realFd >= 0, "SEC-045-E2: realFd opened");
+        LocalFileIdentity realIdentity = LocalFileIdentity::read(realStagingPath);
+        verify(realIdentity.valid, "SEC-045-E2: realIdentity valid");
+
+        // Alien file injected at racePartPath
+        const QByteArray alienData("ALIEN_INJECTED_UNDER_STAGING_NAME");
+        verify(writeFile(racePartPath, alienData), "SEC-045-E2: alien file written");
+
+        // Force descriptor linkat to be skipped
+        simulateDescriptorLinkatUnsupported() = true;
+
+        bool collision = false;
+        int pubErr = 0;
+        bool unlinkFailed = false;
+        // publishOwnedStagingNoOverwrite must fail closed with EOPNOTSUPP, never attempting path-based rename
+        bool pubOk = publishOwnedStagingNoOverwrite(
+            realFd, racePartPath, raceDstPath, realIdentity, &collision, &pubErr, &unlinkFailed);
+        verify(!pubOk && pubErr == EOPNOTSUPP, "SEC-045-E2: publication FAILS CLOSED when descriptor linkat unsupported");
+        verify(!QFileInfo::exists(raceDstPath), "SEC-045-E2: destination was NEVER created");
+        verify(QFileInfo::exists(racePartPath), "SEC-045-E2: alien file was NEVER touched");
+
+        simulateDescriptorLinkatUnsupported() = false;
+        ::close(realFd);
+        QFile::remove(realStagingPath);
+        QFile::remove(racePartPath);
     }
 
     qInfo("PASS: %d LocalFileCopyJob assertions", checks);

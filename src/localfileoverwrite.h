@@ -5,6 +5,7 @@
 #pragma once
 
 #include <QFile>
+#include <QFileInfo>
 #include <QString>
 #include <cerrno>
 #include <fcntl.h>
@@ -58,15 +59,18 @@ inline bool &simulateRenameNoReplaceUnsupported()
     static bool unsupported = false;
     return unsupported;
 }
+
+inline bool &simulateDescriptorLinkatUnsupported()
+{
+    static bool unsupported = false;
+    return unsupported;
+}
 #endif
 
-// Atomically publishes sourcePath at destinationPath only if destinationPath
-// does not exist. Relies strictly on atomic SYS_renameat2(..., RENAME_NOREPLACE).
-// Never falls back to non-atomic rename(2) (which could silently overwrite a
-// concurrently created destination file) nor to non-atomic link(2)/unlink(2)
-// (which suffers from TOCTOU race conditions during rollback or concurrent source replacement).
+// Strictly for moving the original source file. Relies exclusively on atomic
+// SYS_renameat2(..., RENAME_NOREPLACE). Never falls back to linkat nor link/unlink.
 // Filesystems without RENAME_NOREPLACE support fail closed with an explicit error code.
-inline bool publishLocalFileNoOverwrite(
+inline bool moveLocalFileNoOverwrite(
     const QString &sourcePath,
     const QString &destinationPath,
     bool *collisionDetected = nullptr,
@@ -117,4 +121,183 @@ inline bool publishLocalFileNoOverwrite(
     }
     return false;
 #endif
+}
+
+// Deprecated legacy alias for moveLocalFileNoOverwrite to maintain binary and compilation
+// safety without extending permissions.
+inline bool publishLocalFileNoOverwrite(
+    const QString &sourcePath,
+    const QString &destinationPath,
+    bool *collisionDetected = nullptr,
+    int *outErrorNumber = nullptr)
+{
+    return moveLocalFileNoOverwrite(sourcePath, destinationPath, collisionDetected, outErrorNumber);
+}
+
+// Strictly for publishing an owned, verified staging file (e.g. .thispc-part) to its final destination.
+// Requires a valid open file descriptor to the staging file (stagingFd) and its verified identity.
+//
+// Security Architecture (Final Closure):
+// 1. Immutable Object Publishing (Descriptor-based linkat):
+//    Publication operates EXCLUSIVELY ON THE MAINTAINED FILE DESCRIPTOR (stagingFd) via linkat()
+//    (using AT_EMPTY_PATH, with automatic fallback to /proc/self/fd/<fd> with AT_SYMLINK_FOLLOW).
+//    Because the kernel creates the destination directory entry pointing directly to the exact inode
+//    represented by stagingFd, no concurrent renaming, unlinking, or path substitution of the
+//    staging file on disk can cause an alien file to be published.
+// 2. Strict Collision Protection:
+//    linkat() atomically fails with EEXIST if destinationPath already exists, never overwriting it.
+// 3. Fail-Closed on Unsupported Filesystems:
+//    Path-based fallback renameat2(stagingPath, ...) cannot guarantee that stagingPath was not
+//    substituted between checks in an unprivileged or shared directory. Therefore, filesystems
+//    lacking descriptor linkat support (such as FAT32/vfat) fail closed with EOPNOTSUPP.
+// 4. Safe Staging Link Cleanup:
+//    Once destination is published, unlinking the staging link from the directory uses unlinkat().
+//    If pre-unlink verification detects that the staging directory entry was substituted on disk
+//    by a different inode, unlinkat() is REFUSED (fail-closed), preserving the alien file.
+//    CRITICAL: If unlinking the staging link fails or is refused, the published destination is
+//    NEVER rolled back or unlinked.
+inline bool publishOwnedStagingNoOverwrite(
+    int stagingFd,
+    const QString &stagingPath,
+    const QString &destinationPath,
+    const LocalFileIdentity &expectedStagingIdentity,
+    bool *collisionDetected = nullptr,
+    int *outErrorNumber = nullptr,
+    bool *stagingUnlinkFailed = nullptr)
+{
+    if (collisionDetected) {
+        *collisionDetected = false;
+    }
+    if (outErrorNumber) {
+        *outErrorNumber = 0;
+    }
+    if (stagingUnlinkFailed) {
+        *stagingUnlinkFailed = false;
+    }
+
+    if (stagingFd < 0 || !expectedStagingIdentity.valid) {
+        if (outErrorNumber) {
+            *outErrorNumber = EINVAL;
+        }
+        return false;
+    }
+
+    // Verify stagingFd matches expectedStagingIdentity before attempting publication
+    struct stat fdStat {};
+    if (::fstat(stagingFd, &fdStat) != 0) {
+        if (outErrorNumber) {
+            *outErrorNumber = errno ? errno : EIO;
+        }
+        return false;
+    }
+    if (fdStat.st_dev != expectedStagingIdentity.value.st_dev
+        || fdStat.st_ino != expectedStagingIdentity.value.st_ino) {
+        if (outErrorNumber) {
+            *outErrorNumber = EBADF;
+        }
+        return false;
+    }
+
+    // Open destination directory to anchor relative destination operations securely
+    const QString destDir = QFileInfo(destinationPath).absolutePath();
+    const QByteArray destDirEncoded = QFile::encodeName(destDir);
+    const QByteArray destBaseName = QFile::encodeName(QFileInfo(destinationPath).fileName());
+    const QByteArray stagingBaseName = QFile::encodeName(QFileInfo(stagingPath).fileName());
+
+    int destDirFd = ::open(destDirEncoded.constData(), O_DIRECTORY | O_RDONLY | O_CLOEXEC);
+    if (destDirFd < 0) {
+        if (outErrorNumber) {
+            *outErrorNumber = errno ? errno : EIO;
+        }
+        return false;
+    }
+
+    bool linkatSucceeded = false;
+
+#ifdef THISPC_TEST_HARNESS
+    const bool skipDescriptorLinkat = simulateDescriptorLinkatUnsupported();
+#else
+    const bool skipDescriptorLinkat = false;
+#endif
+
+    if (!skipDescriptorLinkat) {
+        // Primary method: linkat with AT_EMPTY_PATH directly from stagingFd
+        int linkRes = ::linkat(stagingFd, "", destDirFd, destBaseName.constData(), AT_EMPTY_PATH);
+        int linkErr = errno;
+
+        // Secondary descriptor method: /proc/self/fd/<stagingFd> with AT_SYMLINK_FOLLOW
+        if (linkRes != 0 && (linkErr == ENOENT || linkErr == EPERM || linkErr == EINVAL)) {
+            const QByteArray procFdPath = "/proc/self/fd/" + QByteArray::number(stagingFd);
+            linkRes = ::linkat(AT_FDCWD, procFdPath.constData(), destDirFd, destBaseName.constData(), AT_SYMLINK_FOLLOW);
+            linkErr = errno;
+        }
+
+        if (linkRes == 0) {
+            linkatSucceeded = true;
+        } else if (linkErr == EEXIST || linkErr == EBUSY || linkErr == ENOTEMPTY || linkErr == EISDIR) {
+            ::close(destDirFd);
+            if (collisionDetected) {
+                *collisionDetected = true;
+            }
+            if (outErrorNumber) {
+                *outErrorNumber = EEXIST;
+            }
+            return false;
+        }
+    }
+
+    if (!linkatSucceeded) {
+        // Path B: Strict Fail-Closed.
+        // On filesystems lacking descriptor linkat support, path-based renameat2(stagingPath)
+        // cannot guarantee that stagingPath was not substituted on disk between check and rename.
+        // Therefore, we refuse to execute unverified path renames and fail closed safely.
+        ::close(destDirFd);
+        if (outErrorNumber) {
+            *outErrorNumber = EOPNOTSUPP;
+        }
+        return false;
+    }
+
+    // At this point destination is successfully published via descriptor linkat!
+    // Verify destination matches stagingFd inode
+    struct stat publishedSt {};
+    if (::fstatat(destDirFd, destBaseName.constData(), &publishedSt, AT_SYMLINK_NOFOLLOW) == 0) {
+        if (publishedSt.st_dev != fdStat.st_dev || publishedSt.st_ino != fdStat.st_ino) {
+            // Inode mismatch: fail closed but NEVER rollback/unlink destination!
+            ::close(destDirFd);
+            if (outErrorNumber) {
+                *outErrorNumber = EIO;
+            }
+            return false;
+        }
+    }
+
+    // Unlink staging link from destination directory
+    // Use unlinkat relative to destDirFd
+    // To ensure we do not unlink a foreign file that was substituted under stagingBaseName,
+    // verify the directory entry's inode matches stagingFd before unlinking.
+    struct stat preUnlinkSt {};
+    if (::fstatat(destDirFd, stagingBaseName.constData(), &preUnlinkSt, AT_SYMLINK_NOFOLLOW) == 0) {
+        if (preUnlinkSt.st_dev == fdStat.st_dev && preUnlinkSt.st_ino == fdStat.st_ino) {
+            if (::unlinkat(destDirFd, stagingBaseName.constData(), 0) != 0) {
+                const int unlinkErr = errno;
+                if (unlinkErr != ENOENT) {
+                    if (stagingUnlinkFailed) {
+                        *stagingUnlinkFailed = true;
+                    }
+                }
+            }
+        } else {
+            // Staging name on disk was substituted by an alien file!
+            // Fail-closed: refuse to unlink alien file; leave it intact.
+            if (stagingUnlinkFailed) {
+                *stagingUnlinkFailed = true;
+            }
+        }
+    }
+
+    // Sync parent directory to persist directory entries (POSIX directory durability)
+    ::fsync(destDirFd);
+    ::close(destDirFd);
+    return true;
 }

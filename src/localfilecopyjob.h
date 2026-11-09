@@ -270,7 +270,17 @@ public Q_SLOTS:
             Q_EMIT cancelled();
             return;
         }
+        const int destHandle = destination.handle();
+        int stagingFd = -1;
+        if (destHandle >= 0) {
+            stagingFd = ::dup(destHandle);
+        }
+        if (stagingFd >= 0) {
+            ::fsync(stagingFd);
+        }
+
         const bool metadataApplied = destination.flush()
+            && (stagingFd < 0 || ::fsync(stagingFd) == 0)
             && destination.setPermissions(sourceInfo.permissions())
             && applyFileTime(
                 destination,
@@ -283,6 +293,9 @@ public Q_SLOTS:
         destination.close();
         source.close();
         if (!metadataApplied) {
+            if (stagingFd >= 0) {
+                ::close(stagingFd);
+            }
             removeVerifiedPartial(m_partialPath, partialIdentity);
             finishWithError(
                 LocalTransferError::Metadata,
@@ -291,6 +304,9 @@ public Q_SLOTS:
         }
         QMutexLocker publicationLocker(&m_mutex);
         if (m_cancelRequested) {
+            if (stagingFd >= 0) {
+                ::close(stagingFd);
+            }
             publicationLocker.unlock();
             removeVerifiedPartial(m_partialPath, partialIdentity);
             markFinished();
@@ -298,6 +314,10 @@ public Q_SLOTS:
             return;
         }
         if (m_overwrite) {
+            if (stagingFd >= 0) {
+                ::close(stagingFd);
+                stagingFd = -1;
+            }
             if (!m_originalDestination.matches(m_destinationPath)
                 || !exchangeLocalFiles(m_partialPath, m_destinationPath)) {
                 removeVerifiedPartial(m_partialPath, partialIdentity);
@@ -322,7 +342,22 @@ public Q_SLOTS:
         } else {
             bool collision = false;
             int publishErr = 0;
-            if (!publishLocalFileNoOverwrite(m_partialPath, m_destinationPath, &collision, &publishErr)) {
+            bool unlinkFailed = false;
+            const bool published = publishOwnedStagingNoOverwrite(
+                stagingFd,
+                m_partialPath,
+                m_destinationPath,
+                partialIdentity,
+                &collision,
+                &publishErr,
+                &unlinkFailed);
+
+            if (stagingFd >= 0) {
+                ::close(stagingFd);
+                stagingFd = -1;
+            }
+
+            if (!published) {
                 removeVerifiedPartial(m_partialPath, partialIdentity);
                 publicationLocker.unlock();
                 if (collision) {
@@ -384,7 +419,7 @@ private:
 
     static void removeVerifiedPartial(const QString &partialPath, const LocalFileIdentity &expectedIdentity)
     {
-        if (!expectedIdentity.valid || expectedIdentity.sameFile(LocalFileIdentity::read(partialPath))) {
+        if (expectedIdentity.valid && expectedIdentity.sameFile(LocalFileIdentity::read(partialPath))) {
             QFile::remove(partialPath);
         }
     }

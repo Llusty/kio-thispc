@@ -596,6 +596,56 @@ When standard operations receive permission denied errors, provide targeted `adm
       - Removed documentation contradiction regarding transitional `link/unlink` fallback in Stage 5.2 summary;
       - Verified Backup: `/mnt/g/ThisPC backup/ThisPC-0.45.0-Stage5.3.1-ManualAccepted-2026-11-08/`;
       - **Security Release Gate Status:** **`BLOCKED / FINAL RELEASE VERIFICATION PENDING`** (system version remains 0.44.0 untouched; no git tags or public release created).
+    - **Stage 5.3.2A — Filesystem Compatibility Preflight:** ✅ COMPLETED:
+      - Conducted read-only inventory of mounted and available filesystems (Btrfs on NVMe root/home, tmpfs on /tmp, vfat EFI, NTFS via ntfs-3g/fuseblk on /mnt/c, /mnt/d, /mnt/g, NTFS via kernel ntfs3 on /mnt/e-raid, /mnt/f-raid, unmounted FAT32 USB on /dev/sde);
+      - Analyzed atomic publication mechanisms in `LocalFileCopyJob`, `LocalFileMoveJob`, and `KioStagedTransferJob` regarding `RENAME_NOREPLACE` fail-closed semantics;
+      - Prepared isolated test environment `~/Pobrane/Testy/0.45/Stage5.3.2-Filesystems/` with fixtures, SHA-256 sums, `tools/check_rename_noreplace` feature probe, and safe non-destructive test script `test_filesystem_transfer.fish`;
+      - Verified native `RENAME_NOREPLACE`, collision protection, and `RENAME_EXCHANGE` on local Btrfs filesystem (PASS);
+      - Formulated non-destructive manual acceptance plan (Scenarios A–H) for cross-filesystem evaluation.
+    - **Stage 5.3.2B — NTFS-3G Compatibility Probe:** ✅ COMPLETED:
+      - Executed probe in user-approved isolated directory `/mnt/d/ThisPC_FS_Test/`;
+      - Confirmed that `ntfs-3g` / FUSE does NOT support `SYS_renameat2` with `RENAME_NOREPLACE` or `RENAME_EXCHANGE`, returning `errno 22 (EINVAL)`;
+      - Identified critical compatibility regression risk: copying or moving files to NTFS-3G partitions without overwrite would fail closed in 0.45.0, whereas it succeeded in 0.44.0;
+      - Conducted read-only inspection of mounted FAT32 pendrive at `/run/media/sebastianh/7871-F299` (vfat, 1.9 GiB free, zero writes performed).
+    - **Stage 5.3.2C — NTFS-3G Safe Publication Research:** ✅ COMPLETED:
+      - Developed and executed diagnostic probe `tools/check_linkat_probe` in isolated `/mnt/d/ThisPC_FS_Test/probe_linkat_test/`;
+      - Confirmed `linkat()` is fully SUPPORTED on `ntfs-3g`: creates valid hard link (same inode, nlink=2), strictly rejects collisions with `errno 17 (EEXIST)` preserving destination content intact, and unlinking staging file leaves standalone published file with nlink=1;
+      - Analyzed architectural safety: publishing staging via `linkat()` followed by staging `unlink()` eliminates the destination rollback race because destination is never unlinked on failure;
+      - Evaluated FAT32 / vfat limitations where hard links are unsupported;
+      - Security Release Gate remains **`BLOCKED / FINAL RELEASE VERIFICATION PENDING`** (system version 0.44.0 untouched).
+    - **Stage 5.3.2D — Safe Publication & Move Security Design Review:** ✅ COMPLETED:
+      - Conducted thorough review of atomic publication, `LocalFileMoveJob` TOCTOU risks, and Overwrite variants on filesystems lacking `RENAME_EXCHANGE`;
+      - Identified critical flaw in current `LocalFileMoveJob::rollbackDestination()` (`QFile::remove(destination)` upon source deletion failure);
+      - Design review found that architectural corrections are strictly required before any implementation.
+    - **Stage 5.3.2D.1 — Security Design Corrections:** ✅ COMPLETED:
+      - Segregated publication APIs: descriptor linkat fallback strictly reserved for verified owned staging files; user source Move forbidden from using linkat;
+      - Designed descriptor-based staging protection against TOCTOU path substitutions;
+      - Established safe Move source handling: refusing to delete source if exact identity cannot be guaranteed, eliminating dangerous destination rollback, fail-safe duplicate retention;
+      - Solidified Overwrite on filesystems without `RENAME_EXCHANGE` as strictly fail-closed;
+      - Defined deterministic regression test matrix (Scenarios 1–10).
+    - **Stage 5.3.2D.2 — Final Security Design Gate:** ✅ COMPLETED:
+      - Empirically verified non-root descriptor publication on NTFS-3G via `linkat(stageFd, "", dstDirFd, name, AT_EMPTY_PATH)` and `/proc/self/fd/NN` (both PASS with strict `EEXIST` collision rejection and SHA-256 integrity);
+      - Proved that renaming staging file on disk while keeping descriptor open still publishes original inode;
+      - Established architectural boundary: standard Linux VFS does not offer atomic conditional unlink by inode, requiring Fail-Closed source retention rather than TOCTOU rollback;
+      - Fixed `removeVerifiedPartial()` flaw where invalid identity previously permitted unconditional deletion.
+    - **Stage 5.3.2E.1/E.2 — Safe NTFS-3G Copy Implementation & Final Closure:** ✅ CLOSED / AUTOMATED PASS / MANUAL ACCEPTED (3/3) / BACKED UP / COMMITTED / PUSHED:
+      - **Copy on Btrfs and NTFS-3G:**
+        - Descriptor-based `linkat()` (`AT_EMPTY_PATH` with `/proc/self/fd` fallback) is the primary publication mechanism for owned staging files;
+        - Atomic collision protection via kernel `EEXIST`; destination files are never overwritten;
+        - Verified SHA-256 payload integrity matching source files;
+        - Manual Acceptance: 3/3 FULL PASS by user (E1-A sample_doc.txt, E1-B skip conflict preserving original SHA-256, E1-C sample_image.bin);
+      - **Hardening and Verification:**
+        - Hardened `removeVerifiedPartial()` requiring `expectedIdentity.valid == true` and matching inode identity;
+        - Separated Move API (`moveLocalFileNoOverwrite()`) strictly using atomic `RENAME_NOREPLACE` without hardlink fallback;
+        - Automated regression: 77/77 test suites PASS; `local_transfer`: 85/85 assertions PASS; `local_move`: 73/73 assertions PASS;
+        - ASan/UBSan clean on transfer engines;
+        - Backup verified at `/mnt/g/ThisPC backup/ThisPC-0.45.0-Stage5.3.2E.2-FinalClosure-2026-11-09/`;
+      - **Remaining Limitations & Security Considerations:**
+        1. VFAT compatibility: VFAT does not support hardlinks. Current Copy mechanism will require dedicated compatibility testing and likely a separate safe publication path (Linux supports `RENAME_NOREPLACE` on VFAT, but actual behavior must be confirmed on real user devices);
+        2. Staging cleanup protection: pre-unlink verification (`fstatat` before `unlinkat`) mitigates substitution risk, but POSIX VFS lacks atomic conditional unlinking by inode. Real trust model assumes non-hostile concurrent modifications by same UID in directory;
+        3. History test harness LSan report: 6464 B in 48 allocations in `history.cpp` test harness retained as a standalone tracking item for verification, distinct from production code;
+        4. Move and Overwrite on NTFS-3G remain restricted;
+      - **Security Release Gate Status:** **`BLOCKED / FINAL RELEASE VERIFICATION PENDING`** (system version 0.44.0 untouched).
 
 ### 0.45.0 — Security Release Gate
 - Prior to official release, a mandatory comprehensive security audit is required, covering unauthorized code execution, potential backdoors, administrative privilege escalation, third-party dependencies, installer integrity, and file operation safety;

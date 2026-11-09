@@ -698,6 +698,56 @@ Gdy zwykła operacja plikowa zakończy się błędem braku uprawnień (Permissio
       - Usunięto rozbieżność dokumentacji dotyczącą przejściowego fallbacku link/unlink w podsumowaniu Etapu 5.2;
       - Zweryfikowany backup: `/mnt/g/ThisPC backup/ThisPC-0.45.0-Stage5.3.1-ManualAccepted-2026-11-08/`;
       - **Stan bramki bezpieczeństwa (Security Release Gate):** **`BLOCKED / FINAL RELEASE VERIFICATION PENDING`** (wersja systemowa 0.44.0 pozostaje nienaruszona; brak tagów gita i publicznego wydania).
+    - **Etap 5.3.2A — Wstępne rozpoznanie kompatybilności systemów plików (Filesystem Compatibility Preflight):** ✅ ZAKOŃCZONY:
+      - Przeprowadzono odczytową inwentaryzację zamontowanych i dostępnych systemów plików (Btrfs na NVMe /, /home, tmpfs na /tmp, vfat EFI, partycje NTFS via ntfs-3g/fuseblk na /mnt/c, /mnt/d, /mnt/g, partycje NTFS via ntfs3 w jądrze na /mnt/e-raid, /mnt/f-raid, odłączony nośnik USB FAT32 na /dev/sde);
+      - Dokonano analizy mechanizmów publikacji atomowej w `LocalFileCopyJob`, `LocalFileMoveJob` oraz `KioStagedTransferJob` w kontekście semantyki fail-closed dla `RENAME_NOREPLACE`;
+      - Przygotowano izolowane środowisko testowe `~/Pobrane/Testy/0.45/Stage5.3.2-Filesystems/` z plikami fixture, sumami SHA-256, narzędziem sondującym `tools/check_rename_noreplace` i bezpiecznym skryptem `test_filesystem_transfer.fish`;
+      - Zweryfikowano natywne wsparcie `RENAME_NOREPLACE`, ochronę przed kolizją i `RENAME_EXCHANGE` na lokalnym systemie Btrfs (PASS);
+      - Opracowano nieniszczący plan scenariuszy manual acceptance (Scenariusze A–H) do weryfikacji między woluminami.
+    - **Etap 5.3.2B — Sonda kompatybilności NTFS-3G (NTFS-3G Compatibility Probe):** ✅ ZAKOŃCZONY:
+      - Przeprowadzono bezpieczny test w zatwierdzonym przez użytkownika katalogu `/mnt/d/ThisPC_FS_Test/`;
+      - Potwierdzono, że sterownik `ntfs-3g` / FUSE NIE wspiera wywołania `SYS_renameat2` z flagami `RENAME_NOREPLACE` ani `RENAME_EXCHANGE`, zwracając błąd `errno 22 (EINVAL)`;
+      - Zidentyfikowano krytyczne ryzyko regresji kompatybilności: kopiowanie lub przenoszenie plików na partycje NTFS-3G bez nadpisywania w 0.45.0 kończyłoby się bezpieczną odmową fail-closed (w 0.44.0 operacja działała dzięki podatnemu na wyścigi `QFile::rename`);
+      - Wykonano wyłącznie odczytowe rozpoznanie zamontowanego pendrive FAT32 pod `/run/media/sebastianh/7871-F299` (vfat, 1.9 GiB wolnego, zero operacji zapisu).
+    - **Etap 5.3.2C — Badania bezpiecznej publikacji na NTFS-3G (NTFS-3G Safe Publication Research):** ✅ ZAKOŃCZONY:
+      - Opracowano i uruchomiono narzędzie diagnostyczne `tools/check_linkat_probe` w podkatalogu `/mnt/d/ThisPC_FS_Test/probe_linkat_test/`;
+      - Potwierdzono pełne wsparcie dla `linkat()` na `ntfs-3g`: poprawne tworzenie dowiązania twardego (ten sam inod, nlink=2), ścisła ochrona przed kolizją z istniejącym celem (`errno 17: EEXIST`), nienaruszone sumy SHA-256 celu oraz odpięcie pliku stagingowego z pozostawieniem samodzielnego pliku (nlink=1);
+      - Wykazano bezpieczeństwo architektoniczne: publikacja staging->cel przez `linkat()` i późniejsze usunięcie stagingu eliminuje ryzyko wyścigu rollbacku (cel nigdy nie jest usuwany w razie niepowodzenia);
+      - Odnotowano ograniczenia FAT32/vfat (brak obsługi dowiązań twardych);
+      - Stan bramki bezpieczeństwa pozostaje **`BLOCKED / FINAL RELEASE VERIFICATION PENDING`** (wersja 0.44.0 nienaruszona).
+    - **Etap 5.3.2D — Przegląd bezpieczeństwa publikacji i przenoszenia (Safe Publication & Move Security Design Review):** ✅ ZAKOŃCZONY:
+      - Przeprowadzono audyt bezpieczeństwa publikacji atomowej, ryzyk TOCTOU w `LocalFileMoveJob` oraz wariantów Overwrite na systemach bez `RENAME_EXCHANGE`;
+      - Zidentyfikowano krytyczną lukę w dotychczasowym `LocalFileMoveJob::rollbackDestination()` (`QFile::remove(destination)` przy nieudanym usunięciu źródła);
+      - Ustalono, że przed przystąpieniem do implementacji bezwzględnie wymagane są korekty architektoniczne.
+    - **Etap 5.3.2D.1 — Korekty bezpieczeństwa architektury (Security Design Corrections):** ✅ ZAKOŃCZONY:
+      - Ścisłe rozdzielenie API publikacji: bezpieczny fallback `linkat` wyłącznie dla zweryfikowanych plików roboczych (owned staging); operacje Move na oryginalnym pliku źródłowym użytkownika bezwzględnie wykluczone z fallbacku `linkat`;
+      - Opracowanie ochrony deskryptorowej stagingu przed wyścigami podmiany ścieżek;
+      - Opracowanie bezpiecznej obsługi źródła Move: odmowa usunięcia źródła, gdy nie można zagwarantować jego ścisłej tożsamości, eliminacja niebezpiecznego rollbacku celu, bezpieczne zachowanie obu kopii w razie wątpliwości;
+      - Utrzymanie operacji Overwrite na systemach bez `RENAME_EXCHANGE` jako bezwzględnie fail-closed;
+      - Zaprojektowanie deterministycznej macierzy testów regresyjnych (Scenariusze 1–10).
+    - **Etap 5.3.2D.2 — Końcowa bramka bezpieczeństwa projektu (Final Security Design Gate):** ✅ ZAKOŃCZONY:
+      - Empiryczne potwierdzenie działania publikacji z deskryptora bez uprawnień roota na NTFS-3G przez `linkat(stageFd, "", dstDirFd, name, AT_EMPTY_PATH)` oraz `/proc/self/fd/NN` (oba PASS z atomową odmową `EEXIST` przy kolizji i 100% integralnością SHA-256);
+      - Wykazanie odporności na podmianę ścieżki stagingu: zmiana nazwy stagingu na dysku przy otwartym deskryptorze nie narusza publikacji oryginalnego i-węzła;
+      - Rozgraniczenie gwarancji technicznych i best-effort: wykazanie braku warunkowego unlinka w VFS i sformalizowanie zasady zachowania obu kopii;
+      - Zabezpieczenie funkcji `removeVerifiedPartial()` przed usuwaniem ścieżek przy nieważnej tożsamości.
+    - **Etap 5.3.2E.1/E.2 — Bezpieczna implementacja kopiowania na NTFS-3G i domknięcie (Safe NTFS-3G Copy Implementation & Final Closure):** ✅ CLOSED / AUTOMATED PASS / MANUAL ACCEPTED (3/3) / BACKED UP / COMMITTED / PUSHED:
+      - **Kopiowanie (Copy) na Btrfs i NTFS-3G:**
+        - Deskryptorowe `linkat` (`AT_EMPTY_PATH` z fallbackiem na `/proc/self/fd`) jest podstawowym mechanizmem publikacji własnego stagingu;
+        - Atomowa ochrona przed kolizją `EEXIST` na poziomie jądra; pliki docelowe nigdy nie są nadpisywane;
+        - Potwierdzona integralność danych SHA-256 zgodna z plikami źródłowymi;
+        - Odbiór manualny użytkownika (Manual Acceptance): 3/3 FULL PASS (E1-A sample_doc.txt, E1-B pominięcie kolizji z zachowaniem oryginalnego SHA-256, E1-C sample_image.bin);
+      - **Uszczelnienie i weryfikacja:**
+        - Uszczelnienie `removeVerifiedPartial()` wymagające `expectedIdentity.valid == true` oraz zgodności i-węzła;
+        - Odseparowane API dla przenoszenia (`moveLocalFileNoOverwrite()`) bezwzględnie używające atomowego `RENAME_NOREPLACE` bez fallbacku hardlinków;
+        - Pełna regresja: 77/77 zestawów testowych PASS; `local_transfer`: 85/85 asercji PASS; `local_move`: 73/73 asercji PASS;
+        - Czysty stan ASan/UBSan w silnikach transferu;
+        - Zweryfikowany backup ukończony w `/mnt/g/ThisPC backup/ThisPC-0.45.0-Stage5.3.2E.2-FinalClosure-2026-11-09/`;
+      - **Pozostałe ograniczenia i uwarunkowania bezpieczeństwa:**
+        1. Kompatybilność VFAT: system VFAT nie obsługuje hardlinków. Obecny mechanizm Copy wymaga osobnego testu zgodności i prawdopodobnie osobnej bezpiecznej ścieżki publikacji (Linux obsługuje `RENAME_NOREPLACE` na VFAT, ale rzeczywiste zachowanie musi zostać potwierdzone na urządzeniu użytkownika);
+        2. Ochrona sprzątania stagingu: sprawdzenie tożsamości `fstatat` przed `unlinkat` ogranicza ryzyko podmiany, lecz POSIX VFS nie oferuje atomowego warunkowego usuwania według numeru i-węzła. Realny model zaufania zakłada brak wrogich współbieżnych modyfikacji katalogu w obrębie tego samego UID;
+        3. Raport LSan testów historii: 6464 B w 48 alokacjach w teście `history.cpp` pozostaje osobnym zagadnieniem do weryfikacji w testach, odrębnym od kodu produkcyjnego;
+        4. Move i Overwrite na NTFS-3G pozostają ograniczone;
+      - **Stan bramki bezpieczeństwa (Security Release Gate):** **`BLOCKED / FINAL RELEASE VERIFICATION PENDING`** (wersja systemowa 0.44.0 nienaruszona).
 
 ### 0.45.0 — Bezpieczeństwo i bramka wydaniowa (Security Release Gate)
 - Przed oficjalnym wydaniem wymagany jest kompleksowy audyt bezpieczeństwa obejmujący: zabezpieczenie przed nieautoryzowanym wykonywaniem kodu, brak podatności typu backdoor, kontrolę uprawnień administracyjnych i brak ich nieuprawnionej eskalacji, weryfikację zależności zewnętrznych, integralność instalatora oraz bezpieczeństwo wszystkich operacji plikowych;
