@@ -748,6 +748,25 @@ Gdy zwykła operacja plikowa zakończy się błędem braku uprawnień (Permissio
         3. Raport LSan testów historii: 6464 B w 48 alokacjach w teście `history.cpp` pozostaje osobnym zagadnieniem do weryfikacji w testach, odrębnym od kodu produkcyjnego;
         4. Move i Overwrite na NTFS-3G pozostają ograniczone;
       - **Stan bramki bezpieczeństwa (Security Release Gate):** **`BLOCKED / FINAL RELEASE VERIFICATION PENDING`** (wersja systemowa 0.44.0 nienaruszona).
+    - **Etap 5.3.2F — Bezpieczna implementacja kopiowania na VFAT i domknięcie (Safe VFAT Copy Implementation & Closure):** ✅ CLOSED / AUTOMATED PASS / MANUAL ACCEPTED (5/5) / BACKED UP / COMMITTED / PUSHED:
+      - **Publikacja przez VFAT RENAME_NOREPLACE:**
+        - Dedykowana, rygorystycznie chroniona ścieżka publikacji dla systemów VFAT (`MSDOS_SUPER_MAGIC`) za pomocą natywnego wywołania jądra Linuksa `SYS_renameat2(..., RENAME_NOREPLACE)`;
+        - Systemy plików bez obsługi dowiązań twardych inne niż VFAT kończą się deterministycznym fail-closed z błędem `EOPNOTSUPP`;
+        - Atomowa ochrona przed kolizją `EEXIST` (errno 17), zabezpieczająca istniejące pliki docelowe bit-po-bicie bez nadpisania;
+        - Potwierdzona pełna ochrona przed kolizją bez uwzględniania wielkości liter (case-insensitive) na FAT32;
+        - Weryfikacja tożsamości stagingu (`st_dev`, `st_ino`, `st_size`, brak symlinka) w deskryptorze katalogu przed rename;
+        - Wymuszenie trwałości struktur katalogu przez `fsync(destDirFd)`;
+      - **Weryfikacja i odbiór manualny (Manual Acceptance):**
+        - Pełna regresja: 77/77 zestawów testowych PASS; `local_transfer`: 113/113 asercji PASS; `local_move`: 73/73 asercji PASS;
+        - Czyste przebiegi ASan/UBSan w silnikach transferu;
+        - Potwierdzona integralność SHA-256 opublikowanych danych we wszystkich testach;
+        - Brak pozostałości stagingu (`.thispc-part` usuwane przy kolizji/błędzie lub atomowo konsumowane przy publikacji);
+        - Odbiór manualny na pendrivie USB FAT32 (UUID `7871-F299`): **5/5 FULL PASS** przez użytkownika;
+        - Zweryfikowany backup ukończony w `/mnt/g/ThisPC backup/ThisPC-0.45.0-Stage5.3.2F-VFAT-ManualAccepted-2026-11-09/`;
+      - **Pozostałe ograniczenia i uwarunkowania bezpieczeństwa:**
+        - Ograniczenia TOCTOU dla nazwy źródłowej: ze względu na brak obsługi `renameat2` po deskryptorze z `AT_EMPTY_PATH` w Linuksie, publikacja na VFAT musi odwoływać się do nazwy pliku stagingowego. Weryfikacja `fstatat` przed i po rename ogranicza ryzyko, lecz model zaufania zakłada brak wrogich procesów modyfikujących staging pod tym samym UID;
+        - Operacje Move i Overwrite na VFAT oraz NTFS-3G pozostają ograniczone;
+      - **Stan bramki bezpieczeństwa (Security Release Gate):** **`BLOCKED / FINAL RELEASE VERIFICATION PENDING`** (wersja systemowa 0.44.0 nienaruszona).
 
 ### 0.45.0 — Bezpieczeństwo i bramka wydaniowa (Security Release Gate)
 - Przed oficjalnym wydaniem wymagany jest kompleksowy audyt bezpieczeństwa obejmujący: zabezpieczenie przed nieautoryzowanym wykonywaniem kodu, brak podatności typu backdoor, kontrolę uprawnień administracyjnych i brak ich nieuprawnionej eskalacji, weryfikację zależności zewnętrznych, integralność instalatora oraz bezpieczeństwo wszystkich operacji plikowych;
@@ -761,6 +780,10 @@ Gdy zwykła operacja plikowa zakończy się błędem braku uprawnień (Permissio
   Zakończone operacje z mniej niż 2 próbkami prędkości (transfery poniżej 500 ms) nie wyświetlają komunikatu „Oczekiwanie na próbki prędkości…”; wykres prezentuje czytelny stan ukończenia („Transfer ukończony natychmiastowo”).
 - **Zagadnienie UX C — Spójność historii operacji:** ✅ ZAMKNIĘTE / ZWERYFIKOWANE
   Panel podręczny `OperationPopup` nie raportuje „Brak historii”, gdy istnieją operacje ukończone w sesji lub zapisane na dysku; podsumowanie podaje dokładną liczbę ukończonych zadań.
+
+#### Przyszli kandydaci UX (Niezaplanowane / W obserwacji):
+- **Kandydat UX-01 — Błędne relatywne porównanie znaczników czasu w oknie konfliktu:**
+  Zaobserwowano komunikat „Rzecz źródłowa jest starsza” pomimo wyświetlania późniejszego czasu źródła. Problem występował na montowaniach NTFS-3G i VFAT. Zachowano do przyszłej analizy bez przypisania do konkretnego wydania.
 
 ### 0.46.0 — Niezależna architektura i audyt bezpieczeństwa (Standalone Architecture & Security Audit)
 - Kompleksowy audyt zależności od KDE Frameworks i bibliotek Qt;

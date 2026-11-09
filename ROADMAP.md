@@ -646,6 +646,25 @@ When standard operations receive permission denied errors, provide targeted `adm
         3. History test harness LSan report: 6464 B in 48 allocations in `history.cpp` test harness retained as a standalone tracking item for verification, distinct from production code;
         4. Move and Overwrite on NTFS-3G remain restricted;
       - **Security Release Gate Status:** **`BLOCKED / FINAL RELEASE VERIFICATION PENDING`** (system version 0.44.0 untouched).
+    - **Stage 5.3.2F — Safe VFAT Copy Implementation & Closure:** ✅ CLOSED / AUTOMATED PASS / MANUAL ACCEPTED (5/5) / BACKED UP / COMMITTED / PUSHED:
+      - **VFAT RENAME_NOREPLACE Publication:**
+        - Dedicated, strictly guarded publication path for VFAT (`MSDOS_SUPER_MAGIC`) using native Linux kernel `SYS_renameat2(..., RENAME_NOREPLACE)`;
+        - Non-VFAT filesystems lacking hardlink support fail closed with `EOPNOTSUPP`;
+        - Atomic collision protection via kernel `EEXIST` (errno 17), preserving existing destination files bit-for-bit without overwrite;
+        - Full case-insensitive collision protection confirmed on FAT32;
+        - Pre-rename verification of staging identity (`st_dev`, `st_ino`, `st_size`, symlink check) against held staging descriptor;
+        - Directory durability enforced via `fsync(destDirFd)`;
+      - **Verification and Manual Acceptance:**
+        - Automated regression: 77/77 test suites PASS; `local_transfer`: 113/113 assertions PASS; `local_move`: 73/73 assertions PASS;
+        - Clean ASan/UBSan runs on all transfer test suites;
+        - Verified SHA-256 payload integrity across all tests;
+        - Zero staging leftovers (`.thispc-part` cleanly unlinked on error/collision or consumed on atomic publication);
+        - Manual Acceptance on USB FAT32 pendrive (UUID `7871-F299`): **5/5 FULL PASS** by user;
+        - Backup verified at `/mnt/g/ThisPC backup/ThisPC-0.45.0-Stage5.3.2F-VFAT-ManualAccepted-2026-11-09/`;
+      - **Remaining Limitations & Security Considerations:**
+        - TOCTOU limitations for staging source: because Linux VFS does not support descriptor-based `renameat2` with `AT_EMPTY_PATH`, VFAT publication references the staging entry by directory name. While pre-rename `fstatat` and post-rename checks detect tampering, the trust model assumes no hostile concurrent process running under the same UID in the destination directory;
+        - Move and Overwrite on VFAT and NTFS-3G remain restricted;
+      - **Security Release Gate Status:** **`BLOCKED / FINAL RELEASE VERIFICATION PENDING`** (system version 0.44.0 untouched).
 
 ### 0.45.0 — Security Release Gate
 - Prior to official release, a mandatory comprehensive security audit is required, covering unauthorized code execution, potential backdoors, administrative privilege escalation, third-party dependencies, installer integrity, and file operation safety;
@@ -659,6 +678,10 @@ When standard operations receive permission denied errors, provide targeted `adm
   Completed operations with fewer than 2 speed samples (transfers under 500 ms) do not display "Waiting for speed samples…"; suppress graph or display appropriate completed terminal status ("Transfer ukończony natychmiastowo").
 - **UX Item C — History Consistency Between Popup and Detailed Window:** ✅ CLOSED / VERIFIED
   Toolbar `OperationPopup` does not display "No history" while completed operations exist in the session or persistent storage; summary displays exact completed task count.
+
+#### Future UX Candidates (Unscheduled / Under Observation):
+- **Candidate UX-01 — Conflict dialog incorrect relative timestamp comparison:**
+  Observed "Source item is older" / "Rzecz źródłowa jest starsza" message despite displaying a newer source timestamp. Issue observed on NTFS-3G and VFAT mounts. Retained for future analysis without assignment to a specific release.
 
 ### 0.46.0 — Standalone Architecture & Security Audit
 - Comprehensive audit of KDE Frameworks and Qt dependencies;

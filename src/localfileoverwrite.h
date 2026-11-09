@@ -12,7 +12,12 @@
 #include <linux/fs.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <sys/vfs.h>
 #include <unistd.h>
+
+#ifndef MSDOS_SUPER_MAGIC
+#define MSDOS_SUPER_MAGIC 0x4d44
+#endif
 
 struct LocalFileIdentity
 {
@@ -64,6 +69,18 @@ inline bool &simulateDescriptorLinkatUnsupported()
 {
     static bool unsupported = false;
     return unsupported;
+}
+
+inline bool &simulateVfatFilesystem()
+{
+    static bool vfat = false;
+    return vfat;
+}
+
+inline bool &simulateFsyncError()
+{
+    static bool err = false;
+    return err;
 }
 #endif
 
@@ -247,15 +264,140 @@ inline bool publishOwnedStagingNoOverwrite(
     }
 
     if (!linkatSucceeded) {
-        // Path B: Strict Fail-Closed.
-        // On filesystems lacking descriptor linkat support, path-based renameat2(stagingPath)
-        // cannot guarantee that stagingPath was not substituted on disk between check and rename.
-        // Therefore, we refuse to execute unverified path renames and fail closed safely.
-        ::close(destDirFd);
-        if (outErrorNumber) {
-            *outErrorNumber = EOPNOTSUPP;
+        // Check if destination filesystem is VFAT / MSDOS
+        struct statfs sfs {};
+        bool isVfat = false;
+        if (::fstatfs(destDirFd, &sfs) == 0) {
+            if (static_cast<unsigned long>(sfs.f_type) == MSDOS_SUPER_MAGIC) {
+                isVfat = true;
+            }
         }
-        return false;
+#ifdef THISPC_TEST_HARNESS
+        if (simulateVfatFilesystem()) {
+            isVfat = true;
+        }
+#endif
+
+        if (!isVfat) {
+            // Path B: Strict Fail-Closed for non-VFAT filesystems without descriptor linkat.
+            // On non-VFAT filesystems lacking descriptor linkat support, path-based fallback
+            // renameat2(stagingPath) cannot guarantee that stagingPath was not substituted on disk
+            // between check and rename. Therefore, we refuse unverified path renames and fail closed safely.
+            ::close(destDirFd);
+            if (outErrorNumber) {
+                *outErrorNumber = EOPNOTSUPP;
+            }
+            return false;
+        }
+
+        // Path C: Safe VFAT Publication via atomic SYS_renameat2(..., RENAME_NOREPLACE)
+        // VFAT does not support hard links (linkat returns EPERM/EOPNOTSUPP), but the Linux VFAT
+        // driver natively and atomically supports SYS_renameat2(..., RENAME_NOREPLACE) in directory lookup.
+        //
+        // Pre-rename verification:
+        // 1. Verify staging directory entry identity in destDirFd against held stagingFd
+        struct stat preRenameSt {};
+        if (::fstatat(destDirFd, stagingBaseName.constData(), &preRenameSt, AT_SYMLINK_NOFOLLOW) != 0) {
+            ::close(destDirFd);
+            if (outErrorNumber) {
+                *outErrorNumber = errno ? errno : ENOENT;
+            }
+            return false;
+        }
+        if (S_ISLNK(preRenameSt.st_mode)
+            || preRenameSt.st_dev != fdStat.st_dev
+            || preRenameSt.st_ino != fdStat.st_ino
+            || preRenameSt.st_size != fdStat.st_size) {
+            // Staging file was substituted or tampered with before rename: fail closed!
+            ::close(destDirFd);
+            if (outErrorNumber) {
+                *outErrorNumber = EBADF;
+            }
+            return false;
+        }
+
+#ifdef THISPC_TEST_HARNESS
+        const bool skipRenameNoReplace = simulateRenameNoReplaceUnsupported();
+#else
+        const bool skipRenameNoReplace = false;
+#endif
+
+        long renameRes = -1;
+        int renameErr = EOPNOTSUPP;
+        if (!skipRenameNoReplace) {
+            renameRes = ::syscall(SYS_renameat2, destDirFd, stagingBaseName.constData(),
+                                  destDirFd, destBaseName.constData(), RENAME_NOREPLACE);
+            renameErr = errno;
+        }
+
+        if (renameRes != 0) {
+            ::close(destDirFd);
+            if (renameErr == EEXIST || renameErr == EBUSY || renameErr == ENOTEMPTY || renameErr == EISDIR) {
+                if (collisionDetected) {
+                    *collisionDetected = true;
+                }
+                if (outErrorNumber) {
+                    *outErrorNumber = EEXIST;
+                }
+                return false;
+            }
+            if (renameErr == EINVAL || renameErr == ENOSYS || renameErr == EOPNOTSUPP) {
+                // Filesystem / kernel lacks RENAME_NOREPLACE: strict fail-closed!
+                if (outErrorNumber) {
+                    *outErrorNumber = EOPNOTSUPP;
+                }
+                return false;
+            }
+            if (outErrorNumber) {
+                *outErrorNumber = renameErr ? renameErr : EIO;
+            }
+            return false;
+        }
+
+        // Post-publication verification for VFAT
+        struct stat postRenameSt {};
+        struct stat postFdSt {};
+        if (::fstatat(destDirFd, destBaseName.constData(), &postRenameSt, AT_SYMLINK_NOFOLLOW) != 0
+            || ::fstat(stagingFd, &postFdSt) != 0) {
+            ::close(destDirFd);
+            if (outErrorNumber) {
+                *outErrorNumber = errno ? errno : EIO;
+            }
+            return false;
+        }
+
+        if (postRenameSt.st_dev != fdStat.st_dev
+            || postRenameSt.st_size != fdStat.st_size
+            || (postRenameSt.st_ino != fdStat.st_ino && postRenameSt.st_ino != postFdSt.st_ino)) {
+            // Inode / size mismatch: fail closed, NEVER rollback/unlink destination!
+            ::close(destDirFd);
+            if (outErrorNumber) {
+                *outErrorNumber = EIO;
+            }
+            return false;
+        }
+
+        // Parent directory durability
+        int fsyncRes = ::fsync(destDirFd);
+#ifdef THISPC_TEST_HARNESS
+        if (simulateFsyncError()) {
+            fsyncRes = -1;
+            errno = EIO;
+        }
+#endif
+        if (fsyncRes != 0) {
+            const int syncErr = errno;
+            if (syncErr != EINVAL && syncErr != ENOTSUP) {
+                ::close(destDirFd);
+                if (outErrorNumber) {
+                    *outErrorNumber = syncErr;
+                }
+                return false;
+            }
+        }
+
+        ::close(destDirFd);
+        return true;
     }
 
     // At this point destination is successfully published via descriptor linkat!

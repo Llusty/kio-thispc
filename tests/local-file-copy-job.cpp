@@ -533,6 +533,156 @@ int main(int argc, char **argv)
         QFile::remove(racePartPath);
     }
 
+    // SEC-045-F: Comprehensive VFAT Atomic Publication & Security Verification
+    {
+        // F.A & F.J: Successful publication on simulated VFAT using RENAME_NOREPLACE with SHA-256 integrity
+        simulateDescriptorLinkatUnsupported() = true;
+        simulateVfatFilesystem() = true;
+
+        const QString vfatDstPath = directory.filePath(QStringLiteral("sec045f-vfat-ok.bin"));
+        LocalFileCopyJob vfatCopy(
+            QUrl::fromLocalFile(sourcePath), QUrl::fromLocalFile(vfatDstPath),
+            nullptr, 16 * 1024, 1, false);
+        vfatCopy.setAutoDelete(false);
+        QSignalSpy vfatResult(&vfatCopy, &KJob::result);
+        vfatCopy.start();
+        verify(waitUntil([&] { return vfatResult.count() == 1; }, 10000),
+               "SEC-045-F.A: VFAT copy finishes");
+        verify(vfatCopy.error() == 0,
+               "SEC-045-F.A: VFAT copy succeeds without error");
+        verify(QFileInfo::exists(vfatDstPath),
+               "SEC-045-F.A: VFAT destination file exists");
+        verify(fileHash(vfatDstPath) == fileHash(sourcePath),
+               "SEC-045-F.J: VFAT published destination SHA-256 exactly matches source");
+        verify(!QFileInfo::exists(vfatCopy.partialPath()),
+               "SEC-045-F.A: VFAT staging file is gone after atomic rename");
+
+        // F.B: EEXIST Collision protection on VFAT
+        LocalFileCopyJob vfatCollisionCopy(
+            QUrl::fromLocalFile(sourcePath), QUrl::fromLocalFile(vfatDstPath),
+            nullptr, 16 * 1024, 1, false);
+        vfatCollisionCopy.setAutoDelete(false);
+        QSignalSpy vfatCollisionResult(&vfatCollisionCopy, &KJob::result);
+        const QByteArray dstHashBefore = fileHash(vfatDstPath);
+        vfatCollisionCopy.start();
+        verify(waitUntil([&] { return vfatCollisionResult.count() == 1; }, 10000),
+               "SEC-045-F.B: VFAT collision copy finishes");
+        verify(vfatCollisionCopy.transferError() == LocalTransferError::DestinationExists
+                   && vfatCollisionCopy.systemError() == EEXIST,
+               "SEC-045-F.B: VFAT collision reports DestinationExists (EEXIST)");
+        verify(fileHash(vfatDstPath) == dstHashBefore,
+               "SEC-045-F.B: existing VFAT destination file is 100% UNTOUCHED");
+        verify(!QFileInfo::exists(vfatCollisionCopy.partialPath()),
+               "SEC-045-F.B: VFAT staging file is cleaned up after collision");
+
+        // F.D: Non-VFAT filesystem without hardlinks fails closed with EOPNOTSUPP
+        simulateVfatFilesystem() = false;
+        const QString nonVfatDst = directory.filePath(QStringLiteral("sec045f-nonvfat.bin"));
+        LocalFileCopyJob nonVfatCopy(
+            QUrl::fromLocalFile(sourcePath), QUrl::fromLocalFile(nonVfatDst),
+            nullptr, 16 * 1024, 1, false);
+        nonVfatCopy.setAutoDelete(false);
+        QSignalSpy nonVfatResult(&nonVfatCopy, &KJob::result);
+        nonVfatCopy.start();
+        verify(waitUntil([&] { return nonVfatResult.count() == 1; }, 10000),
+               "SEC-045-F.D: non-VFAT copy finishes");
+        verify(nonVfatCopy.transferError() == LocalTransferError::Publish
+                   && nonVfatCopy.systemError() == EOPNOTSUPP,
+               "SEC-045-F.D: non-VFAT without linkat FAILS CLOSED with EOPNOTSUPP");
+        verify(!QFileInfo::exists(nonVfatDst),
+               "SEC-045-F.D: destination file never created on unsupported filesystem");
+
+        // F.E: VFAT without RENAME_NOREPLACE fails closed with EOPNOTSUPP
+        simulateVfatFilesystem() = true;
+        simulateRenameNoReplaceUnsupported() = true;
+        const QString noRenameDst = directory.filePath(QStringLiteral("sec045f-norename.bin"));
+        LocalFileCopyJob noRenameCopy(
+            QUrl::fromLocalFile(sourcePath), QUrl::fromLocalFile(noRenameDst),
+            nullptr, 16 * 1024, 1, false);
+        noRenameCopy.setAutoDelete(false);
+        QSignalSpy noRenameResult(&noRenameCopy, &KJob::result);
+        noRenameCopy.start();
+        verify(waitUntil([&] { return noRenameResult.count() == 1; }, 10000),
+               "SEC-045-F.E: no RENAME_NOREPLACE finishes");
+        verify(noRenameCopy.transferError() == LocalTransferError::Publish
+                   && noRenameCopy.systemError() == EOPNOTSUPP,
+               "SEC-045-F.E: VFAT without RENAME_NOREPLACE FAILS CLOSED with EOPNOTSUPP");
+        verify(!QFileInfo::exists(noRenameDst),
+               "SEC-045-F.E: destination file never created");
+        simulateRenameNoReplaceUnsupported() = false;
+
+        // F.F: Injected staging substitution test before VFAT publication
+        const QString vfatSubstDst = directory.filePath(QStringLiteral("sec045f-subst.bin"));
+        const QString vfatSubstPart = vfatSubstDst + QStringLiteral(".thispc-part");
+        const QString vfatRealTmp = directory.filePath(QStringLiteral("sec045f-real.tmp"));
+        verify(writeFile(vfatRealTmp, QByteArray("REAL_VFAT_PAYLOAD")), "SEC-045-F.F: real tmp written");
+        int realVfatFd = ::open(QFile::encodeName(vfatRealTmp).constData(), O_RDWR | O_CLOEXEC);
+        verify(realVfatFd >= 0, "SEC-045-F.F: real fd opened");
+        LocalFileIdentity realVfatId = LocalFileIdentity::read(vfatRealTmp);
+
+        // Alien file at staging path
+        const QByteArray alienVfatData("ALIEN_VFAT_TAMPERED_STAGING");
+        verify(writeFile(vfatSubstPart, alienVfatData), "SEC-045-F.F: alien file written under staging");
+
+        bool vfatCollision = false;
+        int vfatPubErr = 0;
+        bool vfatUnlinkFailed = false;
+        bool vfatPubOk = publishOwnedStagingNoOverwrite(
+            realVfatFd, vfatSubstPart, vfatSubstDst, realVfatId,
+            &vfatCollision, &vfatPubErr, &vfatUnlinkFailed);
+        verify(!vfatPubOk && vfatPubErr == EBADF,
+               "SEC-045-F.F: publication REFUSED when staging inode/size was substituted");
+        verify(!QFileInfo::exists(vfatSubstDst),
+               "SEC-045-F.F: destination was NEVER created from substituted staging");
+        verify(readFile(vfatSubstPart) == alienVfatData,
+               "SEC-045-F.F: alien file at staging path was NEVER unlinked or touched");
+        ::close(realVfatFd);
+        QFile::remove(vfatRealTmp);
+        QFile::remove(vfatSubstPart);
+
+        // F.H: Cancel before publication on VFAT
+        const QString vfatCancelDst = directory.filePath(QStringLiteral("sec045f-cancel.bin"));
+        LocalFileCopyJob vfatCancelCopy(
+            QUrl::fromLocalFile(sourcePath), QUrl::fromLocalFile(vfatCancelDst),
+            nullptr, 16 * 1024, 1, false);
+        vfatCancelCopy.setAutoDelete(false);
+        QSignalSpy vfatCancelSpy(&vfatCancelCopy, &KJob::result);
+        vfatCancelCopy.start();
+        verify(vfatCancelCopy.kill(KJob::EmitResult), "SEC-045-F.H: active VFAT copy can be cancelled");
+        verify(waitUntil([&] { return vfatCancelSpy.count() == 1; }, 10000),
+               "SEC-045-F.H: cancelled VFAT copy finishes");
+        verify(!QFileInfo::exists(vfatCancelDst),
+               "SEC-045-F.H: cancelled destination file was never created");
+        verify(!QFileInfo::exists(vfatCancelCopy.partialPath()),
+               "SEC-045-F.H: cancelled staging file was safely cleaned up");
+
+        // F.I: Fsync directory error handling on VFAT
+        const QString vfatFsyncDst = directory.filePath(QStringLiteral("sec045f-fsync.bin"));
+        const QString vfatFsyncTmp = directory.filePath(QStringLiteral("sec045f-fsync.tmp"));
+        verify(writeFile(vfatFsyncTmp, QByteArray("FSYNC_TEST_PAYLOAD")), "SEC-045-F.I: tmp file written");
+        int fsyncTestFd = ::open(QFile::encodeName(vfatFsyncTmp).constData(), O_RDWR | O_CLOEXEC);
+        verify(fsyncTestFd >= 0, "SEC-045-F.I: fd opened");
+        LocalFileIdentity fsyncId = LocalFileIdentity::read(vfatFsyncTmp);
+
+        simulateFsyncError() = true;
+        bool fsyncCollision = false;
+        int fsyncPubErr = 0;
+        bool fsyncUnlinkFailed = false;
+        bool fsyncPubOk = publishOwnedStagingNoOverwrite(
+            fsyncTestFd, vfatFsyncTmp, vfatFsyncDst, fsyncId,
+            &fsyncCollision, &fsyncPubErr, &fsyncUnlinkFailed);
+        verify(!fsyncPubOk && fsyncPubErr == EIO,
+               "SEC-045-F.I: publish reports EIO when fsync fails");
+        simulateFsyncError() = false;
+        ::close(fsyncTestFd);
+        QFile::remove(vfatFsyncTmp);
+        QFile::remove(vfatFsyncDst);
+
+        // Reset simulation flags
+        simulateVfatFilesystem() = false;
+        simulateDescriptorLinkatUnsupported() = false;
+    }
+
     qInfo("PASS: %d LocalFileCopyJob assertions", checks);
     return 0;
 }
