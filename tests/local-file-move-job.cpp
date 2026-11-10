@@ -1480,6 +1480,276 @@ int main(int argc, char **argv)
     }
 
     // =========================================================================
+    // Stage 5.3.2G.4A — Simulated VFAT Move Qualification Scenarios
+    // (Note: Simulated VFAT over isolated temp fixtures; NOT physical USB VFAT)
+    // =========================================================================
+    {
+        // G4A Test 1a: Same-volume VFAT Move (Automatic -> native RENAME_NOREPLACE)
+        simulateVfatFilesystem() = true;
+        simulateCrossFilesystem() = false;
+
+        const QString vfatSameSrc = temporary.filePath(QStringLiteral("g4a-same-src.bin"));
+        const QString vfatSameDst = temporary.filePath(QStringLiteral("g4a-same-dst.bin"));
+        verify(writeFile(vfatSameSrc, payload), "G4A Test 1a: VFAT same-volume source created");
+
+        LocalMoveHistory histSame;
+        LocalFileMoveJob moveSame(
+            QUrl::fromLocalFile(vfatSameSrc),
+            QUrl::fromLocalFile(vfatSameDst),
+            nullptr,
+            LocalFileMoveStrategy::Automatic,
+            16 * 1024,
+            0);
+        moveSame.setAutoDelete(false);
+        histSame.recordWhenCompleted(&moveSame);
+        QSignalSpy spySame(&moveSame, &KJob::result);
+        moveSame.start();
+        waitForResult(spySame, "G4A Test 1a: VFAT same-volume move finishes");
+
+        verify(moveSame.error() == KJob::NoError && moveSame.moveError() == LocalFileMoveError::None,
+               "G4A Test 1a: VFAT same-volume atomic move succeeds");
+        verify(moveSame.usedAtomicMove(), "G4A Test 1a: usedAtomicMove is true");
+        verify(!QFileInfo::exists(vfatSameSrc) && fileHash(vfatSameDst) == expectedHash,
+               "G4A Test 1a: source moved atomically with intact SHA-256");
+        verify(histSame.canUndo(), "G4A Test 1a: recorded in history");
+
+        // G4A Test 1b: Same-volume VFAT when RENAME_NOREPLACE unsupported -> fail-closed AtomicMove (no NTFS fallback)
+        simulateRenameNoReplaceUnsupported() = true;
+        const QString vfatNoRepSrc = temporary.filePath(QStringLiteral("g4a-norep-src.bin"));
+        const QString vfatNoRepDst = temporary.filePath(QStringLiteral("g4a-norep-dst.bin"));
+        verify(writeFile(vfatNoRepSrc, payload), "G4A Test 1b: source created");
+
+        LocalFileMoveJob moveNoRep(
+            QUrl::fromLocalFile(vfatNoRepSrc),
+            QUrl::fromLocalFile(vfatNoRepDst),
+            nullptr,
+            LocalFileMoveStrategy::Automatic,
+            16 * 1024,
+            0);
+        moveNoRep.setAutoDelete(false);
+        QSignalSpy spyNoRep(&moveNoRep, &KJob::result);
+        moveNoRep.start();
+        waitForResult(spyNoRep, "G4A Test 1b: unsupported RENAME_NOREPLACE finishes");
+
+        verify(moveNoRep.error() != KJob::NoError && moveNoRep.moveError() == LocalFileMoveError::AtomicMove,
+               "G4A Test 1b: fails closed with AtomicMove without NTFS fallback");
+        verify(QFileInfo::exists(vfatNoRepSrc) && fileHash(vfatNoRepSrc) == expectedHash
+                   && !QFileInfo::exists(vfatNoRepDst),
+               "G4A Test 1b: source preserved and destination absent");
+
+        simulateRenameNoReplaceUnsupported() = false;
+        simulateVfatFilesystem() = false;
+    }
+
+    {
+        // G4A Test 2: Cross-FS Move to simulated VFAT with Polish Unicode, spaces, and 0-byte empty file
+        simulateCrossFilesystem() = true;
+        simulateDescriptorLinkatUnsupported() = true;
+        simulateVfatFilesystem() = true;
+
+        const QString uniSrc = temporary.filePath(QStringLiteral("g4a-zażółć gęślą jaźń src.bin"));
+        const QString uniDst = temporary.filePath(QStringLiteral("g4a-zażółć gęślą jaźń dst.bin"));
+        verify(writeFile(uniSrc, payload), "G4A Test 2: Unicode VFAT source created");
+
+        LocalMoveHistory histUni;
+        LocalFileMoveJob moveUni(
+            QUrl::fromLocalFile(uniSrc),
+            QUrl::fromLocalFile(uniDst),
+            nullptr,
+            LocalFileMoveStrategy::Automatic,
+            16 * 1024,
+            0);
+        moveUni.setAutoDelete(false);
+        histUni.recordWhenCompleted(&moveUni);
+        QSignalSpy spyUni(&moveUni, &KJob::result);
+        moveUni.start();
+        waitForResult(spyUni, "G4A Test 2: Unicode cross-fs VFAT move finishes");
+
+        verify(moveUni.error() == KJob::NoError && moveUni.moveError() == LocalFileMoveError::None,
+               "G4A Test 2: cross-fs Unicode VFAT move succeeds");
+        verify(!moveUni.usedAtomicMove() && moveUni.destinationPublished() && moveUni.directoryDurabilityConfirmed(),
+               "G4A Test 2: Copy+Verify+renameat2+fsync confirmed");
+        verify(!QFileInfo::exists(uniSrc) && !QFileInfo::exists(uniDst + QStringLiteral(".thispc-part")),
+               "G4A Test 2: source unlinked and zero staging leftovers");
+        verify(fileHash(uniDst) == expectedHash && histUni.canUndo(),
+               "G4A Test 2: destination SHA-256 matches and history recorded");
+
+        // G4A Test 2b: Empty 0-byte file cross-fs VFAT move
+        const QString emptyVfatSrc = temporary.filePath(QStringLiteral("g4a-empty-src.bin"));
+        const QString emptyVfatDst = temporary.filePath(QStringLiteral("g4a-empty-dst.bin"));
+        verify(writeFile(emptyVfatSrc, QByteArray()), "G4A Test 2b: 0-byte source created");
+
+        LocalFileMoveJob moveEmptyVfat(
+            QUrl::fromLocalFile(emptyVfatSrc),
+            QUrl::fromLocalFile(emptyVfatDst),
+            nullptr,
+            LocalFileMoveStrategy::Automatic,
+            16 * 1024,
+            0);
+        moveEmptyVfat.setAutoDelete(false);
+        QSignalSpy spyEmptyVfat(&moveEmptyVfat, &KJob::result);
+        moveEmptyVfat.start();
+        waitForResult(spyEmptyVfat, "G4A Test 2b: 0-byte VFAT move finishes");
+
+        verify(moveEmptyVfat.error() == KJob::NoError && !QFileInfo::exists(emptyVfatSrc)
+                   && QFileInfo::exists(emptyVfatDst) && QFileInfo(emptyVfatDst).size() == 0,
+               "G4A Test 2b: 0-byte file moved cleanly to VFAT");
+
+        // G4A Test 3: Collision on VFAT preserves both files and rejects history
+        const QByteArray existingVfatPayload = "EXISTING_VFAT_TARGET_DO_NOT_TOUCH";
+        const QString colSrc = temporary.filePath(QStringLiteral("g4a-col-src.bin"));
+        const QString colDst = temporary.filePath(QStringLiteral("g4a-col-dst.bin"));
+        verify(writeFile(colSrc, payload) && writeFile(colDst, existingVfatPayload),
+               "G4A Test 3: collision fixtures created");
+
+        LocalMoveHistory histCol;
+        LocalFileMoveJob moveCol(
+            QUrl::fromLocalFile(colSrc),
+            QUrl::fromLocalFile(colDst),
+            nullptr,
+            LocalFileMoveStrategy::Automatic,
+            16 * 1024,
+            0);
+        moveCol.setAutoDelete(false);
+        histCol.recordWhenCompleted(&moveCol);
+        QSignalSpy spyCol(&moveCol, &KJob::result);
+        moveCol.start();
+        waitForResult(spyCol, "G4A Test 3: VFAT collision move finishes");
+
+        verify(moveCol.error() != KJob::NoError && moveCol.moveError() == LocalFileMoveError::DestinationExists,
+               "G4A Test 3: VFAT collision returns DestinationExists");
+        verify(fileHash(colSrc) == expectedHash && readFile(colDst) == existingVfatPayload,
+               "G4A Test 3: source and pre-existing destination 100% intact");
+        verify(!QFileInfo::exists(colDst + QStringLiteral(".thispc-part")) && !histCol.canUndo(),
+               "G4A Test 3: no staging leftover and rejected by history");
+
+        // G4A Test 4: Publication failure on VFAT (RENAME_NOREPLACE unsupported) fails closed
+        simulateRenameNoReplaceUnsupported() = true;
+        const QString pubFailSrc = temporary.filePath(QStringLiteral("g4a-pubfail-src.bin"));
+        const QString pubFailDst = temporary.filePath(QStringLiteral("g4a-pubfail-dst.bin"));
+        verify(writeFile(pubFailSrc, payload), "G4A Test 4: source created");
+
+        LocalFileMoveJob movePubFail(
+            QUrl::fromLocalFile(pubFailSrc),
+            QUrl::fromLocalFile(pubFailDst),
+            nullptr,
+            LocalFileMoveStrategy::Automatic,
+            16 * 1024,
+            0);
+        movePubFail.setAutoDelete(false);
+        QSignalSpy spyPubFail(&movePubFail, &KJob::result);
+        movePubFail.start();
+        waitForResult(spyPubFail, "G4A Test 4: VFAT publication failure finishes");
+
+        verify(movePubFail.error() != KJob::NoError && !movePubFail.destinationPublished(),
+               "G4A Test 4: VFAT publication failure fails closed");
+        verify(fileHash(pubFailSrc) == expectedHash && !QFileInfo::exists(pubFailDst)
+                   && !QFileInfo::exists(pubFailDst + QStringLiteral(".thispc-part")),
+               "G4A Test 4: source preserved, destination absent, staging cleaned up");
+        simulateRenameNoReplaceUnsupported() = false;
+
+        // G4A Test 5: VFAT directory fsync errors (EINVAL, ENOTSUP, EIO) preserve source & destination (no rollback)
+        for (const int syncErr : {EINVAL, ENOTSUP, EIO}) {
+            simulateFsyncError() = true;
+            simulatedFsyncErrno() = syncErr;
+
+            const QString fsyncSrc = temporary.filePath(QStringLiteral("g4a-fsync-%1-src.bin").arg(syncErr));
+            const QString fsyncDst = temporary.filePath(QStringLiteral("g4a-fsync-%1-dst.bin").arg(syncErr));
+            verify(writeFile(fsyncSrc, payload), "G4A Test 5: fsync source created");
+
+            LocalMoveHistory histSync;
+            LocalFileMoveJob moveSync(
+                QUrl::fromLocalFile(fsyncSrc),
+                QUrl::fromLocalFile(fsyncDst),
+                nullptr,
+                LocalFileMoveStrategy::Automatic,
+                16 * 1024,
+                0);
+            moveSync.setAutoDelete(false);
+            histSync.recordWhenCompleted(&moveSync);
+            QSignalSpy spySync(&moveSync, &KJob::result);
+            moveSync.start();
+            waitForResult(spySync, "G4A Test 5: VFAT fsync error finishes");
+
+            verify(moveSync.error() != KJob::NoError && moveSync.moveError() == LocalFileMoveError::Durability,
+                   "G4A Test 5: VFAT fsync error reports Durability failure");
+            verify(moveSync.destinationPublished() && !moveSync.directoryDurabilityConfirmed(),
+                   "G4A Test 5: destinationPublished true, directoryDurabilityConfirmed false");
+            verify(moveSync.property("thispcPartialMoveOutcome").toBool() && !histSync.canUndo(),
+                   "G4A Test 5: partial outcome flagged and rejected by history");
+            verify(fileHash(fsyncSrc) == expectedHash && fileHash(fsyncDst) == expectedHash,
+                   "G4A Test 5: source preserved and published VFAT destination intact (no rollback)");
+
+            simulateFsyncError() = false;
+        }
+
+        // G4A Test 6: VFAT source removal failure after publication preserves both files
+        {
+            const QString rmSrc = temporary.filePath(QStringLiteral("g4a-rmfail-src.bin"));
+            const QString rmDst = temporary.filePath(QStringLiteral("g4a-rmfail-dst.bin"));
+            verify(writeFile(rmSrc, payload), "G4A Test 6: source created");
+
+            LocalMoveHistory histRm;
+            LocalFileMoveJob moveRm(
+                QUrl::fromLocalFile(rmSrc),
+                QUrl::fromLocalFile(rmDst),
+                nullptr,
+                LocalFileMoveStrategy::Automatic,
+                16 * 1024,
+                0,
+                [](const QString &) { return false; });
+            moveRm.setAutoDelete(false);
+            histRm.recordWhenCompleted(&moveRm);
+            QSignalSpy spyRm(&moveRm, &KJob::result);
+            moveRm.start();
+            waitForResult(spyRm, "G4A Test 6: VFAT source removal failure finishes");
+
+            verify(moveRm.error() != KJob::NoError && moveRm.moveError() == LocalFileMoveError::SourceRemove,
+                   "G4A Test 6: reports SourceRemove error");
+            verify(moveRm.property("thispcPartialMoveOutcome").toBool() && !histRm.canUndo(),
+                   "G4A Test 6: partial outcome flagged and rejected by history");
+            verify(fileHash(rmSrc) == expectedHash && fileHash(rmDst) == expectedHash,
+                   "G4A Test 6: source and published VFAT destination preserved");
+        }
+
+        // G4A Test 7: VFAT overwrite Move remains fail-closed + write error classifications (ENOSPC, EFBIG)
+        {
+            const QString ovSrc = temporary.filePath(QStringLiteral("g4a-ov-src.bin"));
+            const QString ovDst = temporary.filePath(QStringLiteral("g4a-ov-dst.bin"));
+            const QByteArray keepDst = "VFAT_OVERWRITE_KEEP";
+            verify(writeFile(ovSrc, payload) && writeFile(ovDst, keepDst),
+                   "G4A Test 7: overwrite fixtures created");
+
+            LocalFileMoveJob moveOv(
+                QUrl::fromLocalFile(ovSrc),
+                QUrl::fromLocalFile(ovDst),
+                nullptr,
+                LocalFileMoveStrategy::Automatic,
+                16 * 1024,
+                0,
+                {},
+                true,
+                LocalFileIdentity::read(ovDst));
+            moveOv.setAutoDelete(false);
+            QSignalSpy spyOv(&moveOv, &KJob::result);
+            moveOv.start();
+            waitForResult(spyOv, "G4A Test 7: VFAT overwrite move finishes");
+
+            verify(moveOv.error() != KJob::NoError && moveOv.moveError() == LocalFileMoveError::InvalidInput,
+                   "G4A Test 7: VFAT overwrite move fails closed immediately");
+            verify(fileHash(ovSrc) == expectedHash && readFile(ovDst) == keepDst,
+                   "G4A Test 7: neither file touched on fail-closed overwrite");
+            verify(LocalFileCopyWorker::classifyWriteError(ENOSPC) == LocalTransferError::DiskFull
+                       && LocalFileCopyWorker::classifyWriteError(EFBIG) == LocalTransferError::DestinationWrite,
+                   "G4A Test 7: disk-full (ENOSPC) and FAT32 4GiB limit (EFBIG) classified safely");
+        }
+
+        simulateVfatFilesystem() = false;
+        simulateDescriptorLinkatUnsupported() = false;
+        simulateCrossFilesystem() = false;
+    }
+
+    // =========================================================================
     // Stage 5.3.2G.3B — Real Filesystem Integration Tests (Btrfs <-> NTFS-3G)
     // =========================================================================
     {
