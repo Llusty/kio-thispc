@@ -1094,6 +1094,580 @@ int main(int argc, char **argv)
         simulateNtfs3gFilesystem() = false;
     }
 
+    // =========================================================================
+    // Stage 5.3.2G.3B — Safe Single-File Cross-Filesystem Move Scenarios
+    // =========================================================================
+
+    // G3B Test A: Pomyślny Cross-Filesystem Move (Binary payload, Unicode/Polish name)
+    {
+        simulateCrossFilesystem() = true;
+
+        const QString srcA = temporary.filePath(QStringLiteral("g3b-zażółć gęślą jaźń-src.bin"));
+        const QString dstA = temporary.filePath(QStringLiteral("g3b-zażółć gęślą jaźń-dst.bin"));
+        verify(writeFile(srcA, payload), "G3B Test A: cross-fs source created");
+
+        LocalMoveHistory histA;
+        LocalFileMoveJob moveA(
+            QUrl::fromLocalFile(srcA),
+            QUrl::fromLocalFile(dstA),
+            nullptr,
+            LocalFileMoveStrategy::Automatic,
+            16 * 1024,
+            0);
+        moveA.setAutoDelete(false);
+        histA.recordWhenCompleted(&moveA);
+        QSignalSpy spyA(&moveA, &KJob::result);
+        moveA.start();
+        waitForResult(spyA, "G3B Test A: cross-fs move finishes");
+
+        verify(moveA.error() == KJob::NoError && moveA.moveError() == LocalFileMoveError::None,
+               "G3B Test A: cross-fs move reports NoError");
+        verify(!moveA.usedAtomicMove(), "G3B Test A: confirmed uses copy-and-remove for cross-fs");
+        verify(moveA.destinationPublished() && moveA.directoryDurabilityConfirmed(),
+               "G3B Test A: destination published and directory durability confirmed");
+        verify(!QFileInfo::exists(srcA) && QFileInfo::exists(dstA),
+               "G3B Test A: source unlinked and destination published");
+        verify(fileHash(dstA) == expectedHash, "G3B Test A: destination SHA-256 matches payload 100%");
+        verify(histA.canUndo(), "G3B Test A: successfully recorded in history with undo support");
+
+        simulateCrossFilesystem() = false;
+    }
+
+    // G3B Test A_empty: 0-byte (empty) file cross-filesystem move
+    {
+        simulateCrossFilesystem() = true;
+
+        const QString srcEmpty = temporary.filePath(QStringLiteral("g3b-empty-src.bin"));
+        const QString dstEmpty = temporary.filePath(QStringLiteral("g3b-empty-dst.bin"));
+        verify(writeFile(srcEmpty, QByteArray()), "G3B Test A_empty: 0-byte source created");
+
+        LocalFileMoveJob moveEmpty(
+            QUrl::fromLocalFile(srcEmpty),
+            QUrl::fromLocalFile(dstEmpty),
+            nullptr,
+            LocalFileMoveStrategy::Automatic,
+            16 * 1024,
+            0);
+        moveEmpty.setAutoDelete(false);
+        QSignalSpy spyEmpty(&moveEmpty, &KJob::result);
+        moveEmpty.start();
+        waitForResult(spyEmpty, "G3B Test A_empty: 0-byte move finishes");
+
+        verify(moveEmpty.error() == KJob::NoError && moveEmpty.moveError() == LocalFileMoveError::None,
+               "G3B Test A_empty: 0-byte move reports NoError");
+        verify(!QFileInfo::exists(srcEmpty) && QFileInfo::exists(dstEmpty),
+               "G3B Test A_empty: source unlinked and destination exists");
+        verify(QFileInfo(dstEmpty).size() == 0, "G3B Test A_empty: destination size is 0");
+
+        simulateCrossFilesystem() = false;
+    }
+
+    // G3B Test B: Collision on existing destination preserves both pre-existing destination and source
+    {
+        simulateCrossFilesystem() = true;
+
+        const QString srcB = temporary.filePath(QStringLiteral("g3b-collision-src.bin"));
+        const QString dstB = temporary.filePath(QStringLiteral("g3b-collision-dst.bin"));
+        const QByteArray dstExistingData = "ORIGINAL_DESTINATION_DATA_DO_NOT_OVERWRITE";
+        verify(writeFile(srcB, payload), "G3B Test B: source created");
+        verify(writeFile(dstB, dstExistingData), "G3B Test B: destination pre-created");
+
+        LocalMoveHistory histB;
+        LocalFileMoveJob moveB(
+            QUrl::fromLocalFile(srcB),
+            QUrl::fromLocalFile(dstB),
+            nullptr,
+            LocalFileMoveStrategy::Automatic,
+            16 * 1024,
+            0);
+        moveB.setAutoDelete(false);
+        histB.recordWhenCompleted(&moveB);
+        QSignalSpy spyB(&moveB, &KJob::result);
+        moveB.start();
+        waitForResult(spyB, "G3B Test B: collision move finishes");
+
+        verify(moveB.error() != KJob::NoError && moveB.moveError() == LocalFileMoveError::DestinationExists,
+               "G3B Test B: reports DestinationExists error on collision");
+        verify(QFileInfo::exists(srcB) && fileHash(srcB) == expectedHash,
+               "G3B Test B: source file is 100% preserved with intact SHA-256");
+        verify(readFile(dstB) == dstExistingData,
+               "G3B Test B: pre-existing destination is 100% untouched and preserved");
+        verify(!histB.canUndo(), "G3B Test B: collided move is never recorded in history as Completed");
+
+        simulateCrossFilesystem() = false;
+    }
+
+    // G3B Test C: Source tampering during copy triggers Verification error and preserves both files
+    {
+        simulateCrossFilesystem() = true;
+
+        const QString srcC = temporary.filePath(QStringLiteral("g3b-tamper-src.bin"));
+        const QString dstC = temporary.filePath(QStringLiteral("g3b-tamper-dst.bin"));
+        verify(writeFile(srcC, payload), "G3B Test C: source created");
+
+        LocalMoveHistory histC;
+        LocalFileMoveJob moveC(
+            QUrl::fromLocalFile(srcC),
+            QUrl::fromLocalFile(dstC),
+            nullptr,
+            LocalFileMoveStrategy::Automatic,
+            16 * 1024,
+            5);
+        moveC.setAutoDelete(false);
+        histC.recordWhenCompleted(&moveC);
+        QSignalSpy spyC(&moveC, &KJob::result);
+        moveC.start();
+
+        verify(waitUntil([&] { return moveC.processedAmount(KJob::Bytes) >= 32 * 1024; }, 3000),
+               "G3B Test C: move reaches mid-transfer");
+        verify(moveC.suspend(), "G3B Test C: move suspended");
+
+        // Tamper with source file on disk
+        {
+            QFile file(srcC);
+            verify(file.open(QIODevice::ReadWrite), "G3B Test C: source opened for tamper");
+            file.seek(0);
+            file.write("CORRUPTED_TAMPERED_SOURCE_DATA");
+            file.flush();
+        }
+
+        verify(moveC.resume(), "G3B Test C: move resumed");
+        waitForResult(spyC, "G3B Test C: move finishes after tamper");
+
+        verify(moveC.error() != KJob::NoError && moveC.moveError() == LocalFileMoveError::Verification,
+               "G3B Test C: reports Verification error on tampered source");
+        verify(QFileInfo::exists(srcC), "G3B Test C: source file is preserved");
+        verify(QFileInfo::exists(dstC), "G3B Test C: destination file is preserved (no rollback)");
+        verify(!histC.canUndo(), "G3B Test C: verification failure rejected by history");
+
+        simulateCrossFilesystem() = false;
+    }
+
+    // G3B Test D: Read error on missing/unreadable source fails closed
+    {
+        simulateCrossFilesystem() = true;
+
+        const QString srcD = temporary.filePath(QStringLiteral("g3b-missing-src.bin"));
+        const QString dstD = temporary.filePath(QStringLiteral("g3b-missing-dst.bin"));
+
+        LocalFileMoveJob moveD(
+            QUrl::fromLocalFile(srcD),
+            QUrl::fromLocalFile(dstD),
+            nullptr,
+            LocalFileMoveStrategy::Automatic,
+            16 * 1024,
+            0);
+        moveD.setAutoDelete(false);
+        QSignalSpy spyD(&moveD, &KJob::result);
+        moveD.start();
+        waitForResult(spyD, "G3B Test D: missing source move finishes");
+
+        verify(moveD.error() != KJob::NoError, "G3B Test D: reports error on missing source");
+        verify(!QFileInfo::exists(dstD), "G3B Test D: destination was never published");
+
+        simulateCrossFilesystem() = false;
+    }
+
+    // G3B Test E: Staging create error (invalid dest directory) fails closed
+    {
+        simulateCrossFilesystem() = true;
+
+        const QString srcE = temporary.filePath(QStringLiteral("g3b-invaliddir-src.bin"));
+        const QString dstE = temporary.filePath(QStringLiteral("nonexistent-dir-sub/target.bin"));
+        verify(writeFile(srcE, payload), "G3B Test E: source created");
+
+        LocalFileMoveJob moveE(
+            QUrl::fromLocalFile(srcE),
+            QUrl::fromLocalFile(dstE),
+            nullptr,
+            LocalFileMoveStrategy::Automatic,
+            16 * 1024,
+            0);
+        moveE.setAutoDelete(false);
+        QSignalSpy spyE(&moveE, &KJob::result);
+        moveE.start();
+        waitForResult(spyE, "G3B Test E: invalid dest move finishes");
+
+        verify(moveE.error() != KJob::NoError, "G3B Test E: reports error when dest dir missing");
+        verify(QFileInfo::exists(srcE), "G3B Test E: source preserved");
+
+        simulateCrossFilesystem() = false;
+    }
+
+    // G3B Test F: Publication failure on non-VFAT without linkat fails closed safely
+    {
+        simulateCrossFilesystem() = true;
+        simulateDescriptorLinkatUnsupported() = true;
+        simulateVfatFilesystem() = false;
+
+        const QString srcF = temporary.filePath(QStringLiteral("g3b-linkatfail-src.bin"));
+        const QString dstF = temporary.filePath(QStringLiteral("g3b-linkatfail-dst.bin"));
+        verify(writeFile(srcF, payload), "G3B Test F: source created");
+
+        LocalFileMoveJob moveF(
+            QUrl::fromLocalFile(srcF),
+            QUrl::fromLocalFile(dstF),
+            nullptr,
+            LocalFileMoveStrategy::Automatic,
+            16 * 1024,
+            0);
+        moveF.setAutoDelete(false);
+        QSignalSpy spyF(&moveF, &KJob::result);
+        moveF.start();
+        waitForResult(spyF, "G3B Test F: linkat unsupported move finishes");
+
+        verify(moveF.error() != KJob::NoError, "G3B Test F: reports error when publication fails");
+        verify(QFileInfo::exists(srcF), "G3B Test F: source preserved");
+        verify(!QFileInfo::exists(dstF), "G3B Test F: destination was never published");
+
+        simulateDescriptorLinkatUnsupported() = false;
+        simulateCrossFilesystem() = false;
+    }
+
+    // G3B Test G: Fsync directory errors (EIO) in cross-fs -> Durability error, source preserved, destination preserved
+    {
+        simulateCrossFilesystem() = true;
+        simulateFsyncError() = true;
+        simulatedFsyncErrno() = EIO;
+
+        const QString srcG = temporary.filePath(QStringLiteral("g3b-fsynceio-src.bin"));
+        const QString dstG = temporary.filePath(QStringLiteral("g3b-fsynceio-dst.bin"));
+        verify(writeFile(srcG, payload), "G3B Test G: source created");
+
+        LocalFileMoveJob moveG(
+            QUrl::fromLocalFile(srcG),
+            QUrl::fromLocalFile(dstG),
+            nullptr,
+            LocalFileMoveStrategy::Automatic,
+            16 * 1024,
+            0);
+        moveG.setAutoDelete(false);
+        QSignalSpy spyG(&moveG, &KJob::result);
+        moveG.start();
+        waitForResult(spyG, "G3B Test G: fsync EIO move finishes");
+
+        verify(moveG.error() != KJob::NoError && moveG.moveError() == LocalFileMoveError::Durability,
+               "G3B Test G: reports Durability error on fsync EIO");
+        verify(moveG.destinationPublished(), "G3B Test G: destination was published");
+        verify(!moveG.directoryDurabilityConfirmed(), "G3B Test G: durability not confirmed");
+        verify(QFileInfo::exists(srcG), "G3B Test G: source preserved");
+        verify(QFileInfo::exists(dstG), "G3B Test G: destination preserved (no rollback)");
+        verify(moveG.property("thispcPartialMoveOutcome").toBool(),
+               "G3B Test G: thispcPartialMoveOutcome set to true");
+
+        simulateFsyncError() = false;
+        simulateCrossFilesystem() = false;
+    }
+
+    // G3B Test H: Source removal failure after successful publication preserves destination and source
+    {
+        simulateCrossFilesystem() = true;
+
+        const QString srcH = temporary.filePath(QStringLiteral("g3b-src-rm-fail-src.bin"));
+        const QString dstH = temporary.filePath(QStringLiteral("g3b-src-rm-fail-dst.bin"));
+        verify(writeFile(srcH, payload), "G3B Test H: source created");
+
+        LocalMoveHistory histH;
+        LocalFileMoveJob moveH(
+            QUrl::fromLocalFile(srcH),
+            QUrl::fromLocalFile(dstH),
+            nullptr,
+            LocalFileMoveStrategy::Automatic,
+            16 * 1024,
+            0,
+            [](const QString &) { return false; });
+        moveH.setAutoDelete(false);
+        histH.recordWhenCompleted(&moveH);
+        QSignalSpy spyH(&moveH, &KJob::result);
+        moveH.start();
+        waitForResult(spyH, "G3B Test H: source removal fail move finishes");
+
+        verify(moveH.error() != KJob::NoError && moveH.moveError() == LocalFileMoveError::SourceRemove,
+               "G3B Test H: reports SourceRemove error");
+        verify(QFileInfo::exists(srcH), "G3B Test H: source preserved on unlink failure");
+        verify(QFileInfo::exists(dstH), "G3B Test H: published destination preserved intact (no rollback)");
+        verify(fileHash(dstH) == expectedHash, "G3B Test H: destination SHA-256 matches payload");
+        verify(moveH.property("thispcPartialMoveOutcome").toBool(),
+               "G3B Test H: thispcPartialMoveOutcome property set");
+        verify(moveH.errorText().contains(QStringLiteral("zachowany"))
+                   || moveH.errorText().contains(QStringLiteral("preserved")),
+               "G3B Test N: partial outcome errorText clearly informs user");
+        verify(!histH.canUndo(), "G3B Test H: partial move rejected by history");
+
+        // G3B Test K: Retry after partial outcome fails closed with DestinationExists
+        LocalFileMoveJob retryMove(
+            QUrl::fromLocalFile(srcH),
+            QUrl::fromLocalFile(dstH),
+            nullptr,
+            LocalFileMoveStrategy::Automatic,
+            16 * 1024,
+            0);
+        retryMove.setAutoDelete(false);
+        QSignalSpy retrySpy(&retryMove, &KJob::result);
+        retryMove.start();
+        waitForResult(retrySpy, "G3B Test K: retry move finishes");
+
+        verify(retryMove.error() != KJob::NoError && retryMove.moveError() == LocalFileMoveError::DestinationExists,
+               "G3B Test K: retry reports DestinationExists");
+        verify(QFileInfo::exists(srcH) && QFileInfo::exists(dstH),
+               "G3B Test K: both files untouched on retry");
+
+        simulateCrossFilesystem() = false;
+    }
+
+    // G3B Test I & J: Cancellation before and during copy cleans up staging
+    {
+        simulateCrossFilesystem() = true;
+
+        const QString srcI = temporary.filePath(QStringLiteral("g3b-cancel-src.bin"));
+        const QString dstI = temporary.filePath(QStringLiteral("g3b-cancel-dst.bin"));
+        verify(writeFile(srcI, payload), "G3B Test I: source created");
+
+        LocalFileMoveJob moveI(
+            QUrl::fromLocalFile(srcI),
+            QUrl::fromLocalFile(dstI),
+            nullptr,
+            LocalFileMoveStrategy::Automatic,
+            16 * 1024,
+            10);
+        moveI.setAutoDelete(false);
+        QSignalSpy spyI(&moveI, &KJob::result);
+        moveI.start();
+        verify(waitUntil([&] { return moveI.processedAmount(KJob::Bytes) >= 16 * 1024; }, 3000)
+                   && moveI.kill(KJob::EmitResult),
+               "G3B Test I: reaches progress before cancel");
+        waitForResult(spyI, "G3B Test I: kill emits result");
+
+        verify(moveI.error() == KJob::KilledJobError, "G3B Test I: reports KilledJobError");
+        verify(QFileInfo::exists(srcI), "G3B Test I: source untouched");
+        verify(!QFileInfo::exists(dstI), "G3B Test I: destination was never published");
+
+        simulateCrossFilesystem() = false;
+    }
+
+    // G3B Test VFAT: Cross-filesystem move to simulated VFAT destination
+    {
+        simulateCrossFilesystem() = true;
+        simulateDescriptorLinkatUnsupported() = true;
+        simulateVfatFilesystem() = true;
+
+        const QString srcVfat = temporary.filePath(QStringLiteral("g3b-vfat-src.bin"));
+        const QString dstVfat = temporary.filePath(QStringLiteral("g3b-vfat-dst.bin"));
+        verify(writeFile(srcVfat, payload), "G3B Test VFAT: source created");
+
+        LocalFileMoveJob moveVfat(
+            QUrl::fromLocalFile(srcVfat),
+            QUrl::fromLocalFile(dstVfat),
+            nullptr,
+            LocalFileMoveStrategy::Automatic,
+            16 * 1024,
+            0);
+        moveVfat.setAutoDelete(false);
+        QSignalSpy spyVfat(&moveVfat, &KJob::result);
+        moveVfat.start();
+        waitForResult(spyVfat, "G3B Test VFAT: vfat move finishes");
+
+        verify(moveVfat.error() == KJob::NoError && moveVfat.moveError() == LocalFileMoveError::None,
+               "G3B Test VFAT: move to VFAT reports NoError");
+        verify(moveVfat.destinationPublished(), "G3B Test VFAT: destination published via renameat2");
+        verify(!QFileInfo::exists(srcVfat) && QFileInfo::exists(dstVfat),
+               "G3B Test VFAT: source unlinked and destination published on VFAT");
+        verify(fileHash(dstVfat) == expectedHash, "G3B Test VFAT: destination SHA-256 matches payload");
+
+        simulateVfatFilesystem() = false;
+        simulateDescriptorLinkatUnsupported() = false;
+        simulateCrossFilesystem() = false;
+    }
+
+    // =========================================================================
+    // Stage 5.3.2G.3B — Real Filesystem Integration Tests (Btrfs <-> NTFS-3G)
+    // =========================================================================
+    {
+        const bool runRealCrossFs = (qEnvironmentVariableIntValue("THISPC_REAL_CROSSFS_TEST") == 1);
+        if (!runRealCrossFs) {
+            qInfo("SKIP: Real G3B Btrfs <-> NTFS-3G integration test skipped "
+                  "(requires explicit opt-in THISPC_REAL_CROSSFS_TEST=1)");
+        } else {
+            const QString ntfsTestRoot = QStringLiteral("/mnt/d/ThisPC_FS_Test");
+            const QString btrfsParent = QDir::homePath();
+            const QFileInfo ntfsRootInfo(ntfsTestRoot);
+            if (!ntfsRootInfo.exists() || !ntfsRootInfo.isDir()) {
+                qFatal("STOP: Real G3B NTFS-3G root directory missing or invalid: %s",
+                       qPrintable(ntfsTestRoot));
+            }
+
+            struct statfs ntfsSfs {};
+            struct statfs btrfsSfs {};
+            if (::statfs(QFile::encodeName(ntfsTestRoot).constData(), &ntfsSfs) != 0
+                || static_cast<unsigned long>(ntfsSfs.f_type) != FUSE_SUPER_MAGIC) {
+                qFatal("STOP: Real G3B unexpected NTFS-3G mount type (expected FUSE_SUPER_MAGIC) at %s",
+                       qPrintable(ntfsTestRoot));
+            }
+            if (::statfs(QFile::encodeName(btrfsParent).constData(), &btrfsSfs) != 0
+                || static_cast<unsigned long>(btrfsSfs.f_type) != 0x9123683EUL /* BTRFS_SUPER_MAGIC */) {
+                qFatal("STOP: Real G3B unexpected Btrfs mount type (expected BTRFS_SUPER_MAGIC) at %s",
+                       qPrintable(btrfsParent));
+            }
+
+            const QStorageInfo srcStorage(btrfsParent);
+            const QStorageInfo dstStorage(ntfsTestRoot);
+            if (!srcStorage.isValid() || !dstStorage.isValid()
+                || srcStorage.fileSystemType() != QByteArrayLiteral("btrfs")
+                || dstStorage.fileSystemType() != QByteArrayLiteral("fuseblk")
+                || !isNtfs3gMount(ntfsTestRoot, ntfsTestRoot)
+                || srcStorage.device() == dstStorage.device()
+                || srcStorage.rootPath() == dstStorage.rootPath()) {
+                qFatal("STOP: Real G3B unexpected mount state or non-distinct volumes: "
+                       "btrfs=(%s, %s, %s) ntfs=(%s, %s, %s)",
+                       qPrintable(srcStorage.rootPath()),
+                       srcStorage.device().constData(),
+                       srcStorage.fileSystemType().constData(),
+                       qPrintable(dstStorage.rootPath()),
+                       dstStorage.device().constData(),
+                       dstStorage.fileSystemType().constData());
+            }
+
+            QTemporaryDir ntfsUniqueDir(ntfsTestRoot + QStringLiteral("/stage532g3b-ntfs-XXXXXX"));
+            QTemporaryDir btrfsUniqueDir(btrfsParent + QStringLiteral("/.thispc-g3b-btrfs-XXXXXX"));
+            verify(ntfsUniqueDir.isValid(), "Real G3B: unique NTFS-3G directory created");
+            verify(btrfsUniqueDir.isValid(), "Real G3B: unique Btrfs directory created");
+
+            const QString ntfsTestDir = ntfsUniqueDir.path();
+            const QString btrfsTestDir = btrfsUniqueDir.path();
+
+            // Real Test 1: Btrfs -> NTFS-3G move with Polish Unicode characters
+            const QString btrfsSrc1 = btrfsTestDir + QStringLiteral("/zażółć-btrfs-ntfs.bin");
+            const QString ntfsDst1 = ntfsTestDir + QStringLiteral("/zażółć-btrfs-ntfs.bin");
+            verify(writeFile(btrfsSrc1, payload), "Real G3B: Btrfs source created");
+
+            LocalFileMoveJob moveReal1(
+                QUrl::fromLocalFile(btrfsSrc1),
+                QUrl::fromLocalFile(ntfsDst1),
+                nullptr,
+                LocalFileMoveStrategy::Automatic,
+                64 * 1024,
+                0);
+            moveReal1.setAutoDelete(false);
+            QSignalSpy spyReal1(&moveReal1, &KJob::result);
+            moveReal1.start();
+            waitForResult(spyReal1, "Real G3B: Btrfs -> NTFS-3G move finishes");
+
+            verify(moveReal1.error() == KJob::NoError && moveReal1.moveError() == LocalFileMoveError::None,
+                   "Real G3B: Btrfs -> NTFS-3G reports NoError");
+            verify(!moveReal1.usedAtomicMove(), "Real G3B: confirmed copy-and-remove used");
+            verify(!QFileInfo::exists(btrfsSrc1), "Real G3B: Btrfs source safely unlinked");
+            verify(QFileInfo::exists(ntfsDst1), "Real G3B: NTFS-3G destination exists");
+            verify(fileHash(ntfsDst1) == expectedHash, "Real G3B: NTFS-3G destination SHA-256 matches 100%");
+
+            // Real Test 2: NTFS-3G -> Btrfs move
+            const QString btrfsDst2 = btrfsTestDir + QStringLiteral("/zażółć-ntfs-btrfs.bin");
+
+            LocalFileMoveJob moveReal2(
+                QUrl::fromLocalFile(ntfsDst1),
+                QUrl::fromLocalFile(btrfsDst2),
+                nullptr,
+                LocalFileMoveStrategy::Automatic,
+                64 * 1024,
+                0);
+            moveReal2.setAutoDelete(false);
+            QSignalSpy spyReal2(&moveReal2, &KJob::result);
+            moveReal2.start();
+            waitForResult(spyReal2, "Real G3B: NTFS-3G -> Btrfs move finishes");
+
+            verify(moveReal2.error() == KJob::NoError && moveReal2.moveError() == LocalFileMoveError::None,
+                   "Real G3B: NTFS-3G -> Btrfs reports NoError");
+            verify(!QFileInfo::exists(ntfsDst1), "Real G3B: NTFS-3G source safely unlinked");
+            verify(QFileInfo::exists(btrfsDst2), "Real G3B: Btrfs destination exists");
+            verify(fileHash(btrfsDst2) == expectedHash, "Real G3B: Btrfs destination SHA-256 matches 100%");
+
+            // Real Test 3: Collision on NTFS-3G
+            const QString btrfsSrc3 = btrfsTestDir + QStringLiteral("/collision-btrfs.bin");
+            const QString ntfsDst3 = ntfsTestDir + QStringLiteral("/collision-target.bin");
+            const QByteArray existingNtfsData = "NTFS_EXISTING_DO_NOT_TOUCH";
+            verify(writeFile(btrfsSrc3, payload), "Real G3B: collision source created");
+            verify(writeFile(ntfsDst3, existingNtfsData), "Real G3B: collision destination pre-created");
+
+            LocalFileMoveJob moveReal3(
+                QUrl::fromLocalFile(btrfsSrc3),
+                QUrl::fromLocalFile(ntfsDst3),
+                nullptr,
+                LocalFileMoveStrategy::Automatic,
+                64 * 1024,
+                0);
+            moveReal3.setAutoDelete(false);
+            QSignalSpy spyReal3(&moveReal3, &KJob::result);
+            moveReal3.start();
+            waitForResult(spyReal3, "Real G3B: collision move finishes");
+
+            verify(moveReal3.error() != KJob::NoError && moveReal3.moveError() == LocalFileMoveError::DestinationExists,
+                   "Real G3B: reports DestinationExists on NTFS-3G collision");
+            verify(QFileInfo::exists(btrfsSrc3) && fileHash(btrfsSrc3) == expectedHash,
+                   "Real G3B: Btrfs source file is 100% preserved");
+            verify(readFile(ntfsDst3) == existingNtfsData,
+                   "Real G3B: NTFS-3G existing destination is 100% preserved");
+
+            // Real Test 4: Collision and case behavior on NTFS-3G
+            const QString btrfsSrc4 = btrfsTestDir + QStringLiteral("/case-test.bin");
+            const QString ntfsDst4Exact = ntfsTestDir + QStringLiteral("/CaseConflict.bin");
+            verify(writeFile(btrfsSrc4, payload), "Real G3B: case source created");
+            verify(writeFile(ntfsDst4Exact, existingNtfsData), "Real G3B: upper case destination pre-created");
+
+            LocalFileMoveJob moveReal4(
+                QUrl::fromLocalFile(btrfsSrc4),
+                QUrl::fromLocalFile(ntfsDst4Exact),
+                nullptr,
+                LocalFileMoveStrategy::Automatic,
+                64 * 1024,
+                0);
+            moveReal4.setAutoDelete(false);
+            QSignalSpy spyReal4(&moveReal4, &KJob::result);
+            moveReal4.start();
+            waitForResult(spyReal4, "Real G3B: exact collision move finishes");
+
+            verify(moveReal4.error() != KJob::NoError && moveReal4.moveError() == LocalFileMoveError::DestinationExists,
+                   "Real G3B: exact conflict reports DestinationExists on NTFS-3G");
+            verify(QFileInfo::exists(btrfsSrc4), "Real G3B: case source preserved on collision");
+            verify(readFile(ntfsDst4Exact) == existingNtfsData, "Real G3B: existing file preserved on collision");
+
+            // Real Test 5: 0-byte file Btrfs -> NTFS-3G
+            const QString btrfsEmpty = btrfsTestDir + QStringLiteral("/empty-real.bin");
+            const QString ntfsEmpty = ntfsTestDir + QStringLiteral("/empty-real.bin");
+            verify(writeFile(btrfsEmpty, QByteArray()), "Real G3B: empty source created");
+
+            LocalFileMoveJob moveRealEmpty(
+                QUrl::fromLocalFile(btrfsEmpty),
+                QUrl::fromLocalFile(ntfsEmpty),
+                nullptr,
+                LocalFileMoveStrategy::Automatic,
+                64 * 1024,
+                0);
+            moveRealEmpty.setAutoDelete(false);
+            QSignalSpy spyRealEmpty(&moveRealEmpty, &KJob::result);
+            moveRealEmpty.start();
+            waitForResult(spyRealEmpty, "Real G3B: empty move finishes");
+
+            verify(moveRealEmpty.error() == KJob::NoError && moveRealEmpty.moveError() == LocalFileMoveError::None,
+                   "Real G3B: empty move reports NoError");
+            verify(!QFileInfo::exists(btrfsEmpty) && QFileInfo::exists(ntfsEmpty),
+                   "Real G3B: empty source unlinked, empty destination exists");
+            verify(QFileInfo(ntfsEmpty).size() == 0, "Real G3B: empty destination size is 0");
+
+            // Cleanup strictly our created files inside unique test dirs
+            QFile::remove(btrfsDst2);
+            QFile::remove(btrfsSrc3);
+            QFile::remove(ntfsDst3);
+            QFile::remove(btrfsSrc4);
+            QFile::remove(ntfsDst4Exact);
+            QFile::remove(ntfsEmpty);
+
+            // Verify zero orphaned staging files remain in ntfsTestDir before removing unique dir
+            verify(QDir(ntfsTestDir).entryList(QDir::Files | QDir::Hidden).isEmpty(),
+                   "Real G3B: zero leftovers or orphaned staging files in NTFS-3G unique dir");
+            verify(btrfsUniqueDir.remove(), "Real G3B: unique Btrfs dir cleanly removed");
+            verify(ntfsUniqueDir.remove(), "Real G3B: unique NTFS-3G dir cleanly removed");
+        }
+    }
+
     qInfo("PASS: %d LocalFileMoveJob/history assertions", checks);
     return 0;
 }

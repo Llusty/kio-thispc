@@ -140,6 +140,12 @@ inline std::function<void()> &simulateRaceBeforeSourceUnlink()
     static std::function<void()> hook;
     return hook;
 }
+
+inline bool &simulateCrossFilesystem()
+{
+    static bool cross = false;
+    return cross;
+}
 #endif
 
 // Strictly for moving the original source file. Relies exclusively on atomic

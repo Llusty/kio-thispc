@@ -11,7 +11,9 @@
 #include <QDBusConnection>
 #include <QDir>
 #include <QFileInfo>
+#include <QPointer>
 #include <algorithm>
+#include <utility>
 
 namespace {
 
@@ -131,6 +133,10 @@ void DirectoryWatchController::setWatchedUrl(const void *consumer, const QUrl &u
         WatchEntry entry;
         entry.url = newNorm;
         entry.refCount = 1;
+        if (++m_nextGeneration == 0) {
+            ++m_nextGeneration;
+        }
+        entry.generation = m_nextGeneration;
         if (newNorm.isLocalFile()) {
             entry.localPath = newNorm.toLocalFile();
             m_dirWatch.addDir(entry.localPath, KDirWatch::WatchFiles);
@@ -156,7 +162,8 @@ void DirectoryWatchController::removeConsumer(const void *consumer)
         if (it->refCount <= 0) {
             if (it->debounceTimer) {
                 it->debounceTimer->stop();
-                delete it->debounceTimer;
+                it->debounceTimer->disconnect(this);
+                it->debounceTimer->deleteLater();
                 it->debounceTimer = nullptr;
             }
             if (!it->localPath.isEmpty() && m_dirWatch.contains(it->localPath)) {
@@ -190,7 +197,8 @@ void DirectoryWatchController::clear()
     for (auto it = m_watchedEntries.begin(); it != m_watchedEntries.end(); ++it) {
         if (it->debounceTimer) {
             it->debounceTimer->stop();
-            delete it->debounceTimer;
+            it->debounceTimer->disconnect(this);
+            it->debounceTimer->deleteLater();
             it->debounceTimer = nullptr;
         }
         if (!it->localPath.isEmpty() && m_dirWatch.contains(it->localPath)) {
@@ -244,7 +252,12 @@ void DirectoryWatchController::handleFilesAdded(const QString &directory)
 
 void DirectoryWatchController::handleFilesRemoved(const QStringList &fileList)
 {
-    for (const QString &fileStr : fileList) {
+    const QStringList snapshot = fileList;
+    const QPointer<DirectoryWatchController> guard(this);
+    for (const QString &fileStr : snapshot) {
+        if (!guard) {
+            return;
+        }
         if (!isStagingPath(fileStr)) {
             checkAndScheduleMatching(QUrl::fromUserInput(fileStr));
         }
@@ -253,7 +266,12 @@ void DirectoryWatchController::handleFilesRemoved(const QStringList &fileList)
 
 void DirectoryWatchController::handleFilesChanged(const QStringList &fileList)
 {
-    for (const QString &fileStr : fileList) {
+    const QStringList snapshot = fileList;
+    const QPointer<DirectoryWatchController> guard(this);
+    for (const QString &fileStr : snapshot) {
+        if (!guard) {
+            return;
+        }
         if (!isStagingPath(fileStr)) {
             checkAndScheduleMatching(QUrl::fromUserInput(fileStr));
         }
@@ -265,14 +283,39 @@ void DirectoryWatchController::handleFileMoved(const QString &src, const QString
     const QUrl srcUrl = QUrl::fromUserInput(src);
     const QUrl dstUrl = QUrl::fromUserInput(dst);
 
-    for (auto it = m_watchedEntries.begin(); it != m_watchedEntries.end(); ++it) {
+    struct RenameTarget {
+        QString key;
+        quint64 generation = 0;
+    };
+    QList<RenameTarget> renameTargets;
+    for (auto it = m_watchedEntries.cbegin(); it != m_watchedEntries.cend(); ++it) {
         if (sameLocation(it->url, srcUrl)) {
-            Q_EMIT directoryRenamed(srcUrl, dstUrl);
+            renameTargets.append({it.key(), it->generation});
         }
     }
 
+    const QPointer<DirectoryWatchController> guard(this);
+    for (const RenameTarget &target : std::as_const(renameTargets)) {
+        if (!guard) {
+            return;
+        }
+        const auto currentIt = m_watchedEntries.constFind(target.key);
+        if (currentIt == m_watchedEntries.cend()
+            || currentIt->generation != target.generation
+            || currentIt->refCount <= 0) {
+            continue;
+        }
+        Q_EMIT directoryRenamed(srcUrl, dstUrl);
+    }
+
+    if (!guard) {
+        return;
+    }
     if (!isStagingPath(src)) {
         checkAndScheduleMatching(srcUrl);
+    }
+    if (!guard) {
+        return;
     }
     if (!isStagingPath(dst)) {
         checkAndScheduleMatching(dstUrl);
@@ -289,11 +332,7 @@ void DirectoryWatchController::onKDirWatchDirty(const QString &path)
     if (isStagingPath(path)) {
         return;
     }
-    for (auto it = m_watchedEntries.begin(); it != m_watchedEntries.end(); ++it) {
-        if (localPathMatchesWatchedDirectory(it->url, path)) {
-            scheduleDebouncedRefresh(it.key());
-        }
-    }
+    scheduleMatchingLocalPath(path);
 }
 
 void DirectoryWatchController::onKDirWatchCreated(const QString &path)
@@ -301,11 +340,7 @@ void DirectoryWatchController::onKDirWatchCreated(const QString &path)
     if (isStagingPath(path)) {
         return;
     }
-    for (auto it = m_watchedEntries.begin(); it != m_watchedEntries.end(); ++it) {
-        if (localPathMatchesWatchedDirectory(it->url, path)) {
-            scheduleDebouncedRefresh(it.key());
-        }
-    }
+    scheduleMatchingLocalPath(path);
 }
 
 void DirectoryWatchController::onKDirWatchDeleted(const QString &path)
@@ -314,35 +349,95 @@ void DirectoryWatchController::onKDirWatchDeleted(const QString &path)
         return;
     }
     const QString cleanPath = QDir::cleanPath(path);
-    for (auto it = m_watchedEntries.begin(); it != m_watchedEntries.end(); ++it) {
+    struct DeleteTarget {
+        QString key;
+        quint64 generation = 0;
+        QUrl url;
+        bool isDeletedSelf = false;
+    };
+    QList<DeleteTarget> targets;
+    for (auto it = m_watchedEntries.cbegin(); it != m_watchedEntries.cend(); ++it) {
         if (!it->url.isLocalFile()) {
             continue;
         }
         const QString watchedClean = QDir::cleanPath(it->localPath);
         if (watchedClean == cleanPath) {
-            // The watched directory itself was deleted from disk
-            const QUrl deletedUrl = it->url;
-            Q_EMIT directoryDeleted(deletedUrl);
+            targets.append({it.key(), it->generation, it->url, true});
         } else if (localPathMatchesWatchedDirectory(it->url, path)) {
-            // A file or directory inside was deleted
-            scheduleDebouncedRefresh(it.key());
+            targets.append({it.key(), it->generation, it->url, false});
         }
+    }
+
+    const QPointer<DirectoryWatchController> guard(this);
+    for (const DeleteTarget &target : std::as_const(targets)) {
+        if (!guard) {
+            return;
+        }
+        const auto currentIt = m_watchedEntries.constFind(target.key);
+        if (currentIt == m_watchedEntries.cend()
+            || currentIt->generation != target.generation
+            || currentIt->refCount <= 0) {
+            continue;
+        }
+        if (target.isDeletedSelf) {
+            Q_EMIT directoryDeleted(target.url);
+        } else {
+            scheduleDebouncedRefresh(target.key, target.generation);
+        }
+    }
+}
+
+void DirectoryWatchController::scheduleMatchingLocalPath(const QString &path)
+{
+    struct ScheduleTarget {
+        QString key;
+        quint64 generation = 0;
+    };
+    QList<ScheduleTarget> targets;
+    for (auto it = m_watchedEntries.cbegin(); it != m_watchedEntries.cend(); ++it) {
+        if (localPathMatchesWatchedDirectory(it->url, path)) {
+            targets.append({it.key(), it->generation});
+        }
+    }
+
+    const QPointer<DirectoryWatchController> guard(this);
+    for (const ScheduleTarget &target : std::as_const(targets)) {
+        if (!guard) {
+            return;
+        }
+        scheduleDebouncedRefresh(target.key, target.generation);
     }
 }
 
 void DirectoryWatchController::checkAndScheduleMatching(const QUrl &eventUrl)
 {
-    for (auto it = m_watchedEntries.begin(); it != m_watchedEntries.end(); ++it) {
+    struct ScheduleTarget {
+        QString key;
+        quint64 generation = 0;
+    };
+    QList<ScheduleTarget> targets;
+    for (auto it = m_watchedEntries.cbegin(); it != m_watchedEntries.cend(); ++it) {
         if (urlsMatchWatchedDirectory(it->url, eventUrl)) {
-            scheduleDebouncedRefresh(it.key());
+            targets.append({it.key(), it->generation});
         }
+    }
+
+    const QPointer<DirectoryWatchController> guard(this);
+    for (const ScheduleTarget &target : std::as_const(targets)) {
+        if (!guard) {
+            return;
+        }
+        scheduleDebouncedRefresh(target.key, target.generation);
     }
 }
 
-void DirectoryWatchController::scheduleDebouncedRefresh(const QString &key)
+void DirectoryWatchController::scheduleDebouncedRefresh(const QString &key, quint64 expectedGeneration)
 {
     auto it = m_watchedEntries.find(key);
     if (it == m_watchedEntries.end() || it->refCount <= 0) {
+        return;
+    }
+    if (expectedGeneration != 0 && it->generation != expectedGeneration) {
         return;
     }
     WatchEntry &entry = it.value();
@@ -364,22 +459,26 @@ void DirectoryWatchController::scheduleDebouncedRefresh(const QString &key)
         entry.lastEventEpochMs = 0;
         const QUrl targetUrl = entry.url;
         Q_EMIT directoryChanged(targetUrl);
-    } else {
-        const qint64 delay = std::min(m_debounceConfig.nominalWindowMs, remainingUntilDeadline);
-        if (!entry.debounceTimer) {
-            entry.debounceTimer = new QTimer(this);
-            entry.debounceTimer->setSingleShot(true);
-            const QString capturedKey = key;
-            connect(entry.debounceTimer, &QTimer::timeout, this, [this, capturedKey]() {
-                auto timerIt = m_watchedEntries.find(capturedKey);
-                if (timerIt != m_watchedEntries.end() && timerIt->refCount > 0) {
-                    timerIt->firstEventEpochMs = 0;
-                    timerIt->lastEventEpochMs = 0;
-                    const QUrl targetUrl = timerIt->url;
-                    Q_EMIT directoryChanged(targetUrl);
-                }
-            });
-        }
-        entry.debounceTimer->start(static_cast<int>(delay));
+        return;
     }
+
+    const qint64 delay = std::min(m_debounceConfig.nominalWindowMs, remainingUntilDeadline);
+    if (!entry.debounceTimer) {
+        entry.debounceTimer = new QTimer(this);
+        entry.debounceTimer->setSingleShot(true);
+        const QString capturedKey = key;
+        const quint64 capturedGen = entry.generation;
+        connect(entry.debounceTimer, &QTimer::timeout, this, [this, capturedKey, capturedGen]() {
+            auto timerIt = m_watchedEntries.find(capturedKey);
+            if (timerIt != m_watchedEntries.end()
+                && timerIt->generation == capturedGen
+                && timerIt->refCount > 0) {
+                timerIt->firstEventEpochMs = 0;
+                timerIt->lastEventEpochMs = 0;
+                const QUrl targetUrl = timerIt->url;
+                Q_EMIT directoryChanged(targetUrl);
+            }
+        });
+    }
+    entry.debounceTimer->start(static_cast<int>(delay));
 }

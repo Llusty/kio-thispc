@@ -163,9 +163,14 @@ private:
 
         m_sourceSize = static_cast<qulonglong>(m_sourceIdentity.value.st_size);
         setTotalAmount(KJob::Bytes, m_sourceSize);
-        const bool sameStorage =
+        bool sameStorage =
             QStorageInfo(sourceInfo.absolutePath()).device()
             == QStorageInfo(destinationInfo.absolutePath()).device();
+#ifdef THISPC_TEST_HARNESS
+        if (simulateCrossFilesystem()) {
+            sameStorage = false;
+        }
+#endif
         if (!m_overwrite && m_strategy == LocalFileMoveStrategy::Automatic && sameStorage) {
             m_usedAtomicMove = true;
             bool collision = false;
@@ -447,7 +452,7 @@ private:
                     m_overwrite && !m_originalDestination.matches(m_destination.toLocalFile()));
         setProperty("thispcDestinationPublished", m_destinationPublished);
         setProperty("thispcDirectoryDurabilityConfirmed", m_directoryDurabilityConfirmed);
-        if (error == LocalFileMoveError::Durability) {
+        if (error == LocalFileMoveError::Durability || (m_destinationPublished && error != LocalFileMoveError::None)) {
             setProperty("thispcPartialMoveOutcome", true);
         }
         if (m_systemError != 0) {

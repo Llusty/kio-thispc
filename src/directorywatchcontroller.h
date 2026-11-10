@@ -83,13 +83,15 @@ private:
         QUrl url;
         QString localPath;
         int refCount = 0;
+        quint64 generation = 0;
         QTimer *debounceTimer = nullptr;
         qint64 firstEventEpochMs = 0;
         qint64 lastEventEpochMs = 0;
     };
 
     void checkAndScheduleMatching(const QUrl &eventUrl);
-    void scheduleDebouncedRefresh(const QString &key);
+    void scheduleMatchingLocalPath(const QString &path);
+    void scheduleDebouncedRefresh(const QString &key, quint64 expectedGeneration = 0);
 
     DebounceConfig m_debounceConfig;
     KDirWatch m_dirWatch;
@@ -101,6 +103,7 @@ private:
     QMap<QString, WatchEntry> m_watchedEntries;
     // Map consumer pointer -> normalized directory URL
     QMap<const void *, QUrl> m_consumerUrls;
+    quint64 m_nextGeneration = 0;
 
     // Tags used for background tab subscriptions
     static constexpr quintptr kTabTagBase = 0x10000;
