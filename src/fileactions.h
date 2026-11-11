@@ -12,6 +12,7 @@
 #include "batchrenamerecovery.h"
 #include "localfilecopyjob.h"
 #include "localfilemovejob.h"
+#include "localdirectorymovejob.h"
 #include "kiostagedtransferjob.h"
 #include "undocontroller.h"
 #include "transferqueuecontroller.h"
@@ -1627,6 +1628,14 @@ public:
                 return;
             }
             if (moveEval.decision != MovePolicyDecision::AllowedRemoteToRemote) {
+                m_lastMovePolicyEvaluation = {
+                    MovePolicyDecision::RefusedLocalContainment,
+                    false,
+                    {},
+                    moveContainmentErrorMessage()};
+                if (m_showRecoveryFence) {
+                    m_showRecoveryFence(m_lastMovePolicyEvaluation.refusalReason);
+                }
                 if (onFinished) onFinished(nullptr);
                 return;
             }
@@ -2149,8 +2158,16 @@ private:
         QUrl singleTargetDestination;
 
         if (destinationDirectory.isLocalFile() && sources.size() == 1) {
-            QUrl destination = childUrlWithName(destinationDirectory, sources.first().fileName());
-            while (true) {
+            const QString singleSourceName = sources.first().isLocalFile()
+                ? QFileInfo(QDir::cleanPath(sources.first().toLocalFile())).fileName()
+                : sources.first().fileName();
+            QUrl destination = childUrlWithName(destinationDirectory, singleSourceName);
+            const bool isSingleDirMove =
+                (move && moveEval.decision == MovePolicyDecision::AllowedSingleSameVolumeBtrfsDirectory);
+            if (isSingleDirMove) {
+                singleTargetDestination = destination;
+                overwrite = false;
+            } else while (true) {
                 const QFileInfo targetInfo(destination.toLocalFile());
                 if (!targetInfo.exists() && !targetInfo.isSymLink()) {
                     singleTargetDestination = destination;
@@ -2270,7 +2287,13 @@ private:
             }
             KJob *job = nullptr;
             if (allLocal) {
-                if (isSingleRegularLocalFile(sources)) {
+                if (move && launchEval.decision == MovePolicyDecision::AllowedSingleSameVolumeBtrfsDirectory) {
+                    const QString cleanSrcName = QFileInfo(QDir::cleanPath(sources.first().toLocalFile())).fileName();
+                    const QUrl target = singleTargetDestination.isValid()
+                        ? singleTargetDestination
+                        : childUrlWithName(destinationDirectory, cleanSrcName);
+                    job = new LocalDirectoryMoveJob(sources.first(), target, this);
+                } else if (isSingleRegularLocalFile(sources)) {
                     const QUrl target = singleTargetDestination.isValid()
                         ? singleTargetDestination
                         : childUrlWithName(destinationDirectory, QFileInfo(sources.first().toLocalFile()).fileName());
@@ -2403,9 +2426,26 @@ private:
             return false;
         }
         for (const QUrl &source : sources) if (!source.isLocalFile()) return false;
-        const QFileInfo sourceInfo(sources.first().toLocalFile());
+        const QString cleanFirstSourcePath = QDir::cleanPath(sources.first().toLocalFile());
+        const QFileInfo sourceInfo(cleanFirstSourcePath);
         const QFileInfo destinationInfo(destinationDirectory.toLocalFile());
         if (!destinationInfo.exists() || !destinationInfo.isDir()) return false;
+        if (move && sources.size() == 1) {
+            const MoveOperationClassification dirMoveEval = MoveSafetyPolicy::evaluate(sources, destinationDirectory, true);
+            if (dirMoveEval.decision == MovePolicyDecision::AllowedSingleSameVolumeBtrfsDirectory) {
+                const QUrl destination = childUrlWithName(destinationDirectory, sourceInfo.fileName());
+                auto *job = new LocalDirectoryMoveJob(sources.first(), destination, this);
+                if (m_undoController) {
+                    m_undoController->recordNativeTransfer(job, true);
+                }
+                FileOperationContext jobCtx = opContext.type != FileOperationType::Custom ? opContext
+                    : FileOperationContext::create(FileOperationType::Move, sources, destinationDirectory);
+                jobCtx.destinationUrls = {destination};
+                watchFileOperation(job, successMessage, clearClipboard, title, {}, jobCtx);
+                job->start();
+                return true;
+            }
+        }
         if (sources.size() > 1 || !isSingleRegularLocalFile(sources)) {
             if (move) {
                 if (m_showRecoveryFence) m_showRecoveryFence(moveContainmentErrorMessage());

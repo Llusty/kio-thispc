@@ -948,6 +948,12 @@ public:
                                   "This task has already been retried"));
         }
 
+        // Rule: Partial outcome / unconfirmed durability after publish
+        if (task->partialMoveOutcome) {
+            return reject(trLocal("Operacja została już wykonana w systemie plików (brak potwierdzenia trwałości) — automatyczne ani ręczne ponowienie jest zablokowane",
+                                  "Operation already published on filesystem (unconfirmed durability) — retry is blocked"));
+        }
+
         // Rule: Must have a valid descriptor and job factory
         if (!task->desc.jobFactory) {
             return reject(trLocal("Brak fabryki zadania — brak możliwości odtworzenia transferu",
@@ -1080,10 +1086,14 @@ public:
                     }
 
                     const QFileInfo targetInfo(targetPath);
-                    if (targetInfo.exists()) {
+                    if (targetInfo.exists() || targetInfo.isSymLink()) {
                         if (targetInfo.isDir()) {
                             return reject(trLocal("W miejscu docelowym istnieje katalog o tej samej nazwie",
                                                   "A directory with the same name exists at destination"));
+                        }
+                        if (isMove) {
+                            return reject(trLocal("W miejscu docelowym istnieje element o tej samej nazwie — przenoszenie z nadpisywaniem jest wyłączone",
+                                                  "An item with the same name exists at destination — move with overwrite is disabled"));
                         }
                         for (const auto &claim : task->reservation.claims) {
                             if (claim.mode == ReservationMode::ExclusiveWrite && claim.key == targetPath.toCaseFolded()) {
@@ -1350,6 +1360,7 @@ private:
         QDateTime startTimeUtc;
         QDateTime endTimeUtc;
         bool historyRecorded = false;
+        bool partialMoveOutcome = false;
         QString historyUuid;
         quint64 retryOfTaskId = 0;
         quint64 retriedAsTaskId = 0;
@@ -2001,6 +2012,9 @@ private:
         } else if (error == KJob::KilledJobError || error == KIO::ERR_USER_CANCELED) {
             finalize(task, TransferTaskState::Cancelled, TransferFailureKind::None, error, {});
         } else {
+            if (job->property("thispcPartialMoveOutcome").toBool()) {
+                task->partialMoveOutcome = true;
+            }
             const QString errMsg = (job->property("thispcPartialMoveOutcome").toBool() && !job->errorText().isEmpty())
                 ? job->errorText()
                 : job->errorString();

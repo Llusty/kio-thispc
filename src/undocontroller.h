@@ -481,6 +481,18 @@ public:
             const quint64 serial = m_manager->newCommandSerialNumber();
             if (auto *moveJob = qobject_cast<LocalFileMoveJob *>(job)) {
                 m_nativeHistory->recordWhenCompleted(moveJob, serial);
+            } else if (auto *dirMoveJob = qobject_cast<LocalDirectoryMoveJob *>(job)) {
+                m_nativeHistory->recordWhenCompleted(dirMoveJob, serial);
+                connect(dirMoveJob, &KJob::result, this, [this, serial](KJob *completed) {
+                    if (!completed->property("thispcPartialMoveOutcome").toBool()) {
+                        return;
+                    }
+                    // Unconfirmed durability after directory rename: do not allow older
+                    // history entries to replay over the moved directory without user check.
+                    m_irreversibleSerial = qMax(m_irreversibleSerial, serial);
+                    m_redoKinds.clear();
+                    updateActions();
+                });
             }
             return;
         }

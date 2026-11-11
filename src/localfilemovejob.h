@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include "localdirectorymovejob.h"
 #include "localfilecopyjob.h"
 
 #include <KJob>
@@ -496,11 +497,13 @@ class LocalMoveHistory final : public QObject
 public:
     struct Record {
         bool copy = false;
+        bool directory = false;
         QUrl source;
         QUrl destination;
         quint64 serial = 0;
         qulonglong destinationSize = 0;
         QDateTime destinationModified;
+        LocalDirectoryIdentity directoryIdentity;
     };
 
     explicit LocalMoveHistory(QObject *parent = nullptr)
@@ -520,6 +523,25 @@ public:
         return true;
     }
 
+    bool recordWhenCompleted(LocalDirectoryMoveJob *job, quint64 serial = 0)
+    {
+        if (!job) return false;
+        connect(job, &KJob::result, this, [this, job, serial](KJob *completed) {
+            if (completed->error() == KJob::NoError
+                && job->destinationPublished()
+                && job->directoryDurabilityConfirmed()
+                && !job->property("thispcOverwritesDestination").toBool()
+                && !job->property("thispcPartialMoveOutcome").toBool()) {
+                recordCompletedDirectoryMove(
+                    job->sourceUrl(),
+                    job->destinationUrl(),
+                    job->movedIdentity(),
+                    serial);
+            }
+        });
+        return true;
+    }
+
     bool recordWhenCompleted(LocalFileCopyJob *job, quint64 serial = 0)
     {
         if (!job) return false;
@@ -529,6 +551,40 @@ public:
                 recordCompletedCopy(job->sourceUrl(), job->destinationUrl(), serial);
             }
         });
+        return true;
+    }
+
+    bool recordCompletedDirectoryMove(
+        const QUrl &source,
+        const QUrl &destination,
+        const LocalDirectoryIdentity &identity,
+        quint64 serial = 0)
+    {
+        if (m_busy || !source.isLocalFile() || !destination.isLocalFile() || !identity.valid) {
+            return false;
+        }
+        struct stat srcSt {};
+        if (localLstat(source.toLocalFile(), &srcSt) || errno != ENOENT) {
+            return false;
+        }
+        struct stat dstSt {};
+        if (!localLstat(destination.toLocalFile(), &dstSt) || !S_ISDIR(dstSt.st_mode)) {
+            return false;
+        }
+        if (static_cast<quint64>(dstSt.st_dev) != identity.stDev
+            || static_cast<quint64>(dstSt.st_ino) != identity.ino) {
+            return false;
+        }
+        while (m_records.size() > m_position) m_records.removeLast();
+        Record record;
+        record.directory = true;
+        record.source = source;
+        record.destination = destination;
+        record.serial = serial;
+        record.directoryIdentity = identity;
+        m_records.push_back(record);
+        m_position = m_records.size();
+        Q_EMIT availabilityChanged(canUndo(), canRedo());
         return true;
     }
 
@@ -561,13 +617,14 @@ public:
             return false;
         }
         while (m_records.size() > m_position) m_records.removeLast();
-        m_records.push_back({
-            true,
-            source,
-            destination,
-            serial,
-            static_cast<qulonglong>(destinationInfo.size()),
-            destinationInfo.lastModified()});
+        Record record;
+        record.copy = true;
+        record.source = source;
+        record.destination = destination;
+        record.serial = serial;
+        record.destinationSize = static_cast<qulonglong>(destinationInfo.size());
+        record.destinationModified = destinationInfo.lastModified();
+        m_records.push_back(record);
         m_position = m_records.size();
         Q_EMIT availabilityChanged(canUndo(), canRedo());
         return true;
@@ -592,15 +649,22 @@ public:
         const qsizetype target = m_position - 1;
         const Record record = m_records.at(target);
         if (record.copy) return runCopyUndo(record, target);
+        if (record.directory) {
+            return runDirectoryMove(record.destination, record.source, record.directoryIdentity, target, target);
+        }
         return runMove(record.destination, record.source, target);
     }
 
     KJob *redo()
     {
         if (!canRedo()) return nullptr;
+        const qsizetype recordIndex = m_position;
         const qsizetype target = m_position + 1;
-        const Record record = m_records.at(m_position);
+        const Record record = m_records.at(recordIndex);
         if (record.copy) return runCopyRedo(record, target);
+        if (record.directory) {
+            return runDirectoryMove(record.source, record.destination, record.directoryIdentity, target, recordIndex);
+        }
         return runMove(record.source, record.destination, target);
     }
 
@@ -649,6 +713,42 @@ private:
                 [this, successPosition](KJob *completed) {
                     if (completed->error() == KJob::NoError) {
                         m_position = successPosition;
+                    }
+                    m_busy = false;
+                    Q_EMIT availabilityChanged(canUndo(), canRedo());
+                });
+        job->start();
+        return job;
+    }
+
+    KJob *runDirectoryMove(
+        const QUrl &source,
+        const QUrl &destination,
+        const LocalDirectoryIdentity &expectedIdentity,
+        qsizetype successPosition,
+        qsizetype recordIndex)
+    {
+        if (!expectedIdentity.valid) {
+            return nullptr;
+        }
+        m_busy = true;
+        Q_EMIT availabilityChanged(false, false);
+        auto *job = new LocalDirectoryMoveJob(source, destination, this, expectedIdentity);
+        job->setAutoDelete(false);
+        connect(job, &KJob::result, this,
+                [this, job, successPosition, recordIndex](KJob *completed) {
+                    if (completed->error() == KJob::NoError
+                        && job->destinationPublished()
+                        && job->directoryDurabilityConfirmed()
+                        && !completed->property("thispcPartialMoveOutcome").toBool()) {
+                        m_position = successPosition;
+                    } else if (completed->property("thispcPartialMoveOutcome").toBool()) {
+                        if (recordIndex >= 0 && recordIndex < m_records.size()) {
+                            m_records.removeAt(recordIndex);
+                        }
+                        if (m_position > m_records.size()) {
+                            m_position = m_records.size();
+                        }
                     }
                     m_busy = false;
                     Q_EMIT availabilityChanged(canUndo(), canRedo());

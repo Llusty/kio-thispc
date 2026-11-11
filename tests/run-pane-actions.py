@@ -34,7 +34,7 @@ group.add_argument('--local-move', action='store_true', help='run safe native mo
 group.add_argument('--all', action='store_true', help='run every regression suite')
 group.add_argument('--suites', nargs='+', choices=[
     'aggregate_permissions', 'aggregate_properties', 'folder_size', 'properties_folder_size', 'panes', 'tabs', 'properties', 'search', 'actions', 'action_state', 'operations',
-    'local_transfer', 'transfer_plan', 'local_move', 'local_tree', 'tree_history', 'directory_watch',
+    'local_transfer', 'transfer_plan', 'local_move', 'local_dir_move', 'local_tree', 'tree_history', 'directory_watch',
     'sidebar_dnd', 'sidebar_layout', 'split_layout', 'templates', 'trash', 'archive', 'archive_jobs', 'archive_menu', 'archive_creation', 'preview', 'quick_look', 'batch_rename', 'view_settings', 'listing_core', 'drive_home', 'solid_monitor', 'device_mount', 'device_removal', 'split_compare', 'selection_menu', 'location_presentation', 'navigation_history', 'keyboard_navigation', 'remote_url', 'saved_remote', 'recent_reconnect', 'session_history', 'properties_integration', 'properties_hidden', 'properties_posix_mode', 'properties_xattr_edit', 'properties_xattrs', 'properties_capabilities', 'properties_data', 'drive_properties', 'acl', 'acl_editor', 'checksums', 'metadata', 'properties_lifecycle', 'storage_scan', 'storage_analysis', 'hash_utilities', 'duplicate_finder', 'duplicate_actions', 'storage_treemap', 'launch_url_resolver', 'preview_controller', 'image_video_previews', 'executable_previews', 'folder_previews', 'preview_settings', 'search_query', 'admin_retry', 'admin_retry_stage2', 'admin_retry_stage3', 'admin_retry_stage4', 'admin_retry_stage5', 'transfer_queue', 'notifications', 'history'],
     help='build once and run only the selected regression suites')
 options = parser.parse_args()
@@ -97,7 +97,7 @@ def expose_legacy_header(text):
 legacy_exposed_headers = {
     'appwidgets.h', 'archive-creation.h', 'archive-extraction.h',
     'batchrename.h', 'batchrenamerecovery.h', 'directorypreviewadapter.h', 'directoryview.h',
-    'fileactions.h', 'launchurlresolver.h', 'localfilecopyjob.h', 'localfilemovejob.h',
+    'fileactions.h', 'launchurlresolver.h', 'localdirectorymovejob.h', 'localfilecopyjob.h', 'localfilemovejob.h',
     'localtransferjob.h', 'localtransferplan.h', 'localtreehistory.h', 'kiostagedtransferjob.h',
     'operationmanager.h', 'pathwidgets.h', 'previewcontroller.h', 'previewpane.h', 'quicklook.h',
     'searchcontroller.h', 'searchpopover.h', 'searchprogressbar.h', 'advancedsearchfiltersdialog.h', 'sidebar.h', 'splitbrowserpane.h',
@@ -112,6 +112,7 @@ prelude = '''#include <QtTest>
 #include <KIO/OpenUrlJob>
 #include "localfilecopyjob.h"
 #include "localfilemovejob.h"
+#include "localdirectorymovejob.h"
 #include "localtransferplan.h"
 #include "localtransferjob.h"
 #include "kiostagedtransferjob.h"
@@ -167,7 +168,7 @@ with tempfile.TemporaryDirectory(prefix='thispc-pane-tests-', delete=not options
         (tmp / 'src' / test_header.name).write_text(test_header.read_text())
     for implementation in ('actionstatecontroller.cpp', 'appwidgets.cpp', 'applicationstyle.cpp', 'directorylistingcore.cpp', 'directorywatchcontroller.cpp', 'drivehomecoordinator.cpp', 'soliddevicemonitor.cpp', 'devicemountcontroller.cpp', 'deviceremovalcontroller.cpp', 'keyboardnavigation.cpp', 'locationpresentation.cpp', 'navigationhistory.cpp', 'paneadapter.cpp', 'panemenucontroller.cpp', 'primarybrowserpane.cpp', 'previewcoordinator.cpp', 'previewcontroller.cpp', 'directorypreviewadapter.cpp', 'tabcontroller.cpp', 'searchuicontroller.cpp', 'searchpopover.cpp', 'advancedsearchfiltersdialog.cpp', 'selectionmenucontroller.cpp', 'remoteurlhelper.cpp', 'savedremotelocation.cpp', 'savedremotelocationdialog.cpp'):
         (tmp / 'src' / implementation).write_text((root / 'src' / implementation).read_text())
-    suites = {'trash': 'empty-trash.cpp', 'panes': 'pane-actions.cpp', 'templates': 'template-menu.cpp', 'tabs': 'tab-drag-drop.cpp', 'sidebar_dnd': 'sidebar-drag-drop.cpp', 'sidebar_layout': 'sidebar-layout.cpp', 'properties': 'properties-dialog.cpp', 'search': 'search-controller.cpp', 'actions': 'file-actions.cpp', 'action_state': 'action-state-controller.cpp', 'operations': 'operation-manager.cpp', 'local_transfer': 'local-file-copy-job.cpp', 'transfer_plan': 'local-transfer-plan.cpp', 'local_move': 'local-file-move-job.cpp', 'local_tree': 'local-transfer-job.cpp', 'tree_history': 'local-tree-history.cpp', 'archive': 'archive-detection.cpp', 'archive_jobs': 'archive-extraction.cpp', 'archive_menu': 'archive-menu.cpp', 'archive_creation': 'archive-creation.cpp'}
+    suites = {'trash': 'empty-trash.cpp', 'panes': 'pane-actions.cpp', 'templates': 'template-menu.cpp', 'tabs': 'tab-drag-drop.cpp', 'sidebar_dnd': 'sidebar-drag-drop.cpp', 'sidebar_layout': 'sidebar-layout.cpp', 'properties': 'properties-dialog.cpp', 'search': 'search-controller.cpp', 'actions': 'file-actions.cpp', 'action_state': 'action-state-controller.cpp', 'operations': 'operation-manager.cpp', 'local_transfer': 'local-file-copy-job.cpp', 'transfer_plan': 'local-transfer-plan.cpp', 'local_move': 'local-file-move-job.cpp', 'local_dir_move': 'local-directory-move-job.cpp', 'local_tree': 'local-transfer-job.cpp', 'tree_history': 'local-tree-history.cpp', 'archive': 'archive-detection.cpp', 'archive_jobs': 'archive-extraction.cpp', 'archive_menu': 'archive-menu.cpp', 'archive_creation': 'archive-creation.cpp'}
     suites['split_layout'] = 'split-layout.cpp'
     suites['directory_watch'] = 'directory-watch-reentrancy.cpp'
     suites['preview'] = 'preview-pane.cpp'

@@ -127,6 +127,7 @@ add_executable(thispc-view
     src/templatemenu.h
     src/localfilecopyjob.h
     src/localfilemovejob.h
+    src/localdirectorymovejob.h
     src/localfileoverwrite.h
     src/localtransferplan.h
     src/localtransferjob.h
@@ -295,6 +296,7 @@ add_executable(thispc-view-stage3c1-test EXCLUDE_FROM_ALL
     src/templatemenu.h
     src/localfilecopyjob.h
     src/localfilemovejob.h
+    src/localdirectorymovejob.h
     src/localfileoverwrite.h
     src/localtransferplan.h
     src/localtransferjob.h

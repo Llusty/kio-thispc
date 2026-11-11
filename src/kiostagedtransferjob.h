@@ -25,6 +25,7 @@
 
 #include "browsercommon.h"
 #include "localfileoverwrite.h"
+#include "localdirectorymovejob.h"
 
 #include <KIO/CopyJob>
 #include <KIO/DeleteJob>
@@ -217,6 +218,7 @@ inline MtpMoveSafetyEvaluation evaluate(
 enum class MovePolicyDecision {
     NotAMove,
     AllowedSingleRegularLocalFile,
+    AllowedSingleSameVolumeBtrfsDirectory,
     AllowedRemoteToRemote,
     RefusedMtp,
     RefusedInvalidInput,
@@ -324,12 +326,6 @@ inline MoveOperationClassification evaluate(
     }
 
     if (hasLocalSource && destIsLocal) {
-        if (!isSingleRegularLocalFile(sources)) {
-            result.decision = MovePolicyDecision::RefusedLocalContainment;
-            result.allowed = false;
-            result.refusalReason = moveContainmentErrorMessage();
-            return result;
-        }
         const QFileInfo destDirInfo(destinationDirectory.toLocalFile());
         if (!destDirInfo.exists() || !destDirInfo.isDir()) {
             result.decision = MovePolicyDecision::RefusedInvalidInput;
@@ -339,8 +335,33 @@ inline MoveOperationClassification evaluate(
                 "The destination directory is invalid or does not exist.");
             return result;
         }
-        result.decision = MovePolicyDecision::AllowedSingleRegularLocalFile;
-        result.allowed = true;
+        if (isSingleRegularLocalFile(sources)) {
+            result.decision = MovePolicyDecision::AllowedSingleRegularLocalFile;
+            result.allowed = true;
+            return result;
+        }
+        if (sources.size() == 1) {
+            const QString srcPath = sources.first().toLocalFile();
+            struct stat srcSt {};
+            if (localLstat(srcPath, &srcSt) && S_ISDIR(srcSt.st_mode)) {
+                LocalBtrfsDirectoryQualification dirQual;
+                if (LocalDirectoryMoveDetail::qualifyFastForPolicy(
+                        srcPath, destinationDirectory.toLocalFile(), &dirQual)) {
+                    result.decision = MovePolicyDecision::AllowedSingleSameVolumeBtrfsDirectory;
+                    result.allowed = true;
+                    return result;
+                }
+                result.decision = (dirQual.error == LocalDirectoryMoveError::InvalidInput)
+                    ? MovePolicyDecision::RefusedInvalidInput
+                    : MovePolicyDecision::RefusedLocalContainment;
+                result.allowed = false;
+                result.refusalReason = dirQual.reason.isEmpty() ? moveContainmentErrorMessage() : dirQual.reason;
+                return result;
+            }
+        }
+        result.decision = MovePolicyDecision::RefusedLocalContainment;
+        result.allowed = false;
+        result.refusalReason = moveContainmentErrorMessage();
         return result;
     }
 

@@ -55,7 +55,7 @@ int main(int argc, char **argv)
     undo.setActions(&undoAction, &redoAction);
     int completed = 0, lastError = 0;
     bool lastClear = false, interactive = true;
-    bool lastNativeCopy = false, lastNativeMove = false;
+    bool lastNativeCopy = false, lastNativeMove = false, lastNativeDirMove = false;
     bool lastNativeTree = false, lastTreeUsedKio = false, lastSuspendable = false;
     bool pauseNextTree = false;
     QString lastMessage, lastTitle;
@@ -68,6 +68,7 @@ int main(int argc, char **argv)
         lastClear = clear;
         lastNativeCopy = qobject_cast<LocalFileCopyJob *>(job) != nullptr;
         lastNativeMove = qobject_cast<LocalFileMoveJob *>(job) != nullptr;
+        lastNativeDirMove = qobject_cast<LocalDirectoryMoveJob *>(job) != nullptr;
         observedTree = qobject_cast<LocalTransferJob *>(job);
         lastNativeTree = observedTree != nullptr;
         if (observedTree && pauseNextTree) {
@@ -606,7 +607,7 @@ int main(int argc, char **argv)
                "Scenario E: single symlink move refused fail-closed before any modification");
     }
 
-    // Scenario F: Directory move refusal before modification
+    // Scenario F: Unqualified directory move refusal (non-Btrfs / tmpfs) before modification (H.2A keeps non-Btrfs fail-closed)
     {
         const QString dirF = files.filePath("dir-f-src");
         verify(QDir().mkpath(dirF + "/sub"), "Scenario F: directory fixture created");
@@ -616,13 +617,15 @@ int main(int argc, char **argv)
         cutMimeF->setData(QStringLiteral("application/x-kde-cutselection"), QByteArrayLiteral("1"));
         app.clipboard()->setMimeData(cutMimeF);
 
+        simulateDirMoveUnsupportedFsMagic() = MSDOS_SUPER_MAGIC;
         lastFenceMessage.clear();
         const int beforeF = completed;
         actions.pasteClipboardInto(rootB);
+        simulateDirMoveUnsupportedFsMagic() = 0;
         verify(completed == beforeF && QFileInfo::exists(dirF + "/sub/item.txt")
                    && !QFileInfo::exists(b + "/dir-f-src")
-                   && lastFenceMessage == moveContainmentErrorMessage(),
-               "Scenario F: directory move refused fail-closed before any modification");
+                   && !lastFenceMessage.isEmpty(),
+               "Scenario F: non-Btrfs directory move refused fail-closed before any modification");
     }
 
     // Scenario G: Multiple regular files move refusal before modification
@@ -1092,6 +1095,144 @@ int main(int argc, char **argv)
         verify(undo.m_manager->currentCommandSerialNumber() == beforeKioSerial
                    && !undo.kioUndoAvailable() && undo.m_irreversibleSerial > beforeIrrev,
                "H.1.1-D: cross-directory local KIO::move never recorded in KIO UndoManager");
+    }
+
+    // ------------------------------------------------------------------
+    // Stage 5.3.2H.2A: Same-Volume Btrfs Directory Move Integration (Group E)
+    // ------------------------------------------------------------------
+    {
+        struct statfs rootSfs {};
+        verify(::statfs(QFile::encodeName(a).constData(), &rootSfs) == 0
+                   && static_cast<unsigned long>(rootSfs.f_type) == BTRFS_SUPER_MAGIC,
+               "H.2A-E: test root resides on real Btrfs");
+
+        // E1: Ctrl+X / Ctrl+V (pasteClipboardInto) in Legacy mode + Undo + Redo
+        const QString legDir = a + QStringLiteral("/h2a-legacy-dir");
+        const QString legDst = b + QStringLiteral("/h2a-legacy-dir");
+        verify(QDir().mkpath(legDir + QStringLiteral("/nested")), "H.2A-E1: dir tree created");
+        createFixture(legDir + QStringLiteral("/nested/file.txt"), "legacy-dir-data");
+
+        auto *cutMime = new QMimeData;
+        cutMime->setUrls({QUrl::fromLocalFile(legDir)});
+        cutMime->setData(QStringLiteral("application/x-kde-cutselection"), QByteArrayLiteral("1"));
+        QApplication::clipboard()->setMimeData(cutMime);
+
+        setTransferQueueProductionDispatchConnected(false);
+        actions.setQueueController(nullptr);
+        const int beforeLegacyComp = completed;
+        actions.pasteClipboardInto(rootB);
+        verify(QTest::qWaitFor([&] { return completed == beforeLegacyComp + 1; }, 10000)
+                   && lastError == 0
+                   && lastNativeDirMove
+                   && QFileInfo::exists(legDst + QStringLiteral("/nested/file.txt"))
+                   && !QFileInfo::exists(legDir),
+               "H.2A-E1: pasteClipboardInto moved qualified Btrfs dir cleanly via LocalDirectoryMoveJob");
+
+        // Undo + Redo via UndoController
+        verify(undo.nativeUndoAvailable(), "H.2A-E1: Undo available for directory move");
+        undo.undo();
+        verify(QTest::qWaitFor([&] {
+                   return !undo.m_busy && QFileInfo::exists(legDir + QStringLiteral("/nested/file.txt"))
+                       && !QFileInfo::exists(legDst);
+               }, 10000) && undo.nativeRedoAvailable(),
+               "H.2A-E1: Undo moved directory back cleanly");
+        undo.redo();
+        verify(QTest::qWaitFor([&] {
+                   return !undo.m_busy && QFileInfo::exists(legDst + QStringLiteral("/nested/file.txt"))
+                       && !QFileInfo::exists(legDir);
+               }, 10000),
+               "H.2A-E1: Redo re-moved directory cleanly");
+
+        // E2: Drag & Drop (transfer Qt::MoveAction) in Queue mode
+        const QString qDir = a + QString::fromUtf8("/h2a-kolejka-zażółć");
+        const QString qDst = b + QString::fromUtf8("/h2a-kolejka-zażółć");
+        verify(QDir().mkpath(qDir + QStringLiteral("/sub")), "H.2A-E2: queue dir tree created");
+        createFixture(qDir + QStringLiteral("/sub/item.dat"), "queue-payload-xyz");
+
+        TransferQueueController queueCtlE(&parent);
+        actions.setQueueController(&queueCtlE);
+        setTransferQueueProductionDispatchConnected(true);
+        const int beforeCompQ = completed;
+        actions.transfer({QUrl::fromLocalFile(qDir)}, rootB, Qt::MoveAction);
+        const auto qSnap1 = queueCtlE.snapshot();
+        verify(qSnap1.tasks.size() == 1 && qSnap1.tasks.first().backend == TransferBackendKind::LocalNative,
+               "H.2A-E2: queued directory move uses LocalNative backend");
+        verify(QTest::qWaitFor([&] {
+                   const auto s = queueCtlE.snapshot();
+                   return !s.tasks.isEmpty() && s.tasks.first().state == TransferTaskState::Completed;
+               }, 10000),
+               "H.2A-E2: queued directory move reaches Completed state");
+        verify(completed == beforeCompQ && !QFileInfo::exists(qDir)
+                   && fixtureData(qDst + QStringLiteral("/sub/item.dat")) == "queue-payload-xyz",
+               "H.2A-E2: zero legacy OperationManager double-tracking and intact payload");
+
+        // E3: Duplicate Finder transferUrls() STILL blocks directory Move fail-closed!
+        lastFenceMessage.clear();
+        int dfCbCount = 0;
+        KJob *dfCbJob = reinterpret_cast<KJob *>(0x1);
+        actions.transferUrls({QUrl::fromLocalFile(qDst)}, rootA, Qt::MoveAction, [&](KJob *j) {
+            ++dfCbCount;
+            dfCbJob = j;
+        });
+        verify(dfCbCount == 1 && dfCbJob == nullptr && queueCtlE.snapshot().tasks.size() == 1
+                   && QFileInfo::exists(qDst + QStringLiteral("/sub/item.dat"))
+                   && lastFenceMessage == moveContainmentErrorMessage(),
+               "H.2A-E3: Duplicate Finder transferUrls still refuses directory Move fail-closed");
+
+        // E4: Directory collision in Queue mode fails closed without overwrite dialog & without overwrite
+        const QString colSrc = a + QStringLiteral("/h2a-col");
+        const QString colDst = b + QStringLiteral("/h2a-col");
+        verify(QDir().mkdir(colSrc) && QDir().mkdir(colDst), "H.2A-E4: collision dirs created");
+        createFixture(colSrc + QStringLiteral("/src.txt"), "SRC");
+        createFixture(colDst + QStringLiteral("/dst.txt"), "DST");
+        actions.transfer({QUrl::fromLocalFile(colSrc)}, rootB, Qt::MoveAction);
+        verify(QTest::qWaitFor([&] {
+                   const auto s = queueCtlE.snapshot();
+                   return s.tasks.size() == 2 && s.tasks.at(1).state == TransferTaskState::Failed;
+               }, 10000),
+               "H.2A-E4: existing destination dir fails closed in queue without overwrite dialog");
+        verify(QFileInfo::exists(colSrc + QStringLiteral("/src.txt"))
+                   && QFileInfo::exists(colDst + QStringLiteral("/dst.txt")),
+               "H.2A-E4: both colliding directories preserved completely");
+
+        // E5: Descendant cycle & batch multi-dir & mixed file+dir blocked before queue enqueue
+        const QString descParent = a + QStringLiteral("/h2a-cyc");
+        const QString descChild = descParent + QStringLiteral("/sub");
+        verify(QDir().mkpath(descChild), "H.2A-E5: cycle dir created");
+        actions.transfer({QUrl::fromLocalFile(descParent)}, QUrl::fromLocalFile(descChild), Qt::MoveAction);
+        actions.transfer({QUrl::fromLocalFile(descParent), QUrl::fromLocalFile(colSrc)}, rootB, Qt::MoveAction);
+        verify(queueCtlE.snapshot().tasks.size() == 2,
+               "H.2A-E5: cycle and multi-directory moves blocked before queue task creation");
+
+        // E6: Watched moved directory notification safety (DirectoryWatchController reentrancy compatibility)
+        const QString watchSrc = a + QStringLiteral("/h2a-watched-dir");
+        const QString watchDst = b + QStringLiteral("/h2a-watched-dir");
+        verify(QDir().mkdir(watchSrc), "H.2A-E6: watched dir created");
+        createFixture(watchSrc + QStringLiteral("/w.txt"), "W");
+        DirectoryWatchController watcher;
+        int dummyPrimary = 1;
+        int dummySplit = 2;
+        watcher.setWatchedUrl(&dummyPrimary, QUrl::fromLocalFile(a));
+        watcher.setWatchedUrl(&dummySplit, QUrl::fromLocalFile(watchSrc));
+        int deletedSignals = 0;
+        QObject::connect(&watcher, &DirectoryWatchController::directoryDeleted, &watcher, [&](const QUrl &u) {
+            if (sameLocation(u, QUrl::fromLocalFile(watchSrc))) {
+                ++deletedSignals;
+                watcher.removeConsumer(&dummySplit);
+                watcher.setWatchedUrl(&dummySplit, QUrl::fromLocalFile(watchDst));
+            }
+        });
+        actions.transfer({QUrl::fromLocalFile(watchSrc)}, rootB, Qt::MoveAction);
+        verify(QTest::qWaitFor([&] {
+                   const auto s = queueCtlE.snapshot();
+                   return s.tasks.size() == 3 && s.tasks.at(2).state == TransferTaskState::Completed;
+               }, 10000),
+               "H.2A-E6: watched dir moved safely with DirectoryWatchController without crash");
+        QTest::qWait(50);
+        watcher.clear();
+
+        setTransferQueueProductionDispatchConnected(false);
+        actions.setQueueController(nullptr);
     }
 
     qInfo("PASS: %d FileActions assertions; native local copy/move, KIO fallbacks, conflicts, Undo/Redo", checks);
