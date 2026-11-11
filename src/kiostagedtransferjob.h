@@ -214,6 +214,143 @@ inline MtpMoveSafetyEvaluation evaluate(
 
 } // namespace MtpMoveSafety
 
+enum class MovePolicyDecision {
+    NotAMove,
+    AllowedSingleRegularLocalFile,
+    AllowedRemoteToRemote,
+    RefusedMtp,
+    RefusedInvalidInput,
+    RefusedMixedSources,
+    RefusedLocalToRemote,
+    RefusedRemoteToLocal,
+    RefusedLocalContainment,
+};
+
+struct MoveOperationClassification {
+    MovePolicyDecision decision = MovePolicyDecision::NotAMove;
+    bool allowed = true;
+    MtpMoveSafetyEvaluation mtpEvaluation;
+    QString refusalReason;
+};
+
+namespace MoveSafetyPolicy {
+
+inline bool isVirtualNonTransferableScheme(const QUrl &url)
+{
+    if (!url.isValid()) {
+        return true;
+    }
+    const QString scheme = url.scheme().toLower();
+    return scheme.isEmpty()
+        || scheme == QLatin1String("thispc")
+        || scheme == QLatin1String("thispcsearch")
+        || scheme == QLatin1String("filenamesearch")
+        || scheme == QLatin1String("remote")
+        || scheme == QLatin1String("trash")
+        || scheme == QLatin1String("about")
+        || scheme == QLatin1String("data");
+}
+
+inline MoveOperationClassification evaluate(
+    const QList<QUrl> &sources,
+    const QUrl &destinationDirectory,
+    bool move)
+{
+    MoveOperationClassification result;
+    if (!move) {
+        result.decision = MovePolicyDecision::NotAMove;
+        result.allowed = true;
+        return result;
+    }
+
+    if (sources.isEmpty() || !destinationDirectory.isValid() || isVirtualNonTransferableScheme(destinationDirectory)) {
+        result.decision = MovePolicyDecision::RefusedInvalidInput;
+        result.allowed = false;
+        result.refusalReason = moveContainmentErrorMessage();
+        return result;
+    }
+
+    result.mtpEvaluation = MtpMoveSafety::evaluate(sources, destinationDirectory, true);
+    if (!result.mtpEvaluation.isAllowed()) {
+        result.decision = MovePolicyDecision::RefusedMtp;
+        result.allowed = false;
+        result.refusalReason = result.mtpEvaluation.refusalReason;
+        return result;
+    }
+
+    bool hasLocalSource = false;
+    bool hasRemoteSource = false;
+    for (const QUrl &source : sources) {
+        if (isVirtualNonTransferableScheme(source)) {
+            result.decision = MovePolicyDecision::RefusedInvalidInput;
+            result.allowed = false;
+            result.refusalReason = moveContainmentErrorMessage();
+            return result;
+        }
+        if (source.isLocalFile()) {
+            hasLocalSource = true;
+        } else {
+            hasRemoteSource = true;
+        }
+    }
+
+    const bool destIsLocal = destinationDirectory.isLocalFile();
+
+    if (hasLocalSource && hasRemoteSource) {
+        result.decision = MovePolicyDecision::RefusedMixedSources;
+        result.allowed = false;
+        result.refusalReason = trLocal(
+            "Przenoszenie mieszanych elementów lokalnych i zdalnych jest niedostępne ze względów bezpieczeństwa danych. Użyj operacji Kopiuj.",
+            "Moving mixed local and remote items is unavailable for data safety reasons. Use Copy instead.");
+        return result;
+    }
+
+    if (hasLocalSource && !destIsLocal) {
+        result.decision = MovePolicyDecision::RefusedLocalToRemote;
+        result.allowed = false;
+        result.refusalReason = trLocal(
+            "Przenoszenie lokalnych elementów bezpośrednio do lokalizacji zdalnej jest niedostępne ze względów bezpieczeństwa danych. Użyj operacji Kopiuj.",
+            "Moving local items directly to a remote location is unavailable for data safety reasons. Use Copy instead.");
+        return result;
+    }
+
+    if (!hasLocalSource && destIsLocal) {
+        result.decision = MovePolicyDecision::RefusedRemoteToLocal;
+        result.allowed = false;
+        result.refusalReason = trLocal(
+            "Przenoszenie elementów ze źródeł zdalnych bezpośrednio na dysk lokalny jest niedostępne ze względów bezpieczeństwa danych. Użyj operacji Kopiuj.",
+            "Moving items from remote sources directly to a local disk is unavailable for data safety reasons. Use Copy instead.");
+        return result;
+    }
+
+    if (hasLocalSource && destIsLocal) {
+        if (!isSingleRegularLocalFile(sources)) {
+            result.decision = MovePolicyDecision::RefusedLocalContainment;
+            result.allowed = false;
+            result.refusalReason = moveContainmentErrorMessage();
+            return result;
+        }
+        const QFileInfo destDirInfo(destinationDirectory.toLocalFile());
+        if (!destDirInfo.exists() || !destDirInfo.isDir()) {
+            result.decision = MovePolicyDecision::RefusedInvalidInput;
+            result.allowed = false;
+            result.refusalReason = trLocal(
+                "Katalog docelowy jest nieprawidłowy lub nie istnieje.",
+                "The destination directory is invalid or does not exist.");
+            return result;
+        }
+        result.decision = MovePolicyDecision::AllowedSingleRegularLocalFile;
+        result.allowed = true;
+        return result;
+    }
+
+    result.decision = MovePolicyDecision::AllowedRemoteToRemote;
+    result.allowed = true;
+    return result;
+}
+
+} // namespace MoveSafetyPolicy
+
 namespace KioStagedDetail {
 
 inline QString createExclusiveStagedFile(const QString &finalPath)

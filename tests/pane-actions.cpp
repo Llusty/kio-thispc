@@ -22,6 +22,13 @@ int main(int argc, char **argv)
     const QUrl right = QUrl::fromLocalFile(files.path() + "/right");
     QDir().mkpath(left.toLocalFile());
     QDir().mkpath(right.toLocalFile());
+    for (const QString &fixturePath : {left.toLocalFile() + QStringLiteral("/one"),
+                                       right.toLocalFile() + QStringLiteral("/one")}) {
+        QFile f(fixturePath);
+        verify(f.open(QIODevice::WriteOnly | QIODevice::NewOnly) && f.write("pane-one") == 8,
+               "pane regular file fixture");
+        f.close();
+    }
     const QString templates = files.filePath("templates");
     verify(QDir().mkpath(templates), "temporary templates directory");
     QFile templateFile(templates + "/A&B #ż.md");

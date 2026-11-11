@@ -5115,9 +5115,20 @@ public:
                 controller->setMoveExecutor([this](const QList<QUrl> &urls, const QUrl &destUrl,
                     std::function<void(const DuplicateActionController::OperationResult &)> cb) {
                     const QString cleanDest = destUrl.toLocalFile();
-                    m_fileActions->transferUrls(urls, destUrl, Qt::MoveAction, [cb, urls, cleanDest](KJob *job) {
+                    m_fileActions->transferUrls(urls, destUrl, Qt::MoveAction, [this, cb, urls, cleanDest](KJob *job) {
                         DuplicateActionController::OperationResult res;
-                        if (!job || job->error() == KJob::KilledJobError || job->error() == KIO::ERR_USER_CANCELED) {
+                        const auto *moveJob = qobject_cast<LocalFileMoveJob *>(job);
+                        const bool moveCancelled = (moveJob && moveJob->moveError() == LocalFileMoveError::Cancelled);
+                        if (!job) {
+                            if (m_fileActions && !m_fileActions->lastMovePolicyEvaluation().allowed) {
+                                res.errorMessage = m_fileActions->lastMovePolicyEvaluation().refusalReason;
+                                for (const auto &u : urls) {
+                                    res.failedPaths.append(u.toLocalFile());
+                                }
+                            } else {
+                                res.cancelled = true;
+                            }
+                        } else if (job->error() == KJob::KilledJobError || job->error() == KIO::ERR_USER_CANCELED || moveCancelled) {
                             res.cancelled = true;
                         } else if (job->error() != 0) {
                             res.errorMessage = job->errorString();

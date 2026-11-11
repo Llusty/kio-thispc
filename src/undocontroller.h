@@ -406,7 +406,35 @@ public:
                     }
                 }
             }
-            if (involvesMtp && job->operationMode() == KIO::CopyJob::Move) {
+            bool involvesLocal = job->destUrl().isLocalFile();
+            const QList<QUrl> srcs = job->srcUrls();
+            if (!involvesLocal) {
+                for (const QUrl &u : srcs) {
+                    if (u.isLocalFile()) {
+                        involvesLocal = true;
+                        break;
+                    }
+                }
+            }
+            bool isSingleLocalRename = false;
+            if (srcs.size() == 1 && srcs.first().isLocalFile() && job->destUrl().isLocalFile()) {
+                const QString srcPath = srcs.first().toLocalFile();
+                const QString dstPath = job->destUrl().toLocalFile();
+                if (QDir::cleanPath(QFileInfo(srcPath).absolutePath())
+                        == QDir::cleanPath(QFileInfo(dstPath).absolutePath())
+                    && srcs.first().fileName() != job->destUrl().fileName()) {
+                    struct stat dstSt {};
+                    if (::lstat(QFile::encodeName(dstPath).constData(), &dstSt) != 0) {
+                        isSingleLocalRename = true;
+                    } else if (!S_ISDIR(dstSt.st_mode)) {
+                        struct stat srcSt {};
+                        isSingleLocalRename = (::lstat(QFile::encodeName(srcPath).constData(), &srcSt) == 0
+                            && srcSt.st_dev == dstSt.st_dev && srcSt.st_ino == dstSt.st_ino);
+                    }
+                }
+            }
+            if ((involvesMtp || (involvesLocal && !isSingleLocalRename))
+                && job->operationMode() == KIO::CopyJob::Move) {
                 const quint64 serial = m_manager->newCommandSerialNumber();
                 connect(job, &KJob::result, this, [this, serial](KJob *) {
                     m_irreversibleSerial = qMax(m_irreversibleSerial, serial);

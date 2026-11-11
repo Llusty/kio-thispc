@@ -36,25 +36,68 @@ inline QString moveContainmentErrorMessage()
         : QObject::tr("Moving this type of item is temporarily unavailable for data safety reasons. You can copy the items instead of moving them.");
 }
 
+#ifdef THISPC_TEST_HARNESS
+inline std::function<bool(const QString &, struct stat *)> &simulateLstatHook()
+{
+    static std::function<bool(const QString &, struct stat *)> hook;
+    return hook;
+}
+#endif
+
+// Reads link-safe POSIX metadata without following symlinks and without opening FIFOs or devices.
+inline bool localLstat(const QString &localPath, struct stat *outStat)
+{
+    if (!outStat || localPath.isEmpty()) {
+        return false;
+    }
+#ifdef THISPC_TEST_HARNESS
+    if (simulateLstatHook() && simulateLstatHook()(localPath, outStat)) {
+        return true;
+    }
+#endif
+    return ::lstat(QFile::encodeName(localPath).constData(), outStat) == 0;
+}
+
+inline bool isRegularNonSymlinkLocalFilePath(const QString &localPath)
+{
+    struct stat st {};
+    if (!localLstat(localPath, &st)) {
+        return false;
+    }
+    return S_ISREG(st.st_mode);
+}
+
 inline bool isSingleRegularLocalFile(const QList<QUrl> &urls)
 {
     if (urls.size() != 1 || !urls.first().isLocalFile()) {
         return false;
     }
-    const QFileInfo info(urls.first().toLocalFile());
-    if (info.isDir() || info.isSymLink()) {
-        return false;
-    }
-    return true;
+    return isRegularNonSymlinkLocalFilePath(urls.first().toLocalFile());
 }
 
 inline bool isLocalMoveContainmentBlocked(const QList<QUrl> &sources, const QUrl &destinationDirectory, bool move)
 {
-    if (!move || !destinationDirectory.isLocalFile()) {
+    if (!move || sources.isEmpty()) {
         return false;
     }
+    bool hasLocal = false;
+    bool hasNonLocal = false;
     for (const QUrl &u : sources) {
-        if (!u.isLocalFile()) return false;
+        if (!u.isValid() || u.scheme().isEmpty()) {
+            return true;
+        }
+        if (u.isLocalFile()) {
+            hasLocal = true;
+        } else {
+            hasNonLocal = true;
+        }
+    }
+    if (!hasLocal) {
+        // Exclusively remote sources are evaluated by MoveSafetyPolicy / MtpMoveSafety.
+        return false;
+    }
+    if (hasNonLocal || !destinationDirectory.isLocalFile()) {
+        return true;
     }
     return !isSingleRegularLocalFile(sources);
 }
@@ -67,8 +110,7 @@ struct LocalFileIdentity
     static LocalFileIdentity read(const QString &path)
     {
         LocalFileIdentity identity;
-        identity.valid = ::lstat(QFile::encodeName(path).constData(), &identity.value) == 0
-            && S_ISREG(identity.value.st_mode);
+        identity.valid = localLstat(path, &identity.value) && S_ISREG(identity.value.st_mode);
         return identity;
     }
 

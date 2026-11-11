@@ -691,5 +691,408 @@ int main(int argc, char **argv)
                "Scenario J: single regular file move executes cleanly on native filesystem");
     }
 
+    // =========================================================================
+    // Stage 5.3.2H.1.1 — Move Routing Containment Closure Tests (Groups A - D)
+    // =========================================================================
+
+    // Group A: transferUrls() / Duplicate Finder closure (zero KIO::move bypass for local)
+    {
+        // A1. Single regular local file Move via transferUrls() in legacy mode
+        setTransferQueueProductionDispatchConnected(false);
+        const QString srcA1 = files.filePath("tu-single-legacy.txt");
+        const QString dstA1 = b + "/tu-single-legacy.txt";
+        createFixture(srcA1, "transferUrls-legacy");
+
+        int cbCountA1 = 0;
+        bool cbNonNullA1 = false;
+        int cbErrA1 = -1;
+        bool cbDoneA1 = false;
+        const int beforeUndoCount = completed;
+        actions.transferUrls({QUrl::fromLocalFile(srcA1)}, rootB, Qt::MoveAction, [&](KJob *j) {
+            ++cbCountA1;
+            cbNonNullA1 = (j != nullptr);
+            cbErrA1 = j ? j->error() : -1;
+            cbDoneA1 = true;
+        });
+        verify(QTest::qWaitFor([&] { return cbDoneA1; }, 5000),
+               "H.1.1-A1: legacy transferUrls single move finishes");
+        verify(cbCountA1 == 1 && cbNonNullA1 && cbErrA1 == KJob::NoError,
+               "H.1.1-A1: callback called once with valid native move job");
+        verify(lastNativeMove && !QFile::exists(srcA1) && readFile(dstA1) == "transferUrls-legacy",
+               "H.1.1-A1: single regular file moved natively via transferUrls (not KIO::move)");
+        verify(completed == beforeUndoCount + 1, "H.1.1-A1: watchFileOperation observed completion");
+        verify(undo.nativeUndoAvailable(), "H.1.1-A1: native move recorded in LocalMoveHistory (not KIO)");
+        undo.undo();
+        verify(QTest::qWaitFor([&] { return !undo.m_busy && QFile::exists(srcA1) && !QFile::exists(dstA1); }, 5000),
+               "H.1.1-A1: Undo restores single file moved via transferUrls");
+        QFile::remove(srcA1);
+
+        // A2. Single regular local file Move via transferUrls() in production queue mode
+        TransferQueueController queueCtlA(&parent);
+        actions.setQueueController(&queueCtlA);
+        setTransferQueueProductionDispatchConnected(true);
+        const QString srcA2 = files.filePath("tu-single-queue.txt");
+        const QString dstA2 = b + "/tu-single-queue.txt";
+        createFixture(srcA2, "transferUrls-queue");
+
+        int cbCountA2 = 0;
+        bool cbNonNullA2 = false;
+        int cbErrA2 = -1;
+        actions.transferUrls({QUrl::fromLocalFile(srcA2)}, rootB, Qt::MoveAction, [&](KJob *j) {
+            ++cbCountA2;
+            cbNonNullA2 = (j != nullptr);
+            cbErrA2 = j ? j->error() : -1;
+        });
+        verify(queueCtlA.snapshot().tasks.size() == 1
+                   && queueCtlA.snapshot().tasks.front().backend == TransferBackendKind::LocalNative,
+               "H.1.1-A2: queue transferUrls uses LocalNative backend");
+        verify(QTest::qWaitFor([&] { return cbCountA2 == 1; }, 5000),
+               "H.1.1-A2: queue transferUrls callback fires");
+        verify(cbCountA2 == 1 && cbNonNullA2 && cbErrA2 == KJob::NoError,
+               "H.1.1-A2: queue callback called once with LocalFileMoveJob result");
+        verify(!QFile::exists(srcA2) && readFile(dstA2) == "transferUrls-queue",
+               "H.1.1-A2: file moved cleanly via production queue");
+
+        // A3. Multi-file, Directory, Symlink, Broken Symlink via transferUrls() -> fail-closed, NO KIO::move
+        const QString m1 = files.filePath("tu-multi-1.txt");
+        const QString m2 = files.filePath("tu-multi-2.txt");
+        const QString dirS = files.filePath("tu-dir");
+        const QString linkTarget = files.filePath("tu-target.txt");
+        const QString linkValid = files.filePath("tu-link.lnk");
+        const QString linkBroken = files.filePath("tu-broken.lnk");
+        createFixture(m1, "m1");
+        createFixture(m2, "m2");
+        verify(QDir().mkpath(dirS + "/sub"), "H.1.1-A3: dir fixture created");
+        createFixture(dirS + "/sub/inner.txt", "inner");
+        createFixture(linkTarget, "t");
+        verify(::symlink(QFile::encodeName(linkTarget).constData(), QFile::encodeName(linkValid).constData()) == 0
+                   && ::symlink("/nonexistent/broken-target", QFile::encodeName(linkBroken).constData()) == 0,
+               "H.1.1-A3: symlinks created");
+
+        struct RefusalCase {
+            const char *name;
+            QList<QUrl> urls;
+        };
+        const QList<RefusalCase> tuRefusals = {
+            {"multi-file", {QUrl::fromLocalFile(m1), QUrl::fromLocalFile(m2)}},
+            {"directory", {QUrl::fromLocalFile(dirS)}},
+            {"valid-symlink", {QUrl::fromLocalFile(linkValid)}},
+            {"broken-symlink", {QUrl::fromLocalFile(linkBroken)}},
+        };
+        for (const bool useQueue : {false, true}) {
+            setTransferQueueProductionDispatchConnected(useQueue);
+            for (const auto &rc : tuRefusals) {
+                const auto beforeTasks = queueCtlA.snapshot().tasks.size();
+                const int beforeCompleted = completed;
+                lastFenceMessage.clear();
+                int cbCount = 0;
+                KJob *cbJob = reinterpret_cast<KJob *>(0x1);
+                actions.transferUrls(rc.urls, rootB, Qt::MoveAction, [&](KJob *j) {
+                    ++cbCount;
+                    cbJob = j;
+                });
+                verify(cbCount == 1 && cbJob == nullptr, "H.1.1-A3: transferUrls refused fail-closed without creating job");
+                verify(queueCtlA.snapshot().tasks.size() == beforeTasks && completed == beforeCompleted,
+                       "H.1.1-A3: zero queue tasks or KIO jobs created");
+                verify(lastFenceMessage == moveContainmentErrorMessage(),
+                       "H.1.1-A3: security fence message emitted");
+            }
+        }
+        verify(QFile::exists(m1) && QFile::exists(m2) && QFile::exists(dirS + "/sub/inner.txt")
+                   && QFileInfo(linkValid).isSymLink() && QFileInfo(linkBroken).isSymLink(),
+               "H.1.1-A3: all refused sources completely preserved");
+
+        // A4. Conflict with existing target via transferUrls() -> fails closed without overwrite or Undo
+        const QString cSrc = files.filePath("tu-conflict.txt");
+        const QString cDst = b + "/tu-conflict.txt";
+        createFixture(cSrc, "new-source");
+        createFixture(cDst, "existing-keep");
+        for (const bool useQueue : {false, true}) {
+            setTransferQueueProductionDispatchConnected(useQueue);
+            int cbCount = 0;
+            bool cbNonNull = false;
+            int cbErr = 0;
+            const auto beforeHistoryCount = undo.m_nativeHistory->count();
+            actions.transferUrls({QUrl::fromLocalFile(cSrc)}, rootB, Qt::MoveAction, [&](KJob *j) {
+                ++cbCount;
+                cbNonNull = (j != nullptr);
+                cbErr = j ? j->error() : 0;
+            });
+            verify(QTest::qWaitFor([&] { return cbCount == 1; }, 5000),
+                   "H.1.1-A4: conflict transferUrls completes");
+            verify(cbCount == 1 && cbNonNull && cbErr != KJob::NoError,
+                   "H.1.1-A4: conflict fails cleanly without silent overwrite");
+            verify(readFile(cSrc) == "new-source" && readFile(cDst) == "existing-keep",
+                   "H.1.1-A4: source and existing destination intact");
+            verify(undo.m_nativeHistory->count() == beforeHistoryCount,
+                   "H.1.1-A4: failed conflict move never records history/undo");
+        }
+
+        // A5. Explicit overwrite attempt via LocalFileMoveJob remains fail-closed
+        {
+            LocalFileMoveJob ovJob(QUrl::fromLocalFile(cSrc), QUrl::fromLocalFile(cDst),
+                                   nullptr, LocalFileMoveStrategy::Automatic, 16 * 1024, 0, {}, true,
+                                   LocalFileIdentity::read(cDst));
+            ovJob.setAutoDelete(false);
+            QSignalSpy ovSpy(&ovJob, &KJob::result);
+            ovJob.start();
+            verify(ovSpy.wait(5000) && ovJob.error() != KJob::NoError && ovJob.moveError() == LocalFileMoveError::InvalidInput,
+                   "H.1.1-A5: move overwrite strictly fail-closed");
+            verify(readFile(cSrc) == "new-source" && readFile(cDst) == "existing-keep",
+                   "H.1.1-A5: overwrite refusal leaves both files intact");
+        }
+
+        // A6. Cancellation of pending queued transferUrls task invokes callback once cleanly
+        {
+            setTransferQueueProductionDispatchConnected(true);
+            queueCtlA.setDispatchPaused(true);
+            const QString canSrc = files.filePath("tu-cancel.txt");
+            const QString canDst = b + "/tu-cancel.txt";
+            createFixture(canSrc, "cancel-payload");
+            int cbCount = 0;
+            KJob *cbJob = reinterpret_cast<KJob *>(0x1);
+            actions.transferUrls({QUrl::fromLocalFile(canSrc)}, rootB, Qt::MoveAction, [&](KJob *j) {
+                ++cbCount;
+                cbJob = j;
+            });
+            const quint64 taskId = queueCtlA.snapshot().tasks.back().id;
+            verify(queueCtlA.cancelTask(taskId), "H.1.1-A6: queued transferUrls task cancelled");
+            verify(cbCount == 1 && cbJob == nullptr && QFile::exists(canSrc) && !QFile::exists(canDst),
+                   "H.1.1-A6: cancelled transferUrls notifies once and preserves source");
+            queueCtlA.setDispatchPaused(false);
+        }
+
+        setTransferQueueProductionDispatchConnected(false);
+        actions.setQueueController(nullptr);
+    }
+
+    // Group B: Central Move Classification for Local, Remote, Mixed & Invalid URLs (Queue + Legacy)
+    {
+        const QString locFile = files.filePath("mixed-local-src.txt");
+        createFixture(locFile, "mixed-local-bytes");
+        const QUrl locUrl = QUrl::fromLocalFile(locFile);
+        const QUrl remoteSrc(QStringLiteral("sftp://198.51.100.1:1/share/remote-src.txt"));
+        const QUrl remoteDst(QStringLiteral("sftp://198.51.100.1:1/share/remote-dst"));
+
+        // B1. Policy classification checks
+        verify(MoveSafetyPolicy::evaluate({locUrl}, rootB, true).decision == MovePolicyDecision::AllowedSingleRegularLocalFile,
+               "H.1.1-B1: local regular -> local dir allowed");
+        verify(MoveSafetyPolicy::evaluate({locUrl, remoteSrc}, rootB, true).decision == MovePolicyDecision::RefusedMixedSources,
+               "H.1.1-B1: local + remote -> local refused");
+        verify(MoveSafetyPolicy::evaluate({locUrl, remoteSrc}, remoteDst, true).decision == MovePolicyDecision::RefusedMixedSources,
+               "H.1.1-B1: local + remote -> remote refused");
+        verify(MoveSafetyPolicy::evaluate({locUrl}, remoteDst, true).decision == MovePolicyDecision::RefusedLocalToRemote,
+               "H.1.1-B1: local -> remote refused");
+        verify(MoveSafetyPolicy::evaluate({remoteSrc}, rootB, true).decision == MovePolicyDecision::RefusedRemoteToLocal,
+               "H.1.1-B1: remote -> local refused");
+        verify(MoveSafetyPolicy::evaluate({remoteSrc}, remoteDst, true).decision == MovePolicyDecision::AllowedRemoteToRemote,
+               "H.1.1-B1: remote -> remote remains allowed outside local engine");
+        verify(MoveSafetyPolicy::evaluate({QUrl()}, rootB, true).decision == MovePolicyDecision::RefusedInvalidInput,
+               "H.1.1-B1: invalid source URL refused");
+        verify(MoveSafetyPolicy::evaluate({locUrl}, QUrl(QStringLiteral("thispc:/")), true).decision == MovePolicyDecision::RefusedInvalidInput,
+               "H.1.1-B1: virtual destination URL refused");
+        verify(isLocalMoveContainmentBlocked({locUrl, remoteSrc}, rootB, true),
+               "H.1.1-B1: isLocalMoveContainmentBlocked catches mixed sources -> local");
+        verify(isLocalMoveContainmentBlocked({locUrl, remoteSrc}, remoteDst, true),
+               "H.1.1-B1: isLocalMoveContainmentBlocked catches mixed sources -> remote");
+        verify(isLocalMoveContainmentBlocked({locUrl}, remoteDst, true),
+               "H.1.1-B1: isLocalMoveContainmentBlocked catches local -> remote");
+
+        // B2. Runtime containment in Queue & Legacy modes: zero jobs, zero remote connection attempts
+        TransferQueueController queueCtlB(&parent);
+        actions.setQueueController(&queueCtlB);
+        struct DeniedRouteCase {
+            const char *name;
+            QList<QUrl> srcs;
+            QUrl dst;
+        };
+        const QList<DeniedRouteCase> deniedCases = {
+            {"mixed->local", {locUrl, remoteSrc}, rootB},
+            {"mixed->remote", {locUrl, remoteSrc}, remoteDst},
+            {"local->remote", {locUrl}, remoteDst},
+            {"remote->local", {remoteSrc}, rootB},
+            {"invalid-src", {QUrl(QStringLiteral("thispcsearch:/?q=test"))}, rootB},
+            {"invalid-dst", {locUrl}, QUrl(QStringLiteral("thispc:/"))},
+        };
+        for (const bool useQueue : {false, true}) {
+            setTransferQueueProductionDispatchConnected(useQueue);
+            for (const auto &dc : deniedCases) {
+                const int beforeComp = completed;
+                const auto beforeTasks = queueCtlB.snapshot().tasks.size();
+                lastFenceMessage.clear();
+
+                // transfer (DnD)
+                actions.transfer(dc.srcs, dc.dst, Qt::MoveAction);
+                verify(completed == beforeComp && queueCtlB.snapshot().tasks.size() == beforeTasks && !lastFenceMessage.isEmpty(),
+                       "H.1.1-B2: disallowed DnD move created zero jobs and emitted fence");
+
+                // pasteClipboardInto (Cut+Paste)
+                lastFenceMessage.clear();
+                auto *mime = new QMimeData;
+                mime->setUrls(dc.srcs);
+                mime->setData(QStringLiteral("application/x-kde-cutselection"), QByteArrayLiteral("1"));
+                app.clipboard()->setMimeData(mime);
+                actions.pasteClipboardInto(dc.dst);
+                verify(completed == beforeComp && queueCtlB.snapshot().tasks.size() == beforeTasks && !lastFenceMessage.isEmpty(),
+                       "H.1.1-B2: disallowed Cut+Paste move created zero jobs and emitted fence");
+
+                // transferUrls
+                int cbCount = 0;
+                KJob *cbJob = reinterpret_cast<KJob *>(0x1);
+                actions.transferUrls(dc.srcs, dc.dst, Qt::MoveAction, [&](KJob *j) {
+                    ++cbCount;
+                    cbJob = j;
+                });
+                verify(cbCount == 1 && cbJob == nullptr && queueCtlB.snapshot().tasks.size() == beforeTasks,
+                       "H.1.1-B2: disallowed transferUrls created zero jobs");
+            }
+        }
+        verify(readFile(locFile) == "mixed-local-bytes",
+               "H.1.1-B2: local source untouched across all refused mixed/local-remote routes");
+
+        // B3. Remote-only -> Remote-only reaches remote dispatch (tested via runner seam, zero DNS hang)
+        setTransferQueueProductionDispatchConnected(false);
+        interceptFileJobs = true;
+        dispatch = {};
+        actions.transfer({remoteSrc}, remoteDst, Qt::MoveAction);
+        verify(dispatch.kind == QStringLiteral("move") && dispatch.sources == QList<QUrl>{remoteSrc} && dispatch.destination == remoteDst,
+               "H.1.1-B3: remote-only move continues to reach remote KIO path");
+        interceptFileJobs = false;
+        dispatch = {};
+
+        // B4. Copy for mixed and local->local multi remains functional (no regression)
+        const QString cpy1 = files.filePath("copy-keep-1.txt");
+        const QString cpy2 = files.filePath("copy-keep-2.txt");
+        createFixture(cpy1, "c1");
+        createFixture(cpy2, "c2");
+        const int expectedCopyMulti = completed + 1;
+        actions.transfer({QUrl::fromLocalFile(cpy1), QUrl::fromLocalFile(cpy2)}, rootB, Qt::CopyAction);
+        waitJob(expectedCopyMulti);
+        verify(readFile(b + "/copy-keep-1.txt") == "c1" && readFile(b + "/copy-keep-2.txt") == "c2"
+                   && QFile::exists(cpy1) && QFile::exists(cpy2),
+               "H.1.1-B4: multi-file local copy remains fully functional");
+
+        setTransferQueueProductionDispatchConnected(false);
+        actions.setQueueController(nullptr);
+    }
+
+    // Group C: Object Type Classification via lstat / S_ISREG (FIFO, Socket, Devices, Symlinks, Dir, Missing)
+    {
+        const QString regC = files.filePath("obj-regular.txt");
+        const QString dirC = files.filePath("obj-dir");
+        const QString lnkFileC = files.filePath("obj-link-file.lnk");
+        const QString lnkDirC = files.filePath("obj-link-dir.lnk");
+        const QString lnkBrokenC = files.filePath("obj-link-broken.lnk");
+        const QString fifoC = files.filePath("obj-pipe.fifo");
+        const QString sockC = files.filePath("obj-unix.sock");
+        const QString devSimC = files.filePath("obj-dev-sim");
+        const QString missingC = files.filePath("obj-does-not-exist");
+
+        createFixture(regC, "reg");
+        verify(QDir().mkdir(dirC), "H.1.1-C: dir created");
+        verify(::symlink(QFile::encodeName(regC).constData(), QFile::encodeName(lnkFileC).constData()) == 0
+                   && ::symlink(QFile::encodeName(dirC).constData(), QFile::encodeName(lnkDirC).constData()) == 0
+                   && ::symlink("/no/such/file", QFile::encodeName(lnkBrokenC).constData()) == 0,
+               "H.1.1-C: symlinks created");
+        verify(::mkfifo(QFile::encodeName(fifoC).constData(), 0600) == 0, "H.1.1-C: FIFO created");
+        verify(::mknod(QFile::encodeName(sockC).constData(), S_IFSOCK | 0600, 0) == 0, "H.1.1-C: Unix socket created");
+
+        verify(isSingleRegularLocalFile({QUrl::fromLocalFile(regC)}), "H.1.1-C: regular file allowed");
+        verify(!isSingleRegularLocalFile({QUrl::fromLocalFile(dirC)}), "H.1.1-C: directory blocked");
+        verify(!isSingleRegularLocalFile({QUrl::fromLocalFile(lnkFileC)}), "H.1.1-C: symlink to file blocked");
+        verify(!isSingleRegularLocalFile({QUrl::fromLocalFile(lnkDirC)}), "H.1.1-C: symlink to dir blocked");
+        verify(!isSingleRegularLocalFile({QUrl::fromLocalFile(lnkBrokenC)}), "H.1.1-C: broken symlink blocked");
+        verify(!isSingleRegularLocalFile({QUrl::fromLocalFile(fifoC)}), "H.1.1-C: FIFO blocked without opening");
+        verify(!isSingleRegularLocalFile({QUrl::fromLocalFile(sockC)}), "H.1.1-C: Unix socket blocked");
+        verify(!isSingleRegularLocalFile({QUrl::fromLocalFile(missingC)}), "H.1.1-C: missing file blocked");
+
+        // Simulated char and block devices via lstat hook (no root/mknod dev needed)
+        for (const mode_t devMode : {static_cast<mode_t>(S_IFCHR | 0600), static_cast<mode_t>(S_IFBLK | 0600)}) {
+            simulateLstatHook() = [devSimC, devMode](const QString &p, struct stat *st) {
+                if (p == devSimC) {
+                    *st = {};
+                    st->st_mode = devMode;
+                    return true;
+                }
+                return false;
+            };
+            verify(!isSingleRegularLocalFile({QUrl::fromLocalFile(devSimC)}),
+                   "H.1.1-C: simulated device blocked by isSingleRegularLocalFile");
+            verify(!LocalFileIdentity::read(devSimC).valid,
+                   "H.1.1-C: simulated device rejected by LocalFileIdentity::read");
+            TransferQueueController queueCtlDev(&parent);
+            actions.setQueueController(&queueCtlDev);
+            setTransferQueueProductionDispatchConnected(true);
+            actions.transfer({QUrl::fromLocalFile(devSimC)}, rootB, Qt::MoveAction);
+            verify(queueCtlDev.snapshot().tasks.isEmpty(),
+                   "H.1.1-C: simulated device blocked before queue job creation");
+            setTransferQueueProductionDispatchConnected(false);
+            actions.setQueueController(nullptr);
+            simulateLstatHook() = {};
+        }
+
+        // Blocking FIFO/socket runtime moves in both Queue and Legacy modes
+        TransferQueueController queueCtlObj(&parent);
+        actions.setQueueController(&queueCtlObj);
+        for (const bool useQueue : {false, true}) {
+            setTransferQueueProductionDispatchConnected(useQueue);
+            for (const QString &specialPath : {fifoC, sockC}) {
+                const int beforeComp = completed;
+                lastFenceMessage.clear();
+                actions.transfer({QUrl::fromLocalFile(specialPath)}, rootB, Qt::MoveAction);
+                verify(completed == beforeComp && queueCtlObj.snapshot().tasks.isEmpty()
+                           && lastFenceMessage == moveContainmentErrorMessage(),
+                       "H.1.1-C: special file DnD move blocked cleanly before job creation");
+                int cbCount = 0;
+                KJob *cbJob = reinterpret_cast<KJob *>(0x1);
+                actions.transferUrls({QUrl::fromLocalFile(specialPath)}, rootB, Qt::MoveAction, [&](KJob *j) {
+                    ++cbCount;
+                    cbJob = j;
+                });
+                verify(cbCount == 1 && cbJob == nullptr && queueCtlObj.snapshot().tasks.isEmpty(),
+                       "H.1.1-C: special file transferUrls move blocked cleanly");
+            }
+        }
+        setTransferQueueProductionDispatchConnected(false);
+        actions.setQueueController(nullptr);
+        verify(QFileInfo::exists(fifoC) && QFileInfo::exists(sockC),
+               "H.1.1-C: FIFO and socket fixtures intact");
+    }
+
+    // Group D: Defense-in-depth checks (LocalTransferJob(move=true) & KIO UndoController::recordCopyJob)
+    {
+        const QString dSrc = files.filePath("defense-src.txt");
+        createFixture(dSrc, "defense");
+        auto *ltj = new LocalTransferJob({QUrl::fromLocalFile(dSrc)}, rootB, true, &parent);
+        QSignalSpy ltjSpy(ltj, &KJob::result);
+        ltj->start();
+        verify(ltjSpy.wait(5000) && ltj->error() != KJob::NoError && ltj->errorText() == moveContainmentErrorMessage(),
+               "H.1.1-D: LocalTransferJob(move=true) remains strictly fail-closed");
+        verify(readFile(dSrc) == "defense", "H.1.1-D: source untouched");
+
+        // Calling startNativeSingleFileTransfer directly with multiple files must NOT dispatch LocalTransferJob(move=true)
+        const int beforeCompD = completed;
+        lastFenceMessage.clear();
+        const bool handledMulti = actions.startNativeSingleFileTransfer(
+            {QUrl::fromLocalFile(dSrc), QUrl::fromLocalFile(files.filePath("btrfs-single-src.txt"))},
+            rootB, true, false, {}, {});
+        verify(handledMulti && completed == beforeCompD && lastFenceMessage == moveContainmentErrorMessage(),
+               "H.1.1-D: direct startNativeSingleFileTransfer multi-move blocked fail-closed");
+
+        // Defense in depth: UndoController::recordCopyJob must never record uncontained local cross-dir KIO::move
+        auto *unsafeKioMove = KIO::move({QUrl::fromLocalFile(dSrc)}, rootB, KIO::HideProgressInfo);
+        unsafeKioMove->setUiDelegate(nullptr);
+        const quint64 beforeIrrev = undo.m_irreversibleSerial;
+        const quint64 beforeKioSerial = undo.m_manager->currentCommandSerialNumber();
+        QSignalSpy kioSpy(unsafeKioMove, &KJob::result);
+        undo.recordCopyJob(unsafeKioMove);
+        unsafeKioMove->kill(KJob::EmitResult);
+        verify(kioSpy.count() > 0 || kioSpy.wait(2000),
+               "H.1.1-D: killed KIO::move emits result");
+        verify(undo.m_manager->currentCommandSerialNumber() == beforeKioSerial
+                   && !undo.kioUndoAvailable() && undo.m_irreversibleSerial > beforeIrrev,
+               "H.1.1-D: cross-directory local KIO::move never recorded in KIO UndoManager");
+    }
+
     qInfo("PASS: %d FileActions assertions; native local copy/move, KIO fallbacks, conflicts, Undo/Redo", checks);
 }
