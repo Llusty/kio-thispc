@@ -221,6 +221,7 @@ enum class MovePolicyDecision {
     AllowedSingleRegularLocalFile,
     AllowedSingleSameVolumeBtrfsDirectory,
     AllowedBatchSameVolumeBtrfsRegularFiles,
+    AllowedBatchSameVolumeBtrfsMixed,
     AllowedRemoteToRemote,
     RefusedMtp,
     RefusedInvalidInput,
@@ -363,9 +364,18 @@ inline MoveOperationClassification evaluate(
         }
         if (sources.size() >= 2) {
             BatchMovePreflight batchPreflight;
-            if (LocalBatchMoveDetail::qualifyFastForPolicy(
+            if (LocalBatchMoveDetail::qualifyFastForMixedBatchPolicy(
                     sources, destinationDirectory, &batchPreflight)) {
-                result.decision = MovePolicyDecision::AllowedBatchSameVolumeBtrfsRegularFiles;
+                bool hasDirectory = false;
+                for (const auto &it : std::as_const(batchPreflight.items)) {
+                    if (it.kind == BatchMoveItemKind::Directory) {
+                        hasDirectory = true;
+                        break;
+                    }
+                }
+                result.decision = hasDirectory
+                    ? MovePolicyDecision::AllowedBatchSameVolumeBtrfsMixed
+                    : MovePolicyDecision::AllowedBatchSameVolumeBtrfsRegularFiles;
                 result.allowed = true;
                 return result;
             }

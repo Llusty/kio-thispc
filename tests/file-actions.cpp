@@ -1326,15 +1326,64 @@ int main(int argc, char **argv)
                    && lastFenceMessage == moveContainmentErrorMessage(),
                "H.2B.1-F3: Duplicate Finder transferUrls still blocks Btrfs multi-file Move fail-closed");
 
-        // F4: Mixed file + directory batch stays blocked before queue enqueue (H.2B.2 boundary)
+        // F4: Mixed file + directory batch succeeds in production FileActions::transfer + compound Undo/Redo
         const QString mixDir = fDir1 + QStringLiteral("/mixdir");
-        verify(QDir().mkdir(mixDir), "H.2B.1-F4: dir created");
+        verify(QDir().mkdir(mixDir), "H.2B.2B-F4: dir created");
         const QString mixFile = fDir1 + QStringLiteral("/mixfile.txt");
         createFixture(mixFile, "MIX");
         actions.transfer({QUrl::fromLocalFile(mixFile), QUrl::fromLocalFile(mixDir)}, rootB, Qt::MoveAction);
-        verify(queueCtlF.snapshot().tasks.size() == 1
-                   && QFileInfo::exists(mixFile) && QFileInfo::exists(mixDir),
-               "H.2B.1-F4: mixed file+dir batch blocked before queue enqueue");
+        verify(QTest::qWaitFor([&] {
+            const auto snap = queueCtlF.snapshot();
+            return snap.tasks.size() == 2
+                && snap.tasks.at(1).state == TransferTaskState::Completed;
+        }, 10000), "H.2B.2B-F4: mixed file+dir batch completes via production queue");
+        verify(!QFileInfo::exists(mixFile) && !QFileInfo::exists(mixDir)
+                   && QFileInfo::exists(b + QStringLiteral("/mixfile.txt"))
+                   && QFileInfo::exists(b + QStringLiteral("/mixdir")),
+               "H.2B.2B-F4: mixed file+dir batch moved to destination");
+        verify(undo.nativeUndoAvailable(), "H.2B.2B-F4: compound Undo available after queued mixed Move");
+        undo.undo();
+        verify(QTest::qWaitFor([&] {
+            return !undo.m_busy && QFileInfo::exists(mixFile) && QFileInfo::exists(mixDir)
+                && !QFileInfo::exists(b + QStringLiteral("/mixfile.txt"))
+                && !QFileInfo::exists(b + QStringLiteral("/mixdir"));
+        }, 10000) && undo.nativeRedoAvailable(), "H.2B.2B-F4: UndoController restored mixed batch");
+        undo.redo();
+        verify(QTest::qWaitFor([&] {
+            return !undo.m_busy && !QFileInfo::exists(mixFile) && !QFileInfo::exists(mixDir)
+                && QFileInfo::exists(b + QStringLiteral("/mixfile.txt"))
+                && QFileInfo::exists(b + QStringLiteral("/mixdir"));
+        }, 10000), "H.2B.2B-F4: UndoController Redo re-moved mixed batch");
+
+        // F5: 2-directory batch move succeeds in production FileActions::transfer, while transferUrls stays blocked
+        const QString mixDir2 = fDir1 + QStringLiteral("/mixdir2");
+        const QString mixDir3 = fDir1 + QStringLiteral("/mixdir3");
+        verify(QDir().mkdir(mixDir2) && QDir().mkdir(mixDir3), "H.2B.2B-F5: dirs created");
+        actions.transfer({QUrl::fromLocalFile(mixDir2), QUrl::fromLocalFile(mixDir3)}, rootB, Qt::MoveAction);
+        verify(QTest::qWaitFor([&] {
+            const auto snap = queueCtlF.snapshot();
+            return snap.tasks.size() == 3
+                && snap.tasks.at(2).state == TransferTaskState::Completed;
+        }, 10000), "H.2B.2B-F5: 2-directory batch completes via production FileActions::transfer");
+        verify(!QFileInfo::exists(mixDir2) && !QFileInfo::exists(mixDir3)
+                   && QFileInfo::exists(b + QStringLiteral("/mixdir2"))
+                   && QFileInfo::exists(b + QStringLiteral("/mixdir3")),
+               "H.2B.2B-F5: 2-directory batch moved to destination");
+
+        lastFenceMessage.clear();
+        int dupDirCb = 0;
+        KJob *dupDirJob = reinterpret_cast<KJob *>(0x1);
+        actions.transferUrls({QUrl::fromLocalFile(b + QStringLiteral("/mixdir2")),
+                              QUrl::fromLocalFile(b + QStringLiteral("/mixdir3"))},
+                             QUrl::fromLocalFile(fDir1), Qt::MoveAction,
+                             [&](KJob *j) {
+                                 ++dupDirCb;
+                                 dupDirJob = j;
+                             });
+        verify(dupDirCb == 1 && dupDirJob == nullptr
+                   && queueCtlF.snapshot().tasks.size() == 3
+                   && !lastFenceMessage.isEmpty(),
+               "H.2B.2A-F6: Duplicate Finder transferUrls still blocks 2-directory batch move");
 
         setTransferQueueProductionDispatchConnected(false);
         actions.setQueueController(nullptr);

@@ -2316,8 +2316,13 @@ private:
                         ? singleTargetDestination
                         : childUrlWithName(destinationDirectory, cleanSrcName);
                     job = new LocalDirectoryMoveJob(sources.first(), target, this);
-                } else if (move && launchEval.decision == MovePolicyDecision::AllowedBatchSameVolumeBtrfsRegularFiles) {
-                    job = new LocalBatchMoveJob(sources, destinationDirectory, this);
+                } else if (move && (launchEval.decision == MovePolicyDecision::AllowedBatchSameVolumeBtrfsRegularFiles
+                                    || launchEval.decision == MovePolicyDecision::AllowedBatchSameVolumeBtrfsMixed)) {
+                    auto *batchJob = new LocalBatchMoveJob(sources, destinationDirectory, this);
+                    if (launchEval.decision == MovePolicyDecision::AllowedBatchSameVolumeBtrfsMixed) {
+                        batchJob->setAllowDirectories(true);
+                    }
+                    job = batchJob;
                 } else if (isSingleRegularLocalFile(sources)) {
                     const QUrl target = singleTargetDestination.isValid()
                         ? singleTargetDestination
@@ -2474,8 +2479,12 @@ private:
         }
         if (move && sources.size() >= 2) {
             const MoveOperationClassification batchMoveEval = MoveSafetyPolicy::evaluate(sources, destinationDirectory, true);
-            if (batchMoveEval.decision == MovePolicyDecision::AllowedBatchSameVolumeBtrfsRegularFiles) {
+            if (batchMoveEval.decision == MovePolicyDecision::AllowedBatchSameVolumeBtrfsRegularFiles
+                || batchMoveEval.decision == MovePolicyDecision::AllowedBatchSameVolumeBtrfsMixed) {
                 auto *job = new LocalBatchMoveJob(sources, destinationDirectory, this);
+                if (batchMoveEval.decision == MovePolicyDecision::AllowedBatchSameVolumeBtrfsMixed) {
+                    job->setAllowDirectories(true);
+                }
                 if (m_undoController) {
                     m_undoController->recordNativeTransfer(job, true);
                 }

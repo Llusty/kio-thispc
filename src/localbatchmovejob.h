@@ -8,6 +8,7 @@
 #pragma once
 
 #include "browsercommon.h"
+#include "localbtrfsmovecommon.h"
 #include "localdirectorymovejob.h"
 
 #include <KIO/Job>
@@ -60,10 +61,16 @@ enum class BatchMoveError {
     MountOrSubvolumeBoundary,
     ContainmentViolation,
     CollisionInBatch,
+    CycleDetected,
     DestinationExists,
     AtomicMove,
     PostRenameVerification,
     Durability,
+};
+
+enum class BatchMoveItemKind {
+    RegularFile,
+    Directory,
 };
 
 enum class BatchMoveItemState {
@@ -84,119 +91,13 @@ enum class BatchMoveOutcome {
 };
 
 Q_DECLARE_METATYPE(BatchMoveError)
+Q_DECLARE_METATYPE(BatchMoveItemKind)
 Q_DECLARE_METATYPE(BatchMoveItemState)
 Q_DECLARE_METATYPE(BatchMoveOutcome)
 
-struct LocalRegularFileIdentity {
-    quint64 devMajor = 0;
-    quint64 devMinor = 0;
-    quint64 stDev = 0;
-    quint64 ino = 0;
-    quint64 mntId = 0;
-    bool hasMntId = false;
-    bool hasUniqueMntId = false;
-    quint64 subvolId = 0;
-    bool hasSubvol = false;
-    quint64 size = 0;
-    qint64 mtimeSec = 0;
-    quint32 mtimeNsec = 0;
-    qint64 ctimeSec = 0;
-    quint32 ctimeNsec = 0;
-    quint32 nlink = 0;
-    bool valid = false;
-
-    static LocalRegularFileIdentity fromStat(const struct statx &stx, const struct stat &st)
-    {
-        LocalRegularFileIdentity id;
-        const bool hasType = (stx.stx_mask & STATX_TYPE) != 0;
-        const bool hasIno = (stx.stx_mask & STATX_INO) != 0;
-        const bool hasMnt = (stx.stx_mask & (STATX_MNT_ID | STATX_MNT_ID_UNIQUE)) != 0;
-        const bool hasNlink = (stx.stx_mask & STATX_NLINK) != 0;
-        const bool hasSize = (stx.stx_mask & STATX_SIZE) != 0;
-        const bool hasMtime = (stx.stx_mask & STATX_MTIME) != 0;
-        const bool hasCtime = (stx.stx_mask & STATX_CTIME) != 0;
-        if (!hasType || !hasIno || !hasMnt || !hasNlink || !hasSize || !hasMtime || !hasCtime
-            || !S_ISREG(stx.stx_mode)) {
-            return id;
-        }
-        id.devMajor = stx.stx_dev_major;
-        id.devMinor = stx.stx_dev_minor;
-        id.stDev = static_cast<quint64>(st.st_dev);
-        id.ino = static_cast<quint64>(stx.stx_ino);
-        id.mntId = static_cast<quint64>(stx.stx_mnt_id);
-        id.hasMntId = true;
-        id.hasUniqueMntId = (stx.stx_mask & STATX_MNT_ID_UNIQUE) != 0;
-        id.hasSubvol = (stx.stx_mask & STATX_SUBVOL) != 0;
-        id.subvolId = id.hasSubvol ? static_cast<quint64>(stx.stx_subvol) : 0;
-        id.size = static_cast<quint64>(stx.stx_size);
-        id.mtimeSec = static_cast<qint64>(stx.stx_mtime.tv_sec);
-        id.mtimeNsec = static_cast<quint32>(stx.stx_mtime.tv_nsec);
-        id.ctimeSec = static_cast<qint64>(stx.stx_ctime.tv_sec);
-        id.ctimeNsec = static_cast<quint32>(stx.stx_ctime.tv_nsec);
-        id.nlink = static_cast<quint32>(stx.stx_nlink);
-        id.valid = true;
-        return id;
-    }
-
-    bool sameMountScope(const LocalDirectoryIdentity &dirId) const
-    {
-        if (!valid || !dirId.valid || !hasMntId || !dirId.hasMntId) {
-            return false;
-        }
-        if (hasUniqueMntId != dirId.hasUniqueMntId || mntId != dirId.mntId) {
-            return false;
-        }
-        if (devMajor != dirId.devMajor || devMinor != dirId.devMinor || stDev != dirId.stDev) {
-            return false;
-        }
-        if (hasSubvol != dirId.hasSubvol) {
-            return false;
-        }
-        if (hasSubvol && subvolId != dirId.subvolId) {
-            return false;
-        }
-        return true;
-    }
-
-    bool sameObject(const LocalRegularFileIdentity &other) const
-    {
-        if (!valid || !other.valid) {
-            return false;
-        }
-        if (devMajor != other.devMajor || devMinor != other.devMinor
-            || stDev != other.stDev || ino != other.ino) {
-            return false;
-        }
-        if (hasUniqueMntId == other.hasUniqueMntId && mntId != other.mntId) {
-            return false;
-        }
-        if (hasSubvol && other.hasSubvol && subvolId != other.subvolId) {
-            return false;
-        }
-        return true;
-    }
-
-    // Checks object identity plus nlink==1, byte size, and nanosecond mtime/ctime.
-    // Note: catches in-place VFS content edits even when inode is unchanged; offline
-    // raw block mutations or privileged clock spoofing outside VFS remain out of band.
-    bool strictlyUnchangedForHistory(const LocalRegularFileIdentity &other) const
-    {
-        if (!sameObject(other)) {
-            return false;
-        }
-        if (nlink != 1 || other.nlink != 1) {
-            return false;
-        }
-        return size == other.size
-            && mtimeSec == other.mtimeSec
-            && mtimeNsec == other.mtimeNsec
-            && ctimeSec == other.ctimeSec
-            && ctimeNsec == other.ctimeNsec;
-    }
-};
-
 struct BatchMoveItemPlan {
     int index = 0;
+    BatchMoveItemKind kind = BatchMoveItemKind::RegularFile;
     QUrl sourceUrl;
     QUrl destinationUrl;
     QString srcParentPath;
@@ -206,6 +107,8 @@ struct BatchMoveItemPlan {
     QString cleanSrcPath;
     QString cleanDstPath;
     LocalRegularFileIdentity sourceIdentity;
+    LocalDirectoryIdentity dirIdentity;
+    LocalDirectoryTreeSnapshot dirSnapshot;
     LocalDirectoryIdentity srcParentIdentity;
     LocalDirectoryIdentity dstParentIdentity;
     quint64 size = 0;
@@ -213,6 +116,7 @@ struct BatchMoveItemPlan {
 
 struct BatchMoveItemResult {
     int index = 0;
+    BatchMoveItemKind kind = BatchMoveItemKind::RegularFile;
     QUrl sourceUrl;
     QUrl destinationUrl;
     BatchMoveItemState state = BatchMoveItemState::Pending;
@@ -221,7 +125,16 @@ struct BatchMoveItemResult {
     bool destinationPublished = false;
     bool durabilityConfirmed = false;
     LocalRegularFileIdentity movedIdentity;
+    LocalDirectoryIdentity movedDirIdentity;
+    LocalDirectoryTreeSnapshot movedDirSnapshot;
     QString errorText;
+};
+
+struct BatchMoveExpectedItem {
+    BatchMoveItemKind kind = BatchMoveItemKind::RegularFile;
+    LocalRegularFileIdentity fileIdentity;
+    LocalDirectoryIdentity dirIdentity;
+    LocalDirectoryTreeSnapshot dirSnapshot;
 };
 
 struct BatchMovePreflight {
@@ -318,65 +231,38 @@ inline int &simulateBatchMovePostRenameVerifyFailAtStep()
 
 namespace LocalBatchMoveDetail {
 
-using LocalDirectoryMoveDetail::ScopedFd;
-using LocalDirectoryMoveDetail::trMsg;
-using LocalDirectoryMoveDetail::splitCleanLocalPath;
-using LocalDirectoryMoveDetail::isMountPointInMountInfo;
+using LocalBtrfsMoveCommon::ScopedFd;
+using LocalBtrfsMoveCommon::trMsg;
+using LocalBtrfsMoveCommon::splitCleanLocalPath;
+using LocalBtrfsMoveCommon::isMountPointInMountInfo;
 
-inline int batchOpenat2Syscall(
-    int dirFd,
-    const char *path,
-    quint64 flags,
-    quint64 resolve,
-    int *errOut)
+inline LocalBtrfsMoveCommon::TestFaultHooks currentBatchMoveFaultHooks()
 {
+    LocalBtrfsMoveCommon::TestFaultHooks hooks;
 #ifdef THISPC_TEST_HARNESS
-    if (simulateBatchMoveOpenat2Unsupported()) {
-        if (errOut) *errOut = ENOSYS;
-        return -1;
-    }
+    hooks.openat2Unsupported = simulateBatchMoveOpenat2Unsupported();
+    hooks.unsupportedFsMagic = simulateBatchMoveUnsupportedFsMagic();
+    hooks.statxMntIdUnsupported = simulateBatchMoveStatxMntIdUnsupported();
 #endif
-#ifdef SYS_openat2
-    struct open_how how {};
-    how.flags = flags;
-    how.mode = 0;
-    how.resolve = resolve;
-    const int fd = static_cast<int>(::syscall(SYS_openat2, dirFd, path, &how, sizeof(how)));
-    if (fd < 0) {
-        if (errOut) *errOut = errno ? errno : EIO;
-        return -1;
-    }
-    if (errOut) *errOut = 0;
-    return fd;
-#else
-    Q_UNUSED(dirFd);
-    Q_UNUSED(path);
-    Q_UNUSED(flags);
-    Q_UNUSED(resolve);
-    if (errOut) *errOut = ENOSYS;
-    return -1;
-#endif
+    return hooks;
 }
 
 inline int openBatchDirNoSymlinks(const QString &absDirPath, int *errOut)
 {
-    const QByteArray encoded = QFile::encodeName(absDirPath);
-    return batchOpenat2Syscall(
-        AT_FDCWD,
-        encoded.constData(),
-        O_RDONLY | O_DIRECTORY | O_CLOEXEC,
-        RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS,
-        errOut);
+    const LocalBtrfsMoveCommon::TestFaultHooks hooks = currentBatchMoveFaultHooks();
+    return LocalBtrfsMoveCommon::openDirectoryNoSymlinks(absDirPath, errOut, &hooks);
 }
 
 inline int openBatchChildPathNoCrossing(int parentFd, const char *leafName, int *errOut)
 {
-    return batchOpenat2Syscall(
-        parentFd,
-        leafName,
-        O_PATH | O_NOFOLLOW | O_CLOEXEC,
-        RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS | RESOLVE_BENEATH | RESOLVE_NO_XDEV,
-        errOut);
+    const LocalBtrfsMoveCommon::TestFaultHooks hooks = currentBatchMoveFaultHooks();
+    return LocalBtrfsMoveCommon::openChildPathNoCrossing(parentFd, leafName, errOut, &hooks);
+}
+
+inline int openBatchChildDirNoCrossing(int parentFd, const char *leafName, int *errOut)
+{
+    const LocalBtrfsMoveCommon::TestFaultHooks hooks = currentBatchMoveFaultHooks();
+    return LocalBtrfsMoveCommon::openChildDirectoryNoCrossing(parentFd, leafName, errOut, &hooks);
 }
 
 inline bool queryBatchFdMetadata(
@@ -386,46 +272,8 @@ inline bool queryBatchFdMetadata(
     unsigned long *fsMagicOut,
     int *errOut)
 {
-    if (fd < 0 || !stxOut || !stOut || !fsMagicOut) {
-        if (errOut) *errOut = EINVAL;
-        return false;
-    }
-    if (::fstat(fd, stOut) != 0) {
-        if (errOut) *errOut = errno ? errno : EIO;
-        return false;
-    }
-    struct statfs sfs {};
-    if (::fstatfs(fd, &sfs) != 0) {
-        if (errOut) *errOut = errno ? errno : EIO;
-        return false;
-    }
-    *fsMagicOut = static_cast<unsigned long>(sfs.f_type);
-#ifdef THISPC_TEST_HARNESS
-    if (simulateBatchMoveUnsupportedFsMagic() != 0) {
-        *fsMagicOut = simulateBatchMoveUnsupportedFsMagic();
-    }
-#endif
-
-#ifdef SYS_statx
-    std::memset(stxOut, 0, sizeof(*stxOut));
-    const unsigned int mask =
-        STATX_BASIC_STATS | STATX_MNT_ID | STATX_MNT_ID_UNIQUE | STATX_SUBVOL;
-    if (::syscall(SYS_statx, fd, "", AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW, mask, stxOut) != 0) {
-        if (errOut) *errOut = errno ? errno : EIO;
-        return false;
-    }
-#ifdef THISPC_TEST_HARNESS
-    if (simulateBatchMoveStatxMntIdUnsupported()) {
-        stxOut->stx_mask &= ~(STATX_MNT_ID | STATX_MNT_ID_UNIQUE);
-        stxOut->stx_mnt_id = 0;
-    }
-#endif
-    if (errOut) *errOut = 0;
-    return true;
-#else
-    if (errOut) *errOut = ENOSYS;
-    return false;
-#endif
+    const LocalBtrfsMoveCommon::TestFaultHooks hooks = currentBatchMoveFaultHooks();
+    return LocalBtrfsMoveCommon::queryFdMetadata(fd, stxOut, stOut, fsMagicOut, errOut, &hooks);
 }
 
 inline QString unsupportedBatchFsMessage()
@@ -435,6 +283,27 @@ inline QString unsupportedBatchFsMessage()
         "Batch file moving is currently permitted only within the same Btrfs volume without overwriting. Use Copy instead.");
 }
 
+inline BatchMoveError mapContainmentFailureToBatchError(
+    LocalBtrfsMoveCommon::ContainmentFailureKind kind)
+{
+    switch (kind) {
+    case LocalBtrfsMoveCommon::ContainmentFailureKind::Cancelled:
+        return BatchMoveError::Cancelled;
+    case LocalBtrfsMoveCommon::ContainmentFailureKind::InvalidInput:
+        return BatchMoveError::InvalidInput;
+    case LocalBtrfsMoveCommon::ContainmentFailureKind::UnsupportedKernelFeature:
+        return BatchMoveError::UnsupportedKernelFeature;
+    case LocalBtrfsMoveCommon::ContainmentFailureKind::UnsupportedFilesystem:
+        return BatchMoveError::UnsupportedFilesystem;
+    case LocalBtrfsMoveCommon::ContainmentFailureKind::MountOrSubvolumeBoundary:
+        return BatchMoveError::MountOrSubvolumeBoundary;
+    case LocalBtrfsMoveCommon::ContainmentFailureKind::ContainmentViolation:
+    case LocalBtrfsMoveCommon::ContainmentFailureKind::None:
+        return BatchMoveError::ContainmentViolation;
+    }
+    return BatchMoveError::ContainmentViolation;
+}
+
 struct OpenedBatchParent {
     ScopedFd fd;
     LocalDirectoryIdentity identity;
@@ -442,6 +311,7 @@ struct OpenedBatchParent {
 
 struct OpenedBatchExecutionContext {
     QHash<QString, std::shared_ptr<OpenedBatchParent>> parents;
+    QHash<int, std::shared_ptr<ScopedFd>> dirFds;
 };
 
 inline QList<QPair<QUrl, QUrl>> buildPairsForDestinationDir(
@@ -471,10 +341,13 @@ inline QList<QPair<QUrl, QUrl>> buildPairsForDestinationDir(
 
 inline bool runPreflight(
     const QList<QPair<QUrl, QUrl>> &pairs,
-    const QList<LocalRegularFileIdentity> *expectedIdentities,
+    const QList<BatchMoveExpectedItem> *expectedItems,
     bool strictHistoryCheck,
     BatchMovePreflight *outPreflight,
-    OpenedBatchExecutionContext *outCtx)
+    OpenedBatchExecutionContext *outCtx,
+    bool allowDirectories = false,
+    bool deepInspectDirectories = false,
+    const std::atomic<bool> *cancelledPtr = nullptr)
 {
     BatchMovePreflight pf;
     auto fail = [&](BatchMoveError err, int sysErr, const QString &reason) {
@@ -488,13 +361,17 @@ inline bool runPreflight(
 
     if (pairs.size() < 2) {
         return fail(BatchMoveError::InvalidInput, EINVAL,
-                    trMsg("Zbiorcze przenoszenie wymaga co najmniej dwóch kwalifikowanych plików.",
-                          "Batch move requires at least two qualified files."));
+                    trMsg("Zbiorcze przenoszenie wymaga co najmniej dwóch kwalifikowanych elementów.",
+                          "Batch move requires at least two qualified items."));
     }
-    if (expectedIdentities && expectedIdentities->size() != pairs.size()) {
+    if (expectedItems && expectedItems->size() != pairs.size()) {
         return fail(BatchMoveError::InvalidInput, EINVAL,
                     moveContainmentErrorMessage());
     }
+
+    const std::atomic<bool> defaultCancelled{false};
+    const std::atomic<bool> &cancelled = cancelledPtr ? *cancelledPtr : defaultCancelled;
+    const LocalBtrfsMoveCommon::TestFaultHooks hooks = currentBatchMoveFaultHooks();
 
     OpenedBatchExecutionContext localCtx;
     auto getOrOpenParent = [&](const QString &dirPath,
@@ -567,11 +444,20 @@ inline bool runPreflight(
     QSet<QString> seenCleanSources;
     QSet<QString> seenCleanTargets;
     QSet<QPair<quint64, quint64>> seenSourceObjects;
+    QList<QSet<QPair<quint64, quint64>>> perItemVisitedObjects;
+    perItemVisitedObjects.resize(pairs.size());
+    QList<std::shared_ptr<OpenedBatchParent>> uniqueDstParents;
+    QSet<QString> seenDstParentPaths;
     QList<BatchMoveItemPlan> plans;
     plans.reserve(pairs.size());
 
     // First pass: path validation, intra-batch path uniqueness, parent qualification, and child inspection
     for (int i = 0; i < pairs.size(); ++i) {
+        if (cancelled.load(std::memory_order_acquire)) {
+            return fail(BatchMoveError::Cancelled, ECANCELED,
+                        trMsg("Operacja anulowana.", "Operation cancelled."));
+        }
+
         const QUrl &srcUrl = pairs.at(i).first;
         const QUrl &dstUrl = pairs.at(i).second;
         if (!srcUrl.isValid() || !dstUrl.isValid() || !srcUrl.isLocalFile() || !dstUrl.isLocalFile()) {
@@ -589,8 +475,8 @@ inline bool runPreflight(
         const QString cleanDst = QDir::cleanPath(rawDst);
         if (cleanSrc == cleanDst) {
             return fail(BatchMoveError::CollisionInBatch, EINVAL,
-                        trMsg("Źródło i cel wskazują na ten sam plik.",
-                              "Source and destination refer to the same file."));
+                        trMsg("Źródło i cel wskazują na ten sam element.",
+                              "Source and destination refer to the same item."));
         }
         if (seenCleanSources.contains(cleanSrc)) {
             return fail(BatchMoveError::CollisionInBatch, EINVAL,
@@ -599,8 +485,8 @@ inline bool runPreflight(
         }
         if (seenCleanTargets.contains(cleanDst)) {
             return fail(BatchMoveError::CollisionInBatch, EEXIST,
-                        trMsg("Co najmniej dwa wybrane pliki mają tę samą nazwę docelową — przenoszenie bez nadpisywania zablokowane.",
-                              "Two or more selected files map to the same destination name — batch move blocked to prevent overwrite."));
+                        trMsg("Co najmniej dwa wybrane elementy mają tę samą nazwę docelową — przenoszenie bez nadpisywania zablokowane.",
+                              "Two or more selected items map to the same destination name — batch move blocked to prevent overwrite."));
         }
         seenCleanSources.insert(cleanSrc);
         seenCleanTargets.insert(cleanDst);
@@ -623,6 +509,11 @@ inline bool runPreflight(
             return fail(pErr, pSysErr, pMsg);
         }
 
+        if (!seenDstParentPaths.contains(dstParent)) {
+            seenDstParentPaths.insert(dstParent);
+            uniqueDstParents.append(dstParentEntry);
+        }
+
         if (!pf.anchorScope.valid) {
             pf.anchorScope = dstParentEntry->identity;
         }
@@ -635,11 +526,11 @@ inline bool runPreflight(
 
         if (srcParentEntry->identity.sameObject(dstParentEntry->identity) && srcLeaf == dstLeaf) {
             return fail(BatchMoveError::CollisionInBatch, EINVAL,
-                        trMsg("Źródło i cel wskazują na ten sam plik.",
-                              "Source and destination refer to the same file."));
+                        trMsg("Źródło i cel wskazują na ten sam element.",
+                              "Source and destination refer to the same item."));
         }
 
-        // Open source file strictly non-crossing & non-dereferencing via O_PATH
+        // Open source entry strictly non-crossing & non-dereferencing via O_PATH
         const QByteArray srcLeafBytes = QFile::encodeName(srcLeaf);
         int childErr = 0;
         ScopedFd childFd(openBatchChildPathNoCrossing(srcParentEntry->fd.fd, srcLeafBytes.constData(), &childErr));
@@ -671,42 +562,166 @@ inline bool runPreflight(
                         trMsg("Jądro nie zwróciło identyfikatora montowania statx(STATX_MNT_ID).",
                               "Kernel did not provide statx mount identity (STATX_MNT_ID)."));
         }
-
-        // Only single-link regular files allowed
-        if (!(childStx.stx_mask & STATX_TYPE) || !S_ISREG(childStx.stx_mode)) {
+        if (!(childStx.stx_mask & STATX_TYPE)) {
             return fail(BatchMoveError::ContainmentViolation, EINVAL, moveContainmentErrorMessage());
         }
-        const LocalRegularFileIdentity fileId = LocalRegularFileIdentity::fromStat(childStx, childSt);
-        if (!fileId.valid) {
-            return fail(BatchMoveError::ContainmentViolation, EINVAL, moveContainmentErrorMessage());
-        }
-        if (fileId.nlink > 1) {
-            return fail(BatchMoveError::ContainmentViolation, EMLINK, moveContainmentErrorMessage());
-        }
-        if (!fileId.sameMountScope(pf.anchorScope)) {
-            return fail(BatchMoveError::MountOrSubvolumeBoundary, EXDEV,
-                        trMsg("Jeden z plików znajduje się poza kwalifikowanym montowaniem lub podwoluminem Btrfs.",
-                              "One of the files resides outside the qualified Btrfs mount or subvolume."));
-        }
 
-        const QPair<quint64, quint64> objKey(fileId.stDev, fileId.ino);
-        if (seenSourceObjects.contains(objKey)) {
-            return fail(BatchMoveError::CollisionInBatch, EINVAL,
-                        trMsg("Wykryto dwa wpisy wskazujące ten sam obiekt (alias lub hardlink) w jednej partii.",
-                              "Two entries pointing to the same file object detected in one batch."));
-        }
-        seenSourceObjects.insert(objKey);
+        BatchMoveItemPlan itemPlan;
+        itemPlan.index = i;
+        itemPlan.sourceUrl = srcUrl;
+        itemPlan.destinationUrl = dstUrl;
+        itemPlan.srcParentPath = srcParent;
+        itemPlan.srcLeaf = srcLeaf;
+        itemPlan.dstParentPath = dstParent;
+        itemPlan.dstLeaf = dstLeaf;
+        itemPlan.cleanSrcPath = cleanSrc;
+        itemPlan.cleanDstPath = cleanDst;
+        itemPlan.srcParentIdentity = srcParentEntry->identity;
+        itemPlan.dstParentIdentity = dstParentEntry->identity;
 
-        if (expectedIdentities) {
-            const LocalRegularFileIdentity &exp = expectedIdentities->at(i);
-            const bool idMatch = strictHistoryCheck
-                ? fileId.strictlyUnchangedForHistory(exp)
-                : fileId.sameObject(exp);
-            if (!idMatch) {
-                return fail(BatchMoveError::ContainmentViolation, EBADF,
-                            trMsg("Zawartość lub tożsamość co najmniej jednego pliku uległa zmianie — cofnięcie/ponowienie partii zostało zablokowane.",
-                                  "Content or identity of at least one file changed — batch Undo/Redo blocked for safety."));
+        if (S_ISREG(childStx.stx_mode)) {
+            const LocalRegularFileIdentity fileId = LocalRegularFileIdentity::fromStat(childStx, childSt);
+            if (!fileId.valid) {
+                return fail(BatchMoveError::ContainmentViolation, EINVAL, moveContainmentErrorMessage());
             }
+            if (fileId.nlink > 1) {
+                return fail(BatchMoveError::ContainmentViolation, EMLINK, moveContainmentErrorMessage());
+            }
+            if (!fileId.sameMountScope(pf.anchorScope)) {
+                return fail(BatchMoveError::MountOrSubvolumeBoundary, EXDEV,
+                            trMsg("Jeden z plików znajduje się poza kwalifikowanym montowaniem lub podwoluminem Btrfs.",
+                                  "One of the files resides outside the qualified Btrfs mount or subvolume."));
+            }
+
+            const QPair<quint64, quint64> objKey(fileId.stDev, fileId.ino);
+            if (seenSourceObjects.contains(objKey)) {
+                return fail(BatchMoveError::CollisionInBatch, EINVAL,
+                            trMsg("Wykryto dwa wpisy wskazujące ten sam obiekt (alias lub hardlink) w jednej partii.",
+                                  "Two entries pointing to the same file object detected in one batch."));
+            }
+            seenSourceObjects.insert(objKey);
+            perItemVisitedObjects[i].insert(objKey);
+
+            if (expectedItems) {
+                const BatchMoveExpectedItem &exp = expectedItems->at(i);
+                const bool idMatch = (exp.kind == BatchMoveItemKind::RegularFile)
+                    && (strictHistoryCheck
+                            ? fileId.strictlyUnchangedForHistory(exp.fileIdentity)
+                            : fileId.sameObject(exp.fileIdentity));
+                if (!idMatch) {
+                    return fail(BatchMoveError::ContainmentViolation, EBADF,
+                                trMsg("Zawartość lub tożsamość co najmniej jednego pliku uległa zmianie — cofnięcie/ponowienie partii zostało zablokowane.",
+                                      "Content or identity of at least one file changed — batch Undo/Redo blocked for safety."));
+                }
+            }
+
+            itemPlan.kind = BatchMoveItemKind::RegularFile;
+            itemPlan.sourceIdentity = fileId;
+            itemPlan.size = fileId.size;
+            pf.totalBytes += fileId.size;
+        } else if (S_ISDIR(childStx.stx_mode)) {
+            if (!allowDirectories) {
+                return fail(BatchMoveError::ContainmentViolation, EINVAL, moveContainmentErrorMessage());
+            }
+            if (expectedItems && expectedItems->at(i).kind != BatchMoveItemKind::Directory) {
+                return fail(BatchMoveError::ContainmentViolation, EBADF,
+                            trMsg("Typ co najmniej jednego elementu uległ zmianie — cofnięcie/ponowienie partii zostało zablokowane.",
+                                  "Type of at least one item changed — batch Undo/Redo blocked for safety."));
+            }
+
+            int dirErr = 0;
+            ScopedFd dirFd(openBatchChildDirNoCrossing(srcParentEntry->fd.fd, srcLeafBytes.constData(), &dirErr));
+            if (!dirFd.isValid()) {
+                if (dirErr == ENOSYS) {
+                    return fail(BatchMoveError::UnsupportedKernelFeature, dirErr,
+                                trMsg("Jądro nie udostępnia wymaganego bezpiecznego mechanizmu openat2.",
+                                      "The kernel does not support required safe openat2 lookup."));
+                }
+                if (dirErr == EXDEV) {
+                    return fail(BatchMoveError::MountOrSubvolumeBoundary, EXDEV,
+                                trMsg("Katalog przekracza granicę montowania lub podwoluminu Btrfs.",
+                                      "Directory crosses a mount or Btrfs subvolume boundary."));
+                }
+                return fail(BatchMoveError::ContainmentViolation, dirErr, moveContainmentErrorMessage());
+            }
+
+            struct statx dirStx {};
+            struct stat dirSt {};
+            unsigned long dirMagic = 0;
+            if (!queryBatchFdMetadata(dirFd.fd, &dirStx, &dirSt, &dirMagic, &dirErr)) {
+                return fail(BatchMoveError::ContainmentViolation, dirErr, moveContainmentErrorMessage());
+            }
+            if (dirMagic != BTRFS_SUPER_MAGIC) {
+                return fail(BatchMoveError::UnsupportedFilesystem, EXDEV, unsupportedBatchFsMessage());
+            }
+            if (!(dirStx.stx_mask & (STATX_MNT_ID | STATX_MNT_ID_UNIQUE))) {
+                return fail(BatchMoveError::UnsupportedKernelFeature, EOPNOTSUPP,
+                            trMsg("Jądro nie zwróciło identyfikatora montowania statx(STATX_MNT_ID).",
+                                  "Kernel did not provide statx mount identity (STATX_MNT_ID)."));
+            }
+
+            const LocalDirectoryIdentity dirId = LocalDirectoryIdentity::fromStat(dirStx, dirSt);
+            if (!dirId.valid) {
+                return fail(BatchMoveError::ContainmentViolation, EINVAL, moveContainmentErrorMessage());
+            }
+            if (dirId.ino == BTRFS_FIRST_FREE_OBJECTID) {
+                return fail(BatchMoveError::MountOrSubvolumeBoundary, EXDEV,
+                            trMsg("Przenoszenie katalogu głównego podwoluminu lub woluminu Btrfs jest zablokowane.",
+                                  "Moving a Btrfs volume or subvolume root directory is blocked."));
+            }
+            if (!dirId.sameMountScope(pf.anchorScope)) {
+                return fail(BatchMoveError::MountOrSubvolumeBoundary, EXDEV,
+                            trMsg("Jeden z katalogów znajduje się poza kwalifikowanym montowaniem lub podwoluminem Btrfs.",
+                                  "One of the directories resides outside the qualified Btrfs mount or subvolume."));
+            }
+
+            const QPair<quint64, quint64> objKey(dirId.stDev, dirId.ino);
+            if (seenSourceObjects.contains(objKey)) {
+                return fail(BatchMoveError::CollisionInBatch, EINVAL,
+                            trMsg("Wykryto dwa wpisy wskazujące ten sam katalog w jednej partii.",
+                                  "Two entries pointing to the same directory object detected in one batch."));
+            }
+            seenSourceObjects.insert(objKey);
+            perItemVisitedObjects[i].insert(objKey);
+
+            LocalDirectoryTreeSnapshot snap;
+            if (deepInspectDirectories) {
+                LocalBtrfsMoveCommon::ContainmentFailureKind failureKind =
+                    LocalBtrfsMoveCommon::ContainmentFailureKind::None;
+                QString inspectReason;
+                if (!LocalBtrfsMoveCommon::inspectDirectoryTreeContainment(
+                        dirFd.fd, dirId, cancelled, &snap, &perItemVisitedObjects[i],
+                        &failureKind, &inspectReason, &hooks)) {
+                    const BatchMoveError mappedErr = mapContainmentFailureToBatchError(failureKind);
+                    return fail(mappedErr,
+                                mappedErr == BatchMoveError::Cancelled ? ECANCELED : EINVAL,
+                                inspectReason);
+                }
+                pf.totalBytes += snap.scannedBytes;
+                localCtx.dirFds.insert(i, std::make_shared<ScopedFd>(std::move(dirFd)));
+            }
+
+            if (expectedItems) {
+                const BatchMoveExpectedItem &exp = expectedItems->at(i);
+                const bool dirIdMatch = strictHistoryCheck
+                    ? dirId.strictlyUnchangedForHistory(exp.dirIdentity)
+                    : dirId.sameObject(exp.dirIdentity);
+                const bool snapMatch = !deepInspectDirectories
+                    || !exp.dirSnapshot.valid
+                    || snap.matches(exp.dirSnapshot);
+                if (!dirIdMatch || !snapMatch) {
+                    return fail(BatchMoveError::ContainmentViolation, EBADF,
+                                trMsg("Zawartość lub tożsamość co najmniej jednego katalogu uległa zmianie — cofnięcie/ponowienie partii zostało zablokowane.",
+                                      "Content or identity of at least one directory changed — batch Undo/Redo blocked for safety."));
+                }
+            }
+
+            itemPlan.kind = BatchMoveItemKind::Directory;
+            itemPlan.dirIdentity = dirId;
+            itemPlan.dirSnapshot = snap;
+            itemPlan.size = snap.scannedBytes;
+        } else {
+            return fail(BatchMoveError::ContainmentViolation, EINVAL, moveContainmentErrorMessage());
         }
 
         // Check destination path absence (non-dereferencing)
@@ -725,30 +740,54 @@ inline bool runPreflight(
                               "Could not verify destination availability."));
         }
 
-        BatchMoveItemPlan itemPlan;
-        itemPlan.index = i;
-        itemPlan.sourceUrl = srcUrl;
-        itemPlan.destinationUrl = dstUrl;
-        itemPlan.srcParentPath = srcParent;
-        itemPlan.srcLeaf = srcLeaf;
-        itemPlan.dstParentPath = dstParent;
-        itemPlan.dstLeaf = dstLeaf;
-        itemPlan.cleanSrcPath = cleanSrc;
-        itemPlan.cleanDstPath = cleanDst;
-        itemPlan.sourceIdentity = fileId;
-        itemPlan.srcParentIdentity = srcParentEntry->identity;
-        itemPlan.dstParentIdentity = dstParentEntry->identity;
-        itemPlan.size = fileId.size;
-        pf.totalBytes += fileId.size;
         plans.append(itemPlan);
     }
 
-    // Disallow source == another item's destination (chaining/aliasing across batch steps)
+    // Second pass: disallow ancestor-descendant source overlaps, target-inside-source, and target==source
     for (int i = 0; i < plans.size(); ++i) {
         if (seenCleanTargets.contains(plans.at(i).cleanSrcPath)) {
             return fail(BatchMoveError::CollisionInBatch, EINVAL,
                         trMsg("Ścieżka źródłowa pokrywa się ze ścieżką docelową innego elementu partii.",
                               "A source path overlaps with another item's destination path within the batch."));
+        }
+        for (int j = i + 1; j < plans.size(); ++j) {
+            if (LocalBtrfsMoveCommon::pathsOverlap(plans.at(i).cleanSrcPath, plans.at(j).cleanSrcPath)) {
+                return fail(BatchMoveError::CollisionInBatch, EINVAL,
+                            trMsg("Wykryto zagnieżdżone źródła w jednej partii — operacja zablokowana.",
+                                  "Nested source items detected in one batch — blocked for safety."));
+            }
+        }
+        if (plans.at(i).kind == BatchMoveItemKind::Directory) {
+            for (int j = 0; j < plans.size(); ++j) {
+                if (LocalBtrfsMoveCommon::pathsOverlap(plans.at(i).cleanSrcPath, plans.at(j).cleanDstPath)) {
+                    return fail(BatchMoveError::CycleDetected, EINVAL,
+                                trMsg("Nie można przenieść folderu do niego samego lub do jednego z jego podfolderów.",
+                                      "A folder cannot be moved into itself or one of its subfolders."));
+                }
+            }
+            for (const auto &dstP : uniqueDstParents) {
+                if (LocalBtrfsMoveCommon::dstParentHasAncestor(
+                        dstP->fd.fd, dstP->identity, plans.at(i).dirIdentity, &hooks)) {
+                    return fail(BatchMoveError::CycleDetected, EINVAL,
+                                trMsg("Nie można przenieść folderu do niego samego lub do jednego z jego podfolderów.",
+                                      "A folder cannot be moved into itself or one of its subfolders."));
+                }
+            }
+        }
+    }
+
+    // Cross-subtree object overlap check (under same anchorScope verified above)
+    if (deepInspectDirectories) {
+        QSet<QPair<quint64, quint64>> mergedVisited;
+        for (int i = 0; i < plans.size(); ++i) {
+            for (const auto &obj : std::as_const(perItemVisitedObjects.at(i))) {
+                if (mergedVisited.contains(obj)) {
+                    return fail(BatchMoveError::CollisionInBatch, EINVAL,
+                                trMsg("Wykryto nakładające się obiekty lub zagnieżdżone poddrzewa w jednej partii.",
+                                      "Overlapping objects or nested subtrees detected within one batch."));
+                }
+            }
+            mergedVisited.unite(perItemVisitedObjects.at(i));
         }
     }
 
@@ -775,7 +814,24 @@ inline bool qualifyFastForPolicy(
         }
         return false;
     }
-    return runPreflight(pairs, nullptr, false, outPreflight, nullptr);
+    return runPreflight(pairs, nullptr, false, outPreflight, nullptr, false, false, nullptr);
+}
+
+inline bool qualifyFastForMixedBatchPolicy(
+    const QList<QUrl> &sources,
+    const QUrl &destinationDirectory,
+    BatchMovePreflight *outPreflight = nullptr)
+{
+    const QList<QPair<QUrl, QUrl>> pairs = buildPairsForDestinationDir(sources, destinationDirectory);
+    if (pairs.size() < 2) {
+        if (outPreflight) {
+            outPreflight->ok = false;
+            outPreflight->error = BatchMoveError::InvalidInput;
+            outPreflight->reason = moveContainmentErrorMessage();
+        }
+        return false;
+    }
+    return runPreflight(pairs, nullptr, false, outPreflight, nullptr, true, false, nullptr);
 }
 
 } // namespace LocalBatchMoveDetail
@@ -823,10 +879,15 @@ public:
         setProperty("thispcOverwritesDestination", false);
         setProperty("thispcIsBatchMove", true);
         qRegisterMetaType<BatchMoveError>();
+        qRegisterMetaType<BatchMoveItemKind>();
         qRegisterMetaType<BatchMoveItemState>();
         qRegisterMetaType<BatchMoveOutcome>();
         setCapabilities(KJob::Killable);
     }
+
+    bool allowDirectories() const { return m_allowDirectories; }
+    void setAllowDirectories(bool allow) { m_allowDirectories = allow; }
+    void setExpectedItems(const QList<BatchMoveExpectedItem> &items) { m_expectedItems = items; }
 
     ~LocalBatchMoveJob() override
     {
@@ -855,11 +916,21 @@ public:
         }
 
         const QList<QPair<QUrl, QUrl>> pairsCopy = m_pairs;
-        const QList<LocalRegularFileIdentity> expectedCopy = m_expectedIdentities;
+        QList<BatchMoveExpectedItem> expectedCopy = m_expectedItems;
+        if (expectedCopy.isEmpty() && !m_expectedIdentities.isEmpty()) {
+            expectedCopy.reserve(m_expectedIdentities.size());
+            for (const auto &fid : std::as_const(m_expectedIdentities)) {
+                BatchMoveExpectedItem item;
+                item.kind = BatchMoveItemKind::RegularFile;
+                item.fileIdentity = fid;
+                expectedCopy.append(item);
+            }
+        }
         const bool strictCopy = m_strictHistoryCheck;
+        const bool allowDirsCopy = m_allowDirectories;
 
-        m_thread = QThread::create([this, pairsCopy, expectedCopy, strictCopy] {
-            executeWorker(pairsCopy, expectedCopy, strictCopy);
+        m_thread = QThread::create([this, pairsCopy, expectedCopy, strictCopy, allowDirsCopy] {
+            executeWorker(pairsCopy, expectedCopy, strictCopy, allowDirsCopy);
         });
         m_thread->setParent(this);
         connect(m_thread, &QThread::finished, this, [this] {
@@ -934,8 +1005,9 @@ private:
 
     void executeWorker(
         const QList<QPair<QUrl, QUrl>> &pairs,
-        const QList<LocalRegularFileIdentity> &expectedIdentities,
-        bool strictHistoryCheck)
+        const QList<BatchMoveExpectedItem> &expectedItems,
+        bool strictHistoryCheck,
+        bool allowDirectories)
     {
         WorkerResult res;
         res.batch.totalCount = static_cast<int>(pairs.size());
@@ -970,23 +1042,39 @@ private:
 
         BatchMovePreflight pf;
         LocalBatchMoveDetail::OpenedBatchExecutionContext ctx;
-        const QList<LocalRegularFileIdentity> *expectedPtr =
-            expectedIdentities.isEmpty() ? nullptr : &expectedIdentities;
-        if (!LocalBatchMoveDetail::runPreflight(pairs, expectedPtr, strictHistoryCheck, &pf, &ctx)) {
-            res.batch.outcome = BatchMoveOutcome::FullRefusalBeforeExecution;
+        const QList<BatchMoveExpectedItem> *expectedPtr =
+            expectedItems.isEmpty() ? nullptr : &expectedItems;
+        if (!LocalBatchMoveDetail::runPreflight(
+                pairs, expectedPtr, strictHistoryCheck, &pf, &ctx,
+                allowDirectories, true, &m_cancelled)) {
+            res.batch.outcome = (pf.error == BatchMoveError::Cancelled)
+                ? BatchMoveOutcome::FullRefusalBeforeExecution
+                : BatchMoveOutcome::FullRefusalBeforeExecution;
             res.batch.error = pf.error;
             res.batch.systemError = pf.systemError;
             res.batch.reason = pf.reason;
-            res.batch.failedCount = 1;
-            res.batch.skippedCount = qMax(0, res.batch.totalCount - 1);
-            for (int i = 0; i < res.batch.items.size(); ++i) {
-                res.batch.items[i].state = (i == 0)
-                    ? BatchMoveItemState::FailedBeforePublish
-                    : BatchMoveItemState::SkippedAfterAbort;
-                res.batch.items[i].error = pf.error;
+            if (pf.error == BatchMoveError::Cancelled) {
+                res.batch.skippedCount = res.batch.totalCount;
+                for (int i = 0; i < res.batch.items.size(); ++i) {
+                    res.batch.items[i].state = BatchMoveItemState::SkippedAfterAbort;
+                    res.batch.items[i].error = BatchMoveError::Cancelled;
+                }
+            } else {
+                res.batch.failedCount = 1;
+                res.batch.skippedCount = qMax(0, res.batch.totalCount - 1);
+                for (int i = 0; i < res.batch.items.size(); ++i) {
+                    res.batch.items[i].state = (i == 0)
+                        ? BatchMoveItemState::FailedBeforePublish
+                        : BatchMoveItemState::SkippedAfterAbort;
+                    res.batch.items[i].error = pf.error;
+                }
             }
             publishAndReturn();
             return;
+        }
+
+        for (int i = 0; i < pf.items.size(); ++i) {
+            res.batch.items[i].kind = pf.items.at(i).kind;
         }
 
         res.totalBytes = pf.totalBytes;
@@ -1062,49 +1150,198 @@ private:
             const QByteArray srcLeafBytes = QFile::encodeName(itemPlan.srcLeaf);
             const QByteArray dstLeafBytes = QFile::encodeName(itemPlan.dstLeaf);
 
-            // Step revalidation: verify source identity/metadata is unchanged before renameat2
-            struct statx preSrcStx {};
-            struct stat preSrcSt {};
+            // Step revalidation: verify source and parent metadata + tree containment (for dirs) before renameat2
             const unsigned int statxMask =
                 STATX_BASIC_STATS | STATX_MNT_ID | STATX_MNT_ID_UNIQUE | STATX_SUBVOL;
-            if (::syscall(SYS_statx, srcParentFd, srcLeafBytes.constData(),
-                          AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT, statxMask, &preSrcStx) != 0
-                || ::fstatat(srcParentFd, srcLeafBytes.constData(), &preSrcSt, AT_SYMLINK_NOFOLLOW) != 0) {
-                const int stErr = errno ? errno : ENOENT;
-                abortedByError = true;
-                itemRes.state = BatchMoveItemState::FailedBeforePublish;
-                itemRes.error = BatchMoveError::ContainmentViolation;
-                itemRes.systemError = stErr;
-                abortError = itemRes.error;
-                abortSysErr = stErr;
-                abortReason = LocalBatchMoveDetail::trMsg(
-                    "Plik źródłowy „%1” zniknął lub zmienił się przed przeniesieniem — przerwano bez zmian pozostałych plików.",
-                    "Source file \"%1\" disappeared or changed before move — stopped remaining files.")
-                    .arg(itemPlan.srcLeaf);
-                itemRes.errorText = abortReason;
-                for (int j = i + 1; j < totalCount; ++j) {
-                    res.batch.items[j].state = BatchMoveItemState::SkippedAfterAbort;
+            LocalRegularFileIdentity currentSrcId;
+            LocalDirectoryIdentity currentDirId;
+            LocalDirectoryTreeSnapshot currentDirSnap;
+            if (itemPlan.kind == BatchMoveItemKind::RegularFile) {
+                struct statx preSrcStx {};
+                struct stat preSrcSt {};
+                if (::syscall(SYS_statx, srcParentFd, srcLeafBytes.constData(),
+                              AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT, statxMask, &preSrcStx) != 0
+                    || ::fstatat(srcParentFd, srcLeafBytes.constData(), &preSrcSt, AT_SYMLINK_NOFOLLOW) != 0) {
+                    const int stErr = errno ? errno : ENOENT;
+                    abortedByError = true;
+                    itemRes.state = BatchMoveItemState::FailedBeforePublish;
+                    itemRes.error = BatchMoveError::ContainmentViolation;
+                    itemRes.systemError = stErr;
+                    abortError = itemRes.error;
+                    abortSysErr = stErr;
+                    abortReason = LocalBatchMoveDetail::trMsg(
+                        "Plik źródłowy „%1” zniknął lub zmienił się przed przeniesieniem — przerwano bez zmian pozostałych elementów.",
+                        "Source file \"%1\" disappeared or changed before move — stopped remaining items.")
+                        .arg(itemPlan.srcLeaf);
+                    itemRes.errorText = abortReason;
+                    for (int j = i + 1; j < totalCount; ++j) {
+                        res.batch.items[j].state = BatchMoveItemState::SkippedAfterAbort;
+                    }
+                    break;
                 }
-                break;
-            }
 
-            const LocalRegularFileIdentity currentSrcId = LocalRegularFileIdentity::fromStat(preSrcStx, preSrcSt);
-            if (!currentSrcId.strictlyUnchangedForHistory(itemPlan.sourceIdentity)) {
-                abortedByError = true;
-                itemRes.state = BatchMoveItemState::FailedBeforePublish;
-                itemRes.error = BatchMoveError::ContainmentViolation;
-                itemRes.systemError = EBADF;
-                abortError = itemRes.error;
-                abortSysErr = EBADF;
-                abortReason = LocalBatchMoveDetail::trMsg(
-                    "Plik źródłowy „%1” został zmodyfikowany lub podmieniony po walidacji wstępnej — zatrzymano partię.",
-                    "Source file \"%1\" was modified or replaced after preflight — batch stopped.")
-                    .arg(itemPlan.srcLeaf);
-                itemRes.errorText = abortReason;
-                for (int j = i + 1; j < totalCount; ++j) {
-                    res.batch.items[j].state = BatchMoveItemState::SkippedAfterAbort;
+                currentSrcId = LocalRegularFileIdentity::fromStat(preSrcStx, preSrcSt);
+                if (!currentSrcId.strictlyUnchangedForHistory(itemPlan.sourceIdentity)) {
+                    abortedByError = true;
+                    itemRes.state = BatchMoveItemState::FailedBeforePublish;
+                    itemRes.error = BatchMoveError::ContainmentViolation;
+                    itemRes.systemError = EBADF;
+                    abortError = itemRes.error;
+                    abortSysErr = EBADF;
+                    abortReason = LocalBatchMoveDetail::trMsg(
+                        "Plik źródłowy „%1” został zmodyfikowany lub podmieniony po walidacji wstępnej — zatrzymano partię.",
+                        "Source file \"%1\" was modified or replaced after preflight — batch stopped.")
+                        .arg(itemPlan.srcLeaf);
+                    itemRes.errorText = abortReason;
+                    for (int j = i + 1; j < totalCount; ++j) {
+                        res.batch.items[j].state = BatchMoveItemState::SkippedAfterAbort;
+                    }
+                    break;
                 }
-                break;
+            } else {
+                const LocalBtrfsMoveCommon::TestFaultHooks hooks = LocalBatchMoveDetail::currentBatchMoveFaultHooks();
+                struct statx spStx {}, dpStx {};
+                struct stat spSt {}, dpSt {};
+                unsigned long spMagic = 0, dpMagic = 0;
+                int metaErr = 0;
+                if (!LocalBatchMoveDetail::queryBatchFdMetadata(srcParentFd, &spStx, &spSt, &spMagic, &metaErr)
+                    || !LocalBatchMoveDetail::queryBatchFdMetadata(dstParentFd, &dpStx, &dpSt, &dpMagic, &metaErr)
+                    || spMagic != BTRFS_SUPER_MAGIC || dpMagic != BTRFS_SUPER_MAGIC) {
+                    abortedByError = true;
+                    itemRes.state = BatchMoveItemState::FailedBeforePublish;
+                    itemRes.error = BatchMoveError::MountOrSubvolumeBoundary;
+                    itemRes.systemError = metaErr ? metaErr : EXDEV;
+                    abortError = itemRes.error;
+                    abortSysErr = itemRes.systemError;
+                    abortReason = LocalBatchMoveDetail::trMsg(
+                        "Katalog nadrzędny stracił kwalifikację Btrfs przed przeniesieniem „%1” — zatrzymano partię.",
+                        "Parent directory lost Btrfs qualification before moving \"%1\" — batch stopped.")
+                        .arg(itemPlan.srcLeaf);
+                    itemRes.errorText = abortReason;
+                    for (int j = i + 1; j < totalCount; ++j) {
+                        res.batch.items[j].state = BatchMoveItemState::SkippedAfterAbort;
+                    }
+                    break;
+                }
+                const LocalDirectoryIdentity reSpId = LocalDirectoryIdentity::fromStat(spStx, spSt);
+                const LocalDirectoryIdentity reDpId = LocalDirectoryIdentity::fromStat(dpStx, dpSt);
+                if (!reSpId.sameObject(itemPlan.srcParentIdentity)
+                    || !reDpId.sameObject(itemPlan.dstParentIdentity)
+                    || !reSpId.sameMountScope(pf.anchorScope)
+                    || !reDpId.sameMountScope(pf.anchorScope)) {
+                    abortedByError = true;
+                    itemRes.state = BatchMoveItemState::FailedBeforePublish;
+                    itemRes.error = BatchMoveError::MountOrSubvolumeBoundary;
+                    itemRes.systemError = EXDEV;
+                    abortError = itemRes.error;
+                    abortSysErr = EXDEV;
+                    abortReason = LocalBatchMoveDetail::trMsg(
+                        "Zmienił się zakres montowania lub podwoluminu dla „%1” — zatrzymano partię.",
+                        "Mount or subvolume scope changed for \"%1\" — batch stopped.")
+                        .arg(itemPlan.srcLeaf);
+                    itemRes.errorText = abortReason;
+                    for (int j = i + 1; j < totalCount; ++j) {
+                        res.batch.items[j].state = BatchMoveItemState::SkippedAfterAbort;
+                    }
+                    break;
+                }
+
+                int reopenErr = 0;
+                LocalBtrfsMoveCommon::ScopedFd curDirFd(
+                    LocalBatchMoveDetail::openBatchChildDirNoCrossing(srcParentFd, srcLeafBytes.constData(), &reopenErr));
+                struct statx curDirStx {};
+                struct stat curDirSt {};
+                unsigned long curDirMagic = 0;
+                if (!curDirFd.isValid()
+                    || !LocalBatchMoveDetail::queryBatchFdMetadata(curDirFd.fd, &curDirStx, &curDirSt, &curDirMagic, &reopenErr)
+                    || curDirMagic != BTRFS_SUPER_MAGIC) {
+                    abortedByError = true;
+                    itemRes.state = BatchMoveItemState::FailedBeforePublish;
+                    itemRes.error = (reopenErr == EXDEV)
+                        ? BatchMoveError::MountOrSubvolumeBoundary
+                        : BatchMoveError::ContainmentViolation;
+                    itemRes.systemError = reopenErr ? reopenErr : ENOENT;
+                    abortError = itemRes.error;
+                    abortSysErr = itemRes.systemError;
+                    abortReason = LocalBatchMoveDetail::trMsg(
+                        "Katalog źródłowy „%1” zniknął lub zmienił się przed przeniesieniem — przerwano bez zmian pozostałych elementów.",
+                        "Source directory \"%1\" disappeared or changed before move — stopped remaining items.")
+                        .arg(itemPlan.srcLeaf);
+                    itemRes.errorText = abortReason;
+                    for (int j = i + 1; j < totalCount; ++j) {
+                        res.batch.items[j].state = BatchMoveItemState::SkippedAfterAbort;
+                    }
+                    break;
+                }
+
+                currentDirId = LocalDirectoryIdentity::fromStat(curDirStx, curDirSt);
+                if (!currentDirId.valid
+                    || !currentDirId.sameObject(itemPlan.dirIdentity)
+                    || !currentDirId.sameMountScope(pf.anchorScope)
+                    || currentDirId.ino == BTRFS_FIRST_FREE_OBJECTID
+                    || LocalBtrfsMoveCommon::isMountPointInMountInfo(itemPlan.cleanSrcPath)) {
+                    abortedByError = true;
+                    itemRes.state = BatchMoveItemState::FailedBeforePublish;
+                    itemRes.error = BatchMoveError::ContainmentViolation;
+                    itemRes.systemError = EBADF;
+                    abortError = itemRes.error;
+                    abortSysErr = EBADF;
+                    abortReason = LocalBatchMoveDetail::trMsg(
+                        "Katalog źródłowy „%1” został podmieniony przed przeniesieniem — zatrzymano partię.",
+                        "Source directory \"%1\" was replaced before move — batch stopped.")
+                        .arg(itemPlan.srcLeaf);
+                    itemRes.errorText = abortReason;
+                    for (int j = i + 1; j < totalCount; ++j) {
+                        res.batch.items[j].state = BatchMoveItemState::SkippedAfterAbort;
+                    }
+                    break;
+                }
+
+                if (LocalBtrfsMoveCommon::dstParentHasAncestor(dstParentFd, reDpId, currentDirId, &hooks)) {
+                    abortedByError = true;
+                    itemRes.state = BatchMoveItemState::FailedBeforePublish;
+                    itemRes.error = BatchMoveError::CycleDetected;
+                    itemRes.systemError = EINVAL;
+                    abortError = itemRes.error;
+                    abortSysErr = EINVAL;
+                    abortReason = LocalBatchMoveDetail::trMsg(
+                        "Wykryto niedozwolony cykl katalogów przed przeniesieniem „%1” — zatrzymano partię.",
+                        "Directory cycle detected before moving \"%1\" — batch stopped.")
+                        .arg(itemPlan.srcLeaf);
+                    itemRes.errorText = abortReason;
+                    for (int j = i + 1; j < totalCount; ++j) {
+                        res.batch.items[j].state = BatchMoveItemState::SkippedAfterAbort;
+                    }
+                    break;
+                }
+
+                LocalBtrfsMoveCommon::ContainmentFailureKind reinspectFail =
+                    LocalBtrfsMoveCommon::ContainmentFailureKind::None;
+                QString reinspectReason;
+                if (!LocalBtrfsMoveCommon::inspectDirectoryTreeContainment(
+                        curDirFd.fd, currentDirId, m_cancelled, &currentDirSnap, nullptr,
+                        &reinspectFail, &reinspectReason, &hooks)) {
+                    if (reinspectFail == LocalBtrfsMoveCommon::ContainmentFailureKind::Cancelled) {
+                        cancelledDuringExecution = true;
+                        for (int j = i; j < totalCount; ++j) {
+                            res.batch.items[j].state = BatchMoveItemState::SkippedAfterAbort;
+                            res.batch.items[j].error = BatchMoveError::Cancelled;
+                        }
+                        break;
+                    }
+                    abortedByError = true;
+                    itemRes.state = BatchMoveItemState::FailedBeforePublish;
+                    itemRes.error = LocalBatchMoveDetail::mapContainmentFailureToBatchError(reinspectFail);
+                    itemRes.systemError = EINVAL;
+                    abortError = itemRes.error;
+                    abortSysErr = EINVAL;
+                    abortReason = reinspectReason;
+                    itemRes.errorText = abortReason;
+                    for (int j = i + 1; j < totalCount; ++j) {
+                        res.batch.items[j].state = BatchMoveItemState::SkippedAfterAbort;
+                    }
+                    break;
+                }
             }
 
             struct stat preDstExistSt {};
@@ -1229,8 +1466,24 @@ private:
                     verifyErr = errno ? errno : EIO;
                 }
             }
-            const LocalRegularFileIdentity postDstId = LocalRegularFileIdentity::fromStat(postDstStx, postDstSt);
-            if (verifyFail || !postDstId.sameObject(currentSrcId)) {
+            bool identityMatch = false;
+            if (!verifyFail) {
+                if (itemPlan.kind == BatchMoveItemKind::RegularFile) {
+                    const LocalRegularFileIdentity postDstId = LocalRegularFileIdentity::fromStat(postDstStx, postDstSt);
+                    identityMatch = postDstId.sameObject(currentSrcId);
+                    if (identityMatch) {
+                        itemRes.movedIdentity = postDstId;
+                    }
+                } else {
+                    const LocalDirectoryIdentity postDirId = LocalDirectoryIdentity::fromStat(postDstStx, postDstSt);
+                    identityMatch = postDirId.sameObject(currentDirId);
+                    if (identityMatch) {
+                        itemRes.movedDirIdentity = postDirId;
+                        itemRes.movedDirSnapshot = currentDirSnap;
+                    }
+                }
+            }
+            if (verifyFail || !identityMatch) {
                 res.batch.partialMoveOutcome = true;
                 itemRes.state = BatchMoveItemState::FailedDurability;
                 itemRes.error = BatchMoveError::PostRenameVerification;
@@ -1238,8 +1491,8 @@ private:
                 abortError = BatchMoveError::PostRenameVerification;
                 abortSysErr = itemRes.systemError;
                 abortReason = LocalBatchMoveDetail::trMsg(
-                    "Część partii (%1 z %2) została opublikowana w celu, lecz weryfikacja po przeniesieniu pliku „%3” nie powiodła się (%4). Już przeniesione pliki zachowano bez automatycznego cofania i bez ponawiania.",
-                    "Part of the batch (%1 of %2) was published to destination, but post-rename verification of \"%3\" failed (%4). Published files were preserved without automatic rollback or retry.")
+                    "Część partii (%1 z %2) została opublikowana w celu, lecz weryfikacja po przeniesieniu elementu „%3” nie powiodła się (%4). Już przeniesione elementy zachowano bez automatycznego cofania i bez ponawiania.",
+                    "Part of the batch (%1 of %2) was published to destination, but post-rename verification of \"%3\" failed (%4). Published items were preserved without automatic rollback or retry.")
                     .arg(res.batch.publishedCount)
                     .arg(totalCount)
                     .arg(itemPlan.dstLeaf)
@@ -1251,7 +1504,6 @@ private:
                 }
                 break;
             }
-            itemRes.movedIdentity = postDstId;
 
 #ifdef THISPC_TEST_HARNESS
             if (simulateBatchMoveAfterRenameBeforeFsync()) {
@@ -1451,7 +1703,9 @@ private:
 
     QList<QPair<QUrl, QUrl>> m_pairs;
     QList<LocalRegularFileIdentity> m_expectedIdentities;
+    QList<BatchMoveExpectedItem> m_expectedItems;
     bool m_strictHistoryCheck = false;
+    bool m_allowDirectories = false;
     QThread *m_thread = nullptr;
     std::atomic<bool> m_cancelled{false};
     std::atomic<bool> m_workerResultReady{false};

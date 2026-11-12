@@ -97,7 +97,7 @@ def expose_legacy_header(text):
 legacy_exposed_headers = {
     'appwidgets.h', 'archive-creation.h', 'archive-extraction.h',
     'batchrename.h', 'batchrenamerecovery.h', 'directorypreviewadapter.h', 'directoryview.h',
-    'fileactions.h', 'launchurlresolver.h', 'localbatchmovejob.h', 'localdirectorymovejob.h', 'localfilecopyjob.h', 'localfilemovejob.h',
+    'fileactions.h', 'launchurlresolver.h', 'localbtrfsmovecommon.h', 'localbatchmovejob.h', 'localdirectorymovejob.h', 'localfilecopyjob.h', 'localfilemovejob.h',
     'localtransferjob.h', 'localtransferplan.h', 'localtreehistory.h', 'kiostagedtransferjob.h',
     'operationmanager.h', 'pathwidgets.h', 'previewcontroller.h', 'previewpane.h', 'quicklook.h',
     'searchcontroller.h', 'searchpopover.h', 'searchprogressbar.h', 'advancedsearchfiltersdialog.h', 'sidebar.h', 'splitbrowserpane.h',

@@ -333,14 +333,26 @@ int main(int argc, char **argv)
         }
         ::close(sfd);
 
-        for (const QString &bad : {symPath, dirPath, fifoPath, sockPath}) {
+        for (const QString &bad : {symPath, fifoPath, sockPath}) {
             const auto pol = MoveSafetyPolicy::evaluate(
                 {QUrl::fromLocalFile(p1), QUrl::fromLocalFile(bad)},
                 QUrl::fromLocalFile(pfDst), true);
             verify(!pol.allowed && pol.decision == MovePolicyDecision::RefusedLocalContainment,
-                   "Preflight rejects batch containing symlink/dir/FIFO/socket");
+                   "Preflight rejects batch containing symlink/FIFO/socket");
             verify(QFileInfo::exists(p1) && !QFileInfo::exists(pfDst + QStringLiteral("/a.txt")),
-                   "Rejected special/dir/symlink batch left zero changes");
+                   "Rejected special/symlink batch left zero changes");
+        }
+        {
+            BatchMovePreflight regOnlyPf;
+            verify(!LocalBatchMoveDetail::qualifyFastForPolicy(
+                       {QUrl::fromLocalFile(p1), QUrl::fromLocalFile(dirPath)},
+                       QUrl::fromLocalFile(pfDst), &regOnlyPf),
+                   "Regular-files-only preflight helper rejects directory");
+            const auto polDir = MoveSafetyPolicy::evaluate(
+                {QUrl::fromLocalFile(p1), QUrl::fromLocalFile(dirPath)},
+                QUrl::fromLocalFile(pfDst), true);
+            verify(polDir.allowed && polDir.decision == MovePolicyDecision::AllowedBatchSameVolumeBtrfsMixed,
+                   "H.2B.2B policy qualifies mixed file+dir batch on same Btrfs subvolume");
         }
 
         // Non-Btrfs simulated FS (VFAT/NTFS-3G), missing openat2/statx/renameat2, simulated EXDEV, remote & mixed
@@ -875,6 +887,807 @@ int main(int argc, char **argv)
                "NotificationManager emits single coalesced summary for batch move");
         verify(payloads.first().kind == NotificationKind::Success && payloads.first().taskCount == 1,
                "Batch notification has Success kind and single taskCount");
+    }
+
+    // -------------------------------------------------------------------------
+    // 6. Stage 5.3.2H.2B.2A: Mixed & Directory Batch Move Foundation
+    // -------------------------------------------------------------------------
+    {
+        auto runMixedBatch = [](const QList<QUrl> &sources, const QUrl &dstDir) {
+            auto *job = new LocalBatchMoveJob(sources, dstDir);
+            job->setAllowDirectories(true);
+            QEventLoop loop;
+            QObject::connect(job, &KJob::result, &loop, &QEventLoop::quit);
+            job->start();
+            loop.exec();
+            return job;
+        };
+
+        auto isDirPresent = [](const QString &path) {
+            QFileInfo fi(path);
+            return fi.exists() && fi.isDir() && !fi.isSymLink();
+        };
+        auto inodeOf = [](const QString &path) -> quint64 {
+            return static_cast<quint64>(lstatEntry(path).st_ino);
+        };
+
+        const QString h2b2aSrc = srcRoot + QStringLiteral("/h2b2a_src");
+        const QString h2b2aSrcAlt = srcRoot + QStringLiteral("/h2b2a_src_alt");
+        const QString h2b2aDst = dstRoot + QStringLiteral("/h2b2a_dst");
+        verify(QDir().mkpath(h2b2aSrc) && QDir().mkpath(h2b2aSrcAlt) && QDir().mkpath(h2b2aDst),
+               "H2B2A: base dirs created");
+
+        // P1: Two directories from one source parent (with multi-level tree, Unicode, spaces, preserved inodes & SHA-256)
+        {
+            const QString d1 = h2b2aSrc + QStringLiteral("/katalog zażółć spacja");
+            const QString d2 = h2b2aSrc + QStringLiteral("/.ukryty_dir");
+            const QString d1Deep = d1 + QStringLiteral("/sub1/sub2");
+            verify(QDir().mkpath(d1Deep) && QDir().mkpath(d2), "H2B2A-P1: mkpath");
+            const QString f1 = d1 + QStringLiteral("/root.txt");
+            const QString f2 = d1Deep + QStringLiteral("/głęboki plik.bin");
+            const QString f3 = d2 + QStringLiteral("/hidden.dat");
+            verify(writeFileBytes(f1, "R1") && writeFileBytes(f2, "DEEP_DATA_12345") && writeFileBytes(f3, "HID"),
+                   "H2B2A-P1: files");
+            const quint64 inoD1 = inodeOf(d1);
+            const quint64 inoD2 = inodeOf(d2);
+            const quint64 inoF2 = inodeOf(f2);
+            const QByteArray shaF2 = sha256File(f2);
+
+            auto *job = runMixedBatch({QUrl::fromLocalFile(d1), QUrl::fromLocalFile(d2)},
+                                      QUrl::fromLocalFile(h2b2aDst));
+            const BatchMoveResult res = job->batchResult();
+            verify(job->error() == KJob::NoError
+                       && res.outcome == BatchMoveOutcome::FullSuccess
+                       && res.totalCount == 2 && res.publishedCount == 2 && res.durableCount == 2
+                       && res.items.size() == 2
+                       && res.items.at(0).kind == BatchMoveItemKind::Directory
+                       && res.items.at(1).kind == BatchMoveItemKind::Directory
+                       && res.items.at(0).movedDirSnapshot.scannedRegularFiles == 2
+                       && res.items.at(0).movedDirSnapshot.scannedSubdirectories == 2
+                       && res.items.at(0).movedDirSnapshot.scannedBytes == 17,
+                   "H2B2A-P1: two directories moved atomically with accurate tree snapshot");
+            const QString dstD1 = h2b2aDst + QStringLiteral("/katalog zażółć spacja");
+            const QString dstD2 = h2b2aDst + QStringLiteral("/.ukryty_dir");
+            verify(!QFileInfo::exists(d1) && !QFileInfo::exists(d2)
+                       && isDirPresent(dstD1) && isDirPresent(dstD2)
+                       && inodeOf(dstD1) == inoD1 && inodeOf(dstD2) == inoD2
+                       && inodeOf(dstD1 + QStringLiteral("/sub1/sub2/głęboki plik.bin")) == inoF2
+                       && sha256File(dstD1 + QStringLiteral("/sub1/sub2/głęboki plik.bin")) == shaF2,
+                   "H2B2A-P1: inodes and SHA-256 preserved, no staging");
+            delete job;
+        }
+
+        // P2: Two directories from different source parents
+        {
+            const QString dA = h2b2aSrc + QStringLiteral("/diffParentA");
+            const QString dB = h2b2aSrcAlt + QStringLiteral("/diffParentB");
+            verify(QDir().mkpath(dA) && QDir().mkpath(dB), "H2B2A-P2: dirs");
+            verify(writeFileBytes(dA + QStringLiteral("/a.txt"), "AAA")
+                       && writeFileBytes(dB + QStringLiteral("/b.txt"), "BBBB"),
+                   "H2B2A-P2: files");
+            const quint64 inoA = inodeOf(dA);
+            const quint64 inoB = inodeOf(dB);
+            auto *job = runMixedBatch({QUrl::fromLocalFile(dA), QUrl::fromLocalFile(dB)},
+                                      QUrl::fromLocalFile(h2b2aDst));
+            verify(job->error() == KJob::NoError
+                       && job->outcome() == BatchMoveOutcome::FullSuccess
+                       && inodeOf(h2b2aDst + QStringLiteral("/diffParentA")) == inoA
+                       && inodeOf(h2b2aDst + QStringLiteral("/diffParentB")) == inoB,
+                   "H2B2A-P2: two directories from different source parents moved");
+            delete job;
+        }
+
+        // P3: Mixed batch: 1 file + 1 directory
+        {
+            const QString mf = h2b2aSrc + QStringLiteral("/mix_file.txt");
+            const QString md = h2b2aSrc + QStringLiteral("/mix_dir");
+            verify(QDir().mkpath(md), "H2B2A-P3: dir");
+            verify(writeFileBytes(mf, "MIX_FILE") && writeFileBytes(md + QStringLiteral("/in.txt"), "IN_DIR"),
+                   "H2B2A-P3: files");
+            const quint64 inoMf = inodeOf(mf);
+            const quint64 inoMd = inodeOf(md);
+            auto *job = runMixedBatch({QUrl::fromLocalFile(mf), QUrl::fromLocalFile(md)},
+                                      QUrl::fromLocalFile(h2b2aDst));
+            const BatchMoveResult res = job->batchResult();
+            verify(job->error() == KJob::NoError
+                       && res.outcome == BatchMoveOutcome::FullSuccess
+                       && res.items.at(0).kind == BatchMoveItemKind::RegularFile
+                       && res.items.at(1).kind == BatchMoveItemKind::Directory
+                       && inodeOf(h2b2aDst + QStringLiteral("/mix_file.txt")) == inoMf
+                       && inodeOf(h2b2aDst + QStringLiteral("/mix_dir")) == inoMd,
+                   "H2B2A-P3: mixed file + directory batch moved cleanly");
+            delete job;
+        }
+
+        // P4: Mixed batch: 2 files + 1 directory from different parents, total Bytes checked
+        {
+            const QString f1 = h2b2aSrc + QStringLiteral("/p4_f1.txt");
+            const QString f2 = h2b2aSrcAlt + QStringLiteral("/p4_f2.txt");
+            const QString d3 = h2b2aSrc + QStringLiteral("/p4_dir");
+            verify(QDir().mkpath(d3 + QStringLiteral("/sub")), "H2B2A-P4: dir");
+            verify(writeFileBytes(f1, "12345")
+                       && writeFileBytes(f2, "123456")
+                       && writeFileBytes(d3 + QStringLiteral("/sub/x.txt"), "1234567"),
+                   "H2B2A-P4: files");
+            auto *job = runMixedBatch(
+                {QUrl::fromLocalFile(f1), QUrl::fromLocalFile(f2), QUrl::fromLocalFile(d3)},
+                QUrl::fromLocalFile(h2b2aDst));
+            verify(job->error() == KJob::NoError
+                       && job->totalCount() == 3 && job->durableCount() == 3
+                       && job->totalAmount(KJob::Bytes) == 18
+                       && job->processedAmount(KJob::Bytes) == 18,
+                   "H2B2A-P4: 2 files + 1 directory batch moved with exact total byte accounting");
+            delete job;
+        }
+
+        // N1: Destination collision in mixed batch -> FullRefusalBeforeExecution (0 moved)
+        {
+            const QString nf = h2b2aSrc + QStringLiteral("/n1_f.txt");
+            const QString nd = h2b2aSrc + QStringLiteral("/n1_dir");
+            const QString existingDstDir = h2b2aDst + QStringLiteral("/n1_dir");
+            verify(QDir().mkpath(nd) && QDir().mkpath(existingDstDir), "H2B2A-N1: dirs");
+            verify(writeFileBytes(nf, "N1F") && writeFileBytes(nd + QStringLiteral("/x.txt"), "N1D"), "H2B2A-N1: files");
+            auto *job = runMixedBatch({QUrl::fromLocalFile(nf), QUrl::fromLocalFile(nd)},
+                                      QUrl::fromLocalFile(h2b2aDst));
+            verify(job->error() != KJob::NoError
+                       && job->outcome() == BatchMoveOutcome::FullRefusalBeforeExecution
+                       && job->batchError() == BatchMoveError::DestinationExists
+                       && job->publishedCount() == 0
+                       && QFileInfo::exists(nf) && isDirPresent(nd),
+                   "H2B2A-N1: destination collision refuses entire mixed batch before moving file 0");
+            delete job;
+        }
+
+        // N2: Nested sources (dir + child dir, and dir + child file) -> FullRefusalBeforeExecution
+        {
+            const QString parentD = h2b2aSrc + QStringLiteral("/n2_parent");
+            const QString childD = parentD + QStringLiteral("/child_dir");
+            const QString childF = parentD + QStringLiteral("/child_file.txt");
+            verify(QDir().mkpath(childD) && writeFileBytes(childF, "CF"), "H2B2A-N2: fixtures");
+
+            auto *job1 = runMixedBatch({QUrl::fromLocalFile(parentD), QUrl::fromLocalFile(childD)},
+                                       QUrl::fromLocalFile(h2b2aDst));
+            verify(job1->error() != KJob::NoError
+                       && job1->outcome() == BatchMoveOutcome::FullRefusalBeforeExecution
+                       && job1->batchError() == BatchMoveError::CollisionInBatch
+                       && isDirPresent(parentD) && isDirPresent(childD),
+                   "H2B2A-N2a: nested directories in batch refused fail-closed");
+            delete job1;
+
+            auto *job2 = runMixedBatch({QUrl::fromLocalFile(parentD), QUrl::fromLocalFile(childF)},
+                                       QUrl::fromLocalFile(h2b2aDst));
+            verify(job2->error() != KJob::NoError
+                       && job2->outcome() == BatchMoveOutcome::FullRefusalBeforeExecution
+                       && job2->batchError() == BatchMoveError::CollisionInBatch
+                       && isDirPresent(parentD) && QFileInfo::exists(childF),
+                   "H2B2A-N2b: directory + descendant file in batch refused fail-closed");
+            delete job2;
+        }
+
+        // N3: Source directory as ancestor of destination -> CycleDetected
+        {
+            const QString cycA = h2b2aSrc + QStringLiteral("/n3_cycA");
+            const QString cycB = h2b2aSrc + QStringLiteral("/n3_cycB");
+            const QString innerDst = cycA + QStringLiteral("/inner_dst");
+            verify(QDir().mkpath(innerDst) && QDir().mkpath(cycB), "H2B2A-N3: dirs");
+            auto *job = runMixedBatch({QUrl::fromLocalFile(cycA), QUrl::fromLocalFile(cycB)},
+                                      QUrl::fromLocalFile(innerDst));
+            verify(job->error() != KJob::NoError
+                       && job->outcome() == BatchMoveOutcome::FullRefusalBeforeExecution
+                       && job->batchError() == BatchMoveError::CycleDetected
+                       && job->publishedCount() == 0
+                       && isDirPresent(cycA) && isDirPresent(cycB),
+                   "H2B2A-N3: destination inside source directory refused as CycleDetected");
+            delete job;
+        }
+
+        // N4: Symlink in deep subdirectory -> ContainmentViolation, 0 moved
+        {
+            const QString okFile = h2b2aSrc + QStringLiteral("/n4_ok.txt");
+            const QString symDir = h2b2aSrc + QStringLiteral("/n4_symdir");
+            verify(QDir().mkpath(symDir + QStringLiteral("/a/b")) && writeFileBytes(okFile, "OK4"),
+                   "H2B2A-N4: fixtures");
+            verify(::symlink("/etc/hosts", QFile::encodeName(symDir + QStringLiteral("/a/b/bad.lnk")).constData()) == 0,
+                   "H2B2A-N4: symlink created");
+            auto *job = runMixedBatch({QUrl::fromLocalFile(okFile), QUrl::fromLocalFile(symDir)},
+                                      QUrl::fromLocalFile(h2b2aDst));
+            verify(job->error() != KJob::NoError
+                       && job->outcome() == BatchMoveOutcome::FullRefusalBeforeExecution
+                       && job->batchError() == BatchMoveError::ContainmentViolation
+                       && job->publishedCount() == 0 && QFileInfo::exists(okFile),
+                   "H2B2A-N4: deep symlink in directory refuses entire mixed batch");
+            delete job;
+        }
+
+        // N5: Hardlink inside directory -> ContainmentViolation, 0 moved
+        {
+            const QString okFile = h2b2aSrc + QStringLiteral("/n5_ok.txt");
+            const QString hlDir = h2b2aSrc + QStringLiteral("/n5_hldir");
+            const QString hlOrig = h2b2aSrcAlt + QStringLiteral("/n5_orig.txt");
+            verify(QDir().mkpath(hlDir) && writeFileBytes(okFile, "OK5") && writeFileBytes(hlOrig, "HL"),
+                   "H2B2A-N5: fixtures");
+            verify(::link(QFile::encodeName(hlOrig).constData(),
+                          QFile::encodeName(hlDir + QStringLiteral("/hard.txt")).constData()) == 0,
+                   "H2B2A-N5: hardlink created");
+            auto *job = runMixedBatch({QUrl::fromLocalFile(okFile), QUrl::fromLocalFile(hlDir)},
+                                      QUrl::fromLocalFile(h2b2aDst));
+            verify(job->error() != KJob::NoError
+                       && job->outcome() == BatchMoveOutcome::FullRefusalBeforeExecution
+                       && job->batchError() == BatchMoveError::ContainmentViolation
+                       && job->publishedCount() == 0 && QFileInfo::exists(okFile),
+                   "H2B2A-N5: hardlinked file inside directory refuses mixed batch");
+            delete job;
+        }
+
+        // N6: FIFO and Unix socket inside directory -> ContainmentViolation
+        {
+            const QString okFile = h2b2aSrc + QStringLiteral("/n6_ok.txt");
+            const QString fifoDir = h2b2aSrc + QStringLiteral("/n6_fifodir");
+            const QString sockDir = h2b2aSrc + QStringLiteral("/n6_sockdir");
+            verify(QDir().mkpath(fifoDir) && QDir().mkpath(sockDir) && writeFileBytes(okFile, "OK6"),
+                   "H2B2A-N6: dirs");
+            verify(::mkfifo(QFile::encodeName(fifoDir + QStringLiteral("/pipe")).constData(), 0600) == 0,
+                   "H2B2A-N6: fifo created");
+            auto *jobFifo = runMixedBatch({QUrl::fromLocalFile(okFile), QUrl::fromLocalFile(fifoDir)},
+                                          QUrl::fromLocalFile(h2b2aDst));
+            verify(jobFifo->error() != KJob::NoError
+                       && jobFifo->outcome() == BatchMoveOutcome::FullRefusalBeforeExecution
+                       && jobFifo->batchError() == BatchMoveError::ContainmentViolation
+                       && QFileInfo::exists(okFile),
+                   "H2B2A-N6a: FIFO inside directory refuses mixed batch");
+            delete jobFifo;
+
+            const QString prevCwd = QDir::currentPath();
+            verify(QDir::setCurrent(sockDir), "H2B2A-N6: chdir");
+            const int sfd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+            struct sockaddr_un addr {};
+            addr.sun_family = AF_UNIX;
+            std::strncpy(addr.sun_path, "test.sock", sizeof(addr.sun_path) - 1);
+            const bool bound = (sfd >= 0)
+                && (::bind(sfd, reinterpret_cast<struct sockaddr *>(&addr), sizeof(addr)) == 0);
+            if (sfd >= 0) ::close(sfd);
+            QDir::setCurrent(prevCwd);
+            verify(bound, "H2B2A-N6: socket bound");
+            auto *jobSock = runMixedBatch({QUrl::fromLocalFile(okFile), QUrl::fromLocalFile(sockDir)},
+                                          QUrl::fromLocalFile(h2b2aDst));
+            verify(jobSock->error() != KJob::NoError
+                       && jobSock->outcome() == BatchMoveOutcome::FullRefusalBeforeExecution
+                       && jobSock->batchError() == BatchMoveError::ContainmentViolation
+                       && QFileInfo::exists(okFile),
+                   "H2B2A-N6b: Unix socket inside directory refuses mixed batch");
+            delete jobSock;
+        }
+
+        // N7: Mount point / EXDEV boundary / non-Btrfs filesystem -> MountOrSubvolumeBoundary / UnsupportedFilesystem
+        {
+            const QString d1 = h2b2aSrc + QStringLiteral("/n7_d1");
+            const QString d2 = h2b2aSrc + QStringLiteral("/n7_d2");
+            verify(QDir().mkpath(d1) && QDir().mkpath(d2), "H2B2A-N7: dirs");
+
+            simulateBatchMoveUnsupportedFsMagic() = MSDOS_SUPER_MAGIC;
+            auto *jobFs = runMixedBatch({QUrl::fromLocalFile(d1), QUrl::fromLocalFile(d2)},
+                                        QUrl::fromLocalFile(h2b2aDst));
+            verify(jobFs->error() != KJob::NoError
+                       && jobFs->outcome() == BatchMoveOutcome::FullRefusalBeforeExecution
+                       && jobFs->batchError() == BatchMoveError::UnsupportedFilesystem,
+                   "H2B2A-N7a: non-Btrfs filesystem refuses directory batch");
+            delete jobFs;
+            resetBatchTestHooks();
+
+            simulateBatchMoveExdev() = true;
+            auto *jobExdev = runMixedBatch({QUrl::fromLocalFile(d1), QUrl::fromLocalFile(d2)},
+                                           QUrl::fromLocalFile(h2b2aDst));
+            verify(jobExdev->error() != KJob::NoError
+                       && jobExdev->outcome() == BatchMoveOutcome::FullRefusalBeforeExecution
+                       && jobExdev->batchError() == BatchMoveError::MountOrSubvolumeBoundary,
+                   "H2B2A-N7b: EXDEV subvolume/mount boundary refuses directory batch");
+            delete jobExdev;
+            resetBatchTestHooks();
+
+            // Active mount point from /proc/self/mountinfo
+            QString activeMount;
+            QFile mi(QStringLiteral("/proc/self/mountinfo"));
+            if (mi.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                while (!mi.atEnd()) {
+                    const QByteArray line = mi.readLine().trimmed();
+                    const QList<QByteArray> parts = line.split(' ');
+                    if (parts.size() >= 5 && parts.at(4) != "/") {
+                        const QString mp = QFile::decodeName(parts.at(4));
+                        if (QFileInfo::exists(mp) && QFileInfo(mp).isDir()) {
+                            activeMount = mp;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (!activeMount.isEmpty()) {
+                auto *jobMp = runMixedBatch({QUrl::fromLocalFile(d1), QUrl::fromLocalFile(activeMount)},
+                                            QUrl::fromLocalFile(h2b2aDst));
+                verify(jobMp->error() != KJob::NoError
+                           && jobMp->outcome() == BatchMoveOutcome::FullRefusalBeforeExecution,
+                       "H2B2A-N7c: active mount point refused fail-closed");
+                delete jobMp;
+            }
+        }
+
+        // N8: Directory replaced after Phase 2 Preflight -> PartialSuccessCleanStop, item 0 preserved
+        {
+            const QString d1 = h2b2aSrc + QStringLiteral("/n8_d1");
+            const QString d2 = h2b2aSrc + QStringLiteral("/n8_d2");
+            verify(QDir().mkpath(d1) && QDir().mkpath(d2)
+                       && writeFileBytes(d1 + QStringLiteral("/a.txt"), "N8A"),
+                   "H2B2A-N8: dirs");
+            simulateBatchMoveBeforeStep() = [&](int step) {
+                if (step == 1) {
+                    QDir().rmdir(d2);
+                    QDir().mkdir(d2);
+                }
+            };
+            auto *job = runMixedBatch({QUrl::fromLocalFile(d1), QUrl::fromLocalFile(d2)},
+                                      QUrl::fromLocalFile(h2b2aDst));
+            resetBatchTestHooks();
+            const BatchMoveResult res = job->batchResult();
+            verify(job->error() != KJob::NoError
+                       && res.outcome == BatchMoveOutcome::PartialSuccessCleanStop
+                       && res.publishedCount == 1 && res.durableCount == 1
+                       && res.items.at(0).state == BatchMoveItemState::DurableCompleted
+                       && res.items.at(1).state == BatchMoveItemState::FailedBeforePublish
+                       && isDirPresent(h2b2aDst + QStringLiteral("/n8_d1")),
+                   "H2B2A-N8: directory replaced after Preflight stops step 1 cleanly without rolling back step 0");
+            delete job;
+        }
+
+        // N9: New symlink inserted inside dir 2 tree before step 1 rename -> revalidation catches it!
+        {
+            const QString d1 = h2b2aSrc + QStringLiteral("/n9_d1");
+            const QString d2 = h2b2aSrc + QStringLiteral("/n9_d2");
+            verify(QDir().mkpath(d1) && QDir().mkpath(d2 + QStringLiteral("/sub"))
+                       && writeFileBytes(d1 + QStringLiteral("/a.txt"), "N9A"),
+                   "H2B2A-N9: dirs");
+            simulateBatchMoveBeforeStep() = [&](int step) {
+                if (step == 1) {
+                    ::symlink("/etc/passwd",
+                              QFile::encodeName(d2 + QStringLiteral("/sub/injected.lnk")).constData());
+                }
+            };
+            auto *job = runMixedBatch({QUrl::fromLocalFile(d1), QUrl::fromLocalFile(d2)},
+                                      QUrl::fromLocalFile(h2b2aDst));
+            resetBatchTestHooks();
+            const BatchMoveResult res = job->batchResult();
+            verify(job->error() != KJob::NoError
+                       && res.outcome == BatchMoveOutcome::PartialSuccessCleanStop
+                       && res.publishedCount == 1 && res.durableCount == 1
+                       && res.items.at(1).state == BatchMoveItemState::FailedBeforePublish
+                       && res.items.at(1).error == BatchMoveError::ContainmentViolation
+                       && isDirPresent(h2b2aDst + QStringLiteral("/n9_d1"))
+                       && isDirPresent(d2),
+                   "H2B2A-N9: mid-batch symlink injection caught by re-inspection before step 1 rename");
+            delete job;
+        }
+
+        // N10: Collision on step 1 during execution -> PartialSuccessCleanStop
+        {
+            const QString d1 = h2b2aSrc + QStringLiteral("/n10_d1");
+            const QString d2 = h2b2aSrc + QStringLiteral("/n10_d2");
+            verify(QDir().mkpath(d1) && QDir().mkpath(d2), "H2B2A-N10: dirs");
+            simulateBatchMoveBeforeStep() = [&](int step) {
+                if (step == 1) {
+                    QDir().mkdir(h2b2aDst + QStringLiteral("/n10_d2"));
+                }
+            };
+            auto *job = runMixedBatch({QUrl::fromLocalFile(d1), QUrl::fromLocalFile(d2)},
+                                      QUrl::fromLocalFile(h2b2aDst));
+            resetBatchTestHooks();
+            verify(job->error() != KJob::NoError
+                       && job->outcome() == BatchMoveOutcome::PartialSuccessCleanStop
+                       && job->publishedCount() == 1
+                       && job->batchResult().items.at(1).error == BatchMoveError::DestinationExists
+                       && isDirPresent(h2b2aDst + QStringLiteral("/n10_d1"))
+                       && isDirPresent(d2),
+                   "H2B2A-N10: mid-execution collision on dir 2 stops cleanly without rollback");
+            delete job;
+        }
+
+        // N11: fsync error on directory step -> PartialOutcomeWithUnconfirmedDurability + Retry blocked
+        {
+            const QString d1 = h2b2aSrc + QStringLiteral("/n11_d1");
+            const QString d2 = h2b2aSrc + QStringLiteral("/n11_d2");
+            verify(QDir().mkpath(d1) && QDir().mkpath(d2), "H2B2A-N11: dirs");
+            TransferQueueController q;
+            simulateBatchMoveDestinationFsyncErrorAtStep() = {1, EIO};
+            TransferTaskDescriptor desc;
+            desc.title = QStringLiteral("H2B2A-N11");
+            desc.type = TransferOperationType::Move;
+            desc.backend = TransferBackendKind::LocalNative;
+            desc.sources = {QUrl::fromLocalFile(d1), QUrl::fromLocalFile(d2)};
+            desc.destination = QUrl::fromLocalFile(h2b2aDst);
+            desc.startMode = TransferJobStartMode::ControllerStarts;
+            desc.jobFactory = [&]() -> KJob * {
+                auto *j = new LocalBatchMoveJob(
+                    {QUrl::fromLocalFile(d1), QUrl::fromLocalFile(d2)},
+                    QUrl::fromLocalFile(h2b2aDst), &q);
+                j->setAllowDirectories(true);
+                return j;
+            };
+            const auto enq = q.enqueue(std::move(desc));
+            verify(waitUntil([&] {
+                const auto s = q.taskSnapshot(enq.id);
+                return s.has_value() && s->state == TransferTaskState::Failed;
+            }), "H2B2A-N11: fsync error fails queue task");
+            resetBatchTestHooks();
+            const auto snap = q.taskSnapshot(enq.id);
+            verify(snap.has_value()
+                       && snap->state == TransferTaskState::Failed
+                       && !q.checkRetryEligibility(enq.id).eligible
+                       && isDirPresent(h2b2aDst + QStringLiteral("/n11_d1"))
+                       && isDirPresent(h2b2aDst + QStringLiteral("/n11_d2")),
+                   "H2B2A-N11: fsync failure marks partial outcome, preserves published dirs, blocks Retry");
+        }
+
+        // N12: Cancellation after publishing 1st directory -> PartialSuccessCleanStop + Retry blocked
+        {
+            const QString d1 = h2b2aSrc + QStringLiteral("/n12_d1");
+            const QString d2 = h2b2aSrc + QStringLiteral("/n12_d2");
+            verify(QDir().mkpath(d1) && QDir().mkpath(d2), "H2B2A-N12: dirs");
+            TransferQueueController q;
+            LocalBatchMoveJob *activeJob = nullptr;
+            simulateBatchMoveBeforeStep() = [&](int step) {
+                if (step == 1 && activeJob) {
+                    activeJob->kill(KJob::EmitResult);
+                }
+            };
+            TransferTaskDescriptor desc;
+            desc.title = QStringLiteral("H2B2A-N12");
+            desc.type = TransferOperationType::Move;
+            desc.backend = TransferBackendKind::LocalNative;
+            desc.sources = {QUrl::fromLocalFile(d1), QUrl::fromLocalFile(d2)};
+            desc.destination = QUrl::fromLocalFile(h2b2aDst);
+            desc.startMode = TransferJobStartMode::ControllerStarts;
+            desc.jobFactory = [&]() -> KJob * {
+                activeJob = new LocalBatchMoveJob(
+                    {QUrl::fromLocalFile(d1), QUrl::fromLocalFile(d2)},
+                    QUrl::fromLocalFile(h2b2aDst), &q);
+                activeJob->setAllowDirectories(true);
+                return activeJob;
+            };
+            const auto enq = q.enqueue(std::move(desc));
+            verify(waitUntil([&] {
+                const auto s = q.taskSnapshot(enq.id);
+                return s.has_value() && isTerminalTransferState(s->state);
+            }), "H2B2A-N12: cancelled task reaches terminal state");
+            resetBatchTestHooks();
+            const auto snap = q.taskSnapshot(enq.id);
+            verify(snap.has_value()
+                       && snap->state == TransferTaskState::Cancelled
+                       && !q.checkRetryEligibility(enq.id).eligible
+                       && isDirPresent(h2b2aDst + QStringLiteral("/n12_d1"))
+                       && isDirPresent(d2),
+                   "H2B2A-N12: cancel after dir 0 preserves dir 0, leaves dir 1, blocks Retry");
+        }
+
+        // N13: Cancellation after rename of 2nd dir before fsync -> fsync STILL runs and completes durability
+        {
+            const QString d1 = h2b2aSrc + QStringLiteral("/n13_d1");
+            const QString d2 = h2b2aSrc + QStringLiteral("/n13_d2");
+            verify(QDir().mkpath(d1) && QDir().mkpath(d2), "H2B2A-N13: dirs");
+            auto *job = new LocalBatchMoveJob(
+                {QUrl::fromLocalFile(d1), QUrl::fromLocalFile(d2)},
+                QUrl::fromLocalFile(h2b2aDst));
+            job->setAllowDirectories(true);
+            QThread *killerThread = nullptr;
+            simulateBatchMoveAfterRenameBeforeFsync() = [&](int step) {
+                if (step == 1) {
+                    killerThread = QThread::create([job] {
+                        QMetaObject::invokeMethod(job, [job] { job->kill(KJob::EmitResult); }, Qt::QueuedConnection);
+                    });
+                    killerThread->start();
+                    QThread::msleep(15);
+                }
+            };
+            QEventLoop loop;
+            QObject::connect(job, &KJob::result, &loop, &QEventLoop::quit);
+            job->start();
+            loop.exec();
+            if (killerThread) {
+                killerThread->wait();
+                delete killerThread;
+            }
+            resetBatchTestHooks();
+            verify(job->publishedCount() == 2 && job->durableCount() == 2
+                       && isDirPresent(h2b2aDst + QStringLiteral("/n13_d1"))
+                       && isDirPresent(h2b2aDst + QStringLiteral("/n13_d2")),
+                   "H2B2A-N13: cancel after 2nd rename still completes fsync durability gate");
+            delete job;
+        }
+
+        // GUI / Production Policy Containment: MoveSafetyPolicy & default LocalBatchMoveJob still block dir/mixed batches
+        {
+            const QString g1 = h2b2aSrc + QStringLiteral("/gui_d1");
+            const QString g2 = h2b2aSrc + QStringLiteral("/gui_d2");
+            const QString gf = h2b2aSrc + QStringLiteral("/gui_f1.txt");
+            verify(QDir().mkpath(g1) && QDir().mkpath(g2) && writeFileBytes(gf, "GF"), "H2B2A-GUI: fixtures");
+
+            const auto evalTwoDirs = MoveSafetyPolicy::evaluate(
+                {QUrl::fromLocalFile(g1), QUrl::fromLocalFile(g2)},
+                QUrl::fromLocalFile(h2b2aDst),
+                true);
+            verify(evalTwoDirs.allowed
+                       && evalTwoDirs.decision == MovePolicyDecision::AllowedBatchSameVolumeBtrfsMixed,
+                   "H2B2B-GUI1: MoveSafetyPolicy::evaluate() allows qualified 2-directory Btrfs batch move");
+
+            const auto evalMixed = MoveSafetyPolicy::evaluate(
+                {QUrl::fromLocalFile(gf), QUrl::fromLocalFile(g1)},
+                QUrl::fromLocalFile(h2b2aDst),
+                true);
+            verify(evalMixed.allowed
+                       && evalMixed.decision == MovePolicyDecision::AllowedBatchSameVolumeBtrfsMixed,
+                   "H2B2B-GUI2: MoveSafetyPolicy::evaluate() allows qualified mixed file+dir Btrfs batch move");
+
+            // Default LocalBatchMoveJob (allowDirectories == false) still fails closed without explicit opt-in
+            auto *defaultJob = new LocalBatchMoveJob(
+                {QUrl::fromLocalFile(gf), QUrl::fromLocalFile(g1)},
+                QUrl::fromLocalFile(h2b2aDst));
+            QEventLoop loop;
+            QObject::connect(defaultJob, &KJob::result, &loop, &QEventLoop::quit);
+            defaultJob->start();
+            loop.exec();
+            verify(defaultJob->error() != KJob::NoError
+                       && defaultJob->outcome() == BatchMoveOutcome::FullRefusalBeforeExecution
+                       && QFileInfo::exists(gf) && isDirPresent(g1),
+                   "H2B2A-GUI3: default LocalBatchMoveJob without setAllowDirectories(true) fails closed");
+            delete defaultJob;
+        }
+
+        // H.2B.2B Undo/Redo, Partial Undo Fence, Directory Identity & Policy Tests
+        {
+            const QString h2b2bSrc = srcRoot + QStringLiteral("/h2b2b_src");
+            const QString h2b2bDst = dstRoot + QStringLiteral("/h2b2b_dst");
+            verify(QDir().mkpath(h2b2bSrc) && QDir().mkpath(h2b2bDst), "H2B2B: base dirs");
+
+            // UR1: Mixed batch (2 files + 2 multi-level dirs with Unicode/spaces) -> compound Undo & Redo
+            {
+                const QString f1 = h2b2bSrc + QStringLiteral("/ur1 plik.txt");
+                const QString f2 = h2b2bSrc + QStringLiteral("/.ur1_ukryty");
+                const QString d1 = h2b2bSrc + QStringLiteral("/ur1 katalog zażółć");
+                const QString d2 = h2b2bSrc + QStringLiteral("/ur1_dir2");
+                verify(QDir().mkpath(d1 + QStringLiteral("/nested/deep")) && QDir().mkpath(d2), "H2B2B-UR1: dirs");
+                const QString df1 = d1 + QStringLiteral("/nested/deep/inner.bin");
+                const QString df2 = d2 + QStringLiteral("/d2.txt");
+                verify(writeFileBytes(f1, "UR1_F1")
+                           && writeFileBytes(f2, "UR1_F2")
+                           && writeFileBytes(df1, "UR1_DEEP_DATA")
+                           && writeFileBytes(df2, "UR1_D2"),
+                       "H2B2B-UR1: files");
+                const quint64 inoF1 = inodeOf(f1);
+                const quint64 inoF2 = inodeOf(f2);
+                const quint64 inoD1 = inodeOf(d1);
+                const quint64 inoD2 = inodeOf(d2);
+                const quint64 inoDf1 = inodeOf(df1);
+                const QByteArray shaDf1 = sha256File(df1);
+
+                LocalMoveHistory hist;
+                auto *job = new LocalBatchMoveJob(
+                    {QUrl::fromLocalFile(f1), QUrl::fromLocalFile(d1),
+                     QUrl::fromLocalFile(f2), QUrl::fromLocalFile(d2)},
+                    QUrl::fromLocalFile(h2b2bDst));
+                job->setAllowDirectories(true);
+                hist.recordWhenCompleted(job, 1);
+                QEventLoop loop;
+                QObject::connect(job, &KJob::result, &loop, &QEventLoop::quit);
+                job->start();
+                loop.exec();
+                verify(job->error() == KJob::NoError
+                           && job->outcome() == BatchMoveOutcome::FullSuccess
+                           && hist.canUndo() && !hist.canRedo(),
+                       "H2B2B-UR1: mixed batch Move succeeds and records compound Undo");
+                delete job;
+
+                const QString dstF1 = h2b2bDst + QStringLiteral("/ur1 plik.txt");
+                const QString dstF2 = h2b2bDst + QStringLiteral("/.ur1_ukryty");
+                const QString dstD1 = h2b2bDst + QStringLiteral("/ur1 katalog zażółć");
+                const QString dstD2 = h2b2bDst + QStringLiteral("/ur1_dir2");
+                const QString dstDf1 = dstD1 + QStringLiteral("/nested/deep/inner.bin");
+                verify(inodeOf(dstF1) == inoF1 && inodeOf(dstF2) == inoF2
+                           && inodeOf(dstD1) == inoD1 && inodeOf(dstD2) == inoD2
+                           && inodeOf(dstDf1) == inoDf1
+                           && sha256File(dstDf1) == shaDf1,
+                       "H2B2B-UR1: Move preserved inodes and SHA-256");
+
+                // Compound Undo (Ctrl+Z)
+                KJob *undoJob = hist.undo();
+                verify(undoJob != nullptr, "H2B2B-UR1: undo job created");
+                {
+                    QEventLoop uLoop;
+                    QObject::connect(undoJob, &KJob::result, &uLoop, &QEventLoop::quit);
+                    undoJob->exec();
+                }
+                verify(undoJob->error() == KJob::NoError
+                           && !hist.canUndo() && hist.canRedo()
+                           && !QFileInfo::exists(dstF1) && !QFileInfo::exists(dstD1)
+                           && inodeOf(f1) == inoF1 && inodeOf(f2) == inoF2
+                           && inodeOf(d1) == inoD1 && inodeOf(d2) == inoD2
+                           && inodeOf(df1) == inoDf1
+                           && sha256File(df1) == shaDf1,
+                       "H2B2B-UR1: compound Undo restored all 4 items with preserved inodes and SHA-256");
+                delete undoJob;
+
+                // Compound Redo (Ctrl+Y)
+                KJob *redoJob = hist.redo();
+                verify(redoJob != nullptr, "H2B2B-UR1: redo job created");
+                {
+                    QEventLoop rLoop;
+                    QObject::connect(redoJob, &KJob::result, &rLoop, &QEventLoop::quit);
+                    redoJob->exec();
+                }
+                verify(redoJob->error() == KJob::NoError
+                           && hist.canUndo() && !hist.canRedo()
+                           && !QFileInfo::exists(f1) && !QFileInfo::exists(d1)
+                           && inodeOf(dstF1) == inoF1 && inodeOf(dstF2) == inoF2
+                           && inodeOf(dstD1) == inoD1 && inodeOf(dstD2) == inoD2
+                           && inodeOf(dstDf1) == inoDf1
+                           && sha256File(dstDf1) == shaDf1,
+                       "H2B2B-UR1: compound Redo re-moved all 4 items with preserved inodes and SHA-256");
+                delete redoJob;
+            }
+
+            // UR2: Collision at original source blocks Undo in Preflight before any mutation
+            {
+                const QString d1 = h2b2bSrc + QStringLiteral("/ur2_d1");
+                const QString d2 = h2b2bSrc + QStringLiteral("/ur2_d2");
+                verify(QDir().mkpath(d1) && QDir().mkpath(d2), "H2B2B-UR2: dirs");
+                LocalMoveHistory hist;
+                auto *job = new LocalBatchMoveJob(
+                    {QUrl::fromLocalFile(d1), QUrl::fromLocalFile(d2)},
+                    QUrl::fromLocalFile(h2b2bDst));
+                job->setAllowDirectories(true);
+                hist.recordWhenCompleted(job, 1);
+                QEventLoop loop;
+                QObject::connect(job, &KJob::result, &loop, &QEventLoop::quit);
+                job->start();
+                loop.exec();
+                verify(job->error() == KJob::NoError && hist.canUndo(), "H2B2B-UR2: initial Move ok");
+                delete job;
+
+                verify(QDir().mkpath(d1), "H2B2B-UR2: create collision at source d1");
+                KJob *undoJob = hist.undo();
+                verify(undoJob != nullptr, "H2B2B-UR2: undo job created");
+                undoJob->exec();
+                verify(undoJob->error() != KJob::NoError
+                           && isDirPresent(h2b2bDst + QStringLiteral("/ur2_d1"))
+                           && isDirPresent(h2b2bDst + QStringLiteral("/ur2_d2"))
+                           && !isDirPresent(d2),
+                       "H2B2B-UR2: Undo preflight collision blocks entire Undo before moving d2");
+                delete undoJob;
+            }
+
+            // UR3: Directory modified between Move and Undo -> blocked in Preflight
+            {
+                const QString d1 = h2b2bSrc + QStringLiteral("/ur3_d1");
+                const QString d2 = h2b2bSrc + QStringLiteral("/ur3_d2");
+                verify(QDir().mkpath(d1) && QDir().mkpath(d2), "H2B2B-UR3: dirs");
+                LocalMoveHistory hist;
+                auto *job = new LocalBatchMoveJob(
+                    {QUrl::fromLocalFile(d1), QUrl::fromLocalFile(d2)},
+                    QUrl::fromLocalFile(h2b2bDst));
+                job->setAllowDirectories(true);
+                hist.recordWhenCompleted(job, 1);
+                QEventLoop loop;
+                QObject::connect(job, &KJob::result, &loop, &QEventLoop::quit);
+                job->start();
+                loop.exec();
+                verify(job->error() == KJob::NoError && hist.canUndo(), "H2B2B-UR3: initial Move ok");
+                delete job;
+
+                verify(writeFileBytes(h2b2bDst + QStringLiteral("/ur3_d1/tamper.txt"), "X"),
+                       "H2B2B-UR3: modify moved dir");
+                KJob *undoJob = hist.undo();
+                verify(undoJob != nullptr, "H2B2B-UR3: undo job created");
+                undoJob->exec();
+                verify(undoJob->error() != KJob::NoError
+                           && isDirPresent(h2b2bDst + QStringLiteral("/ur3_d1"))
+                           && isDirPresent(h2b2bDst + QStringLiteral("/ur3_d2"))
+                           && !isDirPresent(d2),
+                       "H2B2B-UR3: modified directory blocks Undo in Preflight before moving d2");
+                delete undoJob;
+            }
+
+            // UR4: Partial Undo (step 0 d2 succeeds, step 1 d1 collides mid-Undo) -> preserves both, fences history
+            {
+                const QString prevFile = h2b2bSrc + QStringLiteral("/ur4_prev.txt");
+                verify(writeFileBytes(prevFile, "PREV"), "H2B2B-UR4: prevFile");
+                LocalMoveHistory hist;
+                auto *prevJob = new LocalFileMoveJob(
+                    QUrl::fromLocalFile(prevFile),
+                    QUrl::fromLocalFile(h2b2bDst + QStringLiteral("/ur4_prev.txt")));
+                hist.recordWhenCompleted(prevJob, 1);
+                prevJob->exec();
+                verify(prevJob->error() == KJob::NoError && hist.canUndo(), "H2B2B-UR4: prev move ok");
+                delete prevJob;
+
+                const QString d1 = h2b2bSrc + QStringLiteral("/ur4_d1");
+                const QString d2 = h2b2bSrc + QStringLiteral("/ur4_d2");
+                verify(QDir().mkpath(d1) && QDir().mkpath(d2), "H2B2B-UR4: dirs");
+                auto *job = new LocalBatchMoveJob(
+                    {QUrl::fromLocalFile(d1), QUrl::fromLocalFile(d2)},
+                    QUrl::fromLocalFile(h2b2bDst));
+                job->setAllowDirectories(true);
+                hist.recordWhenCompleted(job, 2);
+                QEventLoop loop;
+                QObject::connect(job, &KJob::result, &loop, &QEventLoop::quit);
+                job->start();
+                loop.exec();
+                verify(job->error() == KJob::NoError && hist.canUndo(), "H2B2B-UR4: batch move ok");
+                delete job;
+
+                // Undo runs in reverse: step 0 = d2, step 1 = d1. Inject collision at d1 right before step 1!
+                simulateBatchMoveBeforeStep() = [&](int step) {
+                    if (step == 1) {
+                        QDir().mkpath(d1);
+                    }
+                };
+                KJob *undoJob = hist.undo();
+                verify(undoJob != nullptr, "H2B2B-UR4: undo job created");
+                undoJob->exec();
+                resetBatchTestHooks();
+
+                verify(undoJob->error() != KJob::NoError
+                           && isDirPresent(d2)
+                           && isDirPresent(h2b2bDst + QStringLiteral("/ur4_d1"))
+                           && !hist.canUndo()
+                           && !hist.canRedo(),
+                       "H2B2B-UR4: partial Undo preserves d2 at src and d1 at dst, blocks Redo & fences prevFile Undo");
+                delete undoJob;
+            }
+
+            // UR5: Partial failure during Move (fsync error at step 1) -> no Undo record, Retry blocked
+            {
+                const QString d1 = h2b2bSrc + QStringLiteral("/ur5_d1");
+                const QString d2 = h2b2bSrc + QStringLiteral("/ur5_d2");
+                verify(QDir().mkpath(d1) && QDir().mkpath(d2), "H2B2B-UR5: dirs");
+                LocalMoveHistory hist;
+                TransferQueueController q;
+                simulateBatchMoveDestinationFsyncErrorAtStep() = {1, EIO};
+                TransferTaskDescriptor desc;
+                desc.title = QStringLiteral("H2B2B-UR5");
+                desc.type = TransferOperationType::Move;
+                desc.backend = TransferBackendKind::LocalNative;
+                desc.sources = {QUrl::fromLocalFile(d1), QUrl::fromLocalFile(d2)};
+                desc.destination = QUrl::fromLocalFile(h2b2bDst);
+                desc.startMode = TransferJobStartMode::ControllerStarts;
+                desc.jobFactory = [&]() -> KJob * {
+                    auto *j = new LocalBatchMoveJob(
+                        {QUrl::fromLocalFile(d1), QUrl::fromLocalFile(d2)},
+                        QUrl::fromLocalFile(h2b2bDst), &q);
+                    j->setAllowDirectories(true);
+                    hist.recordWhenCompleted(j, 1);
+                    return j;
+                };
+                const auto enq = q.enqueue(std::move(desc));
+                verify(waitUntil([&] {
+                    const auto s = q.taskSnapshot(enq.id);
+                    return s.has_value() && s->state == TransferTaskState::Failed;
+                }), "H2B2B-UR5: partial fsync failure fails task");
+                resetBatchTestHooks();
+                verify(!hist.canUndo() && !q.checkRetryEligibility(enq.id).eligible,
+                       "H2B2B-UR5: partial Move creates no Undo record and blocks Retry");
+            }
+
+            // UR6: Non-Btrfs FS refused by MoveSafetyPolicy::evaluate() for mixed batch
+            {
+                const QString d1 = h2b2bSrc + QStringLiteral("/ur6_d1");
+                const QString f1 = h2b2bSrc + QStringLiteral("/ur6_f1.txt");
+                verify(QDir().mkpath(d1) && writeFileBytes(f1, "U6"), "H2B2B-UR6: fixtures");
+                simulateBatchMoveUnsupportedFsMagic() = EXT4_SUPER_MAGIC;
+                const auto evalExt4 = MoveSafetyPolicy::evaluate(
+                    {QUrl::fromLocalFile(f1), QUrl::fromLocalFile(d1)},
+                    QUrl::fromLocalFile(h2b2bDst),
+                    true);
+                resetBatchTestHooks();
+                verify(!evalExt4.allowed
+                           && evalExt4.decision == MovePolicyDecision::RefusedLocalContainment,
+                       "H2B2B-UR6: non-Btrfs mixed batch move refused fail-closed by MoveSafetyPolicy");
+            }
+        }
     }
 
     resetBatchTestHooks();

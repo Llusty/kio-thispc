@@ -682,12 +682,14 @@ int main(int argc, char **argv)
         verify(::symlink(QFile::encodeName(d1).constData(), QFile::encodeName(lnkDir).constData()) == 0,
                "Neg17: standalone symlink to dir created");
 
-        verify(!MoveSafetyPolicy::evaluate({QUrl::fromLocalFile(d1), QUrl::fromLocalFile(d2)},
-                                           QUrl::fromLocalFile(dstRoot), true).allowed,
-               "Neg17a: multi-directory batch move refused fail-closed");
-        verify(!MoveSafetyPolicy::evaluate({QUrl::fromLocalFile(d1), QUrl::fromLocalFile(f1)},
-                                           QUrl::fromLocalFile(dstRoot), true).allowed,
-               "Neg17b: mixed file + directory batch move refused fail-closed");
+        verify(MoveSafetyPolicy::evaluate({QUrl::fromLocalFile(d1), QUrl::fromLocalFile(d2)},
+                                          QUrl::fromLocalFile(dstRoot), true).decision
+                   == MovePolicyDecision::AllowedBatchSameVolumeBtrfsMixed,
+               "Neg17a: multi-directory batch move routes to AllowedBatchSameVolumeBtrfsMixed in H.2B.2B");
+        verify(MoveSafetyPolicy::evaluate({QUrl::fromLocalFile(d1), QUrl::fromLocalFile(f1)},
+                                          QUrl::fromLocalFile(dstRoot), true).decision
+                   == MovePolicyDecision::AllowedBatchSameVolumeBtrfsMixed,
+               "Neg17b: mixed file + directory batch move routes to AllowedBatchSameVolumeBtrfsMixed in H.2B.2B");
         verify(!MoveSafetyPolicy::evaluate({QUrl::fromLocalFile(lnkDir)},
                                            QUrl::fromLocalFile(dstRoot), true).allowed,
                "Neg17c: standalone symlink-to-dir move refused fail-closed");

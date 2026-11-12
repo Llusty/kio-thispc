@@ -500,6 +500,7 @@ public:
         bool copy = false;
         bool directory = false;
         bool batch = false;
+        bool batchHasDirectories = false;
         QUrl source;
         QUrl destination;
         quint64 serial = 0;
@@ -509,6 +510,7 @@ public:
         LocalDirectoryIdentity directoryIdentity;
         QList<QPair<QUrl, QUrl>> batchPairs;
         QList<LocalRegularFileIdentity> batchIdentities;
+        QList<BatchMoveExpectedItem> batchExpectedItems;
     };
 
     explicit LocalMoveHistory(QObject *parent = nullptr)
@@ -558,18 +560,46 @@ public:
                 && res.publishedCount == res.totalCount
                 && res.durableCount == res.totalCount
                 && !res.partialMoveOutcome
+                && res.items.size() == res.totalCount
                 && !job->property("thispcOverwritesDestination").toBool()
                 && !job->property("thispcPartialMoveOutcome").toBool()
                 && !job->property("thispcBatchPartiallyCompleted").toBool()) {
                 QList<QPair<QUrl, QUrl>> pairs;
-                QList<LocalRegularFileIdentity> ids;
+                QList<BatchMoveExpectedItem> expectedItems;
                 pairs.reserve(res.items.size());
-                ids.reserve(res.items.size());
+                expectedItems.reserve(res.items.size());
+                bool hasDirs = false;
+                bool allItemsValid = true;
                 for (const auto &it : res.items) {
+                    if (!it.destinationPublished || !it.durabilityConfirmed) {
+                        allItemsValid = false;
+                        break;
+                    }
+                    BatchMoveExpectedItem exp;
+                    exp.kind = it.kind;
+                    if (it.kind == BatchMoveItemKind::Directory) {
+                        hasDirs = true;
+                        if (!it.movedDirIdentity.valid || !it.movedDirSnapshot.valid) {
+                            allItemsValid = false;
+                            break;
+                        }
+                        exp.dirIdentity = it.movedDirIdentity;
+                        exp.dirSnapshot = it.movedDirSnapshot;
+                    } else {
+                        if (!it.movedIdentity.valid) {
+                            allItemsValid = false;
+                            break;
+                        }
+                        exp.fileIdentity = it.movedIdentity;
+                    }
                     pairs.append({it.sourceUrl, it.destinationUrl});
-                    ids.append(it.movedIdentity);
+                    expectedItems.append(exp);
                 }
-                recordCompletedBatchMove(pairs, ids, serial);
+                if (allItemsValid) {
+                    recordCompletedMixedBatchMove(pairs, expectedItems, hasDirs, serial);
+                } else {
+                    fenceIrreversible();
+                }
             } else if (res.publishedCount > 0 || res.partialMoveOutcome
                        || job->property("thispcPartialMoveOutcome").toBool()
                        || job->property("thispcBatchPartiallyCompleted").toBool()) {
@@ -642,14 +672,33 @@ public:
         const QList<LocalRegularFileIdentity> &identities,
         quint64 serial = 0)
     {
-        if (m_busy || pairs.size() < 2 || pairs.size() != identities.size()) {
+        QList<BatchMoveExpectedItem> items;
+        items.reserve(identities.size());
+        for (const auto &id : identities) {
+            BatchMoveExpectedItem exp;
+            exp.kind = BatchMoveItemKind::RegularFile;
+            exp.fileIdentity = id;
+            items.append(exp);
+        }
+        return recordCompletedMixedBatchMove(pairs, items, false, serial);
+    }
+
+    bool recordCompletedMixedBatchMove(
+        const QList<QPair<QUrl, QUrl>> &pairs,
+        const QList<BatchMoveExpectedItem> &expectedItems,
+        bool hasDirectories,
+        quint64 serial = 0)
+    {
+        if (m_busy || pairs.size() < 2 || pairs.size() != expectedItems.size()) {
             return false;
         }
+        QList<LocalRegularFileIdentity> legacyIds;
+        legacyIds.reserve(expectedItems.size());
         for (int i = 0; i < pairs.size(); ++i) {
             const QUrl &src = pairs.at(i).first;
             const QUrl &dst = pairs.at(i).second;
-            const LocalRegularFileIdentity &id = identities.at(i);
-            if (!src.isLocalFile() || !dst.isLocalFile() || !id.valid) {
+            const BatchMoveExpectedItem &exp = expectedItems.at(i);
+            if (!src.isLocalFile() || !dst.isLocalFile()) {
                 return false;
             }
             struct stat srcSt {};
@@ -666,16 +715,33 @@ public:
                 || ::lstat(dstEnc.constData(), &dstSt) != 0) {
                 return false;
             }
-            const LocalRegularFileIdentity curId = LocalRegularFileIdentity::fromStat(dstStx, dstSt);
-            if (!curId.strictlyUnchangedForHistory(id)) {
-                return false;
+            if (exp.kind == BatchMoveItemKind::Directory) {
+                if (!hasDirectories || !exp.dirIdentity.valid || !exp.dirSnapshot.valid) {
+                    return false;
+                }
+                const LocalDirectoryIdentity curDirId = LocalDirectoryIdentity::fromStat(dstStx, dstSt);
+                if (!curDirId.strictlyUnchangedForHistory(exp.dirIdentity)) {
+                    return false;
+                }
+                legacyIds.append(LocalRegularFileIdentity{});
+            } else {
+                if (!exp.fileIdentity.valid) {
+                    return false;
+                }
+                const LocalRegularFileIdentity curId = LocalRegularFileIdentity::fromStat(dstStx, dstSt);
+                if (!curId.strictlyUnchangedForHistory(exp.fileIdentity)) {
+                    return false;
+                }
+                legacyIds.append(exp.fileIdentity);
             }
         }
         while (m_records.size() > m_position) m_records.removeLast();
         Record record;
         record.batch = true;
+        record.batchHasDirectories = hasDirectories;
         record.batchPairs = pairs;
-        record.batchIdentities = identities;
+        record.batchIdentities = legacyIds;
+        record.batchExpectedItems = expectedItems;
         record.serial = serial;
         record.internalOrder = m_nextOrder++;
         m_records.push_back(record);
@@ -879,29 +945,31 @@ private:
         }
         const Record &rec = m_records.at(recordIndex);
         if (!rec.batch || rec.batchPairs.size() < 2
-            || rec.batchPairs.size() != rec.batchIdentities.size()) {
+            || rec.batchPairs.size() != rec.batchExpectedItems.size()) {
             return nullptr;
         }
         QList<QPair<QUrl, QUrl>> pairs;
-        QList<LocalRegularFileIdentity> expectedIds;
+        QList<BatchMoveExpectedItem> expectedItems;
         const qsizetype n = rec.batchPairs.size();
         pairs.reserve(n);
-        expectedIds.reserve(n);
+        expectedItems.reserve(n);
         if (isUndo) {
             for (qsizetype k = n - 1; k >= 0; --k) {
                 pairs.append({rec.batchPairs.at(k).second, rec.batchPairs.at(k).first});
-                expectedIds.append(rec.batchIdentities.at(k));
+                expectedItems.append(rec.batchExpectedItems.at(k));
             }
         } else {
             for (qsizetype k = 0; k < n; ++k) {
                 pairs.append(rec.batchPairs.at(k));
-                expectedIds.append(rec.batchIdentities.at(k));
+                expectedItems.append(rec.batchExpectedItems.at(k));
             }
         }
 
         m_busy = true;
         Q_EMIT availabilityChanged(false, false);
-        auto *job = new LocalBatchMoveJob(pairs, this, expectedIds, true);
+        auto *job = new LocalBatchMoveJob(pairs, this, {}, true);
+        job->setExpectedItems(expectedItems);
+        job->setAllowDirectories(rec.batchHasDirectories);
         job->setAutoDelete(false);
         connect(job, &KJob::result, this,
                 [this, job, successPosition, recordIndex, isUndo, n](KJob *completed) {
@@ -912,11 +980,24 @@ private:
                         && !res.partialMoveOutcome
                         && recordIndex >= 0 && recordIndex < m_records.size()
                         && m_records.at(recordIndex).batchPairs.size() == n
+                        && m_records.at(recordIndex).batchExpectedItems.size() == n
                         && res.items.size() == n) {
                         for (qsizetype step = 0; step < n; ++step) {
                             const qsizetype origIdx = isUndo ? (n - 1 - step) : step;
-                            m_records[recordIndex].batchIdentities[origIdx] =
-                                res.items.at(step).movedIdentity;
+                            const BatchMoveItemResult &itemRes = res.items.at(step);
+                            BatchMoveExpectedItem &stored =
+                                m_records[recordIndex].batchExpectedItems[origIdx];
+                            stored.kind = itemRes.kind;
+                            if (itemRes.kind == BatchMoveItemKind::Directory) {
+                                stored.dirIdentity = itemRes.movedDirIdentity;
+                                stored.dirSnapshot = itemRes.movedDirSnapshot;
+                            } else {
+                                stored.fileIdentity = itemRes.movedIdentity;
+                                if (origIdx < m_records[recordIndex].batchIdentities.size()) {
+                                    m_records[recordIndex].batchIdentities[origIdx] =
+                                        itemRes.movedIdentity;
+                                }
+                            }
                         }
                         m_position = successPosition;
                     } else if (res.publishedCount > 0 || res.partialMoveOutcome
