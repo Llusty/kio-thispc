@@ -1567,6 +1567,29 @@ public:
             return;
         }
         const bool move = action == Qt::MoveAction;
+        if (move) {
+            bool allLocal = destination.isLocalFile();
+            if (allLocal) {
+                for (const QUrl &u : urls) {
+                    if (!u.isLocalFile()) {
+                        allLocal = false;
+                        break;
+                    }
+                }
+            }
+            if (allLocal && !isSingleRegularLocalFile(urls)) {
+                m_lastMovePolicyEvaluation = {
+                    MovePolicyDecision::RefusedLocalContainment,
+                    false,
+                    {},
+                    moveContainmentErrorMessage()};
+                if (m_showRecoveryFence) {
+                    m_showRecoveryFence(m_lastMovePolicyEvaluation.refusalReason);
+                }
+                if (onFinished) onFinished(nullptr);
+                return;
+            }
+        }
         if (!evaluateAndEnforceMovePolicy(urls, destination, move)) {
             if (onFinished) onFinished(nullptr);
             return;
@@ -2293,6 +2316,8 @@ private:
                         ? singleTargetDestination
                         : childUrlWithName(destinationDirectory, cleanSrcName);
                     job = new LocalDirectoryMoveJob(sources.first(), target, this);
+                } else if (move && launchEval.decision == MovePolicyDecision::AllowedBatchSameVolumeBtrfsRegularFiles) {
+                    job = new LocalBatchMoveJob(sources, destinationDirectory, this);
                 } else if (isSingleRegularLocalFile(sources)) {
                     const QUrl target = singleTargetDestination.isValid()
                         ? singleTargetDestination
@@ -2360,7 +2385,8 @@ private:
                         if (!successMessage.isEmpty() && m_showRecoveryFence) {
                             m_showRecoveryFence(successMessage);
                         }
-                    } else if (res->property("thispcPartialMoveOutcome").toBool()) {
+                    } else if (res->property("thispcPartialMoveOutcome").toBool()
+                               || res->property("thispcBatchPartiallyCompleted").toBool()) {
                         if (m_showRecoveryFence && !res->errorText().isEmpty()) {
                             m_showRecoveryFence(res->errorText());
                         }
@@ -2445,6 +2471,30 @@ private:
                 job->start();
                 return true;
             }
+        }
+        if (move && sources.size() >= 2) {
+            const MoveOperationClassification batchMoveEval = MoveSafetyPolicy::evaluate(sources, destinationDirectory, true);
+            if (batchMoveEval.decision == MovePolicyDecision::AllowedBatchSameVolumeBtrfsRegularFiles) {
+                auto *job = new LocalBatchMoveJob(sources, destinationDirectory, this);
+                if (m_undoController) {
+                    m_undoController->recordNativeTransfer(job, true);
+                }
+                FileOperationContext jobCtx = opContext.type != FileOperationType::Custom ? opContext
+                    : FileOperationContext::create(FileOperationType::Move, sources, destinationDirectory);
+                for (const QUrl &s : sources) {
+                    const QString leaf = QFileInfo(QDir::cleanPath(s.toLocalFile())).fileName();
+                    jobCtx.destinationUrls.append(childUrlWithName(destinationDirectory, leaf));
+                }
+                watchFileOperation(job, successMessage, clearClipboard, title, {}, jobCtx);
+                job->start();
+                return true;
+            }
+            if (m_showRecoveryFence) {
+                m_showRecoveryFence(batchMoveEval.refusalReason.isEmpty()
+                                        ? moveContainmentErrorMessage()
+                                        : batchMoveEval.refusalReason);
+            }
+            return true;
         }
         if (sources.size() > 1 || !isSingleRegularLocalFile(sources)) {
             if (move) {

@@ -953,6 +953,10 @@ public:
             return reject(trLocal("Operacja została już wykonana w systemie plików (brak potwierdzenia trwałości) — automatyczne ani ręczne ponowienie jest zablokowane",
                                   "Operation already published on filesystem (unconfirmed durability) — retry is blocked"));
         }
+        if (task->partialBatchPublished) {
+            return reject(trLocal("Część plików z partii została już przeniesiona — automatyczne ani ręczne ponowienie całej partii jest zablokowane",
+                                  "Part of the batch was already moved — batch retry is blocked"));
+        }
 
         // Rule: Must have a valid descriptor and job factory
         if (!task->desc.jobFactory) {
@@ -1361,6 +1365,7 @@ private:
         QDateTime endTimeUtc;
         bool historyRecorded = false;
         bool partialMoveOutcome = false;
+        bool partialBatchPublished = false;
         QString historyUuid;
         quint64 retryOfTaskId = 0;
         quint64 retriedAsTaskId = 0;
@@ -2010,12 +2015,25 @@ private:
         if (error == 0) {
             finalize(task, TransferTaskState::Completed, TransferFailureKind::None, 0, {});
         } else if (error == KJob::KilledJobError || error == KIO::ERR_USER_CANCELED) {
-            finalize(task, TransferTaskState::Cancelled, TransferFailureKind::None, error, {});
+            if (job->property("thispcBatchPublishedCount").toInt() > 0
+                || job->property("thispcBatchPartiallyCompleted").toBool()) {
+                task->partialBatchPublished = true;
+            }
+            const QString cancelText = (task->partialBatchPublished && !job->errorText().isEmpty())
+                ? job->errorText()
+                : QString();
+            finalize(task, TransferTaskState::Cancelled, TransferFailureKind::None, error, cancelText);
         } else {
             if (job->property("thispcPartialMoveOutcome").toBool()) {
                 task->partialMoveOutcome = true;
             }
-            const QString errMsg = (job->property("thispcPartialMoveOutcome").toBool() && !job->errorText().isEmpty())
+            if (job->property("thispcBatchPublishedCount").toInt() > 0
+                || job->property("thispcBatchPartiallyCompleted").toBool()) {
+                task->partialBatchPublished = true;
+            }
+            const QString errMsg = ((job->property("thispcPartialMoveOutcome").toBool()
+                                     || job->property("thispcBatchPartiallyCompleted").toBool())
+                                    && !job->errorText().isEmpty())
                 ? job->errorText()
                 : job->errorString();
             finalize(task, TransferTaskState::Failed, TransferFailureKind::JobError,

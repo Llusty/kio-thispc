@@ -26,6 +26,7 @@
 #include "browsercommon.h"
 #include "localfileoverwrite.h"
 #include "localdirectorymovejob.h"
+#include "localbatchmovejob.h"
 
 #include <KIO/CopyJob>
 #include <KIO/DeleteJob>
@@ -219,6 +220,7 @@ enum class MovePolicyDecision {
     NotAMove,
     AllowedSingleRegularLocalFile,
     AllowedSingleSameVolumeBtrfsDirectory,
+    AllowedBatchSameVolumeBtrfsRegularFiles,
     AllowedRemoteToRemote,
     RefusedMtp,
     RefusedInvalidInput,
@@ -358,6 +360,23 @@ inline MoveOperationClassification evaluate(
                 result.refusalReason = dirQual.reason.isEmpty() ? moveContainmentErrorMessage() : dirQual.reason;
                 return result;
             }
+        }
+        if (sources.size() >= 2) {
+            BatchMovePreflight batchPreflight;
+            if (LocalBatchMoveDetail::qualifyFastForPolicy(
+                    sources, destinationDirectory, &batchPreflight)) {
+                result.decision = MovePolicyDecision::AllowedBatchSameVolumeBtrfsRegularFiles;
+                result.allowed = true;
+                return result;
+            }
+            result.decision = (batchPreflight.error == BatchMoveError::InvalidInput)
+                ? MovePolicyDecision::RefusedInvalidInput
+                : MovePolicyDecision::RefusedLocalContainment;
+            result.allowed = false;
+            result.refusalReason = batchPreflight.reason.isEmpty()
+                ? moveContainmentErrorMessage()
+                : batchPreflight.reason;
+            return result;
         }
         result.decision = MovePolicyDecision::RefusedLocalContainment;
         result.allowed = false;

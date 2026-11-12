@@ -628,7 +628,7 @@ int main(int argc, char **argv)
                "Scenario F: non-Btrfs directory move refused fail-closed before any modification");
     }
 
-    // Scenario G: Multiple regular files move refusal before modification
+    // Scenario G: Unqualified / non-Btrfs multiple regular files move refusal before modification
     {
         const QString fileG1 = files.filePath("multi-g1.txt");
         const QString fileG2 = files.filePath("multi-g2.txt");
@@ -639,13 +639,15 @@ int main(int argc, char **argv)
         cutMimeG->setData(QStringLiteral("application/x-kde-cutselection"), QByteArrayLiteral("1"));
         app.clipboard()->setMimeData(cutMimeG);
 
+        simulateBatchMoveUnsupportedFsMagic() = MSDOS_SUPER_MAGIC;
         lastFenceMessage.clear();
         const int beforeG = completed;
         actions.pasteClipboardInto(rootB);
+        simulateBatchMoveUnsupportedFsMagic() = 0;
         verify(completed == beforeG && QFile::exists(fileG1) && QFile::exists(fileG2)
                    && !QFile::exists(b + "/multi-g1.txt") && !QFile::exists(b + "/multi-g2.txt")
-                   && lastFenceMessage == moveContainmentErrorMessage(),
-               "Scenario G: multiple files move refused fail-closed before any modification");
+                   && !lastFenceMessage.isEmpty(),
+               "Scenario G: non-Btrfs multiple files move refused fail-closed before any modification");
     }
 
     // Scenario H: Conflict during Move - no fallback to KIO
@@ -1073,14 +1075,16 @@ int main(int argc, char **argv)
                "H.1.1-D: LocalTransferJob(move=true) remains strictly fail-closed");
         verify(readFile(dSrc) == "defense", "H.1.1-D: source untouched");
 
-        // Calling startNativeSingleFileTransfer directly with multiple files must NOT dispatch LocalTransferJob(move=true)
+        // Calling startNativeSingleFileTransfer directly with unqualified multiple files must NOT dispatch LocalTransferJob(move=true)
         const int beforeCompD = completed;
         lastFenceMessage.clear();
+        simulateBatchMoveUnsupportedFsMagic() = MSDOS_SUPER_MAGIC;
         const bool handledMulti = actions.startNativeSingleFileTransfer(
             {QUrl::fromLocalFile(dSrc), QUrl::fromLocalFile(files.filePath("btrfs-single-src.txt"))},
             rootB, true, false, {}, {});
-        verify(handledMulti && completed == beforeCompD && lastFenceMessage == moveContainmentErrorMessage(),
-               "H.1.1-D: direct startNativeSingleFileTransfer multi-move blocked fail-closed");
+        simulateBatchMoveUnsupportedFsMagic() = 0;
+        verify(handledMulti && completed == beforeCompD && !lastFenceMessage.isEmpty(),
+               "H.1.1-D: direct startNativeSingleFileTransfer non-Btrfs multi-move blocked fail-closed");
 
         // Defense in depth: UndoController::recordCopyJob must never record uncontained local cross-dir KIO::move
         auto *unsafeKioMove = KIO::move({QUrl::fromLocalFile(dSrc)}, rootB, KIO::HideProgressInfo);
@@ -1230,6 +1234,107 @@ int main(int argc, char **argv)
                "H.2A-E6: watched dir moved safely with DirectoryWatchController without crash");
         QTest::qWait(50);
         watcher.clear();
+
+        setTransferQueueProductionDispatchConnected(false);
+        actions.setQueueController(nullptr);
+    }
+
+    // ------------------------------------------------------------------
+    // Stage 5.3.2H.2B.1: Same-Volume Btrfs Batch File Move Integration (Group F)
+    // ------------------------------------------------------------------
+    {
+        // F1: Legacy Cut+Paste (Ctrl+X / Ctrl+V) of 3 regular files across 2 Btrfs folders + Undo + Redo
+        const QString fDir1 = a + QStringLiteral("/h2b1-src1");
+        const QString fDir2 = a + QStringLiteral("/h2b1-src2");
+        verify(QDir().mkpath(fDir1) && QDir().mkpath(fDir2), "H.2B.1-F1: dirs created");
+        const QString bf1 = fDir1 + QString::fromUtf8("/zażółć.txt");
+        const QString bf2 = fDir2 + QStringLiteral("/drugi plik.txt");
+        const QString bf3 = fDir1 + QStringLiteral("/.ukryty");
+        createFixture(bf1, "B1");
+        createFixture(bf2, "B2");
+        createFixture(bf3, "B3");
+
+        auto *cutBatch = new QMimeData;
+        cutBatch->setUrls({QUrl::fromLocalFile(bf1), QUrl::fromLocalFile(bf2), QUrl::fromLocalFile(bf3)});
+        cutBatch->setData(QStringLiteral("application/x-kde-cutselection"), QByteArrayLiteral("1"));
+        QApplication::clipboard()->setMimeData(cutBatch);
+
+        setTransferQueueProductionDispatchConnected(false);
+        actions.setQueueController(nullptr);
+        const int beforeLegacyB = completed;
+        actions.pasteClipboardInto(rootB);
+        const QString bt1 = b + QString::fromUtf8("/zażółć.txt");
+        const QString bt2 = b + QStringLiteral("/drugi plik.txt");
+        const QString bt3 = b + QStringLiteral("/.ukryty");
+        verify(QTest::qWaitFor([&] { return completed == beforeLegacyB + 1; }, 10000)
+                   && lastError == 0
+                   && !QFileInfo::exists(bf1) && !QFileInfo::exists(bf2) && !QFileInfo::exists(bf3)
+                   && fixtureData(bt1) == "B1" && fixtureData(bt2) == "B2" && fixtureData(bt3) == "B3",
+               "H.2B.1-F1: legacy Cut+Paste moved 3 Btrfs files atomically");
+
+        verify(undo.nativeUndoAvailable(), "H.2B.1-F1: compound batch Undo available");
+        undo.undo();
+        verify(QTest::qWaitFor([&] {
+                   return !undo.m_busy && fixtureData(bf1) == "B1"
+                       && fixtureData(bf2) == "B2" && fixtureData(bf3) == "B3"
+                       && !QFileInfo::exists(bt1);
+               }, 10000) && undo.nativeRedoAvailable(),
+               "H.2B.1-F1: Undo restored all 3 files across 2 folders");
+        undo.redo();
+        verify(QTest::qWaitFor([&] {
+                   return !undo.m_busy && fixtureData(bt1) == "B1"
+                       && fixtureData(bt2) == "B2" && fixtureData(bt3) == "B3"
+                       && !QFileInfo::exists(bf1);
+               }, 10000),
+               "H.2B.1-F1: Redo re-applied batch move cleanly");
+
+        // F2: Queue mode Drag & Drop -> single LocalNative task, plus Duplicate Finder STILL blocks multi-file!
+        TransferQueueController queueCtlF(&parent);
+        actions.setQueueController(&queueCtlF);
+        setTransferQueueProductionDispatchConnected(true);
+        const QString qf1 = fDir1 + QStringLiteral("/q1.txt");
+        const QString qf2 = fDir1 + QStringLiteral("/q2.txt");
+        createFixture(qf1, "Q1");
+        createFixture(qf2, "Q2");
+        const int beforeCompF = completed;
+        actions.transfer({QUrl::fromLocalFile(qf1), QUrl::fromLocalFile(qf2)}, rootB, Qt::MoveAction);
+        verify(queueCtlF.snapshot().tasks.size() == 1
+                   && queueCtlF.snapshot().tasks.first().backend == TransferBackendKind::LocalNative,
+               "H.2B.1-F2: queued batch move creates single LocalNative task");
+        verify(QTest::qWaitFor([&] {
+                   const auto s = queueCtlF.snapshot();
+                   return !s.tasks.isEmpty() && s.tasks.first().state == TransferTaskState::Completed;
+               }, 10000),
+               "H.2B.1-F2: queued batch move completes");
+        verify(completed == beforeCompF
+                   && fixtureData(b + QStringLiteral("/q1.txt")) == "Q1"
+                   && fixtureData(b + QStringLiteral("/q2.txt")) == "Q2",
+               "H.2B.1-F2: queued batch move preserved data with zero legacy double-tracking");
+
+        // Duplicate Finder MUST still reject multi-file Move even on Btrfs
+        lastFenceMessage.clear();
+        int dupCbCount = 0;
+        KJob *dupCbJob = reinterpret_cast<KJob *>(0x1);
+        actions.transferUrls(
+            {QUrl::fromLocalFile(b + QStringLiteral("/q1.txt")), QUrl::fromLocalFile(b + QStringLiteral("/q2.txt"))},
+            rootA, Qt::MoveAction, [&](KJob *j) {
+                ++dupCbCount;
+                dupCbJob = j;
+            });
+        verify(dupCbCount == 1 && dupCbJob == nullptr
+                   && queueCtlF.snapshot().tasks.size() == 1
+                   && lastFenceMessage == moveContainmentErrorMessage(),
+               "H.2B.1-F3: Duplicate Finder transferUrls still blocks Btrfs multi-file Move fail-closed");
+
+        // F4: Mixed file + directory batch stays blocked before queue enqueue (H.2B.2 boundary)
+        const QString mixDir = fDir1 + QStringLiteral("/mixdir");
+        verify(QDir().mkdir(mixDir), "H.2B.1-F4: dir created");
+        const QString mixFile = fDir1 + QStringLiteral("/mixfile.txt");
+        createFixture(mixFile, "MIX");
+        actions.transfer({QUrl::fromLocalFile(mixFile), QUrl::fromLocalFile(mixDir)}, rootB, Qt::MoveAction);
+        verify(queueCtlF.snapshot().tasks.size() == 1
+                   && QFileInfo::exists(mixFile) && QFileInfo::exists(mixDir),
+               "H.2B.1-F4: mixed file+dir batch blocked before queue enqueue");
 
         setTransferQueueProductionDispatchConnected(false);
         actions.setQueueController(nullptr);

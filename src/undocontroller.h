@@ -493,6 +493,19 @@ public:
                     m_redoKinds.clear();
                     updateActions();
                 });
+            } else if (auto *batchMoveJob = qobject_cast<LocalBatchMoveJob *>(job)) {
+                m_nativeHistory->recordWhenCompleted(batchMoveJob, serial);
+                connect(batchMoveJob, &KJob::result, this, [this, serial](KJob *completed) {
+                    if (!completed->property("thispcPartialMoveOutcome").toBool()
+                        && !completed->property("thispcBatchPartiallyCompleted").toBool()) {
+                        return;
+                    }
+                    // Partial batch publish or unconfirmed durability: fence earlier history
+                    // so Ctrl+Z never replays an older command against partially moved paths.
+                    m_irreversibleSerial = qMax(m_irreversibleSerial, serial);
+                    m_redoKinds.clear();
+                    updateActions();
+                });
             }
             return;
         }
@@ -941,6 +954,14 @@ private:
                         : trLocal("Ponawianie zakończone", "Redo completed"),
                     4000);
             } else {
+                if (completed->property("thispcPartialMoveOutcome").toBool()
+                    || completed->property("thispcBatchPartiallyCompleted").toBool()) {
+                    const quint64 fenceSerial = m_manager
+                        ? m_manager->newCommandSerialNumber()
+                        : (m_irreversibleSerial + 1);
+                    m_irreversibleSerial = qMax(m_irreversibleSerial, fenceSerial);
+                    m_redoKinds.clear();
+                }
                 showStatus(completed->errorString(), 7000);
             }
             if (m_refreshViews) m_refreshViews(false);

@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include "localbatchmovejob.h"
 #include "localdirectorymovejob.h"
 #include "localfilecopyjob.h"
 
@@ -498,12 +499,16 @@ public:
     struct Record {
         bool copy = false;
         bool directory = false;
+        bool batch = false;
         QUrl source;
         QUrl destination;
         quint64 serial = 0;
+        quint64 internalOrder = 0;
         qulonglong destinationSize = 0;
         QDateTime destinationModified;
         LocalDirectoryIdentity directoryIdentity;
+        QList<QPair<QUrl, QUrl>> batchPairs;
+        QList<LocalRegularFileIdentity> batchIdentities;
     };
 
     explicit LocalMoveHistory(QObject *parent = nullptr)
@@ -540,6 +545,49 @@ public:
             }
         });
         return true;
+    }
+
+    bool recordWhenCompleted(LocalBatchMoveJob *job, quint64 serial = 0)
+    {
+        if (!job) return false;
+        connect(job, &KJob::result, this, [this, job, serial](KJob *completed) {
+            const BatchMoveResult &res = job->batchResult();
+            if (completed->error() == KJob::NoError
+                && res.outcome == BatchMoveOutcome::FullSuccess
+                && res.totalCount >= 2
+                && res.publishedCount == res.totalCount
+                && res.durableCount == res.totalCount
+                && !res.partialMoveOutcome
+                && !job->property("thispcOverwritesDestination").toBool()
+                && !job->property("thispcPartialMoveOutcome").toBool()
+                && !job->property("thispcBatchPartiallyCompleted").toBool()) {
+                QList<QPair<QUrl, QUrl>> pairs;
+                QList<LocalRegularFileIdentity> ids;
+                pairs.reserve(res.items.size());
+                ids.reserve(res.items.size());
+                for (const auto &it : res.items) {
+                    pairs.append({it.sourceUrl, it.destinationUrl});
+                    ids.append(it.movedIdentity);
+                }
+                recordCompletedBatchMove(pairs, ids, serial);
+            } else if (res.publishedCount > 0 || res.partialMoveOutcome
+                       || job->property("thispcPartialMoveOutcome").toBool()
+                       || job->property("thispcBatchPartiallyCompleted").toBool()) {
+                fenceIrreversible();
+            }
+        });
+        return true;
+    }
+
+    void fenceIrreversible()
+    {
+        if (m_nextOrder > 1) {
+            m_irreversibleOrder = m_nextOrder - 1;
+        }
+        while (m_records.size() > m_position) {
+            m_records.removeLast();
+        }
+        Q_EMIT availabilityChanged(canUndo(), canRedo());
     }
 
     bool recordWhenCompleted(LocalFileCopyJob *job, quint64 serial = 0)
@@ -581,7 +629,55 @@ public:
         record.source = source;
         record.destination = destination;
         record.serial = serial;
+        record.internalOrder = m_nextOrder++;
         record.directoryIdentity = identity;
+        m_records.push_back(record);
+        m_position = m_records.size();
+        Q_EMIT availabilityChanged(canUndo(), canRedo());
+        return true;
+    }
+
+    bool recordCompletedBatchMove(
+        const QList<QPair<QUrl, QUrl>> &pairs,
+        const QList<LocalRegularFileIdentity> &identities,
+        quint64 serial = 0)
+    {
+        if (m_busy || pairs.size() < 2 || pairs.size() != identities.size()) {
+            return false;
+        }
+        for (int i = 0; i < pairs.size(); ++i) {
+            const QUrl &src = pairs.at(i).first;
+            const QUrl &dst = pairs.at(i).second;
+            const LocalRegularFileIdentity &id = identities.at(i);
+            if (!src.isLocalFile() || !dst.isLocalFile() || !id.valid) {
+                return false;
+            }
+            struct stat srcSt {};
+            if (localLstat(src.toLocalFile(), &srcSt) || errno != ENOENT) {
+                return false;
+            }
+            struct statx dstStx {};
+            struct stat dstSt {};
+            const unsigned int mask =
+                STATX_BASIC_STATS | STATX_MNT_ID | STATX_MNT_ID_UNIQUE | STATX_SUBVOL;
+            const QByteArray dstEnc = QFile::encodeName(dst.toLocalFile());
+            if (::syscall(SYS_statx, AT_FDCWD, dstEnc.constData(),
+                          AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT, mask, &dstStx) != 0
+                || ::lstat(dstEnc.constData(), &dstSt) != 0) {
+                return false;
+            }
+            const LocalRegularFileIdentity curId = LocalRegularFileIdentity::fromStat(dstStx, dstSt);
+            if (!curId.strictlyUnchangedForHistory(id)) {
+                return false;
+            }
+        }
+        while (m_records.size() > m_position) m_records.removeLast();
+        Record record;
+        record.batch = true;
+        record.batchPairs = pairs;
+        record.batchIdentities = identities;
+        record.serial = serial;
+        record.internalOrder = m_nextOrder++;
         m_records.push_back(record);
         m_position = m_records.size();
         Q_EMIT availabilityChanged(canUndo(), canRedo());
@@ -601,6 +697,7 @@ public:
         record.source = source;
         record.destination = destination;
         record.serial = serial;
+        record.internalOrder = m_nextOrder++;
         m_records.push_back(record);
         m_position = m_records.size();
         Q_EMIT availabilityChanged(canUndo(), canRedo());
@@ -622,6 +719,7 @@ public:
         record.source = source;
         record.destination = destination;
         record.serial = serial;
+        record.internalOrder = m_nextOrder++;
         record.destinationSize = static_cast<qulonglong>(destinationInfo.size());
         record.destinationModified = destinationInfo.lastModified();
         m_records.push_back(record);
@@ -630,8 +728,16 @@ public:
         return true;
     }
 
-    bool canUndo() const { return !m_busy && m_position > 0; }
-    bool canRedo() const { return !m_busy && m_position < m_records.size(); }
+    bool canUndo() const
+    {
+        return !m_busy && m_position > 0
+            && m_records.at(m_position - 1).internalOrder > m_irreversibleOrder;
+    }
+    bool canRedo() const
+    {
+        return !m_busy && m_position < m_records.size()
+            && m_records.at(m_position).internalOrder > m_irreversibleOrder;
+    }
     qsizetype count() const { return m_records.size(); }
     qsizetype position() const { return m_position; }
     quint64 undoSerial() const
@@ -652,6 +758,9 @@ public:
         if (record.directory) {
             return runDirectoryMove(record.destination, record.source, record.directoryIdentity, target, target);
         }
+        if (record.batch) {
+            return runBatchMove(target, true, target);
+        }
         return runMove(record.destination, record.source, target);
     }
 
@@ -664,6 +773,9 @@ public:
         if (record.copy) return runCopyRedo(record, target);
         if (record.directory) {
             return runDirectoryMove(record.source, record.destination, record.directoryIdentity, target, recordIndex);
+        }
+        if (record.batch) {
+            return runBatchMove(recordIndex, false, target);
         }
         return runMove(record.source, record.destination, target);
     }
@@ -757,6 +869,74 @@ private:
         return job;
     }
 
+    KJob *runBatchMove(
+        qsizetype recordIndex,
+        bool isUndo,
+        qsizetype successPosition)
+    {
+        if (recordIndex < 0 || recordIndex >= m_records.size()) {
+            return nullptr;
+        }
+        const Record &rec = m_records.at(recordIndex);
+        if (!rec.batch || rec.batchPairs.size() < 2
+            || rec.batchPairs.size() != rec.batchIdentities.size()) {
+            return nullptr;
+        }
+        QList<QPair<QUrl, QUrl>> pairs;
+        QList<LocalRegularFileIdentity> expectedIds;
+        const qsizetype n = rec.batchPairs.size();
+        pairs.reserve(n);
+        expectedIds.reserve(n);
+        if (isUndo) {
+            for (qsizetype k = n - 1; k >= 0; --k) {
+                pairs.append({rec.batchPairs.at(k).second, rec.batchPairs.at(k).first});
+                expectedIds.append(rec.batchIdentities.at(k));
+            }
+        } else {
+            for (qsizetype k = 0; k < n; ++k) {
+                pairs.append(rec.batchPairs.at(k));
+                expectedIds.append(rec.batchIdentities.at(k));
+            }
+        }
+
+        m_busy = true;
+        Q_EMIT availabilityChanged(false, false);
+        auto *job = new LocalBatchMoveJob(pairs, this, expectedIds, true);
+        job->setAutoDelete(false);
+        connect(job, &KJob::result, this,
+                [this, job, successPosition, recordIndex, isUndo, n](KJob *completed) {
+                    const BatchMoveResult &res = job->batchResult();
+                    if (completed->error() == KJob::NoError
+                        && res.outcome == BatchMoveOutcome::FullSuccess
+                        && res.durableCount == res.totalCount
+                        && !res.partialMoveOutcome
+                        && recordIndex >= 0 && recordIndex < m_records.size()
+                        && m_records.at(recordIndex).batchPairs.size() == n
+                        && res.items.size() == n) {
+                        for (qsizetype step = 0; step < n; ++step) {
+                            const qsizetype origIdx = isUndo ? (n - 1 - step) : step;
+                            m_records[recordIndex].batchIdentities[origIdx] =
+                                res.items.at(step).movedIdentity;
+                        }
+                        m_position = successPosition;
+                    } else if (res.publishedCount > 0 || res.partialMoveOutcome
+                               || completed->property("thispcPartialMoveOutcome").toBool()
+                               || completed->property("thispcBatchPartiallyCompleted").toBool()) {
+                        if (recordIndex >= 0 && recordIndex < m_records.size()) {
+                            m_records.removeAt(recordIndex);
+                        }
+                        if (m_position > m_records.size()) {
+                            m_position = m_records.size();
+                        }
+                        fenceIrreversible();
+                    }
+                    m_busy = false;
+                    Q_EMIT availabilityChanged(canUndo(), canRedo());
+                });
+        job->start();
+        return job;
+    }
+
     KJob *runCopyUndo(const Record &record, qsizetype successPosition)
     {
         auto *job = new CopyUndoJob(record, this);
@@ -789,5 +969,7 @@ private:
 
     QList<Record> m_records;
     qsizetype m_position = 0;
+    quint64 m_nextOrder = 1;
+    quint64 m_irreversibleOrder = 0;
     bool m_busy = false;
 };
