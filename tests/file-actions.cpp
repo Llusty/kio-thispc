@@ -1385,8 +1385,179 @@ int main(int argc, char **argv)
                    && !lastFenceMessage.isEmpty(),
                "H.2B.2A-F6: Duplicate Finder transferUrls still blocks 2-directory batch move");
 
+        // H.2C.1A-F7: Production GUI dispatchers stay locked against ext4 directory & batch moves
+        {
+            const QString gDir1 = fDir1 + QStringLiteral("/gui_ext4_d1");
+            const QString gDir2 = fDir1 + QStringLiteral("/gui_ext4_d2");
+            const QString gFile1 = fDir1 + QStringLiteral("/gui_ext4_f1.txt");
+            const QString gFile2 = fDir1 + QStringLiteral("/gui_ext4_f2.txt");
+            verify(QDir().mkdir(gDir1) && QDir().mkdir(gDir2), "H.2C.1A-F7: dirs");
+            createFixture(gFile1, "G1");
+            createFixture(gFile2, "G2");
+
+            simulateDirMoveExt4Filesystem() = true;
+            simulateBatchMoveExt4Filesystem() = true;
+            simulateBatchMoveUnsupportedFsMagic() = EXT4_SUPER_MAGIC;
+
+            const auto evalSingleDir = MoveSafetyPolicy::evaluate(
+                {QUrl::fromLocalFile(gDir1)}, rootB, true);
+            const auto evalFileBatch = MoveSafetyPolicy::evaluate(
+                {QUrl::fromLocalFile(gFile1), QUrl::fromLocalFile(gFile2)}, rootB, true);
+            const auto evalMixedBatch = MoveSafetyPolicy::evaluate(
+                {QUrl::fromLocalFile(gFile1), QUrl::fromLocalFile(gDir1)}, rootB, true);
+            verify(!evalSingleDir.allowed
+                       && !evalFileBatch.allowed
+                       && !evalMixedBatch.allowed
+                       && evalSingleDir.decision == MovePolicyDecision::RefusedLocalContainment
+                       && evalFileBatch.decision == MovePolicyDecision::RefusedLocalContainment
+                       && evalMixedBatch.decision == MovePolicyDecision::RefusedLocalContainment,
+                   "H.2C.1A-F7a: MoveSafetyPolicy::evaluate locks ext4 dir/batch moves out of GUI");
+
+            lastFenceMessage.clear();
+            actions.transfer({QUrl::fromLocalFile(gDir1)}, rootB, Qt::MoveAction);
+            verify(queueCtlF.snapshot().tasks.size() == 3
+                       && !lastFenceMessage.isEmpty()
+                       && QFileInfo::exists(gDir1)
+                       && !QFileInfo::exists(b + QStringLiteral("/gui_ext4_d1")),
+                   "H.2C.1A-F7b: FileActions::transfer refuses single dir Move on simulated ext4 without fallback");
+
+            lastFenceMessage.clear();
+            actions.transfer({QUrl::fromLocalFile(gFile1), QUrl::fromLocalFile(gDir2)}, rootB, Qt::MoveAction);
+            verify(queueCtlF.snapshot().tasks.size() == 3
+                       && !lastFenceMessage.isEmpty()
+                       && QFileInfo::exists(gFile1) && QFileInfo::exists(gDir2)
+                       && !QFileInfo::exists(b + QStringLiteral("/gui_ext4_f1.txt"))
+                       && !QFileInfo::exists(b + QStringLiteral("/gui_ext4_d2")),
+                   "H.2C.1A-F7c: FileActions::transfer refuses mixed batch Move on simulated ext4 without fallback");
+
+            simulateDirMoveExt4Filesystem() = false;
+            simulateBatchMoveExt4Filesystem() = false;
+            simulateBatchMoveUnsupportedFsMagic() = 0;
+        }
+
         setTransferQueueProductionDispatchConnected(false);
         actions.setQueueController(nullptr);
+    }
+
+    // LIFE-01-FIX-04: UndoController::startNativeHistoryJob() must schedule deleteLater()
+    // on finished setAutoDelete(false) KJobs across Single-File, Single-Dir, Batch, and Mixed Batch.
+    {
+        auto drainDeferredDeletes = [&] {
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+            QCoreApplication::processEvents();
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        };
+        auto waitUndoReady = [&] {
+            verify(QTest::qWaitFor([&] {
+                return undoAction.isEnabled() || redoAction.isEnabled();
+            }, 10000), "LIFE-01-FIX-04: undo/redo operation finished");
+            drainDeferredDeletes();
+        };
+
+        // 1. Move without Undo -> KJob cleaned up
+        const QString lifeFile = a + QStringLiteral("/life_fix_file.txt");
+        const QString lifeFileDst = b + QStringLiteral("/life_fix_file.txt");
+        createFixture(lifeFile, "LIFE_FILE");
+        const int baseCompleted = completed;
+        actions.transfer({QUrl::fromLocalFile(lifeFile)}, rootB, Qt::MoveAction);
+        waitJob(baseCompleted + 1);
+        drainDeferredDeletes();
+        verify(!QFile::exists(lifeFile) && fixtureData(lifeFileDst) == "LIFE_FILE"
+                   && parent.findChildren<KJob *>().isEmpty(),
+               "LIFE-01-FIX-04-1: Move without Undo leaves 0 live KJobs");
+
+        // 2 & 3. Move -> Undo -> Redo -> 0 live KJobs
+        undo.undo();
+        waitUndoReady();
+        verify(QFile::exists(lifeFile) && !QFile::exists(lifeFileDst)
+                   && parent.findChildren<KJob *>().isEmpty(),
+               "LIFE-01-FIX-04-2: Move -> Undo restores file and frees KJob");
+
+        undo.redo();
+        waitUndoReady();
+        verify(!QFile::exists(lifeFile) && QFile::exists(lifeFileDst)
+                   && parent.findChildren<KJob *>().isEmpty(),
+               "LIFE-01-FIX-04-3: Move -> Undo -> Redo restores destination and frees KJob");
+
+        // 4. Repeated Undo/Redo (3 cycles) -> no KJob accumulation
+        for (int cycle = 0; cycle < 3; ++cycle) {
+            undo.undo();
+            waitUndoReady();
+            verify(QFile::exists(lifeFile) && parent.findChildren<KJob *>().isEmpty(),
+                   "LIFE-01-FIX-04-4a: repeated Undo frees KJob");
+            undo.redo();
+            waitUndoReady();
+            verify(QFile::exists(lifeFileDst) && parent.findChildren<KJob *>().isEmpty(),
+                   "LIFE-01-FIX-04-4b: repeated Redo frees KJob");
+        }
+
+        // 5. Undo collision / error -> data integrity preserved and failed KJob freed
+        createFixture(lifeFile, "COLLISION_BLOCKER");
+        undo.undo();
+        verify(QTest::qWaitFor([&] {
+            drainDeferredDeletes();
+            return parent.findChildren<KJob *>().isEmpty();
+        }, 10000), "LIFE-01-FIX-04-5: failed Undo (collision) frees KJob");
+        verify(fixtureData(lifeFile) == "COLLISION_BLOCKER"
+                   && fixtureData(lifeFileDst) == "LIFE_FILE",
+               "LIFE-01-FIX-04-5: collision preserves both files without overwrite");
+
+        // 6. Single Directory Move -> Undo -> Redo (if on Btrfs)
+        struct statfs btrfsCheck {};
+        if (::statfs(QFile::encodeName(a).constData(), &btrfsCheck) == 0
+            && static_cast<unsigned long>(btrfsCheck.f_type) == BTRFS_SUPER_MAGIC) {
+            const QString lifeDir = a + QStringLiteral("/life_fix_dir");
+            const QString lifeDirDst = b + QStringLiteral("/life_fix_dir");
+            verify(QDir().mkpath(lifeDir), "LIFE-01-FIX-04-6: setup dir");
+            createFixture(lifeDir + QStringLiteral("/inner.txt"), "DIR_IN");
+            const int dirCompleted = completed;
+            actions.transfer({QUrl::fromLocalFile(lifeDir)}, rootB, Qt::MoveAction);
+            waitJob(dirCompleted + 1);
+            drainDeferredDeletes();
+            verify(QFileInfo::exists(lifeDirDst + QStringLiteral("/inner.txt"))
+                       && parent.findChildren<KJob *>().isEmpty(),
+                   "LIFE-01-FIX-04-6a: Single Dir Move leaves 0 live KJobs");
+
+            undo.undo();
+            waitUndoReady();
+            verify(QFileInfo::exists(lifeDir + QStringLiteral("/inner.txt"))
+                       && parent.findChildren<KJob *>().isEmpty(),
+                   "LIFE-01-FIX-04-6b: Single Dir Undo frees KJob");
+
+            undo.redo();
+            waitUndoReady();
+            verify(QFileInfo::exists(lifeDirDst + QStringLiteral("/inner.txt"))
+                       && parent.findChildren<KJob *>().isEmpty(),
+                   "LIFE-01-FIX-04-6c: Single Dir Redo frees KJob");
+
+            // 7. Mixed Batch Move -> Undo -> Redo -> 0 live KJobs
+            const QString mixF = a + QStringLiteral("/life_mix_f.txt");
+            const QString mixD = a + QStringLiteral("/life_mix_d");
+            createFixture(mixF, "MIX_F");
+            verify(QDir().mkpath(mixD), "LIFE-01-FIX-04-7: setup mixed");
+            createFixture(mixD + QStringLiteral("/m.txt"), "MIX_D");
+            const int mixCompleted = completed;
+            actions.transfer({QUrl::fromLocalFile(mixF), QUrl::fromLocalFile(mixD)}, rootB, Qt::MoveAction);
+            waitJob(mixCompleted + 1);
+            drainDeferredDeletes();
+            verify(QFileInfo::exists(b + QStringLiteral("/life_mix_f.txt"))
+                       && QFileInfo::exists(b + QStringLiteral("/life_mix_d/m.txt"))
+                       && parent.findChildren<KJob *>().isEmpty(),
+                   "LIFE-01-FIX-04-7a: Mixed Batch Move leaves 0 live KJobs");
+
+            undo.undo();
+            waitUndoReady();
+            verify(QFileInfo::exists(mixF) && QFileInfo::exists(mixD + QStringLiteral("/m.txt"))
+                       && parent.findChildren<KJob *>().isEmpty(),
+                   "LIFE-01-FIX-04-7b: Mixed Batch Undo frees KJob");
+
+            undo.redo();
+            waitUndoReady();
+            verify(QFileInfo::exists(b + QStringLiteral("/life_mix_f.txt"))
+                       && QFileInfo::exists(b + QStringLiteral("/life_mix_d/m.txt"))
+                       && parent.findChildren<KJob *>().isEmpty(),
+                   "LIFE-01-FIX-04-7c: Mixed Batch Redo frees KJob");
+        }
     }
 
     qInfo("PASS: %d FileActions assertions; native local copy/move, KIO fallbacks, conflicts, Undo/Redo", checks);

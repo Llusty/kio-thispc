@@ -13,6 +13,7 @@
 #include <QTemporaryDir>
 #include <QTest>
 
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -147,10 +148,8 @@ int main(int argc, char **argv)
            "failed source removal preserves both source and destination intact");
 
     LocalMoveHistory safetyHistory;
-    verify(!safetyHistory.recordCompletedMove(
-               QUrl::fromLocalFile(removeSource),
-               QUrl::fromLocalFile(removeDestination)),
-           "history rejects recording move when source still exists");
+    verify(!safetyHistory.recordWhenCompleted(&removeFailure),
+           "history rejects attaching to already finished partial move");
     verify(safetyHistory.count() == 0,
            "history remains empty after failed source removal");
 
@@ -168,11 +167,15 @@ int main(int argc, char **argv)
                && QFileInfo::exists(atomicDestination),
            "same-filesystem move uses atomic rename");
 
+    constexpr bool hasPublicManualFileRecord = []<typename H>(H *) {
+        return requires(H &h, const QUrl &u) { h.recordCompletedMove(u, u); };
+    }(static_cast<LocalMoveHistory *>(nullptr));
+    static_assert(!hasPublicManualFileRecord,
+                  "LocalMoveHistory::recordCompletedMove must not be public");
+
     LocalMoveHistory history;
-    verify(!history.recordCompletedMove(
-               QUrl::fromLocalFile(atomicSource),
-               QUrl::fromLocalFile(temporary.filePath(QStringLiteral("missing")))),
-           "history rejects an operation that did not complete");
+    verify(!history.recordWhenCompleted(&atomic),
+           "history rejects attaching to already finished job");
 
     const QString historySource = temporary.filePath(QStringLiteral("history-source"));
     const QString historyDestination = temporary.filePath(QStringLiteral("history-destination"));
@@ -1935,6 +1938,503 @@ int main(int argc, char **argv)
                    "Real G3B: zero leftovers or orphaned staging files in NTFS-3G unique dir");
             verify(btrfsUniqueDir.remove(), "Real G3B: unique Btrfs dir cleanly removed");
             verify(ntfsUniqueDir.remove(), "Real G3B: unique NTFS-3G dir cleanly removed");
+        }
+    }
+
+    // =========================================================================
+    // H.2C-U6.2: Single File Strict History Hardening Automated Matrix
+    // =========================================================================
+    {
+        QTemporaryDir u62Root;
+        verify(u62Root.isValid(), "U6.2: temporary root created");
+
+        auto fileInode = [](const QString &path) -> ino_t {
+            struct stat st{};
+            if (::lstat(QFile::encodeName(path).constData(), &st) != 0) {
+                return 0;
+            }
+            return st.st_ino;
+        };
+        auto fileSha256 = [](const QString &path) -> QByteArray {
+            QFile f(path);
+            if (!f.open(QIODevice::ReadOnly)) {
+                return {};
+            }
+            QCryptographicHash hash(QCryptographicHash::Sha256);
+            hash.addData(&f);
+            return hash.result();
+        };
+        auto overwriteInPlaceNoTrunc = [](const QString &path, const QByteArray &data) -> bool {
+            const int fd = ::open(QFile::encodeName(path).constData(), O_WRONLY | O_NOFOLLOW | O_CLOEXEC);
+            if (fd < 0) {
+                return false;
+            }
+            const ssize_t written = ::write(fd, data.constData(), static_cast<size_t>(data.size()));
+            ::close(fd);
+            return written == data.size();
+        };
+        auto createExclusiveFile = [](const QString &path, const QByteArray &data) -> bool {
+            const int fd = ::open(QFile::encodeName(path).constData(),
+                                  O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+                                  0600);
+            if (fd < 0) {
+                return false;
+            }
+            const ssize_t written = ::write(fd, data.constData(), static_cast<size_t>(data.size()));
+            ::close(fd);
+            return written == data.size();
+        };
+
+        // 1. Plain small file move: no strict content hashing, movedSnapshot() invalid
+        {
+            const QString src = u62Root.filePath(QStringLiteral("plain-small-src.bin"));
+            const QString dst = u62Root.filePath(QStringLiteral("plain-small-dst.bin"));
+            verify(writeFile(src, "plain-small-payload"), "U6.2: plain small src created");
+            const int beforeHashes = fileMoveSnapshotFilesHashedCount().load();
+            LocalFileMoveJob plainJob(QUrl::fromLocalFile(src), QUrl::fromLocalFile(dst));
+            plainJob.setAutoDelete(false);
+            QSignalSpy spy(&plainJob, &KJob::result);
+            plainJob.start();
+            waitForResult(spy, "U6.2: plain small move finishes");
+            verify(plainJob.error() == KJob::NoError, "U6.2: plain small move succeeds");
+            verify(fileMoveSnapshotFilesHashedCount().load() == beforeHashes,
+                   "U6.2: plain small move does not hash file content");
+            verify(!plainJob.movedSnapshot().valid,
+                   "U6.2: plain small move does not populate strict snapshot");
+        }
+
+        // 2. Plain 520 MiB sparse file move: no hashing, no 512 MiB strict limit
+        {
+            const QString src = u62Root.filePath(QStringLiteral("plain-520m-src.bin"));
+            const QString dst = u62Root.filePath(QStringLiteral("plain-520m-dst.bin"));
+            const int fd = ::open(QFile::encodeName(src).constData(),
+                                  O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+                                  0600);
+            verify(fd >= 0 && ::ftruncate(fd, 520LL * 1024LL * 1024LL) == 0,
+                   "U6.2: 520 MiB sparse file created");
+            if (fd >= 0) {
+                ::close(fd);
+            }
+            const int beforeHashes = fileMoveSnapshotFilesHashedCount().load();
+            LocalFileMoveJob plainLarge(QUrl::fromLocalFile(src), QUrl::fromLocalFile(dst));
+            plainLarge.setAutoDelete(false);
+            QSignalSpy spy(&plainLarge, &KJob::result);
+            plainLarge.start();
+            waitForResult(spy, "U6.2: plain 520 MiB move finishes");
+            verify(plainLarge.error() == KJob::NoError,
+                   "U6.2: plain 520 MiB sparse move succeeds without 512 MiB limit");
+            verify(fileMoveSnapshotFilesHashedCount().load() == beforeHashes,
+                   "U6.2: plain 520 MiB sparse move does not hash");
+            verify(!QFileInfo::exists(src) && QFileInfo::exists(dst),
+                   "U6.2: plain 520 MiB move relocated file");
+            QFile::remove(dst);
+        }
+
+        // 3. History-backed >512 MiB sparse file move refused before publish
+        {
+            const QString src = u62Root.filePath(QStringLiteral("hist-520m-src.bin"));
+            const QString dst = u62Root.filePath(QStringLiteral("hist-520m-dst.bin"));
+            const int fd = ::open(QFile::encodeName(src).constData(),
+                                  O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+                                  0600);
+            verify(fd >= 0 && ::ftruncate(fd, 520LL * 1024LL * 1024LL) == 0,
+                   "U6.2: history 520 MiB sparse file created");
+            if (fd >= 0) {
+                ::close(fd);
+            }
+            LocalMoveHistory hist;
+            LocalFileMoveJob job(QUrl::fromLocalFile(src), QUrl::fromLocalFile(dst));
+            job.setAutoDelete(false);
+            verify(hist.recordWhenCompleted(&job, 1001), "U6.2: attach history to >512 MiB move");
+            QSignalSpy spy(&job, &KJob::result);
+            job.start();
+            waitForResult(spy, "U6.2: history >512 MiB move finishes");
+            verify(job.error() != KJob::NoError,
+                   "U6.2: history-backed >512 MiB move refused before publish");
+            verify(QFileInfo::exists(src) && !QFileInfo::exists(dst),
+                   "U6.2: >512 MiB refusal leaves source intact and no destination");
+            verify(hist.count() == 0 && !hist.canUndo(),
+                   "U6.2: refused >512 MiB move records nothing");
+            QFile::remove(src);
+        }
+
+        // 4. History-backed Move -> Undo -> Redo preserves inode, SHA-256, snapshot, serials
+        {
+            const QString src = u62Root.filePath(QStringLiteral("cycle-src.txt"));
+            const QString dst = u62Root.filePath(QStringLiteral("cycle-dst.txt"));
+            const QByteArray payload("u62-strict-single-file-34bytes-012");
+            verify(payload.size() == 34 && writeFile(src, payload), "U6.2: cycle src created");
+            const ino_t origIno = fileInode(src);
+            const QByteArray origSha = fileSha256(src);
+
+            LocalMoveHistory hist;
+            LocalFileMoveJob moveJob(QUrl::fromLocalFile(src), QUrl::fromLocalFile(dst));
+            moveJob.setAutoDelete(false);
+            verify(hist.recordWhenCompleted(&moveJob, 2001), "U6.2: cycle history attached");
+            QSignalSpy moveSpy(&moveJob, &KJob::result);
+            moveJob.start();
+            waitForResult(moveSpy, "U6.2: cycle move finishes");
+            verify(moveJob.error() == KJob::NoError && moveJob.movedSnapshot().valid
+                       && moveJob.movedSnapshot().strictContentDigest,
+                   "U6.2: cycle move succeeds with strict snapshot");
+            verify(!QFileInfo::exists(src) && fileInode(dst) == origIno && fileSha256(dst) == origSha,
+                   "U6.2: cycle move preserves inode and SHA-256");
+            verify(hist.count() == 1 && hist.canUndo() && !hist.canRedo() && hist.undoSerial() == 2001,
+                   "U6.2: cycle history state after Move");
+
+            KJob *undoJob = hist.undo();
+            verify(undoJob != nullptr, "U6.2: cycle undo starts");
+            QSignalSpy undoSpy(undoJob, &KJob::result);
+            waitForResult(undoSpy, "U6.2: cycle undo finishes");
+            verify(undoJob->error() == KJob::NoError, "U6.2: cycle undo succeeds");
+            verify(fileInode(src) == origIno && fileSha256(src) == origSha && !QFileInfo::exists(dst),
+                   "U6.2: cycle undo restores original inode and SHA-256");
+            verify(!hist.canUndo() && hist.canRedo() && hist.redoSerial() == 2001,
+                   "U6.2: cycle history state after Undo");
+
+            KJob *redoJob = hist.redo();
+            verify(redoJob != nullptr, "U6.2: cycle redo starts");
+            QSignalSpy redoSpy(redoJob, &KJob::result);
+            waitForResult(redoSpy, "U6.2: cycle redo finishes");
+            verify(redoJob->error() == KJob::NoError, "U6.2: cycle redo succeeds");
+            verify(!QFileInfo::exists(src) && fileInode(dst) == origIno && fileSha256(dst) == origSha,
+                   "U6.2: cycle redo restores destination inode and SHA-256");
+            verify(hist.canUndo() && !hist.canRedo() && hist.undoSerial() == 2001,
+                   "U6.2: cycle history state after Redo");
+        }
+
+        // 5a. Negative Undo: Inode replacement with identical bytes (quarantine original)
+        {
+            const QString quarantineDir = u62Root.filePath(QStringLiteral("quarantine"));
+            verify(QDir().mkpath(quarantineDir), "U6.2: quarantine dir created");
+            const QString src = u62Root.filePath(QStringLiteral("undo-ino-src.bin"));
+            const QString dst = u62Root.filePath(QStringLiteral("undo-ino-dst.bin"));
+            const QByteArray payload("identical-34-byte-payload-for-ino!");
+            verify(payload.size() == 34 && writeFile(src, payload), "U6.2: 5a src created");
+            const ino_t origIno = fileInode(src);
+            const QByteArray origSha = fileSha256(src);
+
+            LocalMoveHistory hist;
+            LocalFileMoveJob job(QUrl::fromLocalFile(src), QUrl::fromLocalFile(dst));
+            job.setAutoDelete(false);
+            verify(hist.recordWhenCompleted(&job, 3001), "U6.2: 5a attach");
+            QSignalSpy spy(&job, &KJob::result);
+            job.start();
+            waitForResult(spy, "U6.2: 5a move finishes");
+            verify(job.error() == KJob::NoError && hist.canUndo(), "U6.2: 5a move ok");
+
+            const QString quarantined = quarantineDir + QStringLiteral("/undo-ino-orig.bin");
+            verify(QFile::rename(dst, quarantined), "U6.2: 5a original quarantined");
+            verify(createExclusiveFile(dst, payload), "U6.2: 5a replacement created");
+            const ino_t replIno = fileInode(dst);
+            verify(replIno != 0 && replIno != origIno && fileSha256(dst) == origSha,
+                   "U6.2: 5a replacement has different inode and identical SHA-256");
+
+            KJob *undoJob = hist.undo();
+            verify(undoJob != nullptr, "U6.2: 5a undo starts");
+            QSignalSpy undoSpy(undoJob, &KJob::result);
+            waitForResult(undoSpy, "U6.2: 5a undo finishes");
+            verify(undoJob->error() != KJob::NoError, "U6.2: 5a undo refused on inode replacement");
+            verify(!QFileInfo::exists(src) && fileInode(dst) == replIno && fileInode(quarantined) == origIno,
+                   "U6.2: 5a src absent, replacement intact, quarantined original untouched");
+            verify(hist.canUndo() && !hist.canRedo() && hist.undoSerial() == 3001,
+                   "U6.2: 5a history cursor and serial unchanged after refusal");
+        }
+
+        // 5b. Negative Undo: Same-size content mutation WITHOUT O_TRUNC (same inode, same size)
+        {
+            const QString src = u62Root.filePath(QStringLiteral("undo-mut-src.bin"));
+            const QString dst = u62Root.filePath(QStringLiteral("undo-mut-dst.bin"));
+            const QByteArray payloadA("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+            const QByteArray payloadB("BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB");
+            verify(payloadA.size() == 34 && payloadB.size() == 34 && writeFile(src, payloadA),
+                   "U6.2: 5b src created");
+            const ino_t origIno = fileInode(src);
+
+            LocalMoveHistory hist;
+            LocalFileMoveJob job(QUrl::fromLocalFile(src), QUrl::fromLocalFile(dst));
+            job.setAutoDelete(false);
+            verify(hist.recordWhenCompleted(&job, 3002), "U6.2: 5b attach");
+            QSignalSpy spy(&job, &KJob::result);
+            job.start();
+            waitForResult(spy, "U6.2: 5b move finishes");
+            verify(job.error() == KJob::NoError, "U6.2: 5b move ok");
+
+            verify(overwriteInPlaceNoTrunc(dst, payloadB), "U6.2: 5b in-place overwrite without O_TRUNC");
+            verify(fileInode(dst) == origIno && QFileInfo(dst).size() == 34 && readFile(dst) == payloadB,
+                   "U6.2: 5b same inode, same 34B size, mutated bytes");
+
+            KJob *undoJob = hist.undo();
+            verify(undoJob != nullptr, "U6.2: 5b undo starts");
+            QSignalSpy undoSpy(undoJob, &KJob::result);
+            waitForResult(undoSpy, "U6.2: 5b undo finishes");
+            verify(undoJob->error() != KJob::NoError, "U6.2: 5b undo refused on same-size content mutation");
+            verify(!QFileInfo::exists(src) && fileInode(dst) == origIno && readFile(dst) == payloadB,
+                   "U6.2: 5b mutated file preserved, src absent");
+            verify(hist.canUndo() && !hist.canRedo() && hist.undoSerial() == 3002,
+                   "U6.2: 5b history cursor and serial unchanged");
+        }
+
+        // 5c. Negative Undo: Size change
+        {
+            const QString src = u62Root.filePath(QStringLiteral("undo-size-src.bin"));
+            const QString dst = u62Root.filePath(QStringLiteral("undo-size-dst.bin"));
+            verify(writeFile(src, "short"), "U6.2: 5c src created");
+            const ino_t origIno = fileInode(src);
+
+            LocalMoveHistory hist;
+            LocalFileMoveJob job(QUrl::fromLocalFile(src), QUrl::fromLocalFile(dst));
+            job.setAutoDelete(false);
+            verify(hist.recordWhenCompleted(&job, 3003), "U6.2: 5c attach");
+            QSignalSpy spy(&job, &KJob::result);
+            job.start();
+            waitForResult(spy, "U6.2: 5c move finishes");
+            verify(job.error() == KJob::NoError, "U6.2: 5c move ok");
+
+            verify(overwriteInPlaceNoTrunc(dst, QByteArray("longer-payload")), "U6.2: 5c size changed");
+            KJob *undoJob = hist.undo();
+            verify(undoJob != nullptr, "U6.2: 5c undo starts");
+            QSignalSpy undoSpy(undoJob, &KJob::result);
+            waitForResult(undoSpy, "U6.2: 5c undo finishes");
+            verify(undoJob->error() != KJob::NoError, "U6.2: 5c undo refused on size change");
+            verify(!QFileInfo::exists(src) && fileInode(dst) == origIno && readFile(dst) == "longer-payload",
+                   "U6.2: 5c file preserved and src absent");
+            verify(hist.canUndo() && hist.undoSerial() == 3003, "U6.2: 5c history unchanged");
+        }
+
+        // 5d. Negative Undo: Destination collision
+        {
+            const QString src = u62Root.filePath(QStringLiteral("undo-coll-src.bin"));
+            const QString dst = u62Root.filePath(QStringLiteral("undo-coll-dst.bin"));
+            verify(writeFile(src, "orig-data"), "U6.2: 5d src created");
+            const ino_t origIno = fileInode(src);
+
+            LocalMoveHistory hist;
+            LocalFileMoveJob job(QUrl::fromLocalFile(src), QUrl::fromLocalFile(dst));
+            job.setAutoDelete(false);
+            verify(hist.recordWhenCompleted(&job, 3004), "U6.2: 5d attach");
+            QSignalSpy spy(&job, &KJob::result);
+            job.start();
+            waitForResult(spy, "U6.2: 5d move finishes");
+            verify(job.error() == KJob::NoError, "U6.2: 5d move ok");
+
+            verify(writeFile(src, "collider"), "U6.2: 5d collider created at src");
+            const ino_t collIno = fileInode(src);
+
+            KJob *undoJob = hist.undo();
+            verify(undoJob != nullptr, "U6.2: 5d undo starts");
+            QSignalSpy undoSpy(undoJob, &KJob::result);
+            waitForResult(undoSpy, "U6.2: 5d undo finishes");
+            verify(undoJob->error() != KJob::NoError, "U6.2: 5d undo refused on collision");
+            verify(fileInode(src) == collIno && readFile(src) == "collider"
+                       && fileInode(dst) == origIno && readFile(dst) == "orig-data",
+                   "U6.2: 5d neither file overwritten");
+            verify(hist.canUndo() && hist.undoSerial() == 3004, "U6.2: 5d history unchanged");
+        }
+
+        // 6a/b/c. Negative Redo: collision, inode replacement, and in-place content change
+        {
+            const QString quarantineDir = u62Root.filePath(QStringLiteral("quarantine"));
+            const QString src = u62Root.filePath(QStringLiteral("redo-neg-src.bin"));
+            const QString dst = u62Root.filePath(QStringLiteral("redo-neg-dst.bin"));
+            const QByteArray payloadA("redo-34-byte-payload-alpha-0000001");
+            const QByteArray payloadB("redo-34-byte-payload-bravo-0000002");
+            verify(payloadA.size() == 34 && payloadB.size() == 34 && writeFile(src, payloadA),
+                   "U6.2: 6 src created");
+            const ino_t origIno = fileInode(src);
+
+            LocalMoveHistory hist;
+            LocalFileMoveJob job(QUrl::fromLocalFile(src), QUrl::fromLocalFile(dst));
+            job.setAutoDelete(false);
+            verify(hist.recordWhenCompleted(&job, 4001), "U6.2: 6 attach");
+            QSignalSpy moveSpy(&job, &KJob::result);
+            job.start();
+            waitForResult(moveSpy, "U6.2: 6 move finishes");
+            verify(job.error() == KJob::NoError, "U6.2: 6 move ok");
+
+            KJob *undoJob = hist.undo();
+            verify(undoJob != nullptr, "U6.2: 6 undo starts");
+            QSignalSpy undoSpy(undoJob, &KJob::result);
+            waitForResult(undoSpy, "U6.2: 6 undo finishes");
+            verify(undoJob->error() == KJob::NoError && hist.canRedo(), "U6.2: 6 undo ok");
+
+            // 6a: collision at dst
+            verify(writeFile(dst, "redo-collider"), "U6.2: 6a collider created");
+            const ino_t collIno = fileInode(dst);
+            {
+                KJob *redoJob = hist.redo();
+                verify(redoJob != nullptr, "U6.2: 6a redo starts");
+                QSignalSpy redoSpy(redoJob, &KJob::result);
+                waitForResult(redoSpy, "U6.2: 6a redo finishes");
+                verify(redoJob->error() != KJob::NoError, "U6.2: 6a redo refused on collision");
+                verify(fileInode(src) == origIno && fileInode(dst) == collIno
+                           && hist.canRedo() && hist.redoSerial() == 4001,
+                       "U6.2: 6a files and history preserved");
+            }
+            QFile::remove(dst);
+
+            // 6b: inode replacement at src with identical bytes
+            const QString quarantined = quarantineDir + QStringLiteral("/redo-orig.bin");
+            verify(QFile::rename(src, quarantined), "U6.2: 6b original quarantined");
+            verify(createExclusiveFile(src, payloadA), "U6.2: 6b replacement created");
+            const ino_t replIno = fileInode(src);
+            verify(replIno != origIno, "U6.2: 6b replacement has different inode");
+            {
+                KJob *redoJob = hist.redo();
+                verify(redoJob != nullptr, "U6.2: 6b redo starts");
+                QSignalSpy redoSpy(redoJob, &KJob::result);
+                waitForResult(redoSpy, "U6.2: 6b redo finishes");
+                verify(redoJob->error() != KJob::NoError, "U6.2: 6b redo refused on inode replacement");
+                verify(fileInode(src) == replIno && !QFileInfo::exists(dst)
+                           && hist.canRedo() && hist.redoSerial() == 4001,
+                       "U6.2: 6b replacement preserved, dst absent, history unchanged");
+            }
+
+            // Restore original inode at src for 6c content mutation test
+            QFile::remove(src);
+            verify(QFile::rename(quarantined, src) && fileInode(src) == origIno,
+                   "U6.2: 6c original restored for content mutation test");
+            verify(overwriteInPlaceNoTrunc(src, payloadB), "U6.2: 6c in-place overwrite without O_TRUNC");
+            {
+                KJob *redoJob = hist.redo();
+                verify(redoJob != nullptr, "U6.2: 6c redo starts");
+                QSignalSpy redoSpy(redoJob, &KJob::result);
+                waitForResult(redoSpy, "U6.2: 6c redo finishes");
+                verify(redoJob->error() != KJob::NoError, "U6.2: 6c redo refused on content mutation");
+                verify(fileInode(src) == origIno && readFile(src) == payloadB
+                           && !QFileInfo::exists(dst) && hist.canRedo() && hist.redoSerial() == 4001,
+                       "U6.2: 6c mutated src preserved, dst absent, history unchanged");
+            }
+        }
+
+        // 7 & 8. Late opt-in / late recordWhenCompleted / double attachment
+        {
+            const QString src = u62Root.filePath(QStringLiteral("late-src.bin"));
+            const QString dst = u62Root.filePath(QStringLiteral("late-dst.bin"));
+            const QString src2 = u62Root.filePath(QStringLiteral("late2-src.bin"));
+            const QString dst2 = u62Root.filePath(QStringLiteral("late2-dst.bin"));
+            verify(writeFile(src, "seed") && writeFile(src2, "late"), "U6.2: 7/8 sources created");
+
+            LocalMoveHistory hist;
+            LocalFileMoveJob seedJob(QUrl::fromLocalFile(src), QUrl::fromLocalFile(dst));
+            seedJob.setAutoDelete(false);
+            verify(hist.recordWhenCompleted(&seedJob, 5001), "U6.2: 7 first attach ok");
+            verify(!hist.recordWhenCompleted(&seedJob, 5002), "U6.2: 8 double attachment refused");
+            QSignalSpy seedSpy(&seedJob, &KJob::result);
+            seedJob.start();
+            waitForResult(seedSpy, "U6.2: 7 seed move finishes");
+            verify(seedJob.error() == KJob::NoError && hist.canUndo(), "U6.2: 7 seed in history");
+
+            LocalFileMoveJob lateJob(QUrl::fromLocalFile(src2), QUrl::fromLocalFile(dst2));
+            lateJob.setAutoDelete(false);
+            QSignalSpy lateSpy(&lateJob, &KJob::result);
+            lateJob.start();
+            verify(!lateJob.setCaptureStrictFileSnapshot(true),
+                   "U6.2: 7 late setCaptureStrictFileSnapshot(true) after start() refused");
+            verify(!hist.recordWhenCompleted(&lateJob, 5003),
+                   "U6.2: 7 late recordWhenCompleted after start() refused");
+            verify(!hist.canUndo() && !hist.canRedo(),
+                   "U6.2: 7 late recordWhenCompleted fences prior history");
+            waitForResult(lateSpy, "U6.2: 7 lateJob finishes");
+        }
+
+        // 9. Partial outcome (SourceRemove failure) refuses history and fences prior history
+        {
+            const QString seedSrc = u62Root.filePath(QStringLiteral("partial-seed-src.bin"));
+            const QString seedDst = u62Root.filePath(QStringLiteral("partial-seed-dst.bin"));
+            const QString partSrc = u62Root.filePath(QStringLiteral("partial-src.bin"));
+            const QString partDst = u62Root.filePath(QStringLiteral("partial-dst.bin"));
+            verify(writeFile(seedSrc, "seed") && writeFile(partSrc, "partial"),
+                   "U6.2: 9 sources created");
+
+            LocalMoveHistory hist;
+            LocalFileMoveJob seedJob(QUrl::fromLocalFile(seedSrc), QUrl::fromLocalFile(seedDst));
+            seedJob.setAutoDelete(false);
+            verify(hist.recordWhenCompleted(&seedJob, 6001), "U6.2: 9 seed attach");
+            QSignalSpy seedSpy(&seedJob, &KJob::result);
+            seedJob.start();
+            waitForResult(seedSpy, "U6.2: 9 seed move finishes");
+            verify(hist.canUndo(), "U6.2: 9 seed undoable");
+
+            LocalFileMoveJob partJob(
+                QUrl::fromLocalFile(partSrc), QUrl::fromLocalFile(partDst), nullptr,
+                LocalFileMoveStrategy::ForceCopyAndRemove, 4096, 0,
+                [](const QString &) { return false; });
+            partJob.setAutoDelete(false);
+            verify(hist.recordWhenCompleted(&partJob, 6002), "U6.2: 9 partial attach");
+            QSignalSpy partSpy(&partJob, &KJob::result);
+            partJob.start();
+            waitForResult(partSpy, "U6.2: 9 partial move finishes");
+            verify(partJob.moveError() == LocalFileMoveError::SourceRemove
+                       && partJob.property("thispcPartialMoveOutcome").toBool(),
+                   "U6.2: 9 partial move flagged");
+            verify(!hist.canUndo() && !hist.canRedo(),
+                   "U6.2: 9 partial outcome refuses recording and fences history");
+        }
+
+        // 10. Symlink refused before publish
+        {
+            const QString target = u62Root.filePath(QStringLiteral("sym-target.bin"));
+            const QString linkPath = u62Root.filePath(QStringLiteral("sym-link.bin"));
+            const QString dst = u62Root.filePath(QStringLiteral("sym-dst.bin"));
+            verify(writeFile(target, "target-data"), "U6.2: 10 target created");
+            verify(::symlink(QFile::encodeName(target).constData(),
+                             QFile::encodeName(linkPath).constData()) == 0,
+                   "U6.2: 10 symlink created");
+
+            LocalMoveHistory hist;
+            LocalFileMoveJob symJob(QUrl::fromLocalFile(linkPath), QUrl::fromLocalFile(dst));
+            symJob.setAutoDelete(false);
+            verify(hist.recordWhenCompleted(&symJob, 7001), "U6.2: 10 symlink attach");
+            QSignalSpy spy(&symJob, &KJob::result);
+            symJob.start();
+            waitForResult(spy, "U6.2: 10 symlink move finishes");
+            verify(symJob.error() != KJob::NoError && QFileInfo(linkPath).isSymLink()
+                       && !QFileInfo::exists(dst) && hist.count() == 0 && !hist.canUndo(),
+                   "U6.2: 10 symlink refused before publish and not recorded");
+        }
+
+        // 11 & 12. Simulated Mount ID change and FS magic change refused on Undo
+        {
+            const QString src = u62Root.filePath(QStringLiteral("hook-src.bin"));
+            const QString dst = u62Root.filePath(QStringLiteral("hook-dst.bin"));
+            verify(writeFile(src, "hook-payload"), "U6.2: 11/12 src created");
+            const ino_t origIno = fileInode(src);
+
+            LocalMoveHistory hist;
+            LocalFileMoveJob job(QUrl::fromLocalFile(src), QUrl::fromLocalFile(dst));
+            job.setAutoDelete(false);
+            verify(hist.recordWhenCompleted(&job, 8001), "U6.2: 11/12 attach");
+            QSignalSpy spy(&job, &KJob::result);
+            job.start();
+            waitForResult(spy, "U6.2: 11/12 move finishes");
+            verify(job.error() == KJob::NoError && hist.canUndo(), "U6.2: 11/12 move ok");
+
+            simulateFileMoveMountIdChange() = true;
+            {
+                KJob *undoJob = hist.undo();
+                verify(undoJob != nullptr, "U6.2: 11 mntId-change undo starts");
+                QSignalSpy undoSpy(undoJob, &KJob::result);
+                waitForResult(undoSpy, "U6.2: 11 mntId-change undo finishes");
+                verify(undoJob->error() != KJob::NoError, "U6.2: 11 undo refused on mntId change");
+                verify(!QFileInfo::exists(src) && fileInode(dst) == origIno
+                           && hist.canUndo() && hist.undoSerial() == 8001,
+                       "U6.2: 11 state and history unchanged");
+            }
+            simulateFileMoveMountIdChange() = false;
+
+            simulateFileMoveUnsupportedFsMagic() = 0x12345678UL;
+            {
+                KJob *undoJob = hist.undo();
+                verify(undoJob != nullptr, "U6.2: 12 fsMagic-change undo starts");
+                QSignalSpy undoSpy(undoJob, &KJob::result);
+                waitForResult(undoSpy, "U6.2: 12 fsMagic-change undo finishes");
+                verify(undoJob->error() != KJob::NoError, "U6.2: 12 undo refused on fsMagic change");
+                verify(!QFileInfo::exists(src) && fileInode(dst) == origIno
+                           && hist.canUndo() && hist.undoSerial() == 8001,
+                       "U6.2: 12 state and history unchanged");
+            }
+            simulateFileMoveUnsupportedFsMagic() = 0UL;
         }
     }
 

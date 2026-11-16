@@ -2503,6 +2503,8 @@ static void testStage25DisableAndReenableHistory(const QString &tempDir)
     histMgr.flushSync();
 
     verifyHistory(histMgr.count() == 3, "New task recorded after re-enabling history");
+    delete job1;
+    delete job2;
 }
 
 static void testStage25RetentionLimitsTrimming(const QString &tempDir)
@@ -2651,6 +2653,8 @@ static void testStage25ClearHistoryAccepted(const QString &tempDir)
     TransferHistoryManager histMgrReload(filePath);
     histMgrReload.loadSync();
     verifyHistory(histMgrReload.count() == 0, "Disk file is empty after clear");
+    delete job1;
+    delete job2;
 }
 
 static void testStage25ClearHistoryCancelled(const QString &tempDir)
@@ -2743,6 +2747,8 @@ static void testStage25ClearPreventsQueueResurrection(const QString &tempDir)
     verifyHistory(histMgr.count() == 1, "Only 1 record present (the new task)");
     verifyHistory(histMgr.records().first().sourceUrls.first().fileName() == QStringLiteral("brand_new.txt"),
                   "New task recorded; old cleared task was not resurrected");
+    delete job1;
+    delete job2;
 }
 
 static void testStage25MultiInstanceConcurrencyAndSync(const QString &tempDir)
@@ -3106,6 +3112,8 @@ static void testStage25MultiProcessFinishedTaskClearedAndNewTransfer(const QStri
     verifyHistory(histMgrA.count() == 1, "Instance A sees exactly 1 record");
     verifyHistory(histMgrA.records().first().sourceUrls.first().fileName() == QStringLiteral("file_new_5mib.bin"),
                   "Instance A sees new Task 2; old Task 1 is permanently gone");
+    delete job1;
+    delete job2;
 }
 
 int main(int argc, char **argv)

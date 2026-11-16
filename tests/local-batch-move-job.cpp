@@ -93,6 +93,12 @@ static void resetBatchTestHooks()
     simulateBatchMoveDestinationFsyncErrorAtStep() = {-1, 0};
     simulateBatchMoveSourceFsyncErrorAtStep() = {-1, 0};
     simulateBatchMovePostRenameVerifyFailAtStep() = -1;
+    simulateBatchMoveExt4Filesystem() = false;
+    simulateBatchMoveExt4StatxMntIdUniqueMissing() = false;
+    simulateBatchMoveExt4FlagsError() = false;
+    simulateBatchMoveExt4CasefoldAllDirs() = false;
+    simulateBatchMoveExt4CasefoldInode() = 0;
+    simulateBatchMoveExt4Encrypt() = false;
 }
 
 int main(int argc, char **argv)
@@ -1687,6 +1693,665 @@ int main(int argc, char **argv)
                            && evalExt4.decision == MovePolicyDecision::RefusedLocalContainment,
                        "H2B2B-UR6: non-Btrfs mixed batch move refused fail-closed by MoveSafetyPolicy");
             }
+        }
+    }
+
+    // Reconstructed H.2C.1A: Simulated ext4 batch gating & fail-closed checks
+    {
+        const QString eRoot = btrfsRoot.filePath(QStringLiteral("h2c_ext4"));
+        const QString eSrc = eRoot + QStringLiteral("/src");
+        const QString eDst = eRoot + QStringLiteral("/dst");
+        verify(QDir().mkpath(eSrc) && QDir().mkpath(eDst), "H2C.1A: setup dirs");
+
+        // 1. Files-only batch on simulated ext4 blocked by default, allowed with setAllowExt4(true)
+        {
+            const QString f1 = eSrc + QStringLiteral("/ef1.txt");
+            const QString f2 = eSrc + QStringLiteral("/ef2.txt");
+            verify(writeFileBytes(f1, "EF1") && writeFileBytes(f2, "EF2"), "H2C.1A-1: setup");
+            simulateBatchMoveExt4Filesystem() = true;
+
+            LocalBatchMoveJob blockedJob({QUrl::fromLocalFile(f1), QUrl::fromLocalFile(f2)},
+                                         QUrl::fromLocalFile(eDst));
+            blockedJob.setAutoDelete(false);
+            verify(!blockedJob.exec() && blockedJob.error() != KJob::NoError
+                       && blockedJob.batchResult().outcome == BatchMoveOutcome::FullRefusalBeforeExecution,
+                   "H2C.1A-1: ext4 batch blocked without setAllowExt4(true)");
+
+            // GUI policy remains locked on ext4
+            const auto guiEval = MoveSafetyPolicy::evaluate(
+                {QUrl::fromLocalFile(f1), QUrl::fromLocalFile(f2)},
+                QUrl::fromLocalFile(eDst),
+                true);
+            verify(!guiEval.allowed && guiEval.decision == MovePolicyDecision::RefusedLocalContainment,
+                   "H2C.1A-1: MoveSafetyPolicy remains locked on ext4");
+
+            LocalBatchMoveJob allowedJob({QUrl::fromLocalFile(f1), QUrl::fromLocalFile(f2)},
+                                         QUrl::fromLocalFile(eDst));
+            allowedJob.setAllowExt4(true);
+            allowedJob.setAutoDelete(false);
+            verify(allowedJob.exec() && allowedJob.error() == KJob::NoError
+                       && allowedJob.batchResult().outcome == BatchMoveOutcome::FullSuccess
+                       && allowedJob.verifiedFsProvenance() == LocalBtrfsMoveCommon::VerifiedMoveFsProvenance::Ext4,
+                   "H2C.1A-1: ext4 files batch succeeds with setAllowExt4(true)");
+            resetBatchTestHooks();
+        }
+
+        // 2. Mixed batch on simulated ext4 with setAllowDirectories(true) + setAllowExt4(true)
+        {
+            const QString mf = eSrc + QStringLiteral("/em_file.txt");
+            const QString md = eSrc + QStringLiteral("/em_dir");
+            verify(writeFileBytes(mf, "EMF") && QDir().mkpath(md)
+                       && writeFileBytes(md + QStringLiteral("/inner.txt"), "EMI"),
+                   "H2C.1A-2: setup");
+            simulateBatchMoveExt4Filesystem() = true;
+            LocalBatchMoveJob mixedJob({QUrl::fromLocalFile(mf), QUrl::fromLocalFile(md)},
+                                       QUrl::fromLocalFile(eDst));
+            mixedJob.setAllowDirectories(true);
+            mixedJob.setAllowExt4(true);
+            mixedJob.setAutoDelete(false);
+            verify(mixedJob.exec() && mixedJob.error() == KJob::NoError
+                       && mixedJob.batchResult().outcome == BatchMoveOutcome::FullSuccess,
+                   "H2C.1A-2: ext4 mixed batch succeeds with explicit opt-in");
+            resetBatchTestHooks();
+        }
+
+        // 3. Missing unique mnt_id / FS_IOC_GETFLAGS error / casefold / encrypt / partial failure on ext4
+        {
+            const QString g1 = eSrc + QStringLiteral("/g1.txt");
+            const QString gd = eSrc + QStringLiteral("/gd");
+            verify(writeFileBytes(g1, "G1") && QDir().mkpath(gd), "H2C.1A-3: setup");
+
+            simulateBatchMoveExt4Filesystem() = true;
+            simulateBatchMoveExt4StatxMntIdUniqueMissing() = true;
+            LocalBatchMoveJob noUniq({QUrl::fromLocalFile(g1), QUrl::fromLocalFile(gd)},
+                                     QUrl::fromLocalFile(eDst));
+            noUniq.setAllowDirectories(true);
+            noUniq.setAllowExt4(true);
+            noUniq.setAutoDelete(false);
+            verify(!noUniq.exec() && noUniq.error() != KJob::NoError,
+                   "H2C.1A-3a: missing STATX_MNT_ID_UNIQUE rejected fail-closed");
+            resetBatchTestHooks();
+
+            simulateBatchMoveExt4Filesystem() = true;
+            simulateBatchMoveExt4FlagsError() = true;
+            LocalBatchMoveJob flagsFail({QUrl::fromLocalFile(g1), QUrl::fromLocalFile(gd)},
+                                        QUrl::fromLocalFile(eDst));
+            flagsFail.setAllowDirectories(true);
+            flagsFail.setAllowExt4(true);
+            flagsFail.setAutoDelete(false);
+            verify(!flagsFail.exec() && flagsFail.error() != KJob::NoError,
+                   "H2C.1A-3b: FS_IOC_GETFLAGS failure rejected fail-closed");
+            resetBatchTestHooks();
+
+            simulateBatchMoveExt4Filesystem() = true;
+            simulateBatchMoveExt4CasefoldAllDirs() = true;
+            LocalBatchMoveJob cfFail({QUrl::fromLocalFile(g1), QUrl::fromLocalFile(gd)},
+                                     QUrl::fromLocalFile(eDst));
+            cfFail.setAllowDirectories(true);
+            cfFail.setAllowExt4(true);
+            cfFail.setAutoDelete(false);
+            verify(!cfFail.exec() && cfFail.error() != KJob::NoError,
+                   "H2C.1A-3c: ext4 casefold rejected fail-closed");
+            resetBatchTestHooks();
+
+            simulateBatchMoveExt4Filesystem() = true;
+            simulateBatchMoveExt4Encrypt() = true;
+            LocalBatchMoveJob encFail({QUrl::fromLocalFile(g1), QUrl::fromLocalFile(gd)},
+                                      QUrl::fromLocalFile(eDst));
+            encFail.setAllowDirectories(true);
+            encFail.setAllowExt4(true);
+            encFail.setAutoDelete(false);
+            verify(!encFail.exec() && encFail.error() != KJob::NoError,
+                   "H2C.1A-3d: ext4 FS_ENCRYPT_FL rejected fail-closed");
+            resetBatchTestHooks();
+
+            simulateBatchMoveExt4Filesystem() = true;
+            simulateBatchMoveDestinationFsyncErrorAtStep() = {1, EIO};
+            LocalMoveHistory partHist;
+            partHist.setAllowExt4History(true);
+            LocalBatchMoveJob partJob({QUrl::fromLocalFile(g1), QUrl::fromLocalFile(gd)},
+                                      QUrl::fromLocalFile(eDst));
+            partJob.setAllowDirectories(true);
+            partJob.setAllowExt4(true);
+            partJob.setAutoDelete(false);
+            verify(partHist.recordWhenCompleted(&partJob, 550), "H2C.1A-3e: attach");
+            verify(!partJob.exec() && partJob.error() != KJob::NoError
+                       && partJob.property("thispcBatchPartiallyCompleted").toBool()
+                       && partHist.count() == 0,
+                   "H2C.1A-3e: partial ext4 batch creates no reversible history");
+            resetBatchTestHooks();
+        }
+    }
+
+    // Reconstructed H.2C Provenance (T4-batch, T5-batch, T6-batch, T10)
+    {
+        const QString pRoot = btrfsRoot.filePath(QStringLiteral("h2c_prov"));
+        const QString pSrc = pRoot + QStringLiteral("/src");
+        const QString pDst = pRoot + QStringLiteral("/dst");
+        verify(QDir().mkpath(pSrc) && QDir().mkpath(pDst), "T4-T6: setup dirs");
+
+        // T4-batch: authorized Btrfs batch move records Btrfs provenance
+        {
+            const QString f0 = pSrc + QStringLiteral("/t4_0.txt");
+            const QString f1 = pSrc + QStringLiteral("/t4_1.txt");
+            verify(writeFileBytes(f0, "T4_0") && writeFileBytes(f1, "T4_1"), "T4-batch: setup");
+            LocalMoveHistory hist;
+            hist.setAllowExt4History(false);
+            LocalBatchMoveJob job({QUrl::fromLocalFile(f0), QUrl::fromLocalFile(f1)},
+                                  QUrl::fromLocalFile(pDst));
+            job.setAutoDelete(false);
+            verify(hist.recordWhenCompleted(&job, 701), "T4-batch: attach");
+            verify(job.exec()
+                       && job.verifiedFsProvenance() == LocalBtrfsMoveCommon::VerifiedMoveFsProvenance::Btrfs
+                       && hist.count() == 1 && hist.undoSerial() == 701,
+                   "T4-batch: authorized Btrfs batch move recorded with Btrfs provenance");
+        }
+
+        // T5-batch: simulated Ext4 blocked when allowExt4History=false, recorded as Ext4 when opt-in=true
+        {
+            const QString f0 = pSrc + QStringLiteral("/t5_0.txt");
+            const QString f1 = pSrc + QStringLiteral("/t5_1.txt");
+            verify(writeFileBytes(f0, "T5_0") && writeFileBytes(f1, "T5_1"), "T5-batch: setup");
+
+            simulateBatchMoveExt4Filesystem() = true;
+            LocalMoveHistory histNoOptIn;
+            histNoOptIn.setAllowExt4History(false);
+            LocalBatchMoveJob blocked({QUrl::fromLocalFile(f0), QUrl::fromLocalFile(f1)},
+                                      QUrl::fromLocalFile(pDst));
+            blocked.setAllowExt4(true);
+            blocked.setAutoDelete(false);
+            verify(histNoOptIn.recordWhenCompleted(&blocked, 702), "T5-batch: attach no opt-in");
+            verify(blocked.exec() && histNoOptIn.count() == 0,
+                   "T5-batch: Ext4 batch move NOT recorded when allowExt4History=false");
+
+            const QString back0 = pDst + QStringLiteral("/t5_0.txt");
+            const QString back1 = pDst + QStringLiteral("/t5_1.txt");
+            const QString dst2 = pSrc + QStringLiteral("/t5_back");
+            verify(QDir().mkpath(dst2), "T5-batch: back dir");
+            LocalMoveHistory histOptIn;
+            histOptIn.setAllowExt4History(true);
+            LocalBatchMoveJob allowed({QUrl::fromLocalFile(back0), QUrl::fromLocalFile(back1)},
+                                      QUrl::fromLocalFile(dst2));
+            allowed.setAllowExt4(true);
+            allowed.setAutoDelete(false);
+            verify(histOptIn.recordWhenCompleted(&allowed, 703), "T5-batch: attach opt-in");
+            verify(allowed.exec() && histOptIn.count() == 1 && histOptIn.undoSerial() == 703,
+                   "T5-batch: Ext4 batch move recorded as verified Ext4 when allowExt4History=true");
+
+            histOptIn.setAllowExt4History(false);
+            KJob *undoJob = histOptIn.undo();
+            auto *batchUndo = qobject_cast<LocalBatchMoveJob *>(undoJob);
+            verify(batchUndo != nullptr && !batchUndo->allowExt4(),
+                   "T5-batch: recorded Ext4 batch does NOT masquerade as Btrfs");
+            verify(!undoJob->exec() && undoJob->error() != KJob::NoError,
+                   "T5-batch: Undo blocked when opt-in disabled");
+            delete undoJob;
+            resetBatchTestHooks();
+        }
+
+        // T6-batch: unknown/tmpfs provenance rejected fail-closed
+        {
+            const QString f0 = pSrc + QStringLiteral("/t6_0.txt");
+            const QString f1 = pSrc + QStringLiteral("/t6_1.txt");
+            verify(writeFileBytes(f0, "T6_0") && writeFileBytes(f1, "T6_1"), "T6-batch: setup");
+            simulateBatchMoveUnsupportedFsMagic() = 0x01021994UL;
+            LocalMoveHistory hist;
+            hist.setAllowExt4History(true);
+            LocalBatchMoveJob job({QUrl::fromLocalFile(f0), QUrl::fromLocalFile(f1)},
+                                  QUrl::fromLocalFile(pDst));
+            job.setAutoDelete(false);
+            verify(hist.recordWhenCompleted(&job, 704), "T6-batch: attach");
+            verify(!job.exec() && job.error() != KJob::NoError && hist.count() == 0,
+                   "T6-batch: unknown/tmpfs provenance rejected fail-closed");
+            resetBatchTestHooks();
+        }
+
+        // T10: post-rename verify failure / durability failure yields no Undo entry & fences prior history
+        {
+            const QString s0 = pSrc + QStringLiteral("/t10_seed0.txt");
+            const QString s1 = pSrc + QStringLiteral("/t10_seed1.txt");
+            const QString f0 = pSrc + QStringLiteral("/t10_0.txt");
+            const QString f1 = pSrc + QStringLiteral("/t10_1.txt");
+            verify(writeFileBytes(s0, "S0") && writeFileBytes(s1, "S1")
+                       && writeFileBytes(f0, "T10_0") && writeFileBytes(f1, "T10_1"),
+                   "T10: setup");
+            LocalMoveHistory hist;
+            LocalBatchMoveJob seed({QUrl::fromLocalFile(s0), QUrl::fromLocalFile(s1)},
+                                   QUrl::fromLocalFile(pDst));
+            seed.setAutoDelete(false);
+            verify(hist.recordWhenCompleted(&seed, 800) && seed.exec() && hist.canUndo(),
+                   "T10: seed history ok");
+
+            simulateBatchMovePostRenameVerifyFailAtStep() = 0;
+            LocalBatchMoveJob failJob({QUrl::fromLocalFile(f0), QUrl::fromLocalFile(f1)},
+                                      QUrl::fromLocalFile(pDst));
+            failJob.setAutoDelete(false);
+            verify(hist.recordWhenCompleted(&failJob, 801), "T10: attach");
+            verify(!failJob.exec() && failJob.error() != KJob::NoError
+                       && !hist.canUndo() && hist.count() == 1,
+                   "T10: post-rename verify fails, adds no Undo entry and fences prior history");
+            resetBatchTestHooks();
+
+            // T10-durability: destination fsync failure on step 1 -> no Undo entry & fences prior history
+            const QString d0 = pSrc + QStringLiteral("/t10_d0.txt");
+            const QString d1 = pSrc + QStringLiteral("/t10_d1.txt");
+            const QString ds0 = pSrc + QStringLiteral("/t10_ds0.txt");
+            const QString ds1 = pSrc + QStringLiteral("/t10_ds1.txt");
+            verify(writeFileBytes(ds0, "DS0") && writeFileBytes(ds1, "DS1")
+                       && writeFileBytes(d0, "D0") && writeFileBytes(d1, "D1"),
+                   "T10-durability: setup");
+            LocalMoveHistory durHist;
+            LocalBatchMoveJob durSeed({QUrl::fromLocalFile(ds0), QUrl::fromLocalFile(ds1)},
+                                      QUrl::fromLocalFile(pDst));
+            durSeed.setAutoDelete(false);
+            verify(durHist.recordWhenCompleted(&durSeed, 802) && durSeed.exec() && durHist.canUndo(),
+                   "T10-durability: seed history ok");
+            simulateBatchMoveDestinationFsyncErrorAtStep() = {1, EIO};
+            LocalBatchMoveJob durFail({QUrl::fromLocalFile(d0), QUrl::fromLocalFile(d1)},
+                                      QUrl::fromLocalFile(pDst));
+            durFail.setAutoDelete(false);
+            verify(durHist.recordWhenCompleted(&durFail, 803), "T10-durability: attach");
+            verify(!durFail.exec() && durFail.error() != KJob::NoError
+                       && durFail.property("thispcBatchPartiallyCompleted").toBool()
+                       && !durHist.canUndo() && durHist.count() == 1,
+                   "T10-durability: fsync failure adds no Undo entry and fences prior history");
+            resetBatchTestHooks();
+        }
+    }
+
+    // Reconstructed U5C.0 & U5C.1: Batch strict directory snapshot opt-in, hashing, mutation/inode checks
+    {
+        const QString u5Root = btrfsRoot.filePath(QStringLiteral("u5c_batch"));
+        const QString u5Src = u5Root + QStringLiteral("/src");
+        const QString u5Dst = u5Root + QStringLiteral("/dst");
+        verify(QDir().mkpath(u5Src) && QDir().mkpath(u5Dst), "U5C: setup dirs");
+
+        // U5C.0: Without history attachment, captureStrictDirectorySnapshot() stays false and 0 files hashed
+        {
+            const QString dA = u5Src + QStringLiteral("/fast_a");
+            const QString dB = u5Src + QStringLiteral("/fast_b");
+            verify(QDir().mkpath(dA) && QDir().mkpath(dB)
+                       && writeFileBytes(dA + QStringLiteral("/fa.txt"), "FAST_A")
+                       && writeFileBytes(dB + QStringLiteral("/fb.txt"), "FAST_B"),
+                   "U5C.0: setup");
+            batchMoveSnapshotFilesHashedCount().store(0, std::memory_order_relaxed);
+            LocalBatchMoveJob fastJob({QUrl::fromLocalFile(dA), QUrl::fromLocalFile(dB)},
+                                      QUrl::fromLocalFile(u5Dst));
+            fastJob.setAllowDirectories(true);
+            fastJob.setAutoDelete(false);
+            verify(!fastJob.captureStrictDirectorySnapshot(), "U5C.0: default strict snapshot false");
+            verify(fastJob.exec() && fastJob.error() == KJob::NoError
+                       && batchMoveSnapshotFilesHashedCount().load(std::memory_order_relaxed) == 0,
+                   "U5C.0: non-history batch move skips strict file hashing");
+        }
+
+        // U5C.1: History-backed Batch Move hashes files, records strict snapshots, detects same-size mutation & inode swap
+        {
+            const QString sA = u5Src + QStringLiteral("/strict_a");
+            const QString sB = u5Src + QStringLiteral("/strict_b");
+            verify(QDir().mkpath(sA) && QDir().mkpath(sB)
+                       && writeFileBytes(sA + QStringLiteral("/sa.txt"), "SA_DATA_01")
+                       && writeFileBytes(sB + QStringLiteral("/sb.txt"), "SB_DATA_01"),
+                   "U5C.1-strict: setup");
+
+            batchMoveSnapshotFilesHashedCount().store(0, std::memory_order_relaxed);
+            LocalMoveHistory sHist;
+            LocalBatchMoveJob sJob({QUrl::fromLocalFile(sA), QUrl::fromLocalFile(sB)},
+                                   QUrl::fromLocalFile(u5Dst));
+            sJob.setAllowDirectories(true);
+            sJob.setAutoDelete(false);
+            verify(sHist.recordWhenCompleted(&sJob, 952) && sJob.captureStrictDirectorySnapshot(),
+                   "U5C.1-strict: opt-in enabled");
+            verify(sJob.exec()
+                       && sJob.batchResult().outcome == BatchMoveOutcome::FullSuccess
+                       && batchMoveSnapshotFilesHashedCount().load(std::memory_order_relaxed) == 2
+                       && sJob.batchResult().items.at(0).movedDirSnapshot.strictContentDigest
+                       && sJob.batchResult().items.at(1).movedDirSnapshot.strictContentDigest
+                       && sHist.count() == 1 && sHist.canUndo(),
+                   "U5C.1-strict: history-backed Batch Move hashed 2 files and recorded strict snapshots");
+
+            // Same-size mutation inside moved directory -> Undo must refuse fail-closed without moving
+            const QString movedFile = u5Dst + QStringLiteral("/strict_a/sa.txt");
+            verify(writeFileBytes(movedFile, "SA_DATA_99"), "U5C.1-mutate: same-size edit");
+            KJob *mutUndo = sHist.undo();
+            verify(mutUndo != nullptr && !mutUndo->exec() && mutUndo->error() != KJob::NoError,
+                   "U5C.1-mutate: Undo refused on same-size SHA-256 mismatch");
+            delete mutUndo;
+            verify(!QFileInfo::exists(sA) && QFileInfo::exists(u5Dst + QStringLiteral("/strict_a")),
+                   "U5C.1-mutate: destination preserved on refusal");
+        }
+
+        // U5C.1: Inode swap with identical bytes inside moved directory -> Undo refused fail-closed
+        {
+            const QString iA = u5Src + QStringLiteral("/inode_a");
+            const QString iB = u5Src + QStringLiteral("/inode_b");
+            verify(QDir().mkpath(iA) && QDir().mkpath(iB)
+                       && writeFileBytes(iA + QStringLiteral("/ia.txt"), "IDENTICAL_BYTES")
+                       && writeFileBytes(iB + QStringLiteral("/ib.txt"), "IB_BYTES"),
+                   "U5C.1-inode: setup");
+            LocalMoveHistory iHist;
+            LocalBatchMoveJob iJob({QUrl::fromLocalFile(iA), QUrl::fromLocalFile(iB)},
+                                   QUrl::fromLocalFile(u5Dst));
+            iJob.setAllowDirectories(true);
+            iJob.setAutoDelete(false);
+            verify(iHist.recordWhenCompleted(&iJob, 954) && iJob.exec() && iHist.canUndo(),
+                   "U5C.1-inode: move ok");
+            const QString movedIa = u5Dst + QStringLiteral("/inode_a/ia.txt");
+            const QString cloneIa = u5Dst + QStringLiteral("/inode_a/ia.txt.clone");
+            verify(writeFileBytes(cloneIa, "IDENTICAL_BYTES")
+                       && ::rename(QFile::encodeName(cloneIa).constData(),
+                                   QFile::encodeName(movedIa).constData()) == 0,
+                   "U5C.1-inode: replace file with new inode and identical bytes");
+            KJob *inodeUndo = iHist.undo();
+            verify(inodeUndo != nullptr && !inodeUndo->exec() && inodeUndo->error() != KJob::NoError,
+                   "U5C.1-inode: Undo refused on inode swap with identical bytes");
+            delete inodeUndo;
+            verify(!QFileInfo::exists(iA) && QFileInfo::exists(u5Dst + QStringLiteral("/inode_a")),
+                   "U5C.1-inode: destination preserved on refusal");
+        }
+
+        // U5C.1: Undo collision -> refused without overwrite
+        {
+            const QString cA = u5Src + QStringLiteral("/col_a.txt");
+            const QString cB = u5Src + QStringLiteral("/col_b.txt");
+            verify(writeFileBytes(cA, "CA") && writeFileBytes(cB, "CB"), "U5C.1-col: setup");
+            LocalMoveHistory cHist;
+            LocalBatchMoveJob cJob({QUrl::fromLocalFile(cA), QUrl::fromLocalFile(cB)},
+                                   QUrl::fromLocalFile(u5Dst));
+            cJob.setAutoDelete(false);
+            verify(cHist.recordWhenCompleted(&cJob, 953) && cJob.exec() && cHist.canUndo(),
+                   "U5C.1-col: move ok");
+            verify(writeFileBytes(cA, "COLLISION"), "U5C.1-col: create blocker at source");
+            KJob *colUndo = cHist.undo();
+            verify(colUndo != nullptr && !colUndo->exec() && colUndo->error() != KJob::NoError,
+                   "U5C.1-col: Undo refused on destination collision");
+            delete colUndo;
+            verify(QFileInfo::exists(u5Dst + QStringLiteral("/col_a.txt")),
+                   "U5C.1-col: moved file preserved without overwrite");
+        }
+
+        // U5C.1-file-strict: Regular-file batch detects same-size mutation, size change, and inode swap
+        {
+            const QString r1 = u5Src + QStringLiteral("/rf_1.txt");
+            const QString r2 = u5Src + QStringLiteral("/rf_2.txt");
+            verify(writeFileBytes(r1, "RF_DATA_01") && writeFileBytes(r2, "RF_DATA_02"),
+                   "U5C.1-file: setup");
+            LocalMoveHistory rHist;
+            LocalBatchMoveJob rJob({QUrl::fromLocalFile(r1), QUrl::fromLocalFile(r2)},
+                                   QUrl::fromLocalFile(u5Dst));
+            rJob.setAutoDelete(false);
+            verify(rHist.recordWhenCompleted(&rJob, 955) && rJob.exec() && rHist.canUndo(),
+                   "U5C.1-file: move ok");
+            const QString movedR1 = u5Dst + QStringLiteral("/rf_1.txt");
+            // Same-size mutation
+            verify(writeFileBytes(movedR1, "RF_DATA_99"), "U5C.1-file: same-size edit");
+            KJob *uMut = rHist.undo();
+            verify(uMut != nullptr && !uMut->exec() && uMut->error() != KJob::NoError,
+                   "U5C.1-file: Undo refused on same-size byte mutation");
+            delete uMut;
+            // Size change
+            verify(writeFileBytes(movedR1, "RF_DATA_LONGER"), "U5C.1-file: size change");
+            KJob *uSize = rHist.undo();
+            verify(uSize != nullptr && !uSize->exec() && uSize->error() != KJob::NoError,
+                   "U5C.1-file: Undo refused on size change");
+            delete uSize;
+            // Inode swap with original bytes
+            const QString movedR2 = u5Dst + QStringLiteral("/rf_2.txt");
+            const QString cloneR2 = u5Dst + QStringLiteral("/rf_2.txt.clone");
+            verify(writeFileBytes(cloneR2, "RF_DATA_02")
+                       && ::rename(QFile::encodeName(cloneR2).constData(),
+                                   QFile::encodeName(movedR2).constData()) == 0,
+                   "U5C.1-file: inode swap on second file");
+            KJob *uInode = rHist.undo();
+            verify(uInode != nullptr && !uInode->exec() && uInode->error() != KJob::NoError,
+                   "U5C.1-file: Undo refused on inode swap");
+            delete uInode;
+            verify(!QFileInfo::exists(r1) && !QFileInfo::exists(r2),
+                   "U5C.1-file: sources untouched after strict refusals");
+        }
+    }
+
+    // H.2C-U6.3: Batch & Mixed Batch history authorization hardening
+    {
+        auto checkBatchMoveApi = []<typename H>(H *) {
+            return requires(H &h) {
+                h.recordCompletedBatchMove(QList<QPair<QUrl, QUrl>>{}, QList<LocalRegularFileIdentity>{}, 0);
+            };
+        };
+        auto checkMixedBatchMoveApi = []<typename H>(H *) {
+            return requires(H &h) {
+                h.recordCompletedMixedBatchMove(
+                    QList<QPair<QUrl, QUrl>>{}, QList<BatchMoveExpectedItem>{}, false, 0);
+            };
+        };
+        constexpr bool hasPublicRecordCompletedBatchMove =
+            checkBatchMoveApi(static_cast<LocalMoveHistory *>(nullptr));
+        constexpr bool hasPublicRecordCompletedMixedBatchMove =
+            checkMixedBatchMoveApi(static_cast<LocalMoveHistory *>(nullptr));
+        verify(!hasPublicRecordCompletedBatchMove && !hasPublicRecordCompletedMixedBatchMove,
+               "U6.3-1: public recordCompletedBatchMove/recordCompletedMixedBatchMove removed");
+
+        const QString u63Root = btrfsRoot.filePath(QStringLiteral("u63_auth"));
+        const QString u63Src = u63Root + QStringLiteral("/src");
+        const QString u63Dst = u63Root + QStringLiteral("/dst");
+        verify(QDir().mkpath(u63Src) && QDir().mkpath(u63Dst), "U6.3: setup dirs");
+
+        // Late attachment after start() (even with pre-enabled strict snapshot) & after finish()
+        {
+            const QString a1 = u63Src + QStringLiteral("/a1.txt");
+            const QString a2 = u63Src + QStringLiteral("/a2.txt");
+            const QString b1 = u63Src + QStringLiteral("/b1.txt");
+            const QString b2 = u63Src + QStringLiteral("/b2.txt");
+            verify(writeFileBytes(a1, "A1") && writeFileBytes(a2, "A2")
+                       && writeFileBytes(b1, "B1") && writeFileBytes(b2, "B2"),
+                   "U6.3-2: setup files");
+
+            LocalMoveHistory hist;
+            LocalBatchMoveJob seed(
+                {QUrl::fromLocalFile(a1), QUrl::fromLocalFile(a2)},
+                QUrl::fromLocalFile(u63Dst));
+            seed.setAutoDelete(false);
+            verify(hist.recordWhenCompleted(&seed, 1001), "U6.3-2: seed attach");
+            verify(seed.exec() && hist.count() == 1 && hist.canUndo(), "U6.3-2: seed move ok");
+
+            LocalBatchMoveJob lateJob(
+                {QUrl::fromLocalFile(b1), QUrl::fromLocalFile(b2)},
+                QUrl::fromLocalFile(u63Dst));
+            lateJob.setAutoDelete(false);
+            verify(lateJob.setCaptureStrictDirectorySnapshot(true), "U6.3-2: pre-enable snapshot");
+            lateJob.start();
+            verify(lateJob.hasStarted(), "U6.3-2: lateJob started");
+            verify(!hist.recordWhenCompleted(&lateJob, 1002),
+                   "U6.3-2: late recordWhenCompleted after start() rejected");
+            verify(!hist.canUndo(), "U6.3-2: late attachment fences prior history");
+            QEventLoop loop;
+            QObject::connect(&lateJob, &KJob::result, &loop, &QEventLoop::quit);
+            if (!lateJob.hasFinished()) {
+                loop.exec();
+            }
+            verify(!hist.recordWhenCompleted(&lateJob, 1003),
+                   "U6.3-2: recordWhenCompleted after finish() rejected");
+            verify(hist.count() == 1 && !hist.canUndo(),
+                   "U6.3-2: finished job did not create a second record");
+        }
+
+        // Double attachment (same history & second history) + duplicate result emission guard
+        {
+            const QString c1 = u63Src + QStringLiteral("/c1.txt");
+            const QString c2 = u63Src + QStringLiteral("/c2.txt");
+            verify(writeFileBytes(c1, "C1") && writeFileBytes(c2, "C2"), "U6.3-3: setup");
+
+            LocalMoveHistory h1;
+            LocalMoveHistory h2;
+            LocalBatchMoveJob job(
+                {QUrl::fromLocalFile(c1), QUrl::fromLocalFile(c2)},
+                QUrl::fromLocalFile(u63Dst));
+            job.setAutoDelete(false);
+            verify(h1.recordWhenCompleted(&job, 1010), "U6.3-3: first attach succeeds");
+            verify(!h2.recordWhenCompleted(&job, 1011), "U6.3-3: second history attach refused");
+            verify(!h1.recordWhenCompleted(&job, 1012), "U6.3-3: duplicate same history attach refused");
+            verify(job.exec() && h1.count() == 1 && h2.count() == 0,
+                   "U6.3-3: only first authorized history records");
+
+            QMetaObject::invokeMethod(&job, "result", Q_ARG(KJob *, &job));
+            QCoreApplication::processEvents();
+            verify(h1.count() == 1, "U6.3-3: duplicate result signal produces no duplicate record");
+        }
+
+        // Lifetime safety: job destroyed before queued delivery / history destroyed before job completes
+        {
+            const QString d1 = u63Src + QStringLiteral("/d1.txt");
+            const QString d2 = u63Src + QStringLiteral("/d2.txt");
+            verify(writeFileBytes(d1, "D1") && writeFileBytes(d2, "D2"), "U6.3-4: setup");
+
+            {
+                LocalMoveHistory hist;
+                auto *job = new LocalBatchMoveJob(
+                    {QUrl::fromLocalFile(d1), QUrl::fromLocalFile(d2)},
+                    QUrl::fromLocalFile(u63Dst));
+                job->setAutoDelete(false);
+                verify(hist.recordWhenCompleted(job, 1020), "U6.3-4a: attach");
+                delete job;
+                QCoreApplication::processEvents();
+                verify(hist.count() == 0, "U6.3-4a: deleting job before start leaves no record");
+            }
+
+            {
+                auto *hist = new LocalMoveHistory;
+                LocalBatchMoveJob job(
+                    {QUrl::fromLocalFile(d1), QUrl::fromLocalFile(d2)},
+                    QUrl::fromLocalFile(u63Dst));
+                job.setAutoDelete(false);
+                verify(hist->recordWhenCompleted(&job, 1021), "U6.3-4b: attach");
+                delete hist;
+                verify(job.exec() && job.error() == KJob::NoError,
+                       "U6.3-4b: job finishes cleanly after history destroyed (no dangling callback)");
+            }
+        }
+
+        // Authorized Mixed Batch Move -> Undo -> Redo round-trip
+        {
+            const QString mFileSrc = u63Src + QStringLiteral("/m_file.txt");
+            const QString mDir = u63Src + QStringLiteral("/m_dir");
+            const QString mBackDst = u63Src + QStringLiteral("/m_back");
+            verify(QDir().mkpath(mDir) && QDir().mkpath(mBackDst)
+                       && writeFileBytes(mFileSrc, "MFILE")
+                       && writeFileBytes(mDir + QStringLiteral("/inner.txt"), "INNER_M"),
+                   "U6.3-5: setup mixed");
+
+            LocalMoveHistory mHist;
+            LocalBatchMoveJob mJob(
+                {QUrl::fromLocalFile(mFileSrc), QUrl::fromLocalFile(mDir)},
+                QUrl::fromLocalFile(mBackDst));
+            mJob.setAllowDirectories(true);
+            mJob.setAutoDelete(false);
+            verify(mHist.recordWhenCompleted(&mJob, 1030), "U6.3-5: attach mixed");
+            verify(mJob.exec() && mJob.error() == KJob::NoError && mHist.count() == 1 && mHist.canUndo(),
+                   "U6.3-5: mixed batch move recorded");
+
+            KJob *undoJob = mHist.undo();
+            verify(undoJob != nullptr && undoJob->exec() && undoJob->error() == KJob::NoError,
+                   "U6.3-5: mixed batch undo succeeded");
+            delete undoJob;
+            verify(QFileInfo::exists(mFileSrc) && QFileInfo::exists(mDir + QStringLiteral("/inner.txt"))
+                       && mHist.canRedo(),
+                   "U6.3-5: sources restored and redo available");
+
+            KJob *redoJob = mHist.redo();
+            verify(redoJob != nullptr && redoJob->exec() && redoJob->error() == KJob::NoError,
+                   "U6.3-5: mixed batch redo succeeded");
+            delete redoJob;
+            verify(QFileInfo::exists(mBackDst + QStringLiteral("/m_file.txt"))
+                       && QFileInfo::exists(mBackDst + QStringLiteral("/m_dir/inner.txt")),
+                   "U6.3-5: destinations restored after redo");
+        }
+
+        // Legal files-only Batch Move -> Undo -> Redo, and unauthorized/unattached Undo/Redo refused
+        {
+            LocalMoveHistory emptyHist;
+            verify(!emptyHist.canUndo() && !emptyHist.canRedo()
+                       && emptyHist.undo() == nullptr && emptyHist.redo() == nullptr,
+                   "U6.3-6: unattached history cannot Undo or Redo");
+
+            const QString f1 = u63Src + QStringLiteral("/f_only_1.txt");
+            const QString f2 = u63Src + QStringLiteral("/f_only_2.txt");
+            const QString fDst = u63Dst + QStringLiteral("/files_only");
+            verify(QDir().mkpath(fDst)
+                       && writeFileBytes(f1, "FO1") && writeFileBytes(f2, "FO2"),
+                   "U6.3-6: setup files-only batch");
+            LocalMoveHistory fHist;
+            LocalBatchMoveJob fJob({QUrl::fromLocalFile(f1), QUrl::fromLocalFile(f2)},
+                                   QUrl::fromLocalFile(fDst));
+            fJob.setAutoDelete(false);
+            verify(fHist.recordWhenCompleted(&fJob, 1031) && fJob.exec() && fJob.error() == KJob::NoError
+                       && fHist.count() == 1 && fHist.canUndo(),
+                   "U6.3-6: files-only batch move recorded");
+            KJob *fUndo = fHist.undo();
+            verify(fUndo != nullptr && fUndo->exec() && fUndo->error() == KJob::NoError
+                       && QFileInfo::exists(f1) && QFileInfo::exists(f2) && fHist.canRedo(),
+                   "U6.3-6: files-only batch undo succeeded");
+            delete fUndo;
+            KJob *fRedo = fHist.redo();
+            verify(fRedo != nullptr && fRedo->exec() && fRedo->error() == KJob::NoError
+                       && QFileInfo::exists(fDst + QStringLiteral("/f_only_1.txt"))
+                       && QFileInfo::exists(fDst + QStringLiteral("/f_only_2.txt")),
+                   "U6.3-6: files-only batch redo succeeded");
+            delete fRedo;
+        }
+
+        // Cursor, serials (undoSerial/redoSerial), fenceIrreversible(), and Redo collision
+        {
+            const QString s1a = u63Src + QStringLiteral("/cur_1a.txt");
+            const QString s1b = u63Src + QStringLiteral("/cur_1b.txt");
+            const QString s2a = u63Src + QStringLiteral("/cur_2a.txt");
+            const QString s2b = u63Src + QStringLiteral("/cur_2b.txt");
+            const QString cDst = u63Dst + QStringLiteral("/cursor");
+            verify(QDir().mkpath(cDst)
+                       && writeFileBytes(s1a, "1A") && writeFileBytes(s1b, "1B")
+                       && writeFileBytes(s2a, "2A") && writeFileBytes(s2b, "2B"),
+                   "U6.3-7: setup cursor/serials");
+
+            LocalMoveHistory cHist;
+            LocalBatchMoveJob j1({QUrl::fromLocalFile(s1a), QUrl::fromLocalFile(s1b)},
+                                 QUrl::fromLocalFile(cDst));
+            j1.setAutoDelete(false);
+            verify(cHist.recordWhenCompleted(&j1, 1101) && j1.exec(), "U6.3-7: batch 1 ok");
+
+            LocalBatchMoveJob j2({QUrl::fromLocalFile(s2a), QUrl::fromLocalFile(s2b)},
+                                 QUrl::fromLocalFile(cDst));
+            j2.setAutoDelete(false);
+            verify(cHist.recordWhenCompleted(&j2, 1102) && j2.exec(), "U6.3-7: batch 2 ok");
+            verify(cHist.count() == 2 && cHist.undoSerial() == 1102 && !cHist.canRedo(),
+                   "U6.3-7: serials track top of stack");
+
+            KJob *u2 = cHist.undo();
+            verify(u2 != nullptr && u2->exec() && cHist.canUndo() && cHist.canRedo()
+                       && cHist.undoSerial() == 1101 && cHist.redoSerial() == 1102,
+                   "U6.3-7: undo moves cursor to 1101/1102");
+            delete u2;
+
+            // Redo collision check
+            const QString moved2a = cDst + QStringLiteral("/cur_2a.txt");
+            verify(writeFileBytes(moved2a, "REDO_BLOCKER"), "U6.3-7: create redo collision");
+            KJob *r2Fail = cHist.redo();
+            verify(r2Fail != nullptr && !r2Fail->exec() && r2Fail->error() != KJob::NoError
+                       && cHist.canUndo() && cHist.canRedo(),
+                   "U6.3-7: Redo refused on destination collision");
+            delete r2Fail;
+
+            // fenceIrreversible() via failed partial batch clears Redo tail and fences prior Undo
+            const QString f1 = u63Src + QStringLiteral("/cur_f1.txt");
+            const QString f2 = u63Src + QStringLiteral("/cur_f2.txt");
+            verify(writeFileBytes(f1, "F1") && writeFileBytes(f2, "F2"), "U6.3-7: setup fence");
+            simulateBatchMoveDestinationFsyncErrorAtStep() = {1, EIO};
+            LocalBatchMoveJob jFail({QUrl::fromLocalFile(f1), QUrl::fromLocalFile(f2)},
+                                    QUrl::fromLocalFile(cDst));
+            jFail.setAutoDelete(false);
+            verify(cHist.recordWhenCompleted(&jFail, 1103), "U6.3-7: attach fence job");
+            verify(!jFail.exec() && !cHist.canRedo() && !cHist.canUndo()
+                       && cHist.undo() == nullptr && cHist.redo() == nullptr,
+                   "U6.3-7: fenceIrreversible clears Redo tail and blocks Undo past fence");
+            resetBatchTestHooks();
         }
     }
 

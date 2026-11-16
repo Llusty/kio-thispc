@@ -89,6 +89,13 @@ static void resetDirMoveTestHooks()
     simulateDirMoveSourceFsyncError() = 0;
     simulateDirMoveBeforeRename() = {};
     simulateDirMoveBeforeDstFsync() = {};
+    simulateDirMoveExt4Filesystem() = false;
+    simulateDirMoveExt4StatxMntIdUniqueMissing() = false;
+    simulateDirMoveExt4FlagsError() = false;
+    simulateDirMoveExt4CasefoldAllDirs() = false;
+    simulateDirMoveExt4CasefoldInode() = 0;
+    simulateDirMoveExt4Encrypt() = false;
+    dirMoveSnapshotFilesHashedCount().store(0, std::memory_order_relaxed);
 }
 
 int main(int argc, char **argv)
@@ -794,6 +801,583 @@ int main(int argc, char **argv)
         verify(!QFileInfo::exists(retrySrc) && sha256File(retryDst + QStringLiteral("/r.txt"))
                    == QCryptographicHash::hash("RETRY", QCryptographicHash::Sha256),
                "Neg18b: retried dir move published with intact data");
+
+        // =========================================================================
+        // H.2C.1A: Simulated ext4 VFS tests (#ifdef THISPC_TEST_HARNESS)
+        // NOTE: No real ext4 mount on host; these verify the ext4 engine rules
+        // via VFS simulation hooks while keeping production GUI locked.
+        // =========================================================================
+        {
+            const QString ext4SrcRoot = srcRoot + QStringLiteral("/sim_ext4_src");
+            const QString ext4DstRoot = dstRoot + QStringLiteral("/sim_ext4_dst");
+            verify(QDir().mkpath(ext4SrcRoot) && QDir().mkpath(ext4DstRoot),
+                   "S-EXT4-D: test roots created");
+
+            // S-EXT4-D1: Positive single directory move with nested subdir & hidden file
+            const QString d1Src = ext4SrcRoot + QStringLiteral("/d1_tree");
+            const QString d1Dst = ext4DstRoot + QStringLiteral("/d1_tree");
+            verify(QDir().mkpath(d1Src + QStringLiteral("/nested"))
+                       && writeFileBytes(d1Src + QStringLiteral("/nested/.dot.txt"), "EXT4_DIR_OK"),
+                   "S-EXT4-D1: fixture created");
+            simulateDirMoveExt4Filesystem() = true;
+            LocalDirectoryMoveJob ext4Ok(QUrl::fromLocalFile(d1Src), QUrl::fromLocalFile(d1Dst));
+            ext4Ok.setAllowExt4(true);
+            ext4Ok.setAutoDelete(false);
+            ext4Ok.exec();
+            resetDirMoveTestHooks();
+            verify(ext4Ok.error() == KJob::NoError
+                       && ext4Ok.destinationPublished()
+                       && ext4Ok.directoryDurabilityConfirmed()
+                       && ext4Ok.outcome() == LocalDirectoryMoveOutcome::PublishedAndDurable
+                       && !QFileInfo::exists(d1Src)
+                       && sha256File(d1Dst + QStringLiteral("/nested/.dot.txt"))
+                              == QCryptographicHash::hash("EXT4_DIR_OK", QCryptographicHash::Sha256),
+                   "S-EXT4-D1 [SIMULATED_EXT4_VFS]: ext4 directory move succeeds when allowExt4=true");
+
+            // S-EXT4-D2: Default allowExt4=false refuses ext4 fail-closed
+            const QString d2Src = ext4SrcRoot + QStringLiteral("/d2_locked");
+            const QString d2Dst = ext4DstRoot + QStringLiteral("/d2_locked");
+            verify(QDir().mkdir(d2Src) && writeFileBytes(d2Src + QStringLiteral("/a.txt"), "LOCK"),
+                   "S-EXT4-D2: fixture created");
+            simulateDirMoveExt4Filesystem() = true;
+            LocalDirectoryMoveJob ext4Locked(QUrl::fromLocalFile(d2Src), QUrl::fromLocalFile(d2Dst));
+            ext4Locked.setAutoDelete(false);
+            ext4Locked.exec();
+            resetDirMoveTestHooks();
+            verify(ext4Locked.error() != KJob::NoError
+                       && ext4Locked.moveError() == LocalDirectoryMoveError::UnsupportedFilesystem
+                       && !ext4Locked.destinationPublished()
+                       && QFileInfo::exists(d2Src + QStringLiteral("/a.txt"))
+                       && !QFileInfo::exists(d2Dst),
+                   "S-EXT4-D2 [SIMULATED_EXT4_VFS]: ext4 refused fail-closed when allowExt4=false");
+
+            // S-EXT4-D3: Missing STATX_MNT_ID_UNIQUE refused fail-closed
+            simulateDirMoveExt4Filesystem() = true;
+            simulateDirMoveExt4StatxMntIdUniqueMissing() = true;
+            LocalDirectoryMoveJob ext4NoUnique(QUrl::fromLocalFile(d2Src), QUrl::fromLocalFile(d2Dst));
+            ext4NoUnique.setAllowExt4(true);
+            ext4NoUnique.setAutoDelete(false);
+            ext4NoUnique.exec();
+            resetDirMoveTestHooks();
+            verify(ext4NoUnique.error() != KJob::NoError
+                       && ext4NoUnique.moveError() == LocalDirectoryMoveError::UnsupportedKernelFeature
+                       && QFileInfo::exists(d2Src + QStringLiteral("/a.txt"))
+                       && !QFileInfo::exists(d2Dst),
+                   "S-EXT4-D3 [SIMULATED_EXT4_VFS]: missing STATX_MNT_ID_UNIQUE refused fail-closed");
+
+            // S-EXT4-D4: FS_IOC_GETFLAGS error refused fail-closed
+            simulateDirMoveExt4Filesystem() = true;
+            simulateDirMoveExt4FlagsError() = true;
+            LocalDirectoryMoveJob ext4FlagsErr(QUrl::fromLocalFile(d2Src), QUrl::fromLocalFile(d2Dst));
+            ext4FlagsErr.setAllowExt4(true);
+            ext4FlagsErr.setAutoDelete(false);
+            ext4FlagsErr.exec();
+            resetDirMoveTestHooks();
+            verify(ext4FlagsErr.error() != KJob::NoError
+                       && ext4FlagsErr.moveError() == LocalDirectoryMoveError::ContainmentViolation
+                       && QFileInfo::exists(d2Src + QStringLiteral("/a.txt"))
+                       && !QFileInfo::exists(d2Dst),
+                   "S-EXT4-D4 [SIMULATED_EXT4_VFS]: FS_IOC_GETFLAGS failure refused fail-closed");
+
+            // S-EXT4-D5: FS_CASEFOLD_FL refused (both all-dirs and deep child inode only)
+            simulateDirMoveExt4Filesystem() = true;
+            simulateDirMoveExt4CasefoldAllDirs() = true;
+            LocalDirectoryMoveJob ext4CfAll(QUrl::fromLocalFile(d2Src), QUrl::fromLocalFile(d2Dst));
+            ext4CfAll.setAllowExt4(true);
+            ext4CfAll.setAutoDelete(false);
+            ext4CfAll.exec();
+            resetDirMoveTestHooks();
+            verify(ext4CfAll.error() != KJob::NoError
+                       && ext4CfAll.moveError() == LocalDirectoryMoveError::ContainmentViolation
+                       && QFileInfo::exists(d2Src + QStringLiteral("/a.txt")),
+                   "S-EXT4-D5a [SIMULATED_EXT4_VFS]: FS_CASEFOLD_FL on dirs refused fail-closed");
+
+            const QString d5Child = d2Src + QStringLiteral("/cf_child");
+            verify(QDir().mkdir(d5Child), "S-EXT4-D5b: child dir created");
+            struct stat cfChildSt {};
+            verify(::lstat(QFile::encodeName(d5Child).constData(), &cfChildSt) == 0, "S-EXT4-D5b: lstat");
+            simulateDirMoveExt4Filesystem() = true;
+            simulateDirMoveExt4CasefoldInode() = static_cast<quint64>(cfChildSt.st_ino);
+            LocalDirectoryMoveJob ext4CfChild(QUrl::fromLocalFile(d2Src), QUrl::fromLocalFile(d2Dst));
+            ext4CfChild.setAllowExt4(true);
+            ext4CfChild.setAutoDelete(false);
+            ext4CfChild.exec();
+            resetDirMoveTestHooks();
+            verify(ext4CfChild.error() != KJob::NoError
+                       && ext4CfChild.moveError() == LocalDirectoryMoveError::ContainmentViolation
+                       && QFileInfo::exists(d5Child) && !QFileInfo::exists(d2Dst),
+                   "S-EXT4-D5b [SIMULATED_EXT4_VFS]: deep child FS_CASEFOLD_FL refused fail-closed");
+
+            // S-EXT4-D6: FS_ENCRYPT_FL refused fail-closed
+            simulateDirMoveExt4Filesystem() = true;
+            simulateDirMoveExt4Encrypt() = true;
+            LocalDirectoryMoveJob ext4Enc(QUrl::fromLocalFile(d2Src), QUrl::fromLocalFile(d2Dst));
+            ext4Enc.setAllowExt4(true);
+            ext4Enc.setAutoDelete(false);
+            ext4Enc.exec();
+            resetDirMoveTestHooks();
+            verify(ext4Enc.error() != KJob::NoError
+                       && ext4Enc.moveError() == LocalDirectoryMoveError::ContainmentViolation
+                       && QFileInfo::exists(d2Src + QStringLiteral("/a.txt")),
+                   "S-EXT4-D6 [SIMULATED_EXT4_VFS]: FS_ENCRYPT_FL refused fail-closed");
+
+            // S-EXT4-D7: Collision, hidden symlink, RENAME_NOREPLACE unsupported, EXDEV all refused
+            const QString d7Col = ext4DstRoot + QStringLiteral("/d2_locked");
+            verify(writeFileBytes(d7Col, "COL"), "S-EXT4-D7: blocker created");
+            simulateDirMoveExt4Filesystem() = true;
+            LocalDirectoryMoveJob ext4Col(QUrl::fromLocalFile(d2Src), QUrl::fromLocalFile(d7Col));
+            ext4Col.setAllowExt4(true);
+            ext4Col.setAutoDelete(false);
+            ext4Col.exec();
+            resetDirMoveTestHooks();
+            verify(ext4Col.error() != KJob::NoError
+                       && ext4Col.moveError() == LocalDirectoryMoveError::DestinationExists
+                       && QFileInfo::exists(d2Src + QStringLiteral("/a.txt")),
+                   "S-EXT4-D7a [SIMULATED_EXT4_VFS]: collision refused without overwrite");
+            verify(QFile::remove(d7Col), "S-EXT4-D7: remove blocker");
+
+            simulateDirMoveExt4Filesystem() = true;
+            simulateDirMoveRenameNoReplaceUnsupported() = true;
+            LocalDirectoryMoveJob ext4NoReplace(QUrl::fromLocalFile(d2Src), QUrl::fromLocalFile(d2Dst));
+            ext4NoReplace.setAllowExt4(true);
+            ext4NoReplace.setAutoDelete(false);
+            ext4NoReplace.exec();
+            resetDirMoveTestHooks();
+            verify(ext4NoReplace.error() != KJob::NoError
+                       && ext4NoReplace.moveError() == LocalDirectoryMoveError::UnsupportedKernelFeature
+                       && QFileInfo::exists(d2Src + QStringLiteral("/a.txt")),
+                   "S-EXT4-D7b [SIMULATED_EXT4_VFS]: RENAME_NOREPLACE unsupported refused without rename() fallback");
+
+            simulateDirMoveExt4Filesystem() = true;
+            simulateDirMoveExdev() = true;
+            LocalDirectoryMoveJob ext4Exdev(QUrl::fromLocalFile(d2Src), QUrl::fromLocalFile(d2Dst));
+            ext4Exdev.setAllowExt4(true);
+            ext4Exdev.setAutoDelete(false);
+            ext4Exdev.exec();
+            resetDirMoveTestHooks();
+            verify(ext4Exdev.error() != KJob::NoError
+                       && ext4Exdev.moveError() == LocalDirectoryMoveError::MountOrSubvolumeBoundary
+                       && QFileInfo::exists(d2Src + QStringLiteral("/a.txt")),
+                   "S-EXT4-D7c [SIMULATED_EXT4_VFS]: EXDEV refused without Copy+Delete fallback");
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // H.2C-U6.1: Single Directory Undo/Redo Strict History Hardening
+    // ------------------------------------------------------------------
+    {
+        const QString u61Root = rootDir.filePath(QStringLiteral("u61"));
+        verify(QDir().mkpath(u61Root), "U61 root created");
+
+        const QByteArray payload34("ALPHA-34-BYTES-0123456789ABCDEFGH!");
+        const QByteArray altPayload34("OMEGA-34-BYTES-0123456789ABCDEFGH!");
+        verify(payload34.size() == 34 && altPayload34.size() == 34, "U61 payloads are 34 bytes");
+
+        auto makeU61Tree = [&](const QString &dirPath, const QByteArray &innerBytes) {
+            verify(QDir().mkpath(dirPath + QStringLiteral("/sub")), "U61 sub created");
+            verify(writeFileBytes(dirPath + QStringLiteral("/sub/inner.txt"), innerBytes),
+                   "U61 inner.txt written");
+            verify(writeFileBytes(dirPath + QStringLiteral("/top.txt"), QByteArray("TOP-DATA")),
+                   "U61 top.txt written");
+        };
+
+        auto readBytes = [](const QString &path) {
+            QFile f(path);
+            if (!f.open(QIODevice::ReadOnly)) return QByteArray();
+            return f.readAll();
+        };
+
+        // U61-T1: Plain LocalDirectoryMoveJob does NOT hash contents
+        {
+            const QString s = u61Root + QStringLiteral("/t1_src");
+            const QString d = u61Root + QStringLiteral("/t1_dst");
+            makeU61Tree(s, payload34);
+            resetDirMoveTestHooks();
+            LocalDirectoryMoveJob job(QUrl::fromLocalFile(s), QUrl::fromLocalFile(d));
+            job.setAutoDelete(false);
+            job.exec();
+            verify(job.error() == KJob::NoError && job.destinationPublished()
+                       && job.directoryDurabilityConfirmed(),
+                   "U61-T1: plain LocalDirectoryMoveJob succeeds");
+            verify(dirMoveSnapshotFilesHashedCount().load(std::memory_order_relaxed) == 0,
+                   "U61-T1: plain LocalDirectoryMoveJob hashes 0 files");
+            verify(!job.movedSnapshot().valid,
+                   "U61-T1: plain LocalDirectoryMoveJob does not populate movedSnapshot");
+        }
+
+        // U61-T2: Plain LocalDirectoryMoveJob moves >512 MiB sparse file without strict snapshot limit
+        {
+            const QString s = u61Root + QStringLiteral("/t2_src");
+            const QString d = u61Root + QStringLiteral("/t2_dst");
+            verify(QDir().mkpath(s), "U61-T2 dir created");
+            {
+                QFile sparse(s + QStringLiteral("/sparse520m.bin"));
+                verify(sparse.open(QIODevice::WriteOnly | QIODevice::Truncate), "U61-T2 sparse open");
+                verify(sparse.resize(qint64(520) * 1024 * 1024), "U61-T2 sparse resize 520 MiB");
+            }
+            resetDirMoveTestHooks();
+            LocalDirectoryMoveJob job(QUrl::fromLocalFile(s), QUrl::fromLocalFile(d));
+            job.setAutoDelete(false);
+            job.exec();
+            verify(job.error() == KJob::NoError && job.destinationPublished()
+                       && QFileInfo::exists(d + QStringLiteral("/sparse520m.bin")),
+                   "U61-T2: plain >512 MiB sparse directory move succeeds");
+            verify(dirMoveSnapshotFilesHashedCount().load(std::memory_order_relaxed) == 0,
+                   "U61-T2: plain >512 MiB move hashes 0 files");
+        }
+
+        // U61-T3: History-backed LocalDirectoryMoveJob refuses >512 MiB before renameat2
+        {
+            const QString s = u61Root + QStringLiteral("/t3_src");
+            const QString d = u61Root + QStringLiteral("/t3_dst");
+            verify(QDir().mkpath(s), "U61-T3 dir created");
+            {
+                QFile sparse(s + QStringLiteral("/sparse520m.bin"));
+                verify(sparse.open(QIODevice::WriteOnly | QIODevice::Truncate), "U61-T3 sparse open");
+                verify(sparse.resize(qint64(520) * 1024 * 1024), "U61-T3 sparse resize 520 MiB");
+            }
+            resetDirMoveTestHooks();
+            LocalMoveHistory history;
+            auto *job = new LocalDirectoryMoveJob(QUrl::fromLocalFile(s), QUrl::fromLocalFile(d));
+            job->setAutoDelete(false);
+            verify(history.recordWhenCompleted(job, 300), "U61-T3: recordWhenCompleted accepted");
+            verify(job->captureStrictDirectorySnapshot(),
+                   "U61-T3: recordWhenCompleted enabled strict snapshot opt-in");
+            job->exec();
+            verify(job->error() != KJob::NoError && !job->destinationPublished()
+                       && QFileInfo::exists(s + QStringLiteral("/sparse520m.bin"))
+                       && !QFileInfo::exists(d),
+                   "U61-T3: history-backed >512 MiB directory move refused before renameat2");
+            verify(!history.canUndo() && !history.canRedo(),
+                   "U61-T3: refused >512 MiB move leaves history empty");
+            delete job;
+        }
+
+        // U61-T4: Late opt-in after start() rejected and fences history (even prior record)
+        {
+            const QString sPrev = u61Root + QStringLiteral("/t4_prev_src");
+            const QString dPrev = u61Root + QStringLiteral("/t4_prev_dst");
+            makeU61Tree(sPrev, payload34);
+            LocalMoveHistory history;
+            auto *prevJob = new LocalDirectoryMoveJob(QUrl::fromLocalFile(sPrev), QUrl::fromLocalFile(dPrev));
+            prevJob->setAutoDelete(false);
+            verify(history.recordWhenCompleted(prevJob, 399), "U61-T4: record prior move");
+            prevJob->exec();
+            QCoreApplication::processEvents();
+            verify(prevJob->error() == KJob::NoError && history.canUndo(), "U61-T4: prior move undoable");
+            delete prevJob;
+
+            const QString s = u61Root + QStringLiteral("/t4_src");
+            const QString d = u61Root + QStringLiteral("/t4_dst");
+            makeU61Tree(s, payload34);
+            resetDirMoveTestHooks();
+            auto *job = new LocalDirectoryMoveJob(QUrl::fromLocalFile(s), QUrl::fromLocalFile(d));
+            job->setAutoDelete(false);
+            QSignalSpy doneSpy(job, &KJob::result);
+            job->start();
+            verify(!job->setCaptureStrictDirectorySnapshot(true),
+                   "U61-T4: setCaptureStrictDirectorySnapshot(true) rejected after start()");
+            verify(!history.recordWhenCompleted(job, 400),
+                   "U61-T4: recordWhenCompleted rejected after start()");
+            verify(!history.canUndo() && !history.canRedo(),
+                   "U61-T4: late registration fences history irreversible (even prior record)");
+            verify(waitUntil([&] { return doneSpy.count() >= 1; }), "U61-T4: job finishes");
+            verify(job->error() == KJob::NoError && QFileInfo::exists(d),
+                   "U61-T4: started plain job still completes move");
+            delete job;
+        }
+
+        // U61-T5: Public manual directory history recording API removed (compile-time verified)
+        // + double-attachment, unconfirmed durability, and cancelled job protections
+        {
+            constexpr bool hasPublicManualDirRecord = []<typename H>(H *) {
+                return requires(H &h, const QUrl &u, const LocalDirectoryIdentity &id) {
+                    h.recordCompletedDirectoryMove(u, u, id);
+                };
+            }(static_cast<LocalMoveHistory *>(nullptr));
+            static_assert(!hasPublicManualDirRecord,
+                          "H.2C-U6.1A: public recordCompletedDirectoryMove() must not exist");
+            verify(!hasPublicManualDirRecord,
+                   "U61-T5a: public recordCompletedDirectoryMove() API removed");
+
+            // U61-T5b: Double attachment on same LocalDirectoryMoveJob rejected & fences history
+            {
+                const QString s = u61Root + QStringLiteral("/t5b_src");
+                const QString d = u61Root + QStringLiteral("/t5b_dst");
+                makeU61Tree(s, payload34);
+                LocalMoveHistory h1;
+                LocalMoveHistory h2;
+                auto *job = new LocalDirectoryMoveJob(QUrl::fromLocalFile(s), QUrl::fromLocalFile(d));
+                job->setAutoDelete(false);
+                verify(h1.recordWhenCompleted(job, 500), "U61-T5b: first attachment succeeds");
+                verify(!h2.recordWhenCompleted(job, 501),
+                       "U61-T5b: second attachment on same job refused");
+                verify(!h1.recordWhenCompleted(job, 502),
+                       "U61-T5b: duplicate attachment on same history refused");
+                job->exec();
+                QCoreApplication::processEvents();
+                verify(job->error() == KJob::NoError && h1.count() == 1 && h1.undoSerial() == 500,
+                       "U61-T5b: duplicate attachment on h1 does not create a second record");
+                verify(h2.count() == 0 && !h2.canUndo(),
+                       "U61-T5b: rejected h2 recorded nothing");
+                delete job;
+            }
+
+            // U61-T5c: Unconfirmed durability (fsync error on initial Move) refuses record & fences
+            {
+                const QString s = u61Root + QStringLiteral("/t5c_src");
+                const QString d = u61Root + QStringLiteral("/t5c_dst");
+                makeU61Tree(s, payload34);
+                resetDirMoveTestHooks();
+                LocalMoveHistory history;
+                auto *job = new LocalDirectoryMoveJob(QUrl::fromLocalFile(s), QUrl::fromLocalFile(d));
+                job->setAutoDelete(false);
+                verify(history.recordWhenCompleted(job, 503), "U61-T5c: attach");
+                simulateDirMoveDestinationFsyncError() = EIO;
+                job->exec();
+                QCoreApplication::processEvents();
+                resetDirMoveTestHooks();
+                verify(job->error() != KJob::NoError && job->destinationPublished()
+                           && !job->directoryDurabilityConfirmed()
+                           && job->property("thispcPartialMoveOutcome").toBool(),
+                       "U61-T5c: partial unconfirmed durability outcome");
+                verify(history.count() == 0 && !history.canUndo() && !history.canRedo(),
+                       "U61-T5c: unconfirmed durability records nothing and fences history");
+                delete job;
+            }
+
+            // U61-T5d: Cancelled job blocks registration
+            {
+                const QString s = u61Root + QStringLiteral("/t5d_src");
+                const QString d = u61Root + QStringLiteral("/t5d_dst");
+                makeU61Tree(s, payload34);
+                resetDirMoveTestHooks();
+                LocalMoveHistory history;
+                auto *job = new LocalDirectoryMoveJob(QUrl::fromLocalFile(s), QUrl::fromLocalFile(d));
+                job->setAutoDelete(false);
+                verify(history.recordWhenCompleted(job, 504), "U61-T5d: attach");
+                job->kill(KJob::EmitResult);
+                QCoreApplication::processEvents();
+                verify(job->error() != KJob::NoError && history.count() == 0 && !history.canUndo(),
+                       "U61-T5d: cancelled job not recorded");
+                delete job;
+            }
+        }
+
+        // U61-T6: Full Move -> Undo -> Redo cycle with strict snapshot
+        {
+            const QString s = u61Root + QStringLiteral("/t6_src");
+            const QString d = u61Root + QStringLiteral("/t6_dst");
+            makeU61Tree(s, payload34);
+            struct stat origSt {};
+            verify(::lstat(QFile::encodeName(s).constData(), &origSt) == 0, "U61-T6: lstat src");
+
+            resetDirMoveTestHooks();
+            LocalMoveHistory history;
+            auto *job = new LocalDirectoryMoveJob(QUrl::fromLocalFile(s), QUrl::fromLocalFile(d));
+            job->setAutoDelete(false);
+            verify(history.recordWhenCompleted(job, 600), "U61-T6: recordWhenCompleted");
+            job->exec();
+            QCoreApplication::processEvents();
+            verify(job->error() == KJob::NoError && job->movedSnapshot().valid
+                       && job->movedSnapshot().strictContentDigest
+                       && job->movedSnapshot().treeDigest.size() == 32,
+                   "U61-T6: initial move captures valid 32-byte strict snapshot");
+            verify(dirMoveSnapshotFilesHashedCount().load(std::memory_order_relaxed) == 2,
+                   "U61-T6: initial strict move hashed both files");
+            verify(history.canUndo() && !history.canRedo(), "U61-T6: history ready for Undo");
+            delete job;
+
+            KJob *undoJob = history.undo();
+            verify(undoJob != nullptr, "U61-T6: undo job started");
+            QSignalSpy undoSpy(undoJob, &KJob::result);
+            verify(waitUntil([&] { return undoSpy.count() >= 1; }), "U61-T6: undo finishes");
+            QCoreApplication::processEvents();
+            verify(undoJob->error() == KJob::NoError, "U61-T6: undo succeeds");
+            delete undoJob;
+
+            struct stat afterUndoSt {};
+            verify(::lstat(QFile::encodeName(s).constData(), &afterUndoSt) == 0
+                       && afterUndoSt.st_ino == origSt.st_ino
+                       && !QFileInfo::exists(d)
+                       && readBytes(s + QStringLiteral("/sub/inner.txt")) == payload34,
+                   "U61-T6: undo restored directory with original inode and contents");
+            verify(!history.canUndo() && history.canRedo(), "U61-T6: history ready for Redo");
+
+            KJob *redoJob = history.redo();
+            verify(redoJob != nullptr, "U61-T6: redo job started");
+            QSignalSpy redoSpy(redoJob, &KJob::result);
+            verify(waitUntil([&] { return redoSpy.count() >= 1; }), "U61-T6: redo finishes");
+            QCoreApplication::processEvents();
+            verify(redoJob->error() == KJob::NoError, "U61-T6: redo succeeds");
+            delete redoJob;
+
+            struct stat afterRedoSt {};
+            verify(::lstat(QFile::encodeName(d).constData(), &afterRedoSt) == 0
+                       && afterRedoSt.st_ino == origSt.st_ino
+                       && !QFileInfo::exists(s)
+                       && readBytes(d + QStringLiteral("/sub/inner.txt")) == payload34,
+                   "U61-T6: redo restored destination with original inode and contents");
+            verify(history.canUndo() && !history.canRedo(), "U61-T6: history back at Undo-ready");
+        }
+
+        // U61-T7: Negative Undo fail-closed matrix
+        auto runNegativeUndoCase = [&](const QString &name, auto mutateDst) {
+            const QString s = u61Root + QStringLiteral("/") + name + QStringLiteral("_src");
+            const QString d = u61Root + QStringLiteral("/") + name + QStringLiteral("_dst");
+            makeU61Tree(s, payload34);
+            resetDirMoveTestHooks();
+            LocalMoveHistory history;
+            auto *job = new LocalDirectoryMoveJob(QUrl::fromLocalFile(s), QUrl::fromLocalFile(d));
+            job->setAutoDelete(false);
+            verify(history.recordWhenCompleted(job, 700), "U61-T7: recordWhenCompleted");
+            job->exec();
+            QCoreApplication::processEvents();
+            verify(job->error() == KJob::NoError && history.canUndo(), "U61-T7: initial move done");
+            delete job;
+
+            mutateDst(s, d);
+
+            KJob *undoJob = history.undo();
+            verify(undoJob != nullptr, "U61-T7: undo job created");
+            QSignalSpy undoSpy(undoJob, &KJob::result);
+            verify(waitUntil([&] { return undoSpy.count() >= 1; }), "U61-T7: undo finished");
+            QCoreApplication::processEvents();
+            verify(undoJob->error() != KJob::NoError,
+                   qPrintable(QStringLiteral("U61-T7 (%1): undo refused fail-closed").arg(name)));
+            verify(!undoJob->property("thispcDestinationPublished").toBool(),
+                   qPrintable(QStringLiteral("U61-T7 (%1): destination not published").arg(name)));
+            verify(QFileInfo::exists(d),
+                   qPrintable(QStringLiteral("U61-T7 (%1): dst preserved").arg(name)));
+            verify(history.canUndo() && !history.canRedo(),
+                   qPrintable(QStringLiteral("U61-T7 (%1): history cursor unchanged").arg(name)));
+            delete undoJob;
+        };
+
+        // U61-T7a: Same-size 34B -> 34B mutation preserving inode
+        runNegativeUndoCase(QStringLiteral("t7a_samesize"), [&](const QString &, const QString &d) {
+            QFile f(d + QStringLiteral("/sub/inner.txt"));
+            verify(f.open(QIODevice::ReadWrite | QIODevice::Truncate), "U61-T7a: open in-place");
+            verify(f.write(altPayload34) == 34 && f.flush(), "U61-T7a: write 34B");
+        });
+
+        // U61-T7b: Internal file inode replacement with identical bytes
+        runNegativeUndoCase(QStringLiteral("t7b_file_ino"), [&](const QString &, const QString &d) {
+            const QString p = d + QStringLiteral("/sub/inner.txt");
+            verify(QFile::remove(p), "U61-T7b: remove inner.txt");
+            verify(writeFileBytes(p, payload34), "U61-T7b: recreate inner.txt with same bytes");
+        });
+
+        // U61-T7c: Root directory inode replacement with identical subtree
+        runNegativeUndoCase(QStringLiteral("t7c_root_ino"), [&](const QString &, const QString &d) {
+            const QString aside = d + QStringLiteral("_aside");
+            verify(QDir().rename(d, aside), "U61-T7c: rename dst aside");
+            makeU61Tree(d, payload34);
+        });
+
+        // U61-T7d: Internal file rename
+        runNegativeUndoCase(QStringLiteral("t7d_rename"), [&](const QString &, const QString &d) {
+            verify(QFile::rename(d + QStringLiteral("/top.txt"),
+                                 d + QStringLiteral("/top_renamed.txt")),
+                   "U61-T7d: rename top.txt");
+        });
+
+        // U61-T7e: Extra file added
+        runNegativeUndoCase(QStringLiteral("t7e_add"), [&](const QString &, const QString &d) {
+            verify(writeFileBytes(d + QStringLiteral("/extra.txt"), QByteArray("X")),
+                   "U61-T7e: add extra.txt");
+        });
+
+        // U61-T7f: Internal file deleted
+        runNegativeUndoCase(QStringLiteral("t7f_delete"), [&](const QString &, const QString &d) {
+            verify(QFile::remove(d + QStringLiteral("/top.txt")), "U61-T7f: remove top.txt");
+        });
+
+        // U61-T7g: File size changed
+        runNegativeUndoCase(QStringLiteral("t7g_resize"), [&](const QString &, const QString &d) {
+            verify(writeFileBytes(d + QStringLiteral("/top.txt"), QByteArray("TOP-DATA-EXPANDED")),
+                   "U61-T7g: resize top.txt");
+        });
+
+        // U61-T7h: Collision at original src before Undo
+        runNegativeUndoCase(QStringLiteral("t7h_collision"), [&](const QString &s, const QString &) {
+            verify(QDir().mkpath(s), "U61-T7h: create collision dir at src");
+            verify(writeFileBytes(s + QStringLiteral("/blocker.txt"), QByteArray("KEEP")),
+                   "U61-T7h: write collision blocker");
+        });
+        verify(readBytes(u61Root + QStringLiteral("/t7h_collision_src/blocker.txt")) == QByteArray("KEEP"),
+               "U61-T7h: collision blocker untouched");
+
+        // U61-T8: Partial outcome during Undo fences history irreversible
+        {
+            const QString s = u61Root + QStringLiteral("/t8_src");
+            const QString d = u61Root + QStringLiteral("/t8_dst");
+            makeU61Tree(s, payload34);
+            resetDirMoveTestHooks();
+            LocalMoveHistory history;
+            auto *job = new LocalDirectoryMoveJob(QUrl::fromLocalFile(s), QUrl::fromLocalFile(d));
+            job->setAutoDelete(false);
+            verify(history.recordWhenCompleted(job, 800), "U61-T8: recordWhenCompleted");
+            job->exec();
+            QCoreApplication::processEvents();
+            verify(job->error() == KJob::NoError && history.canUndo(), "U61-T8: setup move done");
+            delete job;
+
+            simulateDirMoveDestinationFsyncError() = EIO;
+            KJob *undoJob = history.undo();
+            verify(undoJob != nullptr, "U61-T8: undo started");
+            QSignalSpy undoSpy(undoJob, &KJob::result);
+            verify(waitUntil([&] { return undoSpy.count() >= 1; }), "U61-T8: undo finished");
+            QCoreApplication::processEvents();
+            resetDirMoveTestHooks();
+            verify(undoJob->error() != KJob::NoError
+                       && undoJob->property("thispcPartialMoveOutcome").toBool(),
+                   "U61-T8: partial outcome flagged on fsync error");
+            verify(!history.canUndo() && !history.canRedo(),
+                   "U61-T8: partial outcome fences history irreversible");
+            delete undoJob;
+        }
+
+        // U61-T9: Two-record stack: failing undo on #2 preserves serial/cursor and leaves #1 intact
+        {
+            const QString s1 = u61Root + QStringLiteral("/t9_s1");
+            const QString d1 = u61Root + QStringLiteral("/t9_d1");
+            const QString s2 = u61Root + QStringLiteral("/t9_s2");
+            const QString d2 = u61Root + QStringLiteral("/t9_d2");
+            makeU61Tree(s1, payload34);
+            makeU61Tree(s2, payload34);
+
+            resetDirMoveTestHooks();
+            LocalMoveHistory history;
+            auto *j1 = new LocalDirectoryMoveJob(QUrl::fromLocalFile(s1), QUrl::fromLocalFile(d1));
+            j1->setAutoDelete(false);
+            verify(history.recordWhenCompleted(j1, 11), "U61-T9: record #1");
+            j1->exec();
+            QCoreApplication::processEvents();
+            verify(j1->error() == KJob::NoError, "U61-T9: move #1 succeeds");
+            delete j1;
+
+            auto *j2 = new LocalDirectoryMoveJob(QUrl::fromLocalFile(s2), QUrl::fromLocalFile(d2));
+            j2->setAutoDelete(false);
+            verify(history.recordWhenCompleted(j2, 22), "U61-T9: record #2");
+            j2->exec();
+            QCoreApplication::processEvents();
+            verify(j2->error() == KJob::NoError && history.undoSerial() == 22,
+                   "U61-T9: move #2 succeeds with serial 22");
+            delete j2;
+
+            verify(writeFileBytes(d2 + QStringLiteral("/sub/inner.txt"), altPayload34),
+                   "U61-T9: mutate #2");
+            KJob *u2 = history.undo();
+            verify(u2 != nullptr, "U61-T9: undo #2 started");
+            QSignalSpy u2Spy(u2, &KJob::result);
+            verify(waitUntil([&] { return u2Spy.count() >= 1; }), "U61-T9: undo #2 finishes");
+            QCoreApplication::processEvents();
+            verify(u2->error() != KJob::NoError && history.canUndo() && !history.canRedo()
+                       && history.undoSerial() == 22,
+                   "U61-T9: refused undo #2 preserves cursor and undoSerial == 22");
+            delete u2;
+        }
     }
 
     qInfo("PASS: %d LocalDirectoryMoveJob/history assertions", checks);

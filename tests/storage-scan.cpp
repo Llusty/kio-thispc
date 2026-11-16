@@ -510,6 +510,106 @@ int main(int argc, char **argv)
         verify(true, "35. no MIME/hash/thumbnail work triggered during storage scan");
     }
 
+    // 36. StorageScanJob lifecycle, cancellation & thread-safety regression matrix (STORAGE-SCAN-UAF-01)
+    {
+        QTemporaryDir dir;
+        verify(dir.isValid(), "36. temp dir created for lifecycle matrix");
+        for (int i = 0; i < 200; ++i) {
+            writeFile(dir.filePath(QString::asprintf("life_%03d.txt", i)), "x");
+        }
+
+        // 36a. Create and destroy before start()
+        {
+            StorageScanOptions opt;
+            opt.rootPath = dir.path();
+            auto *job = new StorageScanJob(opt);
+            delete job;
+            verify(true, "36a. create and destroy before start safe");
+        }
+
+        // 36b. Double cancel before start() and destroy
+        {
+            StorageScanOptions opt;
+            opt.rootPath = dir.path();
+            StorageScanJob job(opt);
+            job.cancel();
+            job.cancel();
+            verify(true, "36b. idempotent double cancel before start safe");
+        }
+
+        // 36c. Immediate cancel right after start() and destroy without waiting for event loop
+        for (int iter = 0; iter < 10; ++iter) {
+            StorageScanOptions opt;
+            opt.rootPath = dir.path();
+            StorageScanJob job(opt);
+            verify(job.start(), "36c. job started before immediate cancel/destroy");
+            job.cancel();
+            job.cancel();
+        }
+        verify(true, "36c. repeated immediate start -> cancel -> destroy safe");
+
+        // 36d. Repeated fast completion -> cancel -> destroy (direct UAF race window)
+        for (int iter = 0; iter < 20; ++iter) {
+            StorageScanOptions opt;
+            opt.rootPath = dir.path();
+            int finishedCount = 0;
+            StorageScanJob job(opt);
+            QObject::connect(&job, &StorageScanJob::finished, [&](StorageScanState, const StorageScanStats &) {
+                ++finishedCount;
+            });
+            runJob(job);
+            job.cancel();
+            verify(finishedCount == 1, "36d. finished emitted exactly once before cancel/destroy");
+        }
+
+        // 36e. Destroy job from inside finished() handler (via deleteLater / direct delete)
+        {
+            StorageScanOptions opt;
+            opt.rootPath = dir.path();
+            auto *job = new StorageScanJob(opt);
+            QEventLoop loop;
+            int finishedCount = 0;
+            QObject::connect(job, &StorageScanJob::finished, [&](StorageScanState state, const StorageScanStats &st) {
+                ++finishedCount;
+                verify(state == StorageScanState::Completed && st.files == 200, "36e. completed with 200 files");
+                delete job;
+                loop.quit();
+            });
+            QTimer::singleShot(10000, &loop, &QEventLoop::quit);
+            verify(job->start(), "36e. job started for destroy-in-finished");
+            loop.exec();
+            verify(finishedCount == 1, "36e. finished emitted once and delete-in-slot safe");
+        }
+
+        // 36f. Error completion (empty path) -> cancel -> destroy
+        {
+            StorageScanOptions opt;
+            StorageScanJob job(opt);
+            int finishedCount = 0;
+            QObject::connect(&job, &StorageScanJob::finished, [&](StorageScanState, const StorageScanStats &) {
+                ++finishedCount;
+            });
+            runJob(job);
+            job.cancel();
+            verify(job.state() == StorageScanState::Failed && finishedCount == 1,
+                   "36f. failed completion followed by cancel/destroy safe");
+        }
+
+        // 36g. Cancel then start a fresh scan on the same StorageScanJob -> Completed
+        {
+            StorageScanOptions opt;
+            opt.rootPath = dir.path();
+            StorageScanJob job(opt);
+            job.cancel();
+            runJob(job);
+            verify(job.state() == StorageScanState::Cancelled, "36g. first cancelled run reached Cancelled");
+            QCoreApplication::processEvents();
+            const StorageScanStats stats2 = runJob(job);
+            verify(job.state() == StorageScanState::Completed && stats2.files == 200,
+                   "36g. restart after cancelled run completed with 200 files");
+        }
+    }
+
     qInfo("PASS: %d storage_scan assertions; async, local-only, hardlink-aware, no-symlink, mount-aware, cancellable", checks);
     return 0;
 }
