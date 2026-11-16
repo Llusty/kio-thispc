@@ -1,6 +1,6 @@
 [English](README.md) | [Polski](README.pl.md)
 
-# kio-thispc (Ten komputer) 0.45.0
+# kio-thispc (Ten komputer) 0.45.0.1
 
 ThisPC to natywny menedżer plików dla środowiska KDE/Qt, łączący ergonomię inspirowaną Eksploratorem Windows z pracą dwupanelową (Split View), integracją KIO, bezpiecznymi lokalnymi operacjami plikowymi oraz natywną obsługą urządzeń w systemie Linux/KDE.
 
@@ -9,6 +9,13 @@ ThisPC to natywny menedżer plików dla środowiska KDE/Qt, łączący ergonomi�
 - **Licencja:** Licencja MIT
 
 ---
+
+## 0.45.0.1 — Hotfix kolizji katalogów i samokopiowania plików
+
+- Poprawiono obsługę kolizji i kopiowania katalogów (`FOLDER-COLLISION-01`) z jawnym blokowaniem kolizji/samokopiowania przed transferem oraz obsługą lokalnych drzew przez `LocalTransferJob` (z fallbackiem `KIO::copy()`) zamiast `KioStagedTransferJob`.
+- `KioStagedTransferJob` jawnie odrzuca źródła będące katalogami (`KIO::ERR_IS_DIRECTORY`) przed utworzeniem plików tymczasowych `.thispc-part.*`.
+- Przywrócono interaktywny dialog zmiany nazwy (`KIO::RenameDialog` + `LocalFileCopyJob`) przy samokopiowaniu pliku do tego samego katalogu (`C1`).
+- Pełne scalanie katalogów (`FOLDER-MERGE-01`) pozostaje poza zakresem `0.45.0.1` (planowane na `0.45.1`).
 
 ## 0.45.0 — Bezpieczne atomowe przenoszenie, trwała historia i poprawki stabilności (Kandydat wydania)
 
@@ -482,8 +489,8 @@ Funkcje z 0.15.4 — kompaktowy popup operacji, dynamiczna wysokość, anulowani
 
 ```bash
 cd ~/Pobrane
-tar -xzf kio-thispc-0.45.0.tar.gz
-cd kio-thispc-0.45.0
+tar -xzf kio-thispc-0.45.0.1.tar.gz
+cd kio-thispc-0.45.0.1
 chmod +x install.sh
 ./install.sh
 ```

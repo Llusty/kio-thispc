@@ -1229,8 +1229,8 @@ int main(int argc, char **argv)
 
     // 33. Stage 3: Version consistency check
     verify(window.m_versionLabel != nullptr, "window versionLabel exists");
-    verify(window.m_versionLabel->text() == QStringLiteral("v0.45.0"), "window versionLabel shows v0.45.0");
-    verify(window.m_versionLabel->toolTip().contains(QStringLiteral("0.45.0")), "version tooltip contains 0.45.0");
+    verify(window.m_versionLabel->text() == QStringLiteral("v0.45.0.1"), "window versionLabel shows v0.45.0.1");
+    verify(window.m_versionLabel->toolTip().contains(QStringLiteral("0.45.0.1")), "version tooltip contains 0.45.0.1");
 
     // 34. R3: Production transfer queue default activation on ThisPcWindow
     {

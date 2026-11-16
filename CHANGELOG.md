@@ -2,6 +2,16 @@
 
 # Changelog
 
+## 0.45.0.1 — Folder & Self-Copy Collision Hotfix
+
+### Fixed
+- **Folder copy & collision routing (`FOLDER-COLLISION-01`)**: Local directory copy operations no longer route into `KioStagedTransferJob` (which previously caused `.thispc-part.*` staging/regular-file verification errors on directory collisions or self-copy). Single-directory self-copy and colliding destination directories are rejected cleanly upfront with a clear message, while valid local tree copies run via `LocalTransferJob` (with `KIO::copy()` fallback).
+- **Staged transfer job directory guard**: `KioStagedTransferJob` now explicitly rejects directory sources (`KIO::ERR_IS_DIRECTORY`) before creating any `.thispc-part.*` temporary entry.
+- **Same-directory file self-copy (`C1`)**: Copying a regular file into its own directory now opens `KIO::RenameDialog` with a suggested new filename and executes the copy via `LocalFileCopyJob` instead of failing as a same-path transfer, while cross-directory file copies continue to use `LocalFileCopyJob` (local) or `KioStagedTransferJob` (remote-to-local).
+
+### Scope Note
+- Full recursive folder merging (`FOLDER-MERGE-01`) remains out of scope for `0.45.0.1` and is planned for `0.45.1`.
+
 ## 0.45.0 — Safe Atomic Moves, Persistent History & Stability Hardening (Release Candidate)
 
 - **KDE Plasma Transfer Notifications & Unified Operations UX (`TransferNotificationManager`, `OperationManager`):**

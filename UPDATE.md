@@ -1,14 +1,21 @@
 [English](UPDATE.md) | [Polski](UPDATE.pl.md)
 
-# Update to 0.45.0 (Release Candidate)
+# Update to 0.45.0.1 (Hotfix)
 
 ```bash
 cd ~/Pobrane
-tar -xzf kio-thispc-0.45.0.tar.gz
-cd kio-thispc-0.45.0
+tar -xzf kio-thispc-0.45.0.1.tar.gz
+cd kio-thispc-0.45.0.1
 chmod +x install.sh
 ./install.sh
 ```
+
+- Fixes local directory copy & collision handling (`FOLDER-COLLISION-01`): rejects single-folder self-copy/collisions upfront and executes valid local tree copies via `LocalTransferJob` (with `KIO::copy()` fallback).
+- Explicitly rejects directory sources in `KioStagedTransferJob` (`KIO::ERR_IS_DIRECTORY`) before creating `.thispc-part.*` staging entries.
+- Restores interactive rename handling (`KIO::RenameDialog` + `LocalFileCopyJob`) when copying a file into the same directory (`C1`).
+- Full recursive folder merging (`FOLDER-MERGE-01`) remains out of scope for `0.45.0.1` (planned for `0.45.1`).
+
+## 0.45.0 — Previous Release
 
 - KDE Plasma transfer notifications (`TransferNotificationManager`) with coalesced reporting and refined `OperationWindow` (`580 × 380 px`) / `OperationPopup` UX.
 - Persistent transfer history (`TransferHistoryManager`) with retention trimming and multi-instance `historyEpoch` Clear History synchronization.

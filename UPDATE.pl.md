@@ -1,14 +1,21 @@
 [English](UPDATE.md) | [Polski](UPDATE.pl.md)
 
-# Aktualizacja do 0.45.0 (Kandydat wydania)
+# Aktualizacja do 0.45.0.1 (Hotfix)
 
 ```bash
 cd ~/Pobrane
-tar -xzf kio-thispc-0.45.0.tar.gz
-cd kio-thispc-0.45.0
+tar -xzf kio-thispc-0.45.0.1.tar.gz
+cd kio-thispc-0.45.0.1
 chmod +x install.sh
 ./install.sh
 ```
+
+- Poprawka obsługi kolizji i kopiowania katalogów (`FOLDER-COLLISION-01`): jawne odrzucenie samokopiowania/kolizji pojedynczego katalogu przed transferem oraz obsługa lokalnych drzew przez `LocalTransferJob` (z fallbackiem `KIO::copy()`).
+- Jawne odrzucenie źródeł katalogowych w `KioStagedTransferJob` (`KIO::ERR_IS_DIRECTORY`) przed utworzeniem plików tymczasowych `.thispc-part.*`.
+- Przywrócenie interaktywnego dialogu zmiany nazwy (`KIO::RenameDialog` + `LocalFileCopyJob`) przy samokopiowaniu pliku do tego samego katalogu (`C1`).
+- Pełne scalanie katalogów (`FOLDER-MERGE-01`) pozostaje poza zakresem `0.45.0.1` (planowane na `0.45.1`).
+
+## 0.45.0 — Poprzednie wydanie
 
 - Powiadomienia KDE Plasma (`TransferNotificationManager`) i dopracowany układ `OperationWindow` (`580 × 380 px`) / `OperationPopup`.
 - Trwała historia transferów (`TransferHistoryManager`) z retencją i synchronizacją czyszczenia (`historyEpoch`) między instancjami.

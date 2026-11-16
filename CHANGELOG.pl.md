@@ -2,6 +2,16 @@
 
 # Changelog
 
+## 0.45.0.1 — Hotfix kolizji katalogów i samokopiowania plików
+
+### Poprawki
+- **Kopiowanie i kolizje katalogów (`FOLDER-COLLISION-01`)**: Lokalne kopiowanie katalogów nie trafia już do `KioStagedTransferJob` (co wcześniej powodowało błędy weryfikacji pliku tymczasowego `.thispc-part.*` przy kolizji lub samokopiowaniu katalogu). Samokopiowanie oraz kolizja pojedynczego katalogu są jawnie blokowane przed startem transferu czytelnym komunikatem, a prawidłowe lokalne drzewa katalogów obsługuje `LocalTransferJob` (z fallbackiem `KIO::copy()`).
+- **Zabezpieczenie przed katalogiem w `KioStagedTransferJob`**: `KioStagedTransferJob` jawnie odrzuca źródła będące katalogami (`KIO::ERR_IS_DIRECTORY`) przed utworzeniem jakiegokolwiek wpisu tymczasowego `.thispc-part.*`.
+- **Samokopiowanie pliku do tego samego katalogu (`C1`)**: Kopiowanie zwykłego pliku do tego samego katalogu wyświetla teraz `KIO::RenameDialog` z sugerowaną nową nazwą i wykonuje zapis przez `LocalFileCopyJob` zamiast natychmiastowego błędu transferu, podczas gdy kopiowanie między różnymi katalogami nadal używa `LocalFileCopyJob` (lokalnie) lub `KioStagedTransferJob` (zdalne → lokalne).
+
+### Zakres wydania
+- Pełne scalanie katalogów (`FOLDER-MERGE-01`) pozostaje poza zakresem wydania `0.45.0.1` i jest planowane na `0.45.1`.
+
 ## 0.45.0 — Bezpieczne atomowe przenoszenie, trwała historia i poprawki stabilności (Kandydat wydania)
 
 - **Powiadomienia KDE Plasma i UX okna operacji (`TransferNotificationManager`, `OperationManager`):**

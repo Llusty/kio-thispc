@@ -1,6 +1,6 @@
 [English](README.md) | [Polski](README.pl.md)
 
-# kio-thispc (This PC) 0.45.0
+# kio-thispc (This PC) 0.45.0.1
 
 ThisPC is a native KDE/Qt file manager focused on a Windows Explorer-like workflow, dual-pane operation, KIO integration, safe local file operations, and native KDE/Linux device handling.
 
@@ -9,6 +9,13 @@ ThisPC is a native KDE/Qt file manager focused on a Windows Explorer-like workfl
 - **License:** MIT License
 
 ---
+
+## 0.45.0.1 — Folder & Self-Copy Collision Hotfix
+
+- Fixes local directory copy & collision handling (`FOLDER-COLLISION-01`) upfront and executes valid local tree copies via `LocalTransferJob` (with `KIO::copy()` fallback) instead of `KioStagedTransferJob`.
+- Rejects directory sources inside `KioStagedTransferJob` (`KIO::ERR_IS_DIRECTORY`) before creating `.thispc-part.*` staging entries.
+- Restores interactive rename handling (`KIO::RenameDialog` + `LocalFileCopyJob`) for same-directory file self-copy (`C1`).
+- Full recursive folder merging (`FOLDER-MERGE-01`) remains out of scope for `0.45.0.1` (planned for `0.45.1`).
 
 ## 0.45.0 — Safe Atomic Moves, Persistent History & Stability Hardening (Release Candidate)
 
@@ -459,8 +466,8 @@ Features from 0.15.4 — compact operations popup, dynamic height, task cancella
 
 ```bash
 cd ~/Downloads
-tar -xzf kio-thispc-0.45.0.tar.gz
-cd kio-thispc-0.45.0
+tar -xzf kio-thispc-0.45.0.1.tar.gz
+cd kio-thispc-0.45.0.1
 chmod +x install.sh
 ./install.sh
 ```
