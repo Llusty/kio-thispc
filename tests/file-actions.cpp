@@ -1560,5 +1560,194 @@ int main(int argc, char **argv)
         }
     }
 
+    // FOLDER-COLLISION-01: Copying a directory onto an existing directory (self-copy or cross-dir)
+    // must fail closed without routing into KioStagedTransferJob or leaving *.thispc-part* directories.
+    {
+        TransferQueueController fcQueue;
+        actions.setQueueController(&fcQueue);
+        setTransferQueueProductionDispatchConnected(true);
+
+        const QString fcSrcRoot = a + QStringLiteral("/fc_src");
+        const QString fcDstRoot = b + QStringLiteral("/fc_dst");
+        const QString wtfSrc = fcSrcRoot + QStringLiteral("/WTF");
+        const QString wtfDst = fcDstRoot + QStringLiteral("/WTF");
+        verify(QDir().mkpath(wtfSrc + QStringLiteral("/Sub"))
+                   && QDir().mkpath(wtfDst + QStringLiteral("/Sub")),
+               "FOLDER-COLLISION-01: setup artificial WTF trees");
+        createFixture(wtfSrc + QStringLiteral("/Config.wtf"), "SRC_CFG");
+        createFixture(wtfSrc + QStringLiteral("/Sub/new_only.txt"), "NEW_ONLY");
+        createFixture(wtfDst + QStringLiteral("/Config.wtf"), "DST_CFG");
+        createFixture(wtfDst + QStringLiteral("/Sub/dst_only.txt"), "DST_ONLY");
+
+        auto hasStagingArtifact = [](const QString &dirPath) {
+            const QStringList entries = QDir(dirPath).entryList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden);
+            for (const QString &e : entries) {
+                if (e.contains(QStringLiteral(".thispc-part"))) return true;
+            }
+            return false;
+        };
+
+        // 1. Self-copy: copy WTF into its own parent fcSrcRoot
+        lastFenceMessage.clear();
+        actions.transfer({QUrl::fromLocalFile(wtfSrc)}, QUrl::fromLocalFile(fcSrcRoot), Qt::CopyAction);
+        verify(!lastFenceMessage.isEmpty()
+                   && fcQueue.snapshot().tasks.isEmpty()
+                   && !hasStagingArtifact(fcSrcRoot)
+                   && fixtureData(wtfSrc + QStringLiteral("/Config.wtf")) == "SRC_CFG",
+               "FOLDER-COLLISION-01-1: self-copy of directory refused fail-closed with 0 .thispc-part artifacts");
+
+        // 2. Cross-directory collision: copy WTF into fcDstRoot where WTF already exists
+        lastFenceMessage.clear();
+        actions.transfer({QUrl::fromLocalFile(wtfSrc)}, QUrl::fromLocalFile(fcDstRoot), Qt::CopyAction);
+        verify(!lastFenceMessage.isEmpty()
+                   && fcQueue.snapshot().tasks.isEmpty()
+                   && !hasStagingArtifact(fcDstRoot)
+                   && fixtureData(wtfDst + QStringLiteral("/Config.wtf")) == "DST_CFG"
+                   && fixtureData(wtfDst + QStringLiteral("/Sub/dst_only.txt")) == "DST_ONLY",
+               "FOLDER-COLLISION-01-2: cross-dir folder collision refused fail-closed with 0 .thispc-part artifacts");
+
+        // 3. Direct KioStagedTransferJob defense-in-depth rejects local directory before creating .thispc-part
+        auto *dirStaged = new KioStagedTransferJob(
+            {QUrl::fromLocalFile(wtfSrc)}, QUrl::fromLocalFile(fcDstRoot), false,
+            QUrl(), false, {}, &parent, &parent);
+        verify(!dirStaged->exec()
+                   && dirStaged->error() == KIO::ERR_IS_DIRECTORY
+                   && !hasStagingArtifact(fcDstRoot),
+               "FOLDER-COLLISION-01-3: KioStagedTransferJob rejects local directory without staging artifacts");
+        delete dirStaged;
+
+        // 3b. Remote KIO directory (MTP/SFTP/SMB) rejected before creating .thispc-part
+        auto *remoteDirStaged = new KioStagedTransferJob(
+            {QUrl(QStringLiteral("sftp://host/remote/WTF"))}, QUrl::fromLocalFile(fcDstRoot), false,
+            QUrl(), false, {}, &parent, &parent);
+        remoteDirStaged->setSourceStatProvider([](const QUrl &, bool) {
+            KioStagedTransferJob::RemoteSourceMetadata meta;
+            meta.isDirectory = true;
+            meta.name = QStringLiteral("WTF");
+            return meta;
+        });
+        verify(!remoteDirStaged->exec()
+                   && remoteDirStaged->error() == KIO::ERR_IS_DIRECTORY
+                   && !hasStagingArtifact(fcDstRoot),
+               "FOLDER-COLLISION-01-3b: KioStagedTransferJob rejects remote KIO directory without staging artifacts");
+        delete remoteDirStaged;
+
+        // 4. Copying a regular file onto existing regular file still invokes conflict dialog & overwrites cleanly
+        actions.setConflictDecisionOverride([](const QUrl &, const QUrl &, QUrl *) {
+            return KIO::Result_Overwrite;
+        });
+        actions.transfer(
+            {QUrl::fromLocalFile(wtfSrc + QStringLiteral("/Config.wtf"))},
+            QUrl::fromLocalFile(wtfDst),
+            Qt::CopyAction);
+        verify(QTest::qWaitFor([&] {
+            const auto snap = fcQueue.snapshot();
+            return snap.tasks.size() == 1
+                && snap.tasks.at(0).state == TransferTaskState::Completed;
+        }, 10000), "FOLDER-COLLISION-01-4: queued regular file copy with conflict override completes");
+        verify(fixtureData(wtfDst + QStringLiteral("/Config.wtf")) == "SRC_CFG"
+                   && !hasStagingArtifact(wtfDst),
+               "FOLDER-COLLISION-01-4: regular file copy with conflict override still succeeds");
+        actions.setConflictDecisionOverride({});
+
+        // C1: Self-copy of regular file into same directory offers Rename (no Overwrite) and copies to Test (1).txt
+        auto sha256Of = [&](const QString &p) {
+            return QCryptographicHash::hash(fixtureData(p), QCryptographicHash::Sha256);
+        };
+        const QString c1File = fcSrcRoot + QStringLiteral("/Test.txt");
+        const QString c1Copy = fcSrcRoot + QStringLiteral("/Test (1).txt");
+        createFixture(c1File, "C1_ORIGINAL_PAYLOAD_2026");
+        const QByteArray c1OrigHash = sha256Of(c1File);
+
+        bool c1SawDialog = false;
+        QString c1SuggestedText;
+        QTimer::singleShot(0, &parent, [&] {
+            if (auto *dlg = qobject_cast<KIO::RenameDialog *>(QApplication::activeModalWidget())) {
+                c1SawDialog = true;
+                if (auto *edit = dlg->findChild<QLineEdit *>()) {
+                    c1SuggestedText = edit->text();
+                }
+                dlg->renamePressed();
+            }
+        });
+        actions.transfer({QUrl::fromLocalFile(c1File)}, QUrl::fromLocalFile(fcSrcRoot), Qt::CopyAction);
+        verify(c1SawDialog && c1SuggestedText == QStringLiteral("Test (1).txt"),
+               "C1-1: self-copy opens RenameDialog with suggested name Test (1).txt");
+        verify(QTest::qWaitFor([&] {
+            const auto snap = fcQueue.snapshot();
+            return snap.tasks.size() == 2
+                && snap.tasks.at(1).state == TransferTaskState::Completed;
+        }, 10000), "C1-2: self-copy under new name completes");
+        verify(sha256Of(c1File) == c1OrigHash && sha256Of(c1Copy) == c1OrigHash
+                   && !hasStagingArtifact(fcSrcRoot),
+               "C1-3: original and Test (1).txt have identical SHA-256 and 0 .thispc-part artifacts");
+
+        // C1 hardlink / alias: Result_Overwrite must be refused fail-closed when source and target share inode
+        const QString hlDir = a + QStringLiteral("/fc_hl_dir");
+        verify(QDir().mkpath(hlDir)
+                   && ::link(QFile::encodeName(c1File).constData(),
+                             QFile::encodeName(hlDir + QStringLiteral("/Test.txt")).constData()) == 0,
+               "C1-hl: setup hardlink");
+        actions.setConflictDecisionOverride([](const QUrl &, const QUrl &, QUrl *) {
+            return KIO::Result_Overwrite;
+        });
+        actions.transfer({QUrl::fromLocalFile(c1File)}, QUrl::fromLocalFile(hlDir), Qt::CopyAction);
+        verify(fcQueue.snapshot().tasks.size() == 2 && sha256Of(c1File) == c1OrigHash
+                   && !hasStagingArtifact(hlDir),
+               "C1-hl: hardlink self-copy refuses Result_Overwrite fail-closed");
+        actions.setConflictDecisionOverride({});
+
+        // C2: Two distinct files with same name -> Overwrite, Skip, Rename, Cancel all preserve SHA-256 semantics
+        const QString c2Src = fcSrcRoot + QStringLiteral("/C2.txt");
+        const QString c2Dst = fcDstRoot + QStringLiteral("/C2.txt");
+        createFixture(c2Src, "C2_SOURCE_DATA_AAA");
+        createFixture(c2Dst, "C2_DEST_DATA_BBB");
+        const QByteArray c2SrcHash = sha256Of(c2Src);
+        const QByteArray c2DstHash = sha256Of(c2Dst);
+
+        // C2-Skip & C2-Cancel
+        for (int dec : {static_cast<int>(KIO::Result_Skip), static_cast<int>(KIO::Result_Cancel)}) {
+            actions.setConflictDecisionOverride([dec](const QUrl &, const QUrl &, QUrl *) {
+                return dec;
+            });
+            actions.transfer({QUrl::fromLocalFile(c2Src)}, QUrl::fromLocalFile(fcDstRoot), Qt::CopyAction);
+            verify(fcQueue.snapshot().tasks.size() == 2
+                       && sha256Of(c2Dst) == c2DstHash
+                       && !hasStagingArtifact(fcDstRoot),
+                   "C2-Skip/Cancel: destination SHA-256 unchanged");
+        }
+        // C2-Rename
+        const QString c2Renamed = fcDstRoot + QStringLiteral("/C2_renamed.txt");
+        actions.setConflictDecisionOverride([&](const QUrl &, const QUrl &, QUrl *newUrl) {
+            *newUrl = QUrl::fromLocalFile(c2Renamed);
+            return KIO::Result_Rename;
+        });
+        actions.transfer({QUrl::fromLocalFile(c2Src)}, QUrl::fromLocalFile(fcDstRoot), Qt::CopyAction);
+        verify(QTest::qWaitFor([&] {
+            const auto snap = fcQueue.snapshot();
+            return snap.tasks.size() == 3
+                && snap.tasks.at(2).state == TransferTaskState::Completed;
+        }, 10000), "C2-Rename: completes");
+        verify(sha256Of(c2Dst) == c2DstHash && sha256Of(c2Renamed) == c2SrcHash,
+               "C2-Rename: destination preserved and renamed copy matches source SHA-256");
+
+        // C2-Overwrite
+        actions.setConflictDecisionOverride([](const QUrl &, const QUrl &, QUrl *) {
+            return KIO::Result_Overwrite;
+        });
+        actions.transfer({QUrl::fromLocalFile(c2Src)}, QUrl::fromLocalFile(fcDstRoot), Qt::CopyAction);
+        verify(QTest::qWaitFor([&] {
+            const auto snap = fcQueue.snapshot();
+            return snap.tasks.size() == 4
+                && snap.tasks.at(3).state == TransferTaskState::Completed;
+        }, 10000), "C2-Overwrite: completes");
+        verify(sha256Of(c2Dst) == c2SrcHash && !hasStagingArtifact(fcDstRoot),
+               "C2-Overwrite: destination updated to source SHA-256");
+        actions.setConflictDecisionOverride({});
+
+        setTransferQueueProductionDispatchConnected(false);
+        actions.setQueueController(nullptr);
+    }
+
     qInfo("PASS: %d FileActions assertions; native local copy/move, KIO fallbacks, conflicts, Undo/Redo", checks);
 }

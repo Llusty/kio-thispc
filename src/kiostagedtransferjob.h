@@ -658,8 +658,21 @@ public:
         if (!destDirInfo.exists() || !destDirInfo.isDir()) {
             setError(KIO::ERR_CANNOT_ENTER_DIRECTORY);
             setErrorText(QStringLiteral("Katalog docelowy nie istnieje."));
+            m_finished = true;
             emitResult();
             return;
+        }
+
+        for (const QUrl &src : m_sources) {
+            if (src.isLocalFile() && QFileInfo(src.toLocalFile()).isDir()) {
+                setError(KIO::ERR_IS_DIRECTORY);
+                setErrorText(trLocal(
+                    "Transfer etapowy obsługuje wyłącznie pliki zwykłe; katalogi wymagają dedykowanej obsługi.",
+                    "Staged transfer only supports regular files; directories require dedicated handling."));
+                m_finished = true;
+                emitResult();
+                return;
+            }
         }
 
         QTimer::singleShot(0, this, [this] {
@@ -816,6 +829,23 @@ private:
                     return;
                 }
                 m_currentPreCopyMeta = meta;
+                beginStagedCopyForCurrentFile();
+            });
+            return;
+        }
+
+        if (!m_subJobFactory || m_sourceStatProvider) {
+            querySourceMetadata(src, /*postPublishRecheck=*/false, [this](const RemoteSourceMetadata &meta) {
+                if (m_killed || m_finished) return;
+                if (meta.errorCode == 0 && meta.isDirectory) {
+                    setError(KIO::ERR_IS_DIRECTORY);
+                    setErrorText(trLocal(
+                        "Transfer etapowy obsługuje wyłącznie pliki zwykłe; katalogi wymagają dedykowanej obsługi.",
+                        "Staged transfer only supports regular files; directories require dedicated handling."));
+                    m_finished = true;
+                    emitResult();
+                    return;
+                }
                 beginStagedCopyForCurrentFile();
             });
             return;

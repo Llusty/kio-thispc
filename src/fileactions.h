@@ -2204,53 +2204,86 @@ private:
                             if (m_showRecoveryFence) m_showRecoveryFence(moveContainmentErrorMessage());
                             return false;
                         }
+                        if (targetInfo.isDir()) {
+                            const QFileInfo srcInfo(sources.first().toLocalFile());
+                            const bool isSelfCopy = srcInfo.isDir()
+                                && !srcInfo.canonicalFilePath().isEmpty()
+                                && srcInfo.canonicalFilePath() == targetInfo.canonicalFilePath();
+                            const QString collisionMsg = isSelfCopy
+                                ? trLocal(
+                                      "Nie można skopiować folderu „%1” do jego własnego katalogu nadrzędnego, ponieważ folder o tej samej nazwie już istnieje.",
+                                      "Cannot copy folder \"%1\" into its own parent directory because a folder with the same name already exists.")
+                                      .arg(singleSourceName)
+                                : trLocal(
+                                      "W katalogu docelowym istnieje już folder o tej samej nazwie („%1”). Scalanie folderów nie jest jeszcze włączone — użyj innej nazwy lub skopiuj samą zawartość.",
+                                      "A folder with the same name (\"%1\") already exists at the destination. Folder merging is not yet enabled — use a different name or copy its contents instead.")
+                                      .arg(singleSourceName);
+                            if (m_showRecoveryFence) m_showRecoveryFence(collisionMsg);
+                            return false;
+                        }
                         allLocal = false;
                     }
                     break;
                 }
+                bool sameFileConflict = false;
                 if (allLocal) {
                     const QFileInfo sourceInfo(sources.first().toLocalFile());
-                    if (LocalFileIdentity::read(sourceInfo.absoluteFilePath())
-                            .sameFile(LocalFileIdentity::read(destination.toLocalFile()))) {
-                        if (move) {
-                            m_lastMovePolicyEvaluation = {
-                                MovePolicyDecision::RefusedLocalContainment, false, {}, moveContainmentErrorMessage()};
-                            if (m_showRecoveryFence) m_showRecoveryFence(moveContainmentErrorMessage());
-                            return false;
-                        }
-                        allLocal = false;
-                        break;
+                    sameFileConflict = LocalFileIdentity::read(sourceInfo.absoluteFilePath())
+                        .sameFile(LocalFileIdentity::read(destination.toLocalFile()));
+                    if (sameFileConflict && move) {
+                        m_lastMovePolicyEvaluation = {
+                            MovePolicyDecision::RefusedLocalContainment, false, {}, moveContainmentErrorMessage()};
+                        if (m_showRecoveryFence) m_showRecoveryFence(moveContainmentErrorMessage());
+                        return false;
                     }
                 }
                 if (!interactiveConflict) {
-                    // Non-interactive callers (e.g. transferUrls): hand off to LocalFileMoveJob
+                    // Non-interactive callers (e.g. transferUrls): hand off to LocalFileMoveJob/LocalFileCopyJob
                     // with overwrite=false so DestinationExists fails closed cleanly.
                     singleTargetDestination = destination;
                     overwrite = false;
                     break;
                 }
-                originalDestination = LocalFileIdentity::read(destination.toLocalFile());
+                originalDestination = sameFileConflict
+                    ? LocalFileIdentity{}
+                    : LocalFileIdentity::read(destination.toLocalFile());
                 int decision = KIO::Result_Cancel;
                 QUrl customRenamedUrl;
                 if (m_conflictDecisionOverride) {
                     decision = m_conflictDecisionOverride(sources.first(), destination, &customRenamedUrl);
                 } else {
+                    const KIO::RenameDialog_Options opts = sameFileConflict
+                        ? (KIO::RenameDialog_Skip | KIO::RenameDialog_MultipleItems)
+                        : (KIO::RenameDialog_Overwrite | KIO::RenameDialog_Skip | KIO::RenameDialog_MultipleItems);
+                    const QFileInfo srcInfoForDlg(sources.first().toLocalFile());
                     KIO::RenameDialog dialog(
                         m_parentWidget, title, sources.first(), destination,
-                        KIO::RenameDialog_Overwrite | KIO::RenameDialog_Skip
-                            | KIO::RenameDialog_MultipleItems,
-                        0, targetInfo.size(),
-                        QDateTime(), targetInfo.birthTime(),
-                        QDateTime(), targetInfo.lastModified());
-                    dialog.setWindowTitle(isPolish() ? QStringLiteral("Czy zastąpić istniejący plik?")
-                                                     : QStringLiteral("Replace existing file?"));
-                    for (QLabel *lbl : dialog.findChildren<QLabel *>()) {
-                        if (lbl->text().contains(QStringLiteral("rzecz docelow"), Qt::CaseInsensitive)) {
-                            QString txt = lbl->text();
-                            txt.replace(QStringLiteral("Czy zastąpić rzecz docelową?"), QStringLiteral("Czy zastąpić istniejący plik?"));
-                            txt.replace(QStringLiteral("rzecz docelową"), QStringLiteral("istniejący plik"));
-                            txt.replace(QStringLiteral("rzeczy docelowej"), QStringLiteral("istniejącego pliku"));
-                            lbl->setText(txt);
+                        opts,
+                        srcInfoForDlg.isFile() ? srcInfoForDlg.size() : 0, targetInfo.size(),
+                        srcInfoForDlg.birthTime(), targetInfo.birthTime(),
+                        srcInfoForDlg.lastModified(), targetInfo.lastModified());
+                    dialog.setWindowTitle(sameFileConflict
+                        ? (isPolish() ? QStringLiteral("Kopiowanie pliku do tego samego katalogu")
+                                      : QStringLiteral("Copy file to the same folder"))
+                        : (isPolish() ? QStringLiteral("Czy zastąpić istniejący plik?")
+                                      : QStringLiteral("Replace existing file?")));
+                    if (sameFileConflict) {
+                        const QString suggested = suggestedAvailableName(
+                            destinationDirectory, destination.fileName(), false);
+                        if (QLineEdit *nameEdit = dialog.findChild<QLineEdit *>()) {
+                            nameEdit->setText(suggested);
+                        } else {
+                            dialog.suggestNewNamePressed();
+                        }
+                    } else {
+                        for (QLabel *lbl : dialog.findChildren<QLabel *>()) {
+                            if (lbl->text().contains(QStringLiteral("rzecz docelow"), Qt::CaseInsensitive)) {
+                                QString txt = lbl->text();
+                                txt.replace(QStringLiteral("Czy zastąpić rzecz docelową?"), QStringLiteral("Czy zastąpić istniejący plik?"));
+                                txt.replace(QStringLiteral("rzecz docelową"), QStringLiteral("istniejący plik"));
+                                txt.replace(QStringLiteral("rzeczy docelowej"), QStringLiteral("istniejącego pliku"));
+                                lbl->setText(txt);
+                            }
                         }
                     }
                     decision = dialog.exec();
@@ -2261,7 +2294,8 @@ private:
                     }
                 }
                 if (!mutationAllowed()) return true;
-                if (decision == KIO::Result_Overwrite || decision == KIO::Result_OverwriteAll) {
+                if (!sameFileConflict
+                    && (decision == KIO::Result_Overwrite || decision == KIO::Result_OverwriteAll)) {
                     overwrite = true;
                     singleTargetDestination = destination;
                     break;
