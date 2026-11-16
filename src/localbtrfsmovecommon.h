@@ -10,6 +10,7 @@
 #include "browsercommon.h"
 #include "localfileoverwrite.h"
 
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QLocale>
@@ -17,15 +18,19 @@
 #include <QSet>
 #include <QString>
 #include <QStringList>
+#include <QtEndian>
 
+#include <algorithm>
 #include <atomic>
 #include <cerrno>
 #include <cstring>
 #include <dirent.h>
 #include <fcntl.h>
+#include <linux/fs.h>
 #include <linux/magic.h>
 #include <linux/openat2.h>
 #include <linux/stat.h>
+#include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/vfs.h>
@@ -37,12 +42,28 @@
 #define BTRFS_SUPER_MAGIC 0x9123683EUL
 #endif
 
+#ifndef EXT4_SUPER_MAGIC
+#define EXT4_SUPER_MAGIC 0xEF53UL
+#endif
+
 #ifndef NTFS3_SUPER_MAGIC
 #define NTFS3_SUPER_MAGIC 0x7366746EUL
 #endif
 
 #ifndef BTRFS_FIRST_FREE_OBJECTID
 #define BTRFS_FIRST_FREE_OBJECTID 256ULL
+#endif
+
+#ifndef FS_CASEFOLD_FL
+#define FS_CASEFOLD_FL 0x10000000U
+#endif
+
+#ifndef FS_ENCRYPT_FL
+#define FS_ENCRYPT_FL 0x00000800U
+#endif
+
+#ifndef FS_IOC_GETFLAGS
+#define FS_IOC_GETFLAGS _IOR('f', 1, long)
 #endif
 
 #ifndef STATX_TYPE
@@ -297,14 +318,53 @@ struct LocalDirectoryTreeSnapshot {
     quint64 scannedBytes = 0;
     qsizetype scannedRegularFiles = 0;
     qsizetype scannedSubdirectories = 0;
+    QByteArray treeDigest;
+    bool strictContentDigest = false;
     bool valid = false;
 
-    bool matches(const LocalDirectoryTreeSnapshot &other) const
+    bool matches(const LocalDirectoryTreeSnapshot &other, bool requireContentDigest = false) const
     {
-        return valid && other.valid
-            && scannedBytes == other.scannedBytes
-            && scannedRegularFiles == other.scannedRegularFiles
-            && scannedSubdirectories == other.scannedSubdirectories;
+        if (!valid || !other.valid
+            || scannedBytes != other.scannedBytes
+            || scannedRegularFiles != other.scannedRegularFiles
+            || scannedSubdirectories != other.scannedSubdirectories) {
+            return false;
+        }
+        if (requireContentDigest || strictContentDigest || other.strictContentDigest) {
+            return strictContentDigest && other.strictContentDigest
+                && treeDigest.size() == 32
+                && treeDigest == other.treeDigest;
+        }
+        return true;
+    }
+};
+
+struct LocalFileHistorySnapshot {
+    LocalRegularFileIdentity identity;
+    quint64 size = 0;
+    unsigned long fsMagic = 0;
+    QByteArray contentDigest;
+    bool strictContentDigest = false;
+    bool valid = false;
+
+    bool matches(const LocalFileHistorySnapshot &other, bool requireContentDigest = true) const
+    {
+        if (!valid || !other.valid
+            || !identity.valid || !other.identity.valid
+            || identity.hasMntId != other.identity.hasMntId
+            || identity.hasUniqueMntId != other.identity.hasUniqueMntId
+            || !identity.sameObject(other.identity)
+            || identity.nlink != 1 || other.identity.nlink != 1
+            || size != other.size
+            || fsMagic == 0 || fsMagic != other.fsMagic) {
+            return false;
+        }
+        if (requireContentDigest || strictContentDigest || other.strictContentDigest) {
+            return strictContentDigest && other.strictContentDigest
+                && contentDigest.size() == 32
+                && contentDigest == other.contentDigest;
+        }
+        return true;
     }
 };
 
@@ -320,10 +380,53 @@ enum class ContainmentFailureKind {
     ContainmentViolation,
 };
 
+enum class LocalMoveFsProfile {
+    BtrfsOnly,
+    Ext4Only,
+};
+
+enum class VerifiedMoveFsProvenance {
+    Unknown = 0,
+    Btrfs = 1,
+    Ext4 = 2,
+};
+
+inline VerifiedMoveFsProvenance provenanceFromFsMagic(unsigned long magic)
+{
+    if (magic == BTRFS_SUPER_MAGIC) {
+        return VerifiedMoveFsProvenance::Btrfs;
+    }
+    if (magic == EXT4_SUPER_MAGIC) {
+        return VerifiedMoveFsProvenance::Ext4;
+    }
+    return VerifiedMoveFsProvenance::Unknown;
+}
+
+struct FilesystemMoveQualificationProfile {
+    LocalMoveFsProfile fsProfile = LocalMoveFsProfile::BtrfsOnly;
+
+    bool isExt4() const { return fsProfile == LocalMoveFsProfile::Ext4Only; }
+    unsigned long expectedMagic() const
+    {
+        return isExt4() ? EXT4_SUPER_MAGIC : BTRFS_SUPER_MAGIC;
+    }
+    bool requireUniqueMountId() const { return isExt4(); }
+    bool checkBtrfsSubvolRootInode() const { return !isExt4(); }
+    bool checkExt4DirectoryFlags() const { return isExt4(); }
+};
+
 struct TestFaultHooks {
     bool openat2Unsupported = false;
     unsigned long unsupportedFsMagic = 0;
     bool statxMntIdUnsupported = false;
+    bool simulateExt4Filesystem = false;
+    bool simulateExt4StatxMntIdUniqueMissing = false;
+    bool simulateExt4FlagsError = false;
+    bool simulateExt4CasefoldAllDirs = false;
+    quint64 simulateExt4CasefoldInode = 0;
+    bool simulateExt4Encrypt = false;
+    bool simulateFileMoveMntIdChange = false;
+    std::atomic<int> *snapshotFilesHashedCounter = nullptr;
 };
 
 struct ScopedFd {
@@ -513,6 +616,9 @@ inline bool queryFdMetadata(
         return false;
     }
     *fsMagicOut = static_cast<unsigned long>(sfs.f_type);
+    if (hooks && hooks->simulateExt4Filesystem) {
+        *fsMagicOut = EXT4_SUPER_MAGIC;
+    }
     if (hooks && hooks->unsupportedFsMagic != 0) {
         *fsMagicOut = hooks->unsupportedFsMagic;
     }
@@ -525,6 +631,13 @@ inline bool queryFdMetadata(
         if (errOut) *errOut = errno ? errno : EIO;
         return false;
     }
+    if (hooks && hooks->simulateExt4Filesystem) {
+        stxOut->stx_mask &= ~STATX_SUBVOL;
+        stxOut->stx_subvol = 0;
+    }
+    if (hooks && hooks->simulateExt4StatxMntIdUniqueMissing) {
+        stxOut->stx_mask &= ~STATX_MNT_ID_UNIQUE;
+    }
     if (hooks && hooks->statxMntIdUnsupported) {
         stxOut->stx_mask &= ~(STATX_MNT_ID | STATX_MNT_ID_UNIQUE);
         stxOut->stx_mnt_id = 0;
@@ -535,6 +648,92 @@ inline bool queryFdMetadata(
     if (errOut) *errOut = ENOSYS;
     return false;
 #endif
+}
+
+inline bool verifyExt4DirectorySafetyFlags(
+    int dirFd,
+    quint64 dirIno,
+    ContainmentFailureKind *failureOut,
+    QString *reasonOut,
+    const TestFaultHooks *hooks = nullptr)
+{
+    auto fail = [&](ContainmentFailureKind kind, const QString &reason) {
+        if (failureOut) *failureOut = kind;
+        if (reasonOut) *reasonOut = reason;
+        return false;
+    };
+
+    if (hooks && hooks->simulateExt4FlagsError) {
+        return fail(ContainmentFailureKind::ContainmentViolation,
+                    trMsg("Nie można zweryfikować flag ext4 katalogu (FS_IOC_GETFLAGS) — operacja zablokowana.",
+                          "Could not verify ext4 directory flags (FS_IOC_GETFLAGS) — blocked fail-closed."));
+    }
+
+    long rawFlags = 0;
+    if (::ioctl(dirFd, FS_IOC_GETFLAGS, &rawFlags) != 0) {
+        return fail(ContainmentFailureKind::ContainmentViolation,
+                    trMsg("Nie można odczytać flag ext4 katalogu (FS_IOC_GETFLAGS) — operacja zablokowana.",
+                          "Could not read ext4 directory flags (FS_IOC_GETFLAGS) — blocked fail-closed."));
+    }
+
+    const unsigned long flags = static_cast<unsigned long>(rawFlags);
+    const bool hasCasefold = (flags & FS_CASEFOLD_FL) != 0
+        || (hooks && hooks->simulateExt4CasefoldAllDirs)
+        || (hooks && hooks->simulateExt4CasefoldInode != 0 && dirIno == hooks->simulateExt4CasefoldInode);
+    if (hasCasefold) {
+        return fail(ContainmentFailureKind::ContainmentViolation,
+                    trMsg("Katalog ext4 z włączoną obsługą casefold (bez rozróżniania wielkości liter) jest zablokowany ze względów bezpieczeństwa.",
+                          "ext4 directory with casefold enabled is blocked fail-closed for safety."));
+    }
+
+    const bool hasEncrypt = (flags & FS_ENCRYPT_FL) != 0
+        || (hooks && hooks->simulateExt4Encrypt);
+    if (hasEncrypt) {
+        return fail(ContainmentFailureKind::ContainmentViolation,
+                    trMsg("Zaszyfrowany katalog ext4 (FS_ENCRYPT_FL) jest zablokowany ze względów bezpieczeństwa.",
+                          "Encrypted ext4 directory (FS_ENCRYPT_FL) is blocked fail-closed for safety."));
+    }
+
+    if (failureOut) *failureOut = ContainmentFailureKind::None;
+    return true;
+}
+
+inline bool validateQualifiedMountAndFs(
+    const struct statx &stx,
+    unsigned long magic,
+    const FilesystemMoveQualificationProfile &profile,
+    ContainmentFailureKind *failureOut,
+    QString *reasonOut)
+{
+    if (magic != profile.expectedMagic()) {
+        if (failureOut) *failureOut = ContainmentFailureKind::UnsupportedFilesystem;
+        if (reasonOut) {
+            *reasonOut = profile.isExt4()
+                ? trMsg("Ta operacja wymaga zakwalifikowanego woluminu ext4.",
+                        "This operation requires a qualified ext4 volume.")
+                : trMsg("Ta operacja wymaga zakwalifikowanego woluminu Btrfs.",
+                        "This operation requires a qualified Btrfs volume.");
+        }
+        return false;
+    }
+
+    const bool hasRequiredMntId = profile.requireUniqueMountId()
+        ? ((stx.stx_mask & STATX_MNT_ID_UNIQUE) != 0)
+        : ((stx.stx_mask & (STATX_MNT_ID | STATX_MNT_ID_UNIQUE)) != 0);
+    if (!hasRequiredMntId) {
+        if (failureOut) *failureOut = ContainmentFailureKind::UnsupportedKernelFeature;
+        if (reasonOut) {
+            *reasonOut = profile.requireUniqueMountId()
+                ? trMsg("Jądro nie zwróciło wymaganego unikalnego identyfikatora montowania statx(STATX_MNT_ID_UNIQUE).",
+                        "Kernel did not provide required unique statx mount identity (STATX_MNT_ID_UNIQUE).")
+                : trMsg("Jądro nie zwróciło identyfikatora montowania statx(STATX_MNT_ID).",
+                        "Kernel did not provide statx mount identity (STATX_MNT_ID).");
+        }
+        return false;
+    }
+
+    if (failureOut) *failureOut = ContainmentFailureKind::None;
+    return true;
 }
 
 inline QByteArray unescapeMountInfoField(const QByteArray &token)
@@ -643,13 +842,37 @@ inline bool inspectDirectoryTreeContainment(
     QSet<QPair<quint64, quint64>> *visitedObjectsOut,
     ContainmentFailureKind *failureOut,
     QString *reasonOut,
-    const TestFaultHooks *hooks = nullptr)
+    const TestFaultHooks *hooks = nullptr,
+    const FilesystemMoveQualificationProfile &profile = {},
+    bool computeContentDigest = false,
+    bool enforceStrictSnapshotLimits = false)
 {
+    constexpr qsizetype kMaxSnapshotEntries = 100000;
+    constexpr int kMaxSnapshotDepth = 256;
+    constexpr quint64 kMaxSnapshotHashedBytes = 512ULL * 1024ULL * 1024ULL;
+    const bool checkStrictLimits = computeContentDigest || enforceStrictSnapshotLimits;
+
+    struct SnapshotEntry {
+        QByteArray relPath;
+        quint8 type = 0; // 'D' or 'F'
+        quint64 ino = 0;
+        quint64 size = 0;
+        QByteArray sha256;
+    };
+
     auto fail = [&](ContainmentFailureKind kind, const QString &reason) {
         if (failureOut) *failureOut = kind;
         if (reasonOut) *reasonOut = reason;
         return false;
     };
+
+    if (profile.checkExt4DirectoryFlags()) {
+        ContainmentFailureKind flagFailure = ContainmentFailureKind::None;
+        QString flagReason;
+        if (!verifyExt4DirectorySafetyFlags(rootDirFd, rootIdentity.ino, &flagFailure, &flagReason, hooks)) {
+            return fail(flagFailure, flagReason);
+        }
+    }
 
     const int initialFd = ::fcntl(rootDirFd, F_DUPFD_CLOEXEC, 3);
     if (initialFd < 0) {
@@ -658,8 +881,14 @@ inline bool inspectDirectoryTreeContainment(
                           "Could not duplicate directory descriptor."));
     }
 
-    std::vector<ScopedFd> dirStack;
-    dirStack.push_back(ScopedFd(initialFd));
+    struct DirFrame {
+        ScopedFd fd;
+        QByteArray relPath;
+        int depth = 0;
+    };
+
+    std::vector<DirFrame> dirStack;
+    dirStack.push_back(DirFrame{ScopedFd(initialFd), QByteArray(), 0});
     QSet<QPair<quint64, quint64>> visitedDirs;
     visitedDirs.insert({rootIdentity.stDev, rootIdentity.ino});
     if (visitedObjectsOut) {
@@ -669,6 +898,94 @@ inline bool inspectDirectoryTreeContainment(
     quint64 totalBytes = 0;
     qsizetype regularCount = 0;
     qsizetype subdirCount = 0;
+    std::vector<SnapshotEntry> snapshotEntries;
+
+    auto hashRegularFile = [&](int dirFd, const char *name, const struct statx &expectedStx,
+                               QByteArray *digestOut, quint64 *verifiedInoOut, quint64 *verifiedSizeOut) -> bool {
+        const quint64 expectedSize = static_cast<quint64>(expectedStx.stx_size);
+        if (totalBytes > kMaxSnapshotHashedBytes || expectedSize > (kMaxSnapshotHashedBytes - totalBytes)) {
+            return fail(ContainmentFailureKind::ContainmentViolation,
+                        trMsg("Rozmiar poddrzewa przekracza bezpieczny limit weryfikacji snapshotu.",
+                              "Directory subtree size exceeds strict snapshot verification limit."));
+        }
+        ScopedFd fileFd(::openat(dirFd, name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC));
+        if (!fileFd.isValid()) {
+            return fail(ContainmentFailureKind::ContainmentViolation,
+                        trMsg("Nie można bezpiecznie otworzyć pliku podczas weryfikacji snapshotu.",
+                              "Could not safely open file during strict snapshot verification."));
+        }
+        struct stat preSt {};
+        if (::fstat(fileFd.fd, &preSt) != 0
+            || !S_ISREG(preSt.st_mode)
+            || preSt.st_nlink != 1
+            || static_cast<quint64>(preSt.st_dev) != rootIdentity.stDev
+            || static_cast<quint64>(preSt.st_ino) != expectedStx.stx_ino
+            || static_cast<quint64>(preSt.st_size) != expectedSize) {
+            return fail(ContainmentFailureKind::ContainmentViolation,
+                        trMsg("Wykryto zmianę tożsamości lub metadanych pliku podczas weryfikacji snapshotu.",
+                              "File identity or metadata changed during strict snapshot verification."));
+        }
+
+        QCryptographicHash fileHasher(QCryptographicHash::Sha256);
+        char buf[65536];
+        quint64 readTotal = 0;
+        while (true) {
+            if (cancelled.load(std::memory_order_acquire)) {
+                return fail(ContainmentFailureKind::Cancelled,
+                            trMsg("Operacja anulowana.", "Operation cancelled."));
+            }
+            const ssize_t n = ::read(fileFd.fd, buf, sizeof(buf));
+            if (n < 0) {
+                if (errno == EINTR) {
+                    continue;
+                }
+                return fail(ContainmentFailureKind::ContainmentViolation,
+                            trMsg("Błąd odczytu pliku podczas weryfikacji snapshotu.",
+                                  "File read error during strict snapshot verification."));
+            }
+            if (n == 0) {
+                break;
+            }
+            const quint64 chunk = static_cast<quint64>(n);
+            if (chunk > expectedSize - readTotal) {
+                return fail(ContainmentFailureKind::ContainmentViolation,
+                            trMsg("Plik uległ zmianie podczas odczytu snapshotu.",
+                                  "File changed while reading strict snapshot."));
+            }
+            fileHasher.addData(QByteArrayView(buf, static_cast<qsizetype>(n)));
+            readTotal += chunk;
+        }
+        if (readTotal != expectedSize) {
+            return fail(ContainmentFailureKind::ContainmentViolation,
+                        trMsg("Rozmiar odczytanego pliku zmienił się podczas weryfikacji snapshotu.",
+                              "File size changed during strict snapshot read."));
+        }
+
+        struct stat postSt {};
+        if (::fstat(fileFd.fd, &postSt) != 0
+            || !S_ISREG(postSt.st_mode)
+            || postSt.st_nlink != 1
+            || postSt.st_dev != preSt.st_dev
+            || postSt.st_ino != preSt.st_ino
+            || postSt.st_size != preSt.st_size
+            || postSt.st_mtim.tv_sec != preSt.st_mtim.tv_sec
+            || postSt.st_mtim.tv_nsec != preSt.st_mtim.tv_nsec
+            || postSt.st_ctim.tv_sec != preSt.st_ctim.tv_sec
+            || postSt.st_ctim.tv_nsec != preSt.st_ctim.tv_nsec) {
+            return fail(ContainmentFailureKind::ContainmentViolation,
+                        trMsg("Plik został zmodyfikowany w trakcie weryfikacji snapshotu.",
+                              "File was modified during strict snapshot verification."));
+        }
+
+        if (hooks && hooks->snapshotFilesHashedCounter) {
+            hooks->snapshotFilesHashedCounter->fetch_add(1, std::memory_order_relaxed);
+        }
+
+        *digestOut = fileHasher.result();
+        *verifiedInoOut = static_cast<quint64>(postSt.st_ino);
+        *verifiedSizeOut = static_cast<quint64>(postSt.st_size);
+        return true;
+    };
 
     while (!dirStack.empty()) {
         if (cancelled.load(std::memory_order_acquire)) {
@@ -676,17 +993,17 @@ inline bool inspectDirectoryTreeContainment(
                         trMsg("Operacja anulowana.", "Operation cancelled."));
         }
 
-        ScopedFd currentFd = std::move(dirStack.back());
+        DirFrame currentFrame = std::move(dirStack.back());
         dirStack.pop_back();
 
-        DIR *dirStream = ::fdopendir(currentFd.fd);
+        DIR *dirStream = ::fdopendir(currentFrame.fd.fd);
         if (!dirStream) {
             return fail(ContainmentFailureKind::ContainmentViolation,
                         trMsg("Nie można bezpiecznie odczytać zawartości katalogu.",
                               "Could not safely inspect directory contents."));
         }
-        // fdopendir takes ownership of currentFd.fd
-        currentFd.fd = -1;
+        // fdopendir takes ownership of currentFrame.fd.fd
+        currentFrame.fd.fd = -1;
         const int dfd = ::dirfd(dirStream);
 
         struct dirent *entry = nullptr;
@@ -700,6 +1017,19 @@ inline bool inspectDirectoryTreeContainment(
                 continue;
             }
 
+            if (checkStrictLimits
+                && (regularCount + subdirCount) >= kMaxSnapshotEntries) {
+                ::closedir(dirStream);
+                return fail(ContainmentFailureKind::ContainmentViolation,
+                            trMsg("Liczba wpisów poddrzewa przekracza bezpieczny limit weryfikacji snapshotu.",
+                                  "Directory entry count exceeds strict snapshot verification limit."));
+            }
+
+            const QByteArray entryName(entry->d_name);
+            const QByteArray relEntryPath = currentFrame.relPath.isEmpty()
+                ? entryName
+                : (currentFrame.relPath + '/' + entryName);
+
             struct statx childStx {};
             const unsigned int childMask =
                 STATX_BASIC_STATS | STATX_MNT_ID | STATX_MNT_ID_UNIQUE | STATX_SUBVOL;
@@ -710,8 +1040,20 @@ inline bool inspectDirectoryTreeContainment(
                             trMsg("Nie udało się zweryfikować elementu wewnątrz katalogu — operacja zatrzymana.",
                                   "Could not inspect entry inside directory — blocked fail-closed."));
             }
+            if (hooks && hooks->simulateExt4Filesystem) {
+                childStx.stx_mask &= ~STATX_SUBVOL;
+                childStx.stx_subvol = 0;
+            }
+            if (hooks && hooks->simulateExt4StatxMntIdUniqueMissing) {
+                childStx.stx_mask &= ~STATX_MNT_ID_UNIQUE;
+            }
 
-            if (!(childStx.stx_mask & (STATX_TYPE | STATX_MODE | STATX_INO | STATX_NLINK | STATX_MNT_ID | STATX_MNT_ID_UNIQUE))) {
+            const unsigned int requiredBasic = STATX_TYPE | STATX_MODE | STATX_INO | STATX_NLINK;
+            const bool hasBasic = (childStx.stx_mask & requiredBasic) == requiredBasic;
+            const bool hasMnt = profile.requireUniqueMountId()
+                ? ((childStx.stx_mask & STATX_MNT_ID_UNIQUE) != 0)
+                : ((childStx.stx_mask & (STATX_MNT_ID | STATX_MNT_ID_UNIQUE)) != 0);
+            if (!hasBasic || !hasMnt) {
                 ::closedir(dirStream);
                 return fail(ContainmentFailureKind::UnsupportedKernelFeature,
                             trMsg("Jądro nie zwróciło wymaganych metadanych statx dla zawartości katalogu.",
@@ -720,17 +1062,19 @@ inline bool inspectDirectoryTreeContainment(
 
             const bool childUniqueMnt = (childStx.stx_mask & STATX_MNT_ID_UNIQUE) != 0;
             const bool childHasSubvol = (childStx.stx_mask & STATX_SUBVOL) != 0;
+            const bool badSubvolRoot = profile.checkBtrfsSubvolRootInode()
+                && childStx.stx_ino == BTRFS_FIRST_FREE_OBJECTID;
             if (childUniqueMnt != rootIdentity.hasUniqueMntId
                 || childStx.stx_mnt_id != rootIdentity.mntId
                 || childStx.stx_dev_major != rootIdentity.devMajor
                 || childStx.stx_dev_minor != rootIdentity.devMinor
-                || childStx.stx_ino == BTRFS_FIRST_FREE_OBJECTID
+                || badSubvolRoot
                 || childHasSubvol != rootIdentity.hasSubvol
                 || (childHasSubvol && childStx.stx_subvol != rootIdentity.subvolId)) {
                 ::closedir(dirStream);
                 return fail(ContainmentFailureKind::MountOrSubvolumeBoundary,
-                            trMsg("Przenoszony katalog zawiera punkt montowania lub zagnieżdżony podwolumin Btrfs — operacja zablokowana.",
-                                  "Directory contains a mount point or nested Btrfs subvolume — blocked fail-closed."));
+                            trMsg("Przenoszony katalog zawiera punkt montowania lub zagnieżdżony podwolumin — operacja zablokowana.",
+                                  "Directory contains a mount point or nested subvolume — blocked fail-closed."));
             }
 
             if (S_ISLNK(childStx.stx_mode)) {
@@ -747,6 +1091,31 @@ inline bool inspectDirectoryTreeContainment(
                                 trMsg("Przenoszony katalog zawiera plik z wieloma dowiązaniami twardymi (hardlink) — operacja zablokowana.",
                                       "Directory contains a multi-link hardlinked file — blocked fail-closed."));
                 }
+                if (checkStrictLimits) {
+                    const quint64 fileSize = static_cast<quint64>(childStx.stx_size);
+                    if (totalBytes > kMaxSnapshotHashedBytes || fileSize > (kMaxSnapshotHashedBytes - totalBytes)) {
+                        ::closedir(dirStream);
+                        return fail(ContainmentFailureKind::ContainmentViolation,
+                                    trMsg("Rozmiar poddrzewa przekracza bezpieczny limit weryfikacji snapshotu.",
+                                          "Directory subtree size exceeds strict snapshot verification limit."));
+                    }
+                }
+                if (computeContentDigest) {
+                    QByteArray fileDigest;
+                    quint64 verifiedIno = 0;
+                    quint64 verifiedSize = 0;
+                    if (!hashRegularFile(dfd, entry->d_name, childStx, &fileDigest, &verifiedIno, &verifiedSize)) {
+                        ::closedir(dirStream);
+                        return false;
+                    }
+                    snapshotEntries.push_back(SnapshotEntry{
+                        relEntryPath,
+                        static_cast<quint8>('F'),
+                        verifiedIno,
+                        verifiedSize,
+                        fileDigest,
+                    });
+                }
                 ++regularCount;
                 totalBytes += static_cast<quint64>(childStx.stx_size);
                 if (visitedObjectsOut) {
@@ -756,6 +1125,12 @@ inline bool inspectDirectoryTreeContainment(
             }
 
             if (S_ISDIR(childStx.stx_mode)) {
+                if (checkStrictLimits && currentFrame.depth + 1 > kMaxSnapshotDepth) {
+                    ::closedir(dirStream);
+                    return fail(ContainmentFailureKind::ContainmentViolation,
+                                trMsg("Głębokość podkatalogów przekracza bezpieczny limit weryfikacji snapshotu.",
+                                      "Directory nesting depth exceeds strict snapshot verification limit."));
+                }
                 int childErr = 0;
                 ScopedFd childFd(openChildDirectoryNoCrossing(dfd, entry->d_name, &childErr, hooks));
                 if (!childFd.isValid()) {
@@ -780,20 +1155,30 @@ inline bool inspectDirectoryTreeContainment(
                                 trMsg("Nie udało się zweryfikować deskryptora podkatalogu.",
                                       "Could not verify subdirectory descriptor."));
                 }
-                if (openedMagic != BTRFS_SUPER_MAGIC) {
+                if (openedMagic != profile.expectedMagic()) {
                     ::closedir(dirStream);
                     return fail(ContainmentFailureKind::MountOrSubvolumeBoundary,
-                                trMsg("Podkatalog znajduje się poza obsługiwanym woluminem Btrfs.",
-                                      "Subdirectory lies outside the qualified Btrfs volume."));
+                                trMsg("Podkatalog znajduje się poza obsługiwanym woluminem.",
+                                      "Subdirectory lies outside the qualified volume."));
                 }
                 const LocalDirectoryIdentity openedId = LocalDirectoryIdentity::fromStat(openedStx, openedSt);
+                const bool openedBadSubvolRoot = profile.checkBtrfsSubvolRootInode()
+                    && openedId.ino == BTRFS_FIRST_FREE_OBJECTID;
                 if (!openedId.valid || !openedId.sameMountScope(rootIdentity)
                     || openedId.ino != childStx.stx_ino
-                    || openedId.ino == BTRFS_FIRST_FREE_OBJECTID) {
+                    || openedBadSubvolRoot) {
                     ::closedir(dirStream);
                     return fail(ContainmentFailureKind::MountOrSubvolumeBoundary,
-                                trMsg("Wykryto niezgodność topologii lub granicy podwoluminu w podkatalogu.",
+                                trMsg("Wykryto niezgodność topologii lub granicy montowania w podkatalogu.",
                                       "Subdirectory mount or subvolume boundary mismatch detected."));
+                }
+                if (profile.checkExt4DirectoryFlags()) {
+                    ContainmentFailureKind subFlagFailure = ContainmentFailureKind::None;
+                    QString subFlagReason;
+                    if (!verifyExt4DirectorySafetyFlags(childFd.fd, openedId.ino, &subFlagFailure, &subFlagReason, hooks)) {
+                        ::closedir(dirStream);
+                        return fail(subFlagFailure, subFlagReason);
+                    }
                 }
                 const QPair<quint64, quint64> dirKey(openedId.stDev, openedId.ino);
                 if (!visitedDirs.contains(dirKey)) {
@@ -801,8 +1186,17 @@ inline bool inspectDirectoryTreeContainment(
                     if (visitedObjectsOut) {
                         visitedObjectsOut->insert(dirKey);
                     }
+                    if (computeContentDigest) {
+                        snapshotEntries.push_back(SnapshotEntry{
+                            relEntryPath,
+                            static_cast<quint8>('D'),
+                            openedId.ino,
+                            0,
+                            QByteArray(),
+                        });
+                    }
                     ++subdirCount;
-                    dirStack.push_back(std::move(childFd));
+                    dirStack.push_back(DirFrame{std::move(childFd), relEntryPath, currentFrame.depth + 1});
                 }
                 continue;
             }
@@ -826,9 +1220,160 @@ inline bool inspectDirectoryTreeContainment(
         snapshotOut->scannedBytes = totalBytes;
         snapshotOut->scannedRegularFiles = regularCount;
         snapshotOut->scannedSubdirectories = subdirCount;
+        if (computeContentDigest) {
+            std::sort(snapshotEntries.begin(), snapshotEntries.end(),
+                      [](const SnapshotEntry &a, const SnapshotEntry &b) {
+                          return a.relPath < b.relPath;
+                      });
+            QCryptographicHash treeHasher(QCryptographicHash::Sha256);
+            auto appendLe64 = [&](quint64 v) {
+                const quint64 le = qToLittleEndian(v);
+                treeHasher.addData(QByteArrayView(reinterpret_cast<const char *>(&le), sizeof(le)));
+            };
+            auto appendLe32 = [&](quint32 v) {
+                const quint32 le = qToLittleEndian(v);
+                treeHasher.addData(QByteArrayView(reinterpret_cast<const char *>(&le), sizeof(le)));
+            };
+            treeHasher.addData(QByteArrayView("THISPC-TREE-SNAP-V1", 19));
+            appendLe64(static_cast<quint64>(snapshotEntries.size()));
+            for (const SnapshotEntry &se : snapshotEntries) {
+                treeHasher.addData(QByteArrayView(reinterpret_cast<const char *>(&se.type), 1));
+                appendLe32(static_cast<quint32>(se.relPath.size()));
+                treeHasher.addData(se.relPath);
+                appendLe64(se.ino);
+                appendLe64(se.size);
+                appendLe32(static_cast<quint32>(se.sha256.size()));
+                if (!se.sha256.isEmpty()) {
+                    treeHasher.addData(se.sha256);
+                }
+            }
+            appendLe64(totalBytes);
+            appendLe64(static_cast<quint64>(regularCount));
+            appendLe64(static_cast<quint64>(subdirCount));
+            snapshotOut->treeDigest = treeHasher.result();
+            snapshotOut->strictContentDigest = (snapshotOut->treeDigest.size() == 32);
+        } else {
+            snapshotOut->treeDigest.clear();
+            snapshotOut->strictContentDigest = false;
+        }
         snapshotOut->valid = true;
     }
     if (failureOut) *failureOut = ContainmentFailureKind::None;
+    return true;
+}
+
+inline bool captureStrictRegularFileSnapshot(
+    const QString &filePath,
+    LocalFileHistorySnapshot *snapshotOut,
+    QString *reasonOut = nullptr,
+    const TestFaultHooks *hooks = nullptr,
+    bool computeDigest = true)
+{
+    if (!snapshotOut) return false;
+    *snapshotOut = {};
+
+    const QFileInfo fi(filePath);
+    const QString parentPath = fi.path();
+    const QString fileName = fi.fileName();
+    if (parentPath.isEmpty() || fileName.isEmpty() || fileName == QStringLiteral(".")
+        || fileName == QStringLiteral("..")) {
+        if (reasonOut) *reasonOut = QStringLiteral("Invalid file path for strict history snapshot.");
+        return false;
+    }
+
+    int openErr = 0;
+    ScopedFd parentFd(openDirectoryNoSymlinks(parentPath, &openErr, hooks));
+    if (!parentFd.isValid()) {
+        if (reasonOut) *reasonOut = QStringLiteral("Cannot open parent directory without symlinks (%1).").arg(openErr);
+        return false;
+    }
+
+    const QByteArray leafBytes = QFile::encodeName(fileName);
+    ScopedFd fileFd(::openat(parentFd.fd, leafBytes.constData(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC));
+    if (!fileFd.isValid()) {
+        if (reasonOut) *reasonOut = QStringLiteral("Cannot open regular file without symlinks (%1).").arg(errno);
+        return false;
+    }
+
+    struct statx stx1 {};
+    struct stat st1 {};
+    unsigned long magic1 = 0;
+    int metaErr = 0;
+    if (!queryFdMetadata(fileFd.fd, &stx1, &st1, &magic1, &metaErr, hooks)
+        || !S_ISREG(st1.st_mode)) {
+        if (reasonOut) *reasonOut = QStringLiteral("Target is not a regular file or metadata unavailable.");
+        return false;
+    }
+
+    const LocalRegularFileIdentity id1 = LocalRegularFileIdentity::fromStat(stx1, st1);
+    if (!id1.valid || id1.nlink != 1) {
+        if (reasonOut) *reasonOut = QStringLiteral("Refused: file identity invalid or nlink != 1.");
+        return false;
+    }
+
+    constexpr quint64 kMaxStrictFileBytes = 512ULL * 1024ULL * 1024ULL;
+    if (computeDigest && id1.size > kMaxStrictFileBytes) {
+        if (reasonOut) *reasonOut = QStringLiteral("Strict file history snapshot exceeds 512 MiB limit.");
+        return false;
+    }
+
+    QByteArray digest;
+    if (computeDigest) {
+        QCryptographicHash hasher(QCryptographicHash::Sha256);
+        QByteArray buf(256 * 1024, Qt::Uninitialized);
+        quint64 totalRead = 0;
+        for (;;) {
+            const ssize_t n = ::read(fileFd.fd, buf.data(), static_cast<size_t>(buf.size()));
+            if (n < 0) {
+                if (errno == EINTR) continue;
+                if (reasonOut) *reasonOut = QStringLiteral("Read error while hashing file (%1).").arg(errno);
+                return false;
+            }
+            if (n == 0) break;
+            totalRead += static_cast<quint64>(n);
+            if (totalRead > kMaxStrictFileBytes) {
+                if (reasonOut) *reasonOut = QStringLiteral("Strict file history snapshot exceeded 512 MiB during read.");
+                return false;
+            }
+            hasher.addData(QByteArrayView(buf.constData(), n));
+        }
+        if (totalRead != id1.size) {
+            if (reasonOut) *reasonOut = QStringLiteral("File size changed while hashing.");
+            return false;
+        }
+        digest = hasher.result();
+        if (digest.size() != 32) {
+            if (reasonOut) *reasonOut = QStringLiteral("Invalid SHA-256 digest length.");
+            return false;
+        }
+        if (hooks && hooks->snapshotFilesHashedCounter) {
+            hooks->snapshotFilesHashedCounter->fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+
+    struct statx stx2 {};
+    struct stat st2 {};
+    unsigned long magic2 = 0;
+    if (!queryFdMetadata(fileFd.fd, &stx2, &st2, &magic2, &metaErr, hooks)
+        || !S_ISREG(st2.st_mode)) {
+        if (reasonOut) *reasonOut = QStringLiteral("Post-read metadata verification failed.");
+        return false;
+    }
+    const LocalRegularFileIdentity id2 = LocalRegularFileIdentity::fromStat(stx2, st2);
+    if (!id2.valid || !id1.strictlyUnchangedForHistory(id2) || magic1 != magic2) {
+        if (reasonOut) *reasonOut = QStringLiteral("File was modified concurrently during snapshot capture.");
+        return false;
+    }
+
+    snapshotOut->identity = id2;
+    if (hooks && hooks->simulateFileMoveMntIdChange) {
+        snapshotOut->identity.mntId ^= 1ULL;
+    }
+    snapshotOut->size = id2.size;
+    snapshotOut->fsMagic = magic2;
+    snapshotOut->contentDigest = digest;
+    snapshotOut->strictContentDigest = computeDigest;
+    snapshotOut->valid = true;
     return true;
 }
 

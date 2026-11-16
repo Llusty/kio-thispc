@@ -21,6 +21,7 @@
 #include <cstring>
 #include <dirent.h>
 #include <fcntl.h>
+#include <memory>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -30,19 +31,21 @@ class StorageScanWorker final : public QObject
     Q_OBJECT
 
 public:
-    explicit StorageScanWorker(StorageScanOptions options)
+    explicit StorageScanWorker(StorageScanOptions options,
+                               std::shared_ptr<std::atomic<bool>> cancelFlag = {})
         : m_options(std::move(options))
+        , m_cancelled(cancelFlag ? std::move(cancelFlag) : std::make_shared<std::atomic<bool>>(false))
     {
     }
 
     void requestCancel()
     {
-        m_cancelled.store(true, std::memory_order_release);
+        m_cancelled->store(true, std::memory_order_release);
     }
 
     bool isCancelled() const
     {
-        return m_cancelled.load(std::memory_order_acquire);
+        return m_cancelled->load(std::memory_order_acquire);
     }
 
 public Q_SLOTS:
@@ -51,7 +54,7 @@ public Q_SLOTS:
         StorageScanStats stats;
         QList<StorageScanEntry> entries;
 
-        if (m_cancelled.load(std::memory_order_acquire)) {
+        if (m_cancelled->load(std::memory_order_acquire)) {
             Q_EMIT finished(StorageScanState::Cancelled, stats, entries);
             return;
         }
@@ -199,7 +202,7 @@ public Q_SLOTS:
         bool cancelled = false;
 
         while (!dirQueue.isEmpty()) {
-            if (m_cancelled.load(std::memory_order_acquire)) {
+            if (m_cancelled->load(std::memory_order_acquire)) {
                 cancelled = true;
                 break;
             }
@@ -222,7 +225,7 @@ public Q_SLOTS:
             }
 
             while (true) {
-                if (m_cancelled.load(std::memory_order_acquire)) {
+                if (m_cancelled->load(std::memory_order_acquire)) {
                     cancelled = true;
                     break;
                 }
@@ -371,5 +374,5 @@ Q_SIGNALS:
 
 private:
     StorageScanOptions m_options;
-    std::atomic<bool> m_cancelled{false};
+    std::shared_ptr<std::atomic<bool>> m_cancelled;
 };

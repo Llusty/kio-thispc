@@ -43,6 +43,37 @@ enum class LocalFileMoveStrategy {
 
 Q_DECLARE_METATYPE(LocalFileMoveError)
 
+#ifdef THISPC_TEST_HARNESS
+inline std::atomic<int> &fileMoveSnapshotFilesHashedCount()
+{
+    static std::atomic<int> count{0};
+    return count;
+}
+
+inline unsigned long &simulateFileMoveUnsupportedFsMagic()
+{
+    static unsigned long magic = 0;
+    return magic;
+}
+
+inline bool &simulateFileMoveMountIdChange()
+{
+    static bool changed = false;
+    return changed;
+}
+#endif
+
+inline LocalBtrfsMoveCommon::TestFaultHooks currentFileMoveFaultHooks()
+{
+    LocalBtrfsMoveCommon::TestFaultHooks hooks;
+#ifdef THISPC_TEST_HARNESS
+    hooks.snapshotFilesHashedCounter = &fileMoveSnapshotFilesHashedCount();
+    hooks.unsupportedFsMagic = simulateFileMoveUnsupportedFsMagic();
+    hooks.simulateFileMoveMntIdChange = simulateFileMoveMountIdChange();
+#endif
+    return hooks;
+}
+
 
 class LocalFileMoveJob final : public KIO::Job
 {
@@ -60,7 +91,9 @@ public:
         int chunkDelayMilliseconds = 0,
         RemoveSource removeSource = {},
         bool overwrite = false,
-        LocalFileIdentity originalDestination = {})
+        LocalFileIdentity originalDestination = {},
+        bool strictHistoryCheck = false,
+        LocalFileHistorySnapshot expectedSourceSnapshot = {})
         : KIO::Job()
         , m_source(source)
         , m_destination(destination)
@@ -76,6 +109,8 @@ public:
               : RemoveSource([](const QString &path) {
                     return QFile::remove(path);
                 }))
+        , m_strictHistoryCheck(strictHistoryCheck)
+        , m_expectedSourceSnapshot(std::move(expectedSourceSnapshot))
     {
         setParent(parent);
         setProperty("thispcSourceUrls", QVariant::fromValue(QList<QUrl>{source}));
@@ -99,6 +134,28 @@ public:
     int systemError() const { return m_systemError; }
     bool destinationPublished() const { return m_destinationPublished; }
     bool directoryDurabilityConfirmed() const { return m_directoryDurabilityConfirmed; }
+    bool captureStrictFileSnapshot() const { return m_captureStrictFileSnapshot; }
+    bool setCaptureStrictFileSnapshot(bool enabled)
+    {
+        if (m_started || m_finished) {
+            return false;
+        }
+        m_captureStrictFileSnapshot = enabled;
+        return true;
+    }
+    bool hasStarted() const { return m_started; }
+    bool hasFinished() const { return m_finished; }
+    bool claimHistoryAttachment()
+    {
+        if (m_started || m_finished || m_historyAttachmentClaimed) {
+            return false;
+        }
+        m_historyAttachmentClaimed = true;
+        m_captureStrictFileSnapshot = true;
+        return true;
+    }
+    bool strictHistoryCheck() const { return m_strictHistoryCheck; }
+    LocalFileHistorySnapshot movedSnapshot() const { return m_movedSnapshot; }
 
 protected:
     bool doKill() override
@@ -163,6 +220,37 @@ private:
             return;
         }
 
+        const bool needStrictSnapshot = m_captureStrictFileSnapshot || m_strictHistoryCheck;
+        LocalFileHistorySnapshot preMoveSnap;
+        const LocalBtrfsMoveCommon::TestFaultHooks hooks = currentFileMoveFaultHooks();
+        if (needStrictSnapshot) {
+            if (m_strictHistoryCheck
+                && (!m_expectedSourceSnapshot.valid
+                    || !m_expectedSourceSnapshot.strictContentDigest
+                    || m_expectedSourceSnapshot.contentDigest.size() != 32
+                    || !m_expectedSourceSnapshot.identity.valid
+                    || m_expectedSourceSnapshot.fsMagic == 0)) {
+                finish(LocalFileMoveError::InvalidInput,
+                       QLocale().language() == QLocale::Polish
+                           ? QStringLiteral("Brak kompletnego ścisłego snapshotu historii dla operacji Undo/Redo pliku.")
+                           : tr("Missing complete strict history snapshot for file Undo/Redo."));
+                return;
+            }
+            QString snapReason;
+            if (!LocalBtrfsMoveCommon::captureStrictRegularFileSnapshot(
+                    sourcePath, &preMoveSnap, &snapReason, &hooks, true)) {
+                finish(LocalFileMoveError::Verification, snapReason);
+                return;
+            }
+            if (m_strictHistoryCheck && !preMoveSnap.matches(m_expectedSourceSnapshot, true)) {
+                finish(LocalFileMoveError::Verification,
+                       QLocale().language() == QLocale::Polish
+                           ? QStringLiteral("Odmowa cofnięcia/ponowienia pliku: tożsamość lub zawartość pliku zmieniła się od czasu zapisania historii.")
+                           : tr("File Undo/Redo refused: file identity or contents changed since history was recorded."));
+                return;
+            }
+        }
+
         m_sourceSize = static_cast<qulonglong>(m_sourceIdentity.value.st_size);
         setTotalAmount(KJob::Bytes, m_sourceSize);
         bool sameStorage =
@@ -210,6 +298,23 @@ private:
             }
             m_destinationPublished = true;
             m_directoryDurabilityConfirmed = true;
+            if (needStrictSnapshot) {
+                LocalFileHistorySnapshot postDstSnap;
+                QString postReason;
+                if (!LocalBtrfsMoveCommon::captureStrictRegularFileSnapshot(
+                        destinationPath, &postDstSnap, &postReason, &hooks, false)
+                    || !postDstSnap.valid
+                    || !postDstSnap.identity.sameObject(preMoveSnap.identity)
+                    || postDstSnap.fsMagic != preMoveSnap.fsMagic) {
+                    finish(LocalFileMoveError::Verification,
+                           postReason.isEmpty()
+                               ? QStringLiteral("Post-rename file identity verification failed.")
+                               : postReason);
+                    return;
+                }
+                m_movedSnapshot = preMoveSnap;
+                m_movedSnapshot.identity = postDstSnap.identity;
+            }
             setProcessedAmount(KJob::Bytes, m_sourceSize);
             finish(LocalFileMoveError::None, {});
             return;
@@ -391,6 +496,26 @@ private:
                         return;
                     }
 
+                    if (m_captureStrictFileSnapshot || m_strictHistoryCheck) {
+                        LocalFileHistorySnapshot postDstSnap;
+                        QString postReason;
+                        const LocalBtrfsMoveCommon::TestFaultHooks hooks = currentFileMoveFaultHooks();
+                        if (!LocalBtrfsMoveCommon::captureStrictRegularFileSnapshot(
+                                destinationPath, &postDstSnap, &postReason, &hooks, false)
+                            || !postDstSnap.valid
+                            || postDstSnap.size != m_sourceSize
+                            || currentDestHash.size() != 32) {
+                            finish(LocalFileMoveError::Verification,
+                                   postReason.isEmpty()
+                                       ? QStringLiteral("Post-move strict file snapshot verification failed.")
+                                       : postReason);
+                            return;
+                        }
+                        m_movedSnapshot = postDstSnap;
+                        m_movedSnapshot.contentDigest = currentDestHash;
+                        m_movedSnapshot.strictContentDigest = true;
+                    }
+
                     setProcessedAmount(KJob::Bytes, m_sourceSize);
                     finish(LocalFileMoveError::None, {});
                 });
@@ -488,6 +613,11 @@ private:
     bool m_directoryDurabilityConfirmed = false;
     LocalFileMoveError m_moveError = LocalFileMoveError::None;
     int m_systemError = 0;
+    bool m_captureStrictFileSnapshot = false;
+    bool m_historyAttachmentClaimed = false;
+    bool m_strictHistoryCheck = false;
+    LocalFileHistorySnapshot m_expectedSourceSnapshot;
+    LocalFileHistorySnapshot m_movedSnapshot;
 };
 
 
@@ -501,6 +631,8 @@ public:
         bool directory = false;
         bool batch = false;
         bool batchHasDirectories = false;
+        LocalBtrfsMoveCommon::VerifiedMoveFsProvenance fsProvenance =
+            LocalBtrfsMoveCommon::VerifiedMoveFsProvenance::Unknown;
         QUrl source;
         QUrl destination;
         quint64 serial = 0;
@@ -508,6 +640,8 @@ public:
         qulonglong destinationSize = 0;
         QDateTime destinationModified;
         LocalDirectoryIdentity directoryIdentity;
+        LocalDirectoryTreeSnapshot directorySnapshot;
+        LocalFileHistorySnapshot fileSnapshot;
         QList<QPair<QUrl, QUrl>> batchPairs;
         QList<LocalRegularFileIdentity> batchIdentities;
         QList<BatchMoveExpectedItem> batchExpectedItems;
@@ -518,94 +652,86 @@ public:
     {
     }
 
+    bool allowExt4History() const { return m_allowExt4History; }
+    void setAllowExt4History(bool allow) { m_allowExt4History = allow; }
+
     bool recordWhenCompleted(LocalFileMoveJob *job, quint64 serial = 0)
     {
-        if (!job) return false;
-        connect(job, &KJob::result, this, [this, job, serial](KJob *completed) {
+        if (!job || m_busy) return false;
+        if (!job->claimHistoryAttachment()) {
+            fenceIrreversible();
+            return false;
+        }
+        QPointer<LocalFileMoveJob> safeJob(job);
+        connect(job, &KJob::result, this, [this, safeJob, serial](KJob *completed) {
+            if (!safeJob) return;
             if (completed->error() == KJob::NoError
-                && !job->property("thispcOverwritesDestination").toBool()) {
-                recordCompletedMove(job->sourceUrl(), job->destinationUrl(), serial);
+                && safeJob->destinationPublished()
+                && safeJob->directoryDurabilityConfirmed()
+                && !safeJob->property("thispcOverwritesDestination").toBool()
+                && !safeJob->property("thispcPartialMoveOutcome").toBool()) {
+                recordAuthorizedFileMove(safeJob.data(), serial);
+            } else if (safeJob->property("thispcPartialMoveOutcome").toBool()
+                       || (safeJob->destinationPublished() && !safeJob->directoryDurabilityConfirmed())) {
+                fenceIrreversible();
             }
-        });
+        }, Qt::SingleShotConnection);
         return true;
     }
 
     bool recordWhenCompleted(LocalDirectoryMoveJob *job, quint64 serial = 0)
     {
-        if (!job) return false;
-        connect(job, &KJob::result, this, [this, job, serial](KJob *completed) {
+        if (!job || m_busy) return false;
+        if (!job->claimHistoryAttachment()) {
+            fenceIrreversible();
+            return false;
+        }
+        QPointer<LocalDirectoryMoveJob> safeJob(job);
+        connect(job, &KJob::result, this, [this, safeJob, serial](KJob *completed) {
+            if (!safeJob) return;
             if (completed->error() == KJob::NoError
-                && job->destinationPublished()
-                && job->directoryDurabilityConfirmed()
-                && !job->property("thispcOverwritesDestination").toBool()
-                && !job->property("thispcPartialMoveOutcome").toBool()) {
-                recordCompletedDirectoryMove(
-                    job->sourceUrl(),
-                    job->destinationUrl(),
-                    job->movedIdentity(),
-                    serial);
+                && safeJob->destinationPublished()
+                && safeJob->directoryDurabilityConfirmed()
+                && !safeJob->property("thispcOverwritesDestination").toBool()
+                && !safeJob->property("thispcPartialMoveOutcome").toBool()) {
+                recordAuthorizedDirectoryMove(safeJob.data(), serial);
+            } else if (safeJob->property("thispcPartialMoveOutcome").toBool()
+                       || (safeJob->destinationPublished() && !safeJob->directoryDurabilityConfirmed())) {
+                fenceIrreversible();
             }
-        });
+        }, Qt::SingleShotConnection);
         return true;
     }
 
     bool recordWhenCompleted(LocalBatchMoveJob *job, quint64 serial = 0)
     {
-        if (!job) return false;
-        connect(job, &KJob::result, this, [this, job, serial](KJob *completed) {
-            const BatchMoveResult &res = job->batchResult();
+        if (!job || m_busy) return false;
+        if (!job->claimHistoryAttachment()) {
+            fenceIrreversible();
+            return false;
+        }
+        QPointer<LocalBatchMoveJob> safeJob(job);
+        connect(job, &KJob::result, this, [this, safeJob, serial](KJob *completed) {
+            if (!safeJob) return;
+            const BatchMoveResult &res = safeJob->batchResult();
             if (completed->error() == KJob::NoError
+                && safeJob->hasFinished()
                 && res.outcome == BatchMoveOutcome::FullSuccess
                 && res.totalCount >= 2
                 && res.publishedCount == res.totalCount
                 && res.durableCount == res.totalCount
                 && !res.partialMoveOutcome
                 && res.items.size() == res.totalCount
-                && !job->property("thispcOverwritesDestination").toBool()
-                && !job->property("thispcPartialMoveOutcome").toBool()
-                && !job->property("thispcBatchPartiallyCompleted").toBool()) {
-                QList<QPair<QUrl, QUrl>> pairs;
-                QList<BatchMoveExpectedItem> expectedItems;
-                pairs.reserve(res.items.size());
-                expectedItems.reserve(res.items.size());
-                bool hasDirs = false;
-                bool allItemsValid = true;
-                for (const auto &it : res.items) {
-                    if (!it.destinationPublished || !it.durabilityConfirmed) {
-                        allItemsValid = false;
-                        break;
-                    }
-                    BatchMoveExpectedItem exp;
-                    exp.kind = it.kind;
-                    if (it.kind == BatchMoveItemKind::Directory) {
-                        hasDirs = true;
-                        if (!it.movedDirIdentity.valid || !it.movedDirSnapshot.valid) {
-                            allItemsValid = false;
-                            break;
-                        }
-                        exp.dirIdentity = it.movedDirIdentity;
-                        exp.dirSnapshot = it.movedDirSnapshot;
-                    } else {
-                        if (!it.movedIdentity.valid) {
-                            allItemsValid = false;
-                            break;
-                        }
-                        exp.fileIdentity = it.movedIdentity;
-                    }
-                    pairs.append({it.sourceUrl, it.destinationUrl});
-                    expectedItems.append(exp);
-                }
-                if (allItemsValid) {
-                    recordCompletedMixedBatchMove(pairs, expectedItems, hasDirs, serial);
-                } else {
-                    fenceIrreversible();
-                }
+                && !safeJob->property("thispcOverwritesDestination").toBool()
+                && !safeJob->property("thispcPartialMoveOutcome").toBool()
+                && !safeJob->property("thispcBatchPartiallyCompleted").toBool()) {
+                recordAuthorizedBatchMove(safeJob.data(), serial);
             } else if (res.publishedCount > 0 || res.partialMoveOutcome
-                       || job->property("thispcPartialMoveOutcome").toBool()
-                       || job->property("thispcBatchPartiallyCompleted").toBool()) {
+                       || safeJob->property("thispcPartialMoveOutcome").toBool()
+                       || safeJob->property("thispcBatchPartiallyCompleted").toBool()) {
                 fenceIrreversible();
             }
-        });
+        }, Qt::SingleShotConnection);
         return true;
     }
 
@@ -629,144 +755,6 @@ public:
                 recordCompletedCopy(job->sourceUrl(), job->destinationUrl(), serial);
             }
         });
-        return true;
-    }
-
-    bool recordCompletedDirectoryMove(
-        const QUrl &source,
-        const QUrl &destination,
-        const LocalDirectoryIdentity &identity,
-        quint64 serial = 0)
-    {
-        if (m_busy || !source.isLocalFile() || !destination.isLocalFile() || !identity.valid) {
-            return false;
-        }
-        struct stat srcSt {};
-        if (localLstat(source.toLocalFile(), &srcSt) || errno != ENOENT) {
-            return false;
-        }
-        struct stat dstSt {};
-        if (!localLstat(destination.toLocalFile(), &dstSt) || !S_ISDIR(dstSt.st_mode)) {
-            return false;
-        }
-        if (static_cast<quint64>(dstSt.st_dev) != identity.stDev
-            || static_cast<quint64>(dstSt.st_ino) != identity.ino) {
-            return false;
-        }
-        while (m_records.size() > m_position) m_records.removeLast();
-        Record record;
-        record.directory = true;
-        record.source = source;
-        record.destination = destination;
-        record.serial = serial;
-        record.internalOrder = m_nextOrder++;
-        record.directoryIdentity = identity;
-        m_records.push_back(record);
-        m_position = m_records.size();
-        Q_EMIT availabilityChanged(canUndo(), canRedo());
-        return true;
-    }
-
-    bool recordCompletedBatchMove(
-        const QList<QPair<QUrl, QUrl>> &pairs,
-        const QList<LocalRegularFileIdentity> &identities,
-        quint64 serial = 0)
-    {
-        QList<BatchMoveExpectedItem> items;
-        items.reserve(identities.size());
-        for (const auto &id : identities) {
-            BatchMoveExpectedItem exp;
-            exp.kind = BatchMoveItemKind::RegularFile;
-            exp.fileIdentity = id;
-            items.append(exp);
-        }
-        return recordCompletedMixedBatchMove(pairs, items, false, serial);
-    }
-
-    bool recordCompletedMixedBatchMove(
-        const QList<QPair<QUrl, QUrl>> &pairs,
-        const QList<BatchMoveExpectedItem> &expectedItems,
-        bool hasDirectories,
-        quint64 serial = 0)
-    {
-        if (m_busy || pairs.size() < 2 || pairs.size() != expectedItems.size()) {
-            return false;
-        }
-        QList<LocalRegularFileIdentity> legacyIds;
-        legacyIds.reserve(expectedItems.size());
-        for (int i = 0; i < pairs.size(); ++i) {
-            const QUrl &src = pairs.at(i).first;
-            const QUrl &dst = pairs.at(i).second;
-            const BatchMoveExpectedItem &exp = expectedItems.at(i);
-            if (!src.isLocalFile() || !dst.isLocalFile()) {
-                return false;
-            }
-            struct stat srcSt {};
-            if (localLstat(src.toLocalFile(), &srcSt) || errno != ENOENT) {
-                return false;
-            }
-            struct statx dstStx {};
-            struct stat dstSt {};
-            const unsigned int mask =
-                STATX_BASIC_STATS | STATX_MNT_ID | STATX_MNT_ID_UNIQUE | STATX_SUBVOL;
-            const QByteArray dstEnc = QFile::encodeName(dst.toLocalFile());
-            if (::syscall(SYS_statx, AT_FDCWD, dstEnc.constData(),
-                          AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT, mask, &dstStx) != 0
-                || ::lstat(dstEnc.constData(), &dstSt) != 0) {
-                return false;
-            }
-            if (exp.kind == BatchMoveItemKind::Directory) {
-                if (!hasDirectories || !exp.dirIdentity.valid || !exp.dirSnapshot.valid) {
-                    return false;
-                }
-                const LocalDirectoryIdentity curDirId = LocalDirectoryIdentity::fromStat(dstStx, dstSt);
-                if (!curDirId.strictlyUnchangedForHistory(exp.dirIdentity)) {
-                    return false;
-                }
-                legacyIds.append(LocalRegularFileIdentity{});
-            } else {
-                if (!exp.fileIdentity.valid) {
-                    return false;
-                }
-                const LocalRegularFileIdentity curId = LocalRegularFileIdentity::fromStat(dstStx, dstSt);
-                if (!curId.strictlyUnchangedForHistory(exp.fileIdentity)) {
-                    return false;
-                }
-                legacyIds.append(exp.fileIdentity);
-            }
-        }
-        while (m_records.size() > m_position) m_records.removeLast();
-        Record record;
-        record.batch = true;
-        record.batchHasDirectories = hasDirectories;
-        record.batchPairs = pairs;
-        record.batchIdentities = legacyIds;
-        record.batchExpectedItems = expectedItems;
-        record.serial = serial;
-        record.internalOrder = m_nextOrder++;
-        m_records.push_back(record);
-        m_position = m_records.size();
-        Q_EMIT availabilityChanged(canUndo(), canRedo());
-        return true;
-    }
-
-    bool recordCompletedMove(
-        const QUrl &source, const QUrl &destination, quint64 serial = 0)
-    {
-        if (m_busy || !source.isLocalFile() || !destination.isLocalFile()
-            || QFileInfo::exists(source.toLocalFile())
-            || !QFileInfo::exists(destination.toLocalFile())) {
-            return false;
-        }
-        while (m_records.size() > m_position) m_records.removeLast();
-        Record record;
-        record.source = source;
-        record.destination = destination;
-        record.serial = serial;
-        record.internalOrder = m_nextOrder++;
-        m_records.push_back(record);
-        m_position = m_records.size();
-        Q_EMIT availabilityChanged(canUndo(), canRedo());
         return true;
     }
 
@@ -822,12 +810,13 @@ public:
         const Record record = m_records.at(target);
         if (record.copy) return runCopyUndo(record, target);
         if (record.directory) {
-            return runDirectoryMove(record.destination, record.source, record.directoryIdentity, target, target);
+            return runDirectoryMove(record.destination, record.source, record.directoryIdentity,
+                                    record.directorySnapshot, target, target, record.fsProvenance);
         }
         if (record.batch) {
             return runBatchMove(target, true, target);
         }
-        return runMove(record.destination, record.source, target);
+        return runMove(record.destination, record.source, record.fileSnapshot, target, target);
     }
 
     KJob *redo()
@@ -838,18 +827,319 @@ public:
         const Record record = m_records.at(recordIndex);
         if (record.copy) return runCopyRedo(record, target);
         if (record.directory) {
-            return runDirectoryMove(record.source, record.destination, record.directoryIdentity, target, recordIndex);
+            return runDirectoryMove(record.source, record.destination, record.directoryIdentity,
+                                    record.directorySnapshot, target, recordIndex, record.fsProvenance);
         }
         if (record.batch) {
             return runBatchMove(recordIndex, false, target);
         }
-        return runMove(record.source, record.destination, target);
+        return runMove(record.source, record.destination, record.fileSnapshot, target, recordIndex);
     }
 
 Q_SIGNALS:
     void availabilityChanged(bool undoAvailable, bool redoAvailable);
 
 private:
+    bool recordAuthorizedFileMove(LocalFileMoveJob *job, quint64 serial)
+    {
+        if (!job || m_busy || !job->hasFinished() || job->error() != KJob::NoError
+            || !job->destinationPublished() || !job->directoryDurabilityConfirmed()
+            || job->property("thispcOverwritesDestination").toBool()
+            || job->property("thispcPartialMoveOutcome").toBool()) {
+            return false;
+        }
+        const QUrl source = job->sourceUrl();
+        const QUrl destination = job->destinationUrl();
+        const LocalFileHistorySnapshot snapshot = job->movedSnapshot();
+        if (!source.isLocalFile() || !destination.isLocalFile()
+            || !snapshot.valid || !snapshot.strictContentDigest
+            || snapshot.contentDigest.size() != 32
+            || !snapshot.identity.valid || snapshot.fsMagic == 0) {
+            fenceIrreversible();
+            return false;
+        }
+        if (snapshot.fsMagic == EXT4_SUPER_MAGIC && !m_allowExt4History) {
+            return false;
+        }
+        struct stat srcSt {};
+        if (localLstat(source.toLocalFile(), &srcSt) || errno != ENOENT) {
+            fenceIrreversible();
+            return false;
+        }
+        const LocalBtrfsMoveCommon::TestFaultHooks hooks = currentFileMoveFaultHooks();
+        LocalFileHistorySnapshot observed;
+        QString reason;
+        if (!LocalBtrfsMoveCommon::captureStrictRegularFileSnapshot(
+                destination.toLocalFile(), &observed, &reason, &hooks, false)
+            || !observed.valid
+            || !observed.identity.sameObject(snapshot.identity)
+            || observed.identity.nlink != 1
+            || observed.size != snapshot.size
+            || observed.fsMagic != snapshot.fsMagic) {
+            fenceIrreversible();
+            return false;
+        }
+        while (m_records.size() > m_position) m_records.removeLast();
+        Record record;
+        record.fsProvenance = LocalBtrfsMoveCommon::provenanceFromFsMagic(observed.fsMagic);
+        record.source = source;
+        record.destination = destination;
+        record.serial = serial;
+        record.internalOrder = m_nextOrder++;
+        record.fileSnapshot = snapshot;
+        record.fileSnapshot.identity = observed.identity;
+        m_records.push_back(record);
+        m_position = m_records.size();
+        Q_EMIT availabilityChanged(canUndo(), canRedo());
+        return true;
+    }
+
+    bool recordAuthorizedDirectoryMove(LocalDirectoryMoveJob *job, quint64 serial)
+    {
+        if (!job || m_busy || !job->hasFinished() || job->error() != KJob::NoError
+            || !job->destinationPublished() || !job->directoryDurabilityConfirmed()
+            || job->property("thispcOverwritesDestination").toBool()
+            || job->property("thispcPartialMoveOutcome").toBool()) {
+            return false;
+        }
+        const QUrl source = job->sourceUrl();
+        const QUrl destination = job->destinationUrl();
+        const LocalDirectoryIdentity identity = job->movedIdentity();
+        const LocalDirectoryTreeSnapshot snapshot = job->movedSnapshot();
+        const LocalBtrfsMoveCommon::VerifiedMoveFsProvenance provenance = job->verifiedFsProvenance();
+        if (!source.isLocalFile() || !destination.isLocalFile() || !identity.valid) {
+            fenceIrreversible();
+            return false;
+        }
+        if (provenance == LocalBtrfsMoveCommon::VerifiedMoveFsProvenance::Unknown) {
+            return false;
+        }
+        if (provenance == LocalBtrfsMoveCommon::VerifiedMoveFsProvenance::Ext4 && !m_allowExt4History) {
+            return false;
+        }
+        if (!snapshot.valid || !snapshot.strictContentDigest || snapshot.treeDigest.size() != 32) {
+            fenceIrreversible();
+            return false;
+        }
+        struct stat srcSt {};
+        if (localLstat(source.toLocalFile(), &srcSt) || errno != ENOENT) {
+            fenceIrreversible();
+            return false;
+        }
+        const LocalBtrfsMoveCommon::TestFaultHooks hooks =
+            LocalDirectoryMoveDetail::currentDirMoveFaultHooks();
+        int openErr = 0;
+        LocalBtrfsMoveCommon::ScopedFd dstFd(
+            LocalBtrfsMoveCommon::openDirectoryNoSymlinks(destination.toLocalFile(), &openErr, &hooks));
+        if (!dstFd.isValid()) {
+            fenceIrreversible();
+            return false;
+        }
+        struct statx dstStx {};
+        struct stat dstSt {};
+        unsigned long dstMagic = 0;
+        int metaErr = 0;
+        if (!LocalBtrfsMoveCommon::queryFdMetadata(dstFd.fd, &dstStx, &dstSt, &dstMagic, &metaErr, &hooks)
+            || !S_ISDIR(dstSt.st_mode)) {
+            fenceIrreversible();
+            return false;
+        }
+        const LocalBtrfsMoveCommon::VerifiedMoveFsProvenance observed =
+            LocalBtrfsMoveCommon::provenanceFromFsMagic(dstMagic);
+        if (observed == LocalBtrfsMoveCommon::VerifiedMoveFsProvenance::Unknown
+            || observed != provenance
+            || (observed == LocalBtrfsMoveCommon::VerifiedMoveFsProvenance::Ext4 && !m_allowExt4History)) {
+            fenceIrreversible();
+            return false;
+        }
+        const LocalDirectoryIdentity observedId = LocalDirectoryIdentity::fromStat(dstStx, dstSt);
+        if (!observedId.valid || !identity.sameObject(observedId)) {
+            fenceIrreversible();
+            return false;
+        }
+        while (m_records.size() > m_position) m_records.removeLast();
+        Record record;
+        record.directory = true;
+        record.fsProvenance = observed;
+        record.source = source;
+        record.destination = destination;
+        record.serial = serial;
+        record.internalOrder = m_nextOrder++;
+        record.directoryIdentity = observedId;
+        record.directorySnapshot = snapshot;
+        m_records.push_back(record);
+        m_position = m_records.size();
+        Q_EMIT availabilityChanged(canUndo(), canRedo());
+        return true;
+    }
+
+    bool recordAuthorizedBatchMove(LocalBatchMoveJob *job, quint64 serial)
+    {
+        if (!job || m_busy || !job->hasFinished() || job->error() != KJob::NoError
+            || job->property("thispcOverwritesDestination").toBool()
+            || job->property("thispcPartialMoveOutcome").toBool()
+            || job->property("thispcBatchPartiallyCompleted").toBool()) {
+            return false;
+        }
+        const BatchMoveResult &res = job->batchResult();
+        if (res.outcome != BatchMoveOutcome::FullSuccess
+            || res.totalCount < 2
+            || res.publishedCount != res.totalCount
+            || res.durableCount != res.totalCount
+            || res.partialMoveOutcome
+            || res.items.size() != res.totalCount) {
+            if (res.publishedCount > 0 || res.partialMoveOutcome) {
+                fenceIrreversible();
+            }
+            return false;
+        }
+        const LocalBtrfsMoveCommon::VerifiedMoveFsProvenance expectedProvenance =
+            res.verifiedFsProvenance;
+        if (expectedProvenance == LocalBtrfsMoveCommon::VerifiedMoveFsProvenance::Unknown) {
+            fenceIrreversible();
+            return false;
+        }
+        if (expectedProvenance == LocalBtrfsMoveCommon::VerifiedMoveFsProvenance::Ext4
+            && !m_allowExt4History) {
+            return false;
+        }
+
+        const LocalBtrfsMoveCommon::TestFaultHooks hooks =
+            LocalBatchMoveDetail::currentBatchMoveFaultHooks();
+        LocalBtrfsMoveCommon::VerifiedMoveFsProvenance batchObserved =
+            LocalBtrfsMoveCommon::VerifiedMoveFsProvenance::Unknown;
+        QList<QPair<QUrl, QUrl>> pairs;
+        QList<BatchMoveExpectedItem> expectedItems;
+        QList<LocalRegularFileIdentity> legacyIds;
+        pairs.reserve(res.items.size());
+        expectedItems.reserve(res.items.size());
+        legacyIds.reserve(res.items.size());
+        bool hasDirectories = false;
+
+        for (const auto &it : res.items) {
+            if (!it.destinationPublished || !it.durabilityConfirmed
+                || !it.sourceUrl.isLocalFile() || !it.destinationUrl.isLocalFile()) {
+                fenceIrreversible();
+                return false;
+            }
+            struct stat srcSt {};
+            if (localLstat(it.sourceUrl.toLocalFile(), &srcSt) || errno != ENOENT) {
+                fenceIrreversible();
+                return false;
+            }
+            QString dstParentPath;
+            QString dstLeaf;
+            if (!LocalBtrfsMoveCommon::splitCleanLocalPath(
+                    it.destinationUrl.toLocalFile(), &dstParentPath, &dstLeaf)) {
+                fenceIrreversible();
+                return false;
+            }
+            int parentOpenErr = 0;
+            LocalBtrfsMoveCommon::ScopedFd dstParentFd(
+                LocalBtrfsMoveCommon::openDirectoryNoSymlinks(dstParentPath, &parentOpenErr, &hooks));
+            if (!dstParentFd.isValid()) {
+                fenceIrreversible();
+                return false;
+            }
+            struct statx parentStx {};
+            struct stat parentSt {};
+            unsigned long parentMagic = 0;
+            int parentMetaErr = 0;
+            if (!LocalBtrfsMoveCommon::queryFdMetadata(
+                    dstParentFd.fd, &parentStx, &parentSt, &parentMagic, &parentMetaErr, &hooks)) {
+                fenceIrreversible();
+                return false;
+            }
+            const LocalBtrfsMoveCommon::VerifiedMoveFsProvenance itemObserved =
+                LocalBtrfsMoveCommon::provenanceFromFsMagic(parentMagic);
+            if (itemObserved == LocalBtrfsMoveCommon::VerifiedMoveFsProvenance::Unknown) {
+                fenceIrreversible();
+                return false;
+            }
+            if (batchObserved == LocalBtrfsMoveCommon::VerifiedMoveFsProvenance::Unknown) {
+                batchObserved = itemObserved;
+            } else if (batchObserved != itemObserved) {
+                fenceIrreversible();
+                return false;
+            }
+            struct statx dstStx {};
+            struct stat dstSt {};
+            const unsigned int mask =
+                STATX_BASIC_STATS | STATX_MNT_ID | STATX_MNT_ID_UNIQUE | STATX_SUBVOL;
+            const QByteArray dstEnc = QFile::encodeName(it.destinationUrl.toLocalFile());
+            if (::syscall(SYS_statx, AT_FDCWD, dstEnc.constData(),
+                          AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT, mask, &dstStx) != 0
+                || ::lstat(dstEnc.constData(), &dstSt) != 0) {
+                fenceIrreversible();
+                return false;
+            }
+            if (dstStx.stx_dev_major != parentStx.stx_dev_major
+                || dstStx.stx_dev_minor != parentStx.stx_dev_minor
+                || dstStx.stx_mnt_id != parentStx.stx_mnt_id) {
+                fenceIrreversible();
+                return false;
+            }
+
+            BatchMoveExpectedItem exp;
+            exp.kind = it.kind;
+            if (it.kind == BatchMoveItemKind::Directory) {
+                hasDirectories = true;
+                if (!it.movedDirIdentity.valid || !it.movedDirSnapshot.valid
+                    || !it.movedDirSnapshot.strictContentDigest
+                    || it.movedDirSnapshot.treeDigest.size() != 32) {
+                    fenceIrreversible();
+                    return false;
+                }
+                const LocalDirectoryIdentity curDirId = LocalDirectoryIdentity::fromStat(dstStx, dstSt);
+                if (!curDirId.strictlyUnchangedForHistory(it.movedDirIdentity)) {
+                    fenceIrreversible();
+                    return false;
+                }
+                exp.dirIdentity = it.movedDirIdentity;
+                exp.dirSnapshot = it.movedDirSnapshot;
+                legacyIds.append(LocalRegularFileIdentity{});
+            } else {
+                if (!it.movedIdentity.valid) {
+                    fenceIrreversible();
+                    return false;
+                }
+                const LocalRegularFileIdentity curId = LocalRegularFileIdentity::fromStat(dstStx, dstSt);
+                if (!curId.strictlyUnchangedForHistory(it.movedIdentity)) {
+                    fenceIrreversible();
+                    return false;
+                }
+                exp.fileIdentity = it.movedIdentity;
+                legacyIds.append(it.movedIdentity);
+            }
+            pairs.append({it.sourceUrl, it.destinationUrl});
+            expectedItems.append(exp);
+        }
+
+        if (batchObserved == LocalBtrfsMoveCommon::VerifiedMoveFsProvenance::Unknown
+            || batchObserved != expectedProvenance) {
+            fenceIrreversible();
+            return false;
+        }
+        if (batchObserved == LocalBtrfsMoveCommon::VerifiedMoveFsProvenance::Ext4
+            && !m_allowExt4History) {
+            return false;
+        }
+        while (m_records.size() > m_position) m_records.removeLast();
+        Record record;
+        record.batch = true;
+        record.batchHasDirectories = hasDirectories;
+        record.fsProvenance = batchObserved;
+        record.batchPairs = pairs;
+        record.batchIdentities = legacyIds;
+        record.batchExpectedItems = expectedItems;
+        record.serial = serial;
+        record.internalOrder = m_nextOrder++;
+        m_records.push_back(record);
+        m_position = m_records.size();
+        Q_EMIT availabilityChanged(canUndo(), canRedo());
+        return true;
+    }
+
     class CopyUndoJob final : public KIO::Job
     {
     public:
@@ -881,16 +1171,59 @@ private:
     };
 
     KJob *runMove(
-        const QUrl &source, const QUrl &destination, qsizetype successPosition)
+        const QUrl &source,
+        const QUrl &destination,
+        const LocalFileHistorySnapshot &expectedSnapshot,
+        qsizetype successPosition,
+        qsizetype recordIndex)
     {
+        if (!expectedSnapshot.valid
+            || !expectedSnapshot.strictContentDigest
+            || expectedSnapshot.contentDigest.size() != 32
+            || !expectedSnapshot.identity.valid
+            || expectedSnapshot.fsMagic == 0) {
+            return nullptr;
+        }
+        if (expectedSnapshot.fsMagic == EXT4_SUPER_MAGIC && !m_allowExt4History) {
+            return nullptr;
+        }
         m_busy = true;
         Q_EMIT availabilityChanged(false, false);
-        auto *job = new LocalFileMoveJob(source, destination, this);
+        auto *job = new LocalFileMoveJob(
+            source,
+            destination,
+            this,
+            LocalFileMoveStrategy::Automatic,
+            256 * 1024,
+            0,
+            {},
+            false,
+            {},
+            /*strictHistoryCheck=*/true,
+            expectedSnapshot);
         job->setAutoDelete(false);
         connect(job, &KJob::result, this,
-                [this, successPosition](KJob *completed) {
-                    if (completed->error() == KJob::NoError) {
+                [this, job, successPosition, recordIndex](KJob *completed) {
+                    if (completed->error() == KJob::NoError
+                        && job->destinationPublished()
+                        && job->directoryDurabilityConfirmed()
+                        && !completed->property("thispcPartialMoveOutcome").toBool()) {
+                        if (recordIndex >= 0 && recordIndex < m_records.size()
+                            && job->movedSnapshot().valid
+                            && job->movedSnapshot().strictContentDigest
+                            && job->movedSnapshot().contentDigest.size() == 32) {
+                            m_records[recordIndex].fileSnapshot = job->movedSnapshot();
+                        }
                         m_position = successPosition;
+                    } else if (completed->property("thispcPartialMoveOutcome").toBool()
+                               || (job->destinationPublished() && !job->directoryDurabilityConfirmed())) {
+                        if (recordIndex >= 0 && recordIndex < m_records.size()) {
+                            m_records.removeAt(recordIndex);
+                        }
+                        if (m_position > m_records.size()) {
+                            m_position = m_records.size();
+                        }
+                        fenceIrreversible();
                     }
                     m_busy = false;
                     Q_EMIT availabilityChanged(canUndo(), canRedo());
@@ -903,15 +1236,26 @@ private:
         const QUrl &source,
         const QUrl &destination,
         const LocalDirectoryIdentity &expectedIdentity,
+        const LocalDirectoryTreeSnapshot &expectedSnapshot,
         qsizetype successPosition,
-        qsizetype recordIndex)
+        qsizetype recordIndex,
+        LocalBtrfsMoveCommon::VerifiedMoveFsProvenance fsProvenance)
     {
-        if (!expectedIdentity.valid) {
+        if (!expectedIdentity.valid
+            || !expectedSnapshot.valid
+            || !expectedSnapshot.strictContentDigest
+            || expectedSnapshot.treeDigest.size() != 32
+            || fsProvenance == LocalBtrfsMoveCommon::VerifiedMoveFsProvenance::Unknown) {
             return nullptr;
         }
         m_busy = true;
         Q_EMIT availabilityChanged(false, false);
-        auto *job = new LocalDirectoryMoveJob(source, destination, this, expectedIdentity);
+        auto *job = new LocalDirectoryMoveJob(
+            source, destination, this, expectedIdentity, /*strictHistoryCheck=*/true, expectedSnapshot);
+        if (m_allowExt4History
+            && fsProvenance == LocalBtrfsMoveCommon::VerifiedMoveFsProvenance::Ext4) {
+            job->setAllowExt4(true);
+        }
         job->setAutoDelete(false);
         connect(job, &KJob::result, this,
                 [this, job, successPosition, recordIndex](KJob *completed) {
@@ -919,6 +1263,14 @@ private:
                         && job->destinationPublished()
                         && job->directoryDurabilityConfirmed()
                         && !completed->property("thispcPartialMoveOutcome").toBool()) {
+                        if (recordIndex >= 0 && recordIndex < m_records.size()) {
+                            m_records[recordIndex].directoryIdentity = job->movedIdentity();
+                            if (job->movedSnapshot().valid
+                                && job->movedSnapshot().strictContentDigest
+                                && job->movedSnapshot().treeDigest.size() == 32) {
+                                m_records[recordIndex].directorySnapshot = job->movedSnapshot();
+                            }
+                        }
                         m_position = successPosition;
                     } else if (completed->property("thispcPartialMoveOutcome").toBool()) {
                         if (recordIndex >= 0 && recordIndex < m_records.size()) {
@@ -927,6 +1279,7 @@ private:
                         if (m_position > m_records.size()) {
                             m_position = m_records.size();
                         }
+                        fenceIrreversible();
                     }
                     m_busy = false;
                     Q_EMIT availabilityChanged(canUndo(), canRedo());
@@ -945,7 +1298,8 @@ private:
         }
         const Record &rec = m_records.at(recordIndex);
         if (!rec.batch || rec.batchPairs.size() < 2
-            || rec.batchPairs.size() != rec.batchExpectedItems.size()) {
+            || rec.batchPairs.size() != rec.batchExpectedItems.size()
+            || rec.fsProvenance == LocalBtrfsMoveCommon::VerifiedMoveFsProvenance::Unknown) {
             return nullptr;
         }
         QList<QPair<QUrl, QUrl>> pairs;
@@ -970,6 +1324,10 @@ private:
         auto *job = new LocalBatchMoveJob(pairs, this, {}, true);
         job->setExpectedItems(expectedItems);
         job->setAllowDirectories(rec.batchHasDirectories);
+        if (m_allowExt4History
+            && rec.fsProvenance == LocalBtrfsMoveCommon::VerifiedMoveFsProvenance::Ext4) {
+            job->setAllowExt4(true);
+        }
         job->setAutoDelete(false);
         connect(job, &KJob::result, this,
                 [this, job, successPosition, recordIndex, isUndo, n](KJob *completed) {
@@ -1053,4 +1411,5 @@ private:
     quint64 m_nextOrder = 1;
     quint64 m_irreversibleOrder = 0;
     bool m_busy = false;
+    bool m_allowExt4History = false;
 };

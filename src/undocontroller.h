@@ -967,6 +967,7 @@ private:
             if (m_refreshViews) m_refreshViews(false);
             if (m_updateFileActions) m_updateFileActions();
             updateActions();
+            completed->deleteLater();
         });
     }
 

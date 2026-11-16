@@ -81,6 +81,8 @@ struct LocalBtrfsDirectoryQualification {
     quint64 scannedBytes = 0;
     qsizetype scannedRegularFiles = 0;
     qsizetype scannedSubdirectories = 0;
+    LocalBtrfsMoveCommon::VerifiedMoveFsProvenance verifiedFsProvenance =
+        LocalBtrfsMoveCommon::VerifiedMoveFsProvenance::Unknown;
 };
 
 #ifdef THISPC_TEST_HARNESS
@@ -149,6 +151,48 @@ inline std::function<void()> &simulateDirMoveBeforeDstFsync()
     static std::function<void()> hook;
     return hook;
 }
+
+inline bool &simulateDirMoveExt4Filesystem()
+{
+    static bool enabled = false;
+    return enabled;
+}
+
+inline bool &simulateDirMoveExt4StatxMntIdUniqueMissing()
+{
+    static bool missing = false;
+    return missing;
+}
+
+inline bool &simulateDirMoveExt4FlagsError()
+{
+    static bool err = false;
+    return err;
+}
+
+inline bool &simulateDirMoveExt4CasefoldAllDirs()
+{
+    static bool cf = false;
+    return cf;
+}
+
+inline quint64 &simulateDirMoveExt4CasefoldInode()
+{
+    static quint64 ino = 0;
+    return ino;
+}
+
+inline bool &simulateDirMoveExt4Encrypt()
+{
+    static bool enc = false;
+    return enc;
+}
+
+inline std::atomic<int> &dirMoveSnapshotFilesHashedCount()
+{
+    static std::atomic<int> count{0};
+    return count;
+}
 #endif
 
 namespace LocalDirectoryMoveDetail {
@@ -165,6 +209,13 @@ inline LocalBtrfsMoveCommon::TestFaultHooks currentDirMoveFaultHooks()
     hooks.openat2Unsupported = simulateDirMoveOpenat2Unsupported();
     hooks.unsupportedFsMagic = simulateDirMoveUnsupportedFsMagic();
     hooks.statxMntIdUnsupported = simulateDirMoveStatxMntIdUnsupported();
+    hooks.simulateExt4Filesystem = simulateDirMoveExt4Filesystem();
+    hooks.simulateExt4StatxMntIdUniqueMissing = simulateDirMoveExt4StatxMntIdUniqueMissing();
+    hooks.simulateExt4FlagsError = simulateDirMoveExt4FlagsError();
+    hooks.simulateExt4CasefoldAllDirs = simulateDirMoveExt4CasefoldAllDirs();
+    hooks.simulateExt4CasefoldInode = simulateDirMoveExt4CasefoldInode();
+    hooks.simulateExt4Encrypt = simulateDirMoveExt4Encrypt();
+    hooks.snapshotFilesHashedCounter = &dirMoveSnapshotFilesHashedCount();
 #endif
     return hooks;
 }
@@ -226,7 +277,8 @@ inline bool qualifyAndOpenSameVolumeBtrfs(
     const LocalDirectoryIdentity *expectedSourceIdentity,
     bool checkDestinationAbsence,
     LocalBtrfsDirectoryQualification *outQual,
-    OpenedMoveContext *outCtx)
+    OpenedMoveContext *outCtx,
+    const LocalBtrfsMoveCommon::FilesystemMoveQualificationProfile &profile = {})
 {
     LocalBtrfsDirectoryQualification localQual;
     auto fail = [&](LocalDirectoryMoveError err, int sysErr, const QString &reason) {
@@ -309,16 +361,28 @@ inline bool qualifyAndOpenSameVolumeBtrfs(
                           "Could not inspect directory descriptor metadata."));
     }
 
-    if (spMagic != BTRFS_SUPER_MAGIC || srcMagic != BTRFS_SUPER_MAGIC || dpMagic != BTRFS_SUPER_MAGIC) {
-        return fail(LocalDirectoryMoveError::UnsupportedFilesystem, EXDEV, unsupportedFsMessage());
-    }
-
-    if (!(spStx.stx_mask & (STATX_MNT_ID | STATX_MNT_ID_UNIQUE))
-        || !(srcStx.stx_mask & (STATX_MNT_ID | STATX_MNT_ID_UNIQUE))
-        || !(dpStx.stx_mask & (STATX_MNT_ID | STATX_MNT_ID_UNIQUE))) {
-        return fail(LocalDirectoryMoveError::UnsupportedKernelFeature, EOPNOTSUPP,
-                    trMsg("Jądro nie zwróciło identyfikatora montowania statx(STATX_MNT_ID).",
-                          "Kernel did not provide statx mount identity (STATX_MNT_ID)."));
+    const LocalBtrfsMoveCommon::TestFaultHooks hooks = currentDirMoveFaultHooks();
+    auto mapFailure = [](LocalBtrfsMoveCommon::ContainmentFailureKind k) {
+        switch (k) {
+        case LocalBtrfsMoveCommon::ContainmentFailureKind::UnsupportedKernelFeature:
+            return LocalDirectoryMoveError::UnsupportedKernelFeature;
+        case LocalBtrfsMoveCommon::ContainmentFailureKind::UnsupportedFilesystem:
+            return LocalDirectoryMoveError::UnsupportedFilesystem;
+        case LocalBtrfsMoveCommon::ContainmentFailureKind::MountOrSubvolumeBoundary:
+            return LocalDirectoryMoveError::MountOrSubvolumeBoundary;
+        default:
+            return LocalDirectoryMoveError::ContainmentViolation;
+        }
+    };
+    for (const auto &check : {std::pair<const struct statx *, unsigned long>{&spStx, spMagic},
+                              std::pair<const struct statx *, unsigned long>{&srcStx, srcMagic},
+                              std::pair<const struct statx *, unsigned long>{&dpStx, dpMagic}}) {
+        LocalBtrfsMoveCommon::ContainmentFailureKind fk = LocalBtrfsMoveCommon::ContainmentFailureKind::None;
+        QString fmsg;
+        if (!LocalBtrfsMoveCommon::validateQualifiedMountAndFs(*check.first, check.second, profile, &fk, &fmsg)) {
+            const int fsys = (fk == LocalBtrfsMoveCommon::ContainmentFailureKind::UnsupportedKernelFeature) ? EOPNOTSUPP : EXDEV;
+            return fail(mapFailure(fk), fsys, fmsg);
+        }
     }
 
 #ifdef THISPC_TEST_HARNESS
@@ -333,6 +397,14 @@ inline bool qualifyAndOpenSameVolumeBtrfs(
     localQual.srcParentIdentity = LocalDirectoryIdentity::fromStat(spStx, spSt);
     localQual.sourceIdentity = LocalDirectoryIdentity::fromStat(srcStx, srcSt);
     localQual.dstParentIdentity = LocalDirectoryIdentity::fromStat(dpStx, dpSt);
+    localQual.verifiedFsProvenance = LocalBtrfsMoveCommon::provenanceFromFsMagic(srcMagic);
+    if (localQual.verifiedFsProvenance == LocalBtrfsMoveCommon::VerifiedMoveFsProvenance::Unknown
+        || LocalBtrfsMoveCommon::provenanceFromFsMagic(spMagic) != localQual.verifiedFsProvenance
+        || LocalBtrfsMoveCommon::provenanceFromFsMagic(dpMagic) != localQual.verifiedFsProvenance) {
+        return fail(LocalDirectoryMoveError::UnsupportedFilesystem, EXDEV,
+                    trMsg("Nie udało się jednoznacznie zweryfikować pochodzenia systemu plików.",
+                          "Could not unambiguously verify filesystem provenance."));
+    }
 
     if (!localQual.srcParentIdentity.valid
         || !localQual.sourceIdentity.valid
@@ -341,10 +413,23 @@ inline bool qualifyAndOpenSameVolumeBtrfs(
                     moveContainmentErrorMessage());
     }
 
-    if (localQual.sourceIdentity.ino == BTRFS_FIRST_FREE_OBJECTID) {
+    if (profile.checkBtrfsSubvolRootInode()
+        && localQual.sourceIdentity.ino == BTRFS_FIRST_FREE_OBJECTID) {
         return fail(LocalDirectoryMoveError::MountOrSubvolumeBoundary, EXDEV,
                     trMsg("Przenoszenie katalogu głównego podwoluminu lub woluminu Btrfs jest zablokowane.",
                           "Moving a Btrfs volume or subvolume root directory is blocked."));
+    }
+
+    if (profile.checkExt4DirectoryFlags()) {
+        for (const auto &fdIno : {std::pair<int, quint64>{srcParentFd.fd, localQual.srcParentIdentity.ino},
+                                  std::pair<int, quint64>{srcDirFd.fd, localQual.sourceIdentity.ino},
+                                  std::pair<int, quint64>{dstParentFd.fd, localQual.dstParentIdentity.ino}}) {
+            LocalBtrfsMoveCommon::ContainmentFailureKind fk = LocalBtrfsMoveCommon::ContainmentFailureKind::None;
+            QString fmsg;
+            if (!LocalBtrfsMoveCommon::verifyExt4DirectorySafetyFlags(fdIno.first, fdIno.second, &fk, &fmsg, &hooks)) {
+                return fail(mapFailure(fk), EINVAL, fmsg);
+            }
+        }
     }
 
     if (!localQual.sourceIdentity.sameMountScope(localQual.srcParentIdentity)
@@ -442,13 +527,27 @@ inline bool inspectDirectoryTreeContainment(
     const std::atomic<bool> &cancelled,
     LocalBtrfsDirectoryQualification *qual,
     LocalDirectoryMoveError *errOut,
-    QString *reasonOut)
+    QString *reasonOut,
+    const LocalBtrfsMoveCommon::FilesystemMoveQualificationProfile &profile = {},
+    bool computeContentDigest = false,
+    bool enforceStrictSnapshotLimits = false,
+    LocalDirectoryTreeSnapshot *snapshotOut = nullptr)
 {
     LocalDirectoryTreeSnapshot snapshot;
     LocalBtrfsMoveCommon::ContainmentFailureKind failureKind = LocalBtrfsMoveCommon::ContainmentFailureKind::None;
     const LocalBtrfsMoveCommon::TestFaultHooks hooks = currentDirMoveFaultHooks();
     if (!LocalBtrfsMoveCommon::inspectDirectoryTreeContainment(
-            rootDirFd, rootIdentity, cancelled, &snapshot, nullptr, &failureKind, reasonOut, &hooks)) {
+            rootDirFd,
+            rootIdentity,
+            cancelled,
+            &snapshot,
+            nullptr,
+            &failureKind,
+            reasonOut,
+            &hooks,
+            profile,
+            computeContentDigest,
+            enforceStrictSnapshotLimits)) {
         if (errOut) {
             switch (failureKind) {
             case LocalBtrfsMoveCommon::ContainmentFailureKind::Cancelled:
@@ -480,7 +579,12 @@ inline bool inspectDirectoryTreeContainment(
         qual->scannedRegularFiles = snapshot.scannedRegularFiles;
         qual->scannedSubdirectories = snapshot.scannedSubdirectories;
     }
-    if (errOut) *errOut = LocalDirectoryMoveError::None;
+    if (snapshotOut) {
+        *snapshotOut = snapshot;
+    }
+    if (errOut) {
+        *errOut = LocalDirectoryMoveError::None;
+    }
     return true;
 }
 
@@ -495,11 +599,15 @@ public:
         const QUrl &source,
         const QUrl &destination,
         QObject *parent = nullptr,
-        LocalDirectoryIdentity expectedSourceIdentity = {})
+        LocalDirectoryIdentity expectedSourceIdentity = {},
+        bool strictHistoryCheck = false,
+        LocalDirectoryTreeSnapshot expectedSourceSnapshot = {})
         : KIO::Job()
         , m_source(source)
         , m_destination(destination)
         , m_expectedSourceIdentity(expectedSourceIdentity)
+        , m_strictHistoryCheck(strictHistoryCheck)
+        , m_expectedSourceSnapshot(std::move(expectedSourceSnapshot))
     {
         setParent(parent);
         setProperty("thispcSourceUrls", QVariant::fromValue(QList<QUrl>{source}));
@@ -536,9 +644,15 @@ public:
         const QString srcPath = m_source.toLocalFile();
         const QString dstPath = m_destination.toLocalFile();
         const LocalDirectoryIdentity expectedId = m_expectedSourceIdentity;
+        const bool allowExt4Copy = m_allowExt4;
+        const bool captureStrictSnapshot = m_captureStrictSnapshot;
+        const bool strictHistoryCheck = m_strictHistoryCheck;
+        const LocalDirectoryTreeSnapshot expectedSnapshot = m_expectedSourceSnapshot;
 
-        m_thread = QThread::create([this, srcPath, dstPath, expectedId] {
-            executeWorker(srcPath, dstPath, expectedId);
+        m_thread = QThread::create([this, srcPath, dstPath, expectedId, allowExt4Copy,
+                                    captureStrictSnapshot, strictHistoryCheck, expectedSnapshot] {
+            executeWorker(srcPath, dstPath, expectedId, allowExt4Copy,
+                          captureStrictSnapshot, strictHistoryCheck, expectedSnapshot);
         });
         m_thread->setParent(this);
         connect(m_thread, &QThread::finished, this, [this] {
@@ -558,7 +672,32 @@ public:
     bool destinationPublished() const { return m_destinationPublished; }
     bool directoryDurabilityConfirmed() const { return m_directoryDurabilityConfirmed; }
     LocalDirectoryIdentity movedIdentity() const { return m_movedIdentity; }
+    LocalDirectoryTreeSnapshot movedSnapshot() const { return m_movedSnapshot; }
+    LocalBtrfsMoveCommon::VerifiedMoveFsProvenance verifiedFsProvenance() const { return m_verifiedFsProvenance; }
     bool isCancelRequested() const { return m_cancelled.load(std::memory_order_acquire); }
+    bool allowExt4() const { return m_allowExt4; }
+    void setAllowExt4(bool allow) { m_allowExt4 = allow; }
+    bool captureStrictDirectorySnapshot() const { return m_captureStrictSnapshot; }
+    bool setCaptureStrictDirectorySnapshot(bool enabled)
+    {
+        if (m_started || m_finished) {
+            return false;
+        }
+        m_captureStrictSnapshot = enabled;
+        return true;
+    }
+    bool hasStarted() const { return m_started; }
+    bool hasFinished() const { return m_finished; }
+    bool claimHistoryAttachment()
+    {
+        if (m_started || m_finished || m_historyAttachmentClaimed) {
+            return false;
+        }
+        m_historyAttachmentClaimed = true;
+        m_captureStrictSnapshot = true;
+        return true;
+    }
+    bool strictHistoryCheck() const { return m_strictHistoryCheck; }
 
 protected:
     bool doKill() override
@@ -587,6 +726,9 @@ private:
         bool destinationPublished = false;
         bool durabilityConfirmed = false;
         LocalDirectoryIdentity movedIdentity;
+        LocalDirectoryTreeSnapshot movedSnapshot;
+        LocalBtrfsMoveCommon::VerifiedMoveFsProvenance verifiedFsProvenance =
+            LocalBtrfsMoveCommon::VerifiedMoveFsProvenance::Unknown;
         quint64 scannedBytes = 0;
         QString message;
     };
@@ -594,7 +736,11 @@ private:
     void executeWorker(
         const QString &srcPath,
         const QString &dstPath,
-        const LocalDirectoryIdentity &expectedIdentity)
+        const LocalDirectoryIdentity &expectedIdentity,
+        bool allowExt4,
+        bool captureStrictSnapshot,
+        bool strictHistoryCheck,
+        const LocalDirectoryTreeSnapshot &expectedSnapshot)
     {
         WorkerResult res;
         auto finishWorker = [&] {
@@ -609,6 +755,20 @@ private:
             finishWorker();
             return;
         }
+        if (strictHistoryCheck
+            && (!expectedSnapshot.valid || !expectedSnapshot.strictContentDigest
+                || expectedSnapshot.treeDigest.size() != 32)) {
+            res.error = LocalDirectoryMoveError::InvalidInput;
+            res.message = LocalDirectoryMoveDetail::trMsg(
+                "Brak kompletnego ścisłego snapshotu historii dla operacji Undo/Redo katalogu.",
+                "Missing complete strict history snapshot for directory Undo/Redo.");
+            finishWorker();
+            return;
+        }
+
+        const LocalBtrfsMoveCommon::FilesystemMoveQualificationProfile profile{
+            allowExt4 ? LocalBtrfsMoveCommon::LocalMoveFsProfile::Ext4Only
+                      : LocalBtrfsMoveCommon::LocalMoveFsProfile::BtrfsOnly};
 
         LocalBtrfsDirectoryQualification qual;
         LocalDirectoryMoveDetail::OpenedMoveContext ctx;
@@ -618,7 +778,8 @@ private:
                 expectedIdentity.valid ? &expectedIdentity : nullptr,
                 true,
                 &qual,
-                &ctx)) {
+                &ctx,
+                profile)) {
             res.error = qual.error;
             res.sysErrno = qual.systemError;
             res.message = qual.reason;
@@ -626,14 +787,37 @@ private:
             return;
         }
 
+        const bool needStrictSnapshot = captureStrictSnapshot || strictHistoryCheck;
+        LocalDirectoryTreeSnapshot capturedSnapshot;
         LocalDirectoryMoveError inspectErr = LocalDirectoryMoveError::None;
         QString inspectMsg;
         if (!LocalDirectoryMoveDetail::inspectDirectoryTreeContainment(
-                ctx.srcDirFd.fd, qual.sourceIdentity, m_cancelled, &qual, &inspectErr, &inspectMsg)) {
+                ctx.srcDirFd.fd,
+                qual.sourceIdentity,
+                m_cancelled,
+                &qual,
+                &inspectErr,
+                &inspectMsg,
+                profile,
+                needStrictSnapshot,
+                needStrictSnapshot,
+                &capturedSnapshot)) {
             res.error = inspectErr;
             res.message = inspectMsg;
             finishWorker();
             return;
+        }
+        if (strictHistoryCheck) {
+            if (!capturedSnapshot.valid || !capturedSnapshot.strictContentDigest
+                || capturedSnapshot.treeDigest.size() != 32
+                || !capturedSnapshot.matches(expectedSnapshot, true)) {
+                res.error = LocalDirectoryMoveError::ContainmentViolation;
+                res.message = LocalDirectoryMoveDetail::trMsg(
+                    "Odmowa cofnięcia/ponowienia katalogu: struktura lub zawartość katalogu zmieniła się od czasu zapisania historii.",
+                    "Directory Undo/Redo refused: directory structure or contents changed since history was recorded.");
+                finishWorker();
+                return;
+            }
         }
         res.scannedBytes = qual.scannedBytes;
 
@@ -675,6 +859,15 @@ private:
             finishWorker();
             return;
         }
+#ifdef THISPC_TEST_HARNESS
+        if (simulateDirMoveExt4Filesystem()) {
+            recheckSrcStx.stx_mask &= ~STATX_SUBVOL;
+            recheckSrcStx.stx_subvol = 0;
+            if (simulateDirMoveExt4StatxMntIdUniqueMissing()) {
+                recheckSrcStx.stx_mask &= ~STATX_MNT_ID_UNIQUE;
+            }
+        }
+#endif
         const LocalDirectoryIdentity currentEntryId = LocalDirectoryIdentity::fromStat(recheckSrcStx, recheckSrcSt);
         if (!currentEntryId.valid || !currentEntryId.sameObject(qual.sourceIdentity)) {
             res.error = LocalDirectoryMoveError::ContainmentViolation;
@@ -764,6 +957,15 @@ private:
             return;
         }
 
+#ifdef THISPC_TEST_HARNESS
+        if (simulateDirMoveExt4Filesystem()) {
+            postDstStx.stx_mask &= ~STATX_SUBVOL;
+            postDstStx.stx_subvol = 0;
+            if (simulateDirMoveExt4StatxMntIdUniqueMissing()) {
+                postDstStx.stx_mask &= ~STATX_MNT_ID_UNIQUE;
+            }
+        }
+#endif
         const LocalDirectoryIdentity postDstId = LocalDirectoryIdentity::fromStat(postDstStx, postDstSt);
         if (!postDstId.valid || postDstId.ino != qual.sourceIdentity.ino
             || postDstId.devMajor != qual.sourceIdentity.devMajor
@@ -777,6 +979,9 @@ private:
             return;
         }
         res.movedIdentity = postDstId;
+        if (needStrictSnapshot) {
+            res.movedSnapshot = capturedSnapshot;
+        }
 
 #ifdef THISPC_TEST_HARNESS
         if (simulateDirMoveBeforeDstFsync()) {
@@ -830,6 +1035,7 @@ private:
         res.durabilityConfirmed = true;
         res.destinationPublished = true;
         res.outcome = LocalDirectoryMoveOutcome::PublishedAndDurable;
+        res.verifiedFsProvenance = qual.verifiedFsProvenance;
         res.error = LocalDirectoryMoveError::None;
         res.sysErrno = 0;
         res.message.clear();
@@ -847,6 +1053,8 @@ private:
         m_directoryDurabilityConfirmed = res.durabilityConfirmed;
         m_outcome = res.outcome;
         m_movedIdentity = res.movedIdentity;
+        m_movedSnapshot = res.movedSnapshot;
+        m_verifiedFsProvenance = res.verifiedFsProvenance;
         m_systemError = res.sysErrno;
         finish(res.error, res.message);
     }
@@ -878,6 +1086,8 @@ private:
     QUrl m_source;
     QUrl m_destination;
     LocalDirectoryIdentity m_expectedSourceIdentity;
+    bool m_strictHistoryCheck = false;
+    LocalDirectoryTreeSnapshot m_expectedSourceSnapshot;
     QThread *m_thread = nullptr;
     std::atomic<bool> m_cancelled{false};
     std::atomic<bool> m_destinationPublishedAtomic{false};
@@ -887,6 +1097,12 @@ private:
     bool m_directoryDurabilityConfirmed = false;
     LocalDirectoryMoveOutcome m_outcome = LocalDirectoryMoveOutcome::NotPublished;
     LocalDirectoryIdentity m_movedIdentity;
+    LocalDirectoryTreeSnapshot m_movedSnapshot;
+    LocalBtrfsMoveCommon::VerifiedMoveFsProvenance m_verifiedFsProvenance =
+        LocalBtrfsMoveCommon::VerifiedMoveFsProvenance::Unknown;
     LocalDirectoryMoveError m_moveError = LocalDirectoryMoveError::None;
     int m_systemError = 0;
+    bool m_allowExt4 = false;
+    bool m_captureStrictSnapshot = false;
+    bool m_historyAttachmentClaimed = false;
 };

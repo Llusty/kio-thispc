@@ -13,6 +13,9 @@
 #include <QThread>
 #include <QTimer>
 
+#include <atomic>
+#include <memory>
+
 class StorageScanJob final : public QObject
 {
     Q_OBJECT
@@ -31,9 +34,10 @@ public:
     ~StorageScanJob() override
     {
         cancel();
-        if (m_thread && m_thread->isRunning()) {
+        if (m_thread) {
             m_thread->quit();
             m_thread->wait();
+            m_thread = nullptr;
         }
     }
 
@@ -76,18 +80,24 @@ public:
             }
         }
 
+        if (m_thread) {
+            m_thread->quit();
+            m_thread->wait();
+            m_thread = nullptr;
+        }
+        if (m_state != StorageScanState::Idle) {
+            // Preserve cancel() called before the initial start(); reset for subsequent runs.
+            m_cancelFlag = std::make_shared<std::atomic<bool>>(false);
+        }
+
         m_state = StorageScanState::Running;
         m_stats = StorageScanStats{};
         m_entries.clear();
         Q_EMIT stateChanged(m_state);
 
         auto *thread = new QThread(this);
-        auto *worker = new StorageScanWorker(m_options);
-        if (m_cancelRequested.load(std::memory_order_acquire)) {
-            worker->requestCancel();
-        }
+        auto *worker = new StorageScanWorker(m_options, m_cancelFlag);
         m_thread = thread;
-        m_worker = worker;
         worker->moveToThread(thread);
 
         connect(thread, &QThread::started, worker, &StorageScanWorker::run);
@@ -95,20 +105,19 @@ public:
             m_stats = stats;
             Q_EMIT progress(stats, currentPath);
         });
-        connect(worker, &StorageScanWorker::finished, this, [this, thread](StorageScanState state, const StorageScanStats &stats, const QList<StorageScanEntry> &entries) {
+        connect(worker, &StorageScanWorker::finished, thread, &QThread::quit);
+        connect(worker, &StorageScanWorker::finished, worker, &QObject::deleteLater);
+        connect(worker, &StorageScanWorker::finished, this, [this](StorageScanState state, const StorageScanStats &stats, const QList<StorageScanEntry> &entries) {
             m_state = state;
             m_stats = stats;
             m_entries = entries;
             Q_EMIT progress(m_stats, QString());
             Q_EMIT stateChanged(m_state);
             Q_EMIT finished(m_state, m_stats);
-            thread->quit();
         });
-        connect(worker, &StorageScanWorker::finished, worker, &QObject::deleteLater);
         connect(thread, &QThread::finished, this, [this, thread] {
             if (m_thread == thread) {
                 m_thread = nullptr;
-                m_worker = nullptr;
             }
             thread->deleteLater();
         });
@@ -119,10 +128,8 @@ public:
 
     void cancel()
     {
-        m_cancelRequested.store(true, std::memory_order_release);
-        if (m_worker) {
-            m_worker->requestCancel();
-        }
+        // Shared atomic token decouples cancellation from StorageScanWorker's thread-affine lifetime.
+        m_cancelFlag->store(true, std::memory_order_release);
     }
 
 Q_SIGNALS:
@@ -135,7 +142,6 @@ private:
     StorageScanState m_state = StorageScanState::Idle;
     StorageScanStats m_stats;
     QList<StorageScanEntry> m_entries;
-    std::atomic<bool> m_cancelRequested{false};
+    std::shared_ptr<std::atomic<bool>> m_cancelFlag{std::make_shared<std::atomic<bool>>(false)};
     QPointer<QThread> m_thread;
-    QPointer<StorageScanWorker> m_worker;
 };
