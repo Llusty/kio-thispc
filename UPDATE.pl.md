@@ -1,5 +1,24 @@
 [English](UPDATE.md) | [Polski](UPDATE.pl.md)
 
+# Aktualizacja do 0.45.0 (Kandydat wydania)
+
+```bash
+cd ~/Pobrane
+tar -xzf kio-thispc-0.45.0.tar.gz
+cd kio-thispc-0.45.0
+chmod +x install.sh
+./install.sh
+```
+
+- Powiadomienia KDE Plasma (`TransferNotificationManager`) i dopracowany układ `OperationWindow` (`580 × 380 px`) / `OperationPopup`.
+- Trwała historia transferów (`TransferHistoryManager`) z retencją i synchronizacją czyszczenia (`historyEpoch`) między instancjami.
+- Bezpieczne atomowe Move / Undo / Redo na Btrfs dla pojedynczych plików, katalogów, partii i partii mieszanych (`openat2`, `renameat2(RENAME_NOREPLACE)`, `fsync`, kontrola inode/mount/SHA-256, `fenceIrreversible()` oraz autoryzacja historii `claimHistoryAttachment()`).
+- Eksperymentalny wewnętrzny profil `ext4` (`H.2C.1A`, wyłącznie przez `setAllowExt4(true)`); produkcyjne GUI pozostaje zablokowane na `BtrfsOnly`.
+- Naprawiono `StorageScanJob::cancel()` (UAF) oraz `LIFE-01` (zwolnienie `KJob` po Undo/Redo w `UndoController::startNativeHistoryJob()`).
+- Znane ograniczenie zewnętrzne: `KIO::RenameDialog` w `libKF6KIOWidgets.so.6` (KF6 6.31.0) wycieka ~3 KB `QMenu` na dialog konfliktu.
+
+---
+
 # Aktualizacja do 0.44.0
 
 ```bash

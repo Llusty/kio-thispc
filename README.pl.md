@@ -1,6 +1,6 @@
 [English](README.md) | [Polski](README.pl.md)
 
-# kio-thispc (Ten komputer) 0.44.0
+# kio-thispc (Ten komputer) 0.45.0
 
 ThisPC to natywny menedżer plików dla środowiska KDE/Qt, łączący ergonomię inspirowaną Eksploratorem Windows z pracą dwupanelową (Split View), integracją KIO, bezpiecznymi lokalnymi operacjami plikowymi oraz natywną obsługą urządzeń w systemie Linux/KDE.
 
@@ -9,6 +9,13 @@ ThisPC to natywny menedżer plików dla środowiska KDE/Qt, łączący ergonomi�
 - **Licencja:** Licencja MIT
 
 ---
+
+## 0.45.0 — Bezpieczne atomowe przenoszenie, trwała historia i poprawki stabilności (Kandydat wydania)
+
+- **Powiadomienia KDE i UX okna operacji:** Natywne alerty `KNotification` (`TransferNotificationManager`), kompaktowe `OperationWindow` (`580 × 380 px`) oraz zsynchronizowana historia w `OperationWindow` i `OperationPopup`.
+- **Trwała historia transferów (`TransferHistoryManager`):** Historia zapisywana na dysku z retencją oraz wieloinstancyjną synchronizacją czyszczenia (`historyEpoch`).
+- **Bezpieczne atomowe Move / Undo / Redo na Btrfs:** Obsługa pojedynczych plików, katalogów, partii i partii mieszanych (`openat2`, `renameat2(RENAME_NOREPLACE)`, `fsync`) ze ścisłą weryfikacją `ino` / `mntId` / SHA-256, `fenceIrreversible()` i autoryzacją historii `claimHistoryAttachment()`. (Wewnętrzny profil `ext4` z `H.2C.1A` pozostaje zablokowany w GUI do `BtrfsOnly`.)
+- **Poprawki stabilności i pamięci:** Naprawiono UAF w `StorageScanJob::cancel()` oraz blokadę zamykania `LIFE-01` w `UndoController::startNativeHistoryJob()`.
 
 ## 0.44.0 — Kolejka i kontrola transferów (Transfer Queue & Control)
 
@@ -475,8 +482,8 @@ Funkcje z 0.15.4 — kompaktowy popup operacji, dynamiczna wysokość, anulowani
 
 ```bash
 cd ~/Pobrane
-tar -xzf kio-thispc-0.44.0.tar.gz
-cd kio-thispc-0.44.0
+tar -xzf kio-thispc-0.45.0.tar.gz
+cd kio-thispc-0.45.0
 chmod +x install.sh
 ./install.sh
 ```

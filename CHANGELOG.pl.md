@@ -2,6 +2,27 @@
 
 # Changelog
 
+## 0.45.0 — Bezpieczne atomowe przenoszenie, trwała historia i poprawki stabilności (Kandydat wydania)
+
+- **Powiadomienia KDE Plasma i UX okna operacji (`TransferNotificationManager`, `OperationManager`):**
+  - Dodano natywne powiadomienia KDE Plasma (`KNotification`) ze scalaniem powiadomień o zakończeniu i błędach transferów.
+  - Dopracowano kompaktowy rozmiar startowy `OperationWindow` (`580 × 380 px`), komunikaty wykresu prędkości po zakończeniu zadania oraz synchronizację historii między `OperationWindow` i `OperationPopup`.
+- **Trwała historia transferów, retencja i wiele instancji (`TransferHistoryManager`):**
+  - Wdrożono zapisywaną na dysk historię operacji z limitami retencji oraz epokową synchronizacją **Wyczyść historię** (`historyEpoch`), zapobiegającą powrotowi wyczyszczonych wpisów między aktywną kolejką a wieloma instancjami aplikacji.
+  - Usunięto wyciek `HistoryTestJob(false)` w infrastrukturze testowej Stage 2.5 (`tests/history.cpp`).
+- **Bezpieczne atomowe Move / Undo / Redo (`LocalFileMoveJob`, `LocalDirectoryMoveJob`, `LocalBatchMoveJob`, `LocalMoveHistory`):**
+  - Wdrożono atomowe Move / Undo / Redo na tym samym woluminie Btrfs dla pojedynczych plików, katalogów, partii (Batch) i partii mieszanych (Mixed Batch) z użyciem `SYS_openat2` (`RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS | RESOLVE_BENEATH | RESOLVE_NO_XDEV`), `SYS_renameat2(..., RENAME_NOREPLACE)` i dwukierunkowego `fsync`.
+  - Wprowadzono ścisłą kontrolę tożsamości i pełnych skrótów SHA-256 (`ino`, `st_dev`, `STATX_MNT_ID_UNIQUE` / `mntId`, typ systemu plików), wykrywającą mutacje zawartości o tym samym rozmiarze, zmianę rozmiaru, podmianę inode, kolizje docelowe, symlinki i cykle katalogów (fail-closed).
+  - Dodano obsługę wyników częściowych, błędów `fsync` i `fenceIrreversible()`.
+  - **Utwardzenie autoryzacji historii (`U6.1A`, `U6.2`, `U6.3`):** usunięto publiczne metody ręcznego zapisu historii (`recordCompletedMove`, `recordCompletedDirectoryMove`, `recordCompletedBatchMove`, `recordCompletedMixedBatchMove`); rejestracja odbywa się wyłącznie przez jednorazowe `claimHistoryAttachment()` i `recordWhenCompleted()`.
+  - **Eksperymentalny silnik wewnętrzny `ext4` (`H.2C.1A`, zablokowany w GUI):** dodano profil `LocalMoveFsProfile::Ext4Only` (`STATX_MNT_ID_UNIQUE`, `FS_IOC_GETFLAGS` odrzucające `casefold` i `fscrypt`) dostępny wyłącznie po jawnym `setAllowExt4(true)`; produkcyjne GUI (`MoveSafetyPolicy`) pozostaje zablokowane do `BtrfsOnly`.
+- **Poprawki pamięciowe i cyklu życia:**
+  - **Naprawa Storage Scan UAF (`StorageScanJob`, `StorageScanWorker`):** zastąpiono międzywątkowy `QPointer<StorageScanWorker>` współdzielonym atomowym tokenem `std::shared_ptr<std::atomic<bool>>` oraz uporządkowano kończenie `QThread`.
+  - **Naprawa `LIFE-01` (`UndoController::startNativeHistoryJob()`):** dodano `completed->deleteLater()` po zakończeniu zadań Undo/Redo (`setAutoDelete(false)`), zwalniając `QEventLoopLocker` w `KJob` i zapewniając czyste zamknięcie procesu.
+- **Znane ograniczenia i ryzyka zewnętrzne:**
+  - `KIO::RenameDialog` (`libKF6KIOWidgets.so.6`, KF6 6.31.0) wykazuje zewnętrzny wyciek osieroconego `QMenu` (~3 KB na dialog konfliktu z `MultipleItems` i `mtime`; `18 400 B / 130 alokacji` w suicie `actions`).
+  - Pokrycie `local_batch_move` (`330` asercji) pochodzi ze zweryfikowanej rekonstrukcji po wcześniejszym resecie niezacommitowanego pliku testowego.
+
 ## 0.44.0 — Kolejka i kontrola transferów (Transfer Queue & Control)
 
 - **Kolejka transferów i harmonogram zadań (`TransferQueueController`, `TransferTaskDescriptor`, `TransferQueueSettings`):**

@@ -1,6 +1,6 @@
 [English](README.md) | [Polski](README.pl.md)
 
-# kio-thispc (This PC) 0.44.0
+# kio-thispc (This PC) 0.45.0
 
 ThisPC is a native KDE/Qt file manager focused on a Windows Explorer-like workflow, dual-pane operation, KIO integration, safe local file operations, and native KDE/Linux device handling.
 
@@ -9,6 +9,13 @@ ThisPC is a native KDE/Qt file manager focused on a Windows Explorer-like workfl
 - **License:** MIT License
 
 ---
+
+## 0.45.0 — Safe Atomic Moves, Persistent History & Stability Hardening (Release Candidate)
+
+- **KDE Notifications & Unified Operations UX:** Native `KNotification` transfer alerts (`TransferNotificationManager`), compact `OperationWindow` (`580 × 380 px`), and synchronized `OperationWindow` / `OperationPopup` history views.
+- **Persistent Transfer History (`TransferHistoryManager`):** Disk-backed history with retention limits and multi-instance `historyEpoch` Clear History synchronization.
+- **Safe Atomic Btrfs Move / Undo / Redo:** Single File, Single Directory, Batch, and Mixed Batch atomic moves (`openat2`, `renameat2(RENAME_NOREPLACE)`, bidirectional `fsync`) with strict `ino` / `mntId` / SHA-256 verification, fail-closed `fenceIrreversible()`, and single-use `claimHistoryAttachment()` history authorization. (Internal `ext4` engine `H.2C.1A` remains gated behind `setAllowExt4(true)`; GUI remains `BtrfsOnly`.)
+- **Stability & Memory Fixes:** Fixed `StorageScanJob::cancel()` cross-thread UAF and `LIFE-01` post-Undo/Redo exit lock in `UndoController::startNativeHistoryJob()`.
 
 ## 0.44.0 — Transfer Queue & Control
 
@@ -452,8 +459,8 @@ Features from 0.15.4 — compact operations popup, dynamic height, task cancella
 
 ```bash
 cd ~/Downloads
-tar -xzf kio-thispc-0.44.0.tar.gz
-cd kio-thispc-0.44.0
+tar -xzf kio-thispc-0.45.0.tar.gz
+cd kio-thispc-0.45.0
 chmod +x install.sh
 ./install.sh
 ```

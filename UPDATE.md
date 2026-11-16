@@ -1,5 +1,24 @@
 [English](UPDATE.md) | [Polski](UPDATE.pl.md)
 
+# Update to 0.45.0 (Release Candidate)
+
+```bash
+cd ~/Pobrane
+tar -xzf kio-thispc-0.45.0.tar.gz
+cd kio-thispc-0.45.0
+chmod +x install.sh
+./install.sh
+```
+
+- KDE Plasma transfer notifications (`TransferNotificationManager`) with coalesced reporting and refined `OperationWindow` (`580 × 380 px`) / `OperationPopup` UX.
+- Persistent transfer history (`TransferHistoryManager`) with retention trimming and multi-instance `historyEpoch` Clear History synchronization.
+- Safe atomic Btrfs Move / Undo / Redo across Single File, Single Directory, Batch, and Mixed Batch operations (`openat2`, `renameat2(RENAME_NOREPLACE)`, bidirectional `fsync`, inode/mount/SHA-256 verification, fail-closed `fenceIrreversible()`, and single-use `claimHistoryAttachment()` history authorization).
+- Experimental internal `ext4` qualification engine (`H.2C.1A`, opt-in via `setAllowExt4(true)`); production GUI remains locked to `BtrfsOnly`.
+- Fixed `StorageScanJob::cancel()` cross-thread heap-use-after-free and `LIFE-01` post-Undo/Redo exit lock in `UndoController::startNativeHistoryJob()`.
+- Known external limitation: `KIO::RenameDialog` in `libKF6KIOWidgets.so.6` (KF6 6.31.0) leaks ~3 KiB per conflict dialog (`QMenu` without parent).
+
+---
+
 # Update to 0.44.0
 
 ```bash

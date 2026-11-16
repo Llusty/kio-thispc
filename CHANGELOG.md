@@ -2,6 +2,27 @@
 
 # Changelog
 
+## 0.45.0 — Safe Atomic Moves, Persistent History & Stability Hardening (Release Candidate)
+
+- **KDE Plasma Transfer Notifications & Unified Operations UX (`TransferNotificationManager`, `OperationManager`):**
+  - Integrated native KDE Plasma desktop notifications (`KNotification`) with coalesced completion/error reporting for transfers.
+  - Refined `OperationWindow` compact startup geometry (`580 × 380 px`), accurate terminal-state speed graph messaging, and synchronized `OperationWindow` / `OperationPopup` history views.
+- **Persistent Transfer History, Retention & Multi-Instance Sync (`TransferHistoryManager`):**
+  - Added disk-persisted transfer history with configurable retention limits, epoch-based **Clear History** synchronization (`historyEpoch`, preventing resurrection of cleared records across active queues and multiple running instances).
+  - Resolved a test-harness `KJob` leak (`HistoryTestJob(false)`) in Stage 2.5 history regression tests.
+- **Safe Atomic Local Move / Undo / Redo (`LocalFileMoveJob`, `LocalDirectoryMoveJob`, `LocalBatchMoveJob`, `LocalMoveHistory`):**
+  - Implemented same-volume atomic Btrfs Move / Undo / Redo across Single File, Single Directory, Batch, and Mixed Batch operations using `SYS_openat2` (`RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS | RESOLVE_BENEATH | RESOLVE_NO_XDEV`), `SYS_renameat2(..., RENAME_NOREPLACE)`, and bidirectional `fsync`.
+  - Enforced strict `LocalRegularFileIdentity` and `LocalDirectorySnapshot` verification (`ino`, `st_dev`, `STATX_MNT_ID_UNIQUE` / `mntId`, filesystem magic, and full SHA-256 content digests) to detect same-size byte mutations, size changes, inode swaps, destination collisions, symlinks, and directory-cycle moves fail-closed.
+  - Enforced strict fail-closed handling and `fenceIrreversible()` on partial outcomes, `fsync` failures, and post-rename verification failures.
+  - **Batch & Single-Item History Authorization Hardening (`U6.1A`, `U6.2`, `U6.3`):** Removed public manual history-recording APIs (`recordCompletedMove`, `recordCompletedDirectoryMove`, `recordCompletedBatchMove`, `recordCompletedMixedBatchMove`); all GUI/history recording now routes exclusively through single-use `claimHistoryAttachment()` and `recordWhenCompleted()`, rejecting late (`after start()`/`finish()`) and duplicate attachments.
+  - **Experimental Internal `ext4` Engine (`H.2C.1A`, GUI Locked):** Added parameterized `LocalMoveFsProfile::Ext4Only` support with strict `STATX_MNT_ID_UNIQUE` and `FS_IOC_GETFLAGS` (`FS_CASEFOLD_FL` / `FS_ENCRYPT_FL` refusal) behind explicit `setAllowExt4(true)` opt-in; production GUI (`MoveSafetyPolicy`) remains strictly locked to `BtrfsOnly`.
+- **Memory & Lifecycle Fixes:**
+  - **Storage Scan UAF Fix (`StorageScanJob`, `StorageScanWorker`):** Replaced cross-thread `QPointer<StorageScanWorker>` dereferencing in `StorageScanJob::cancel()` with a lock-free `std::shared_ptr<std::atomic<bool>>` cancellation token, connected `finished -> QThread::quit` directly, and ensured deterministic thread cleanup in `~StorageScanJob()`.
+  - **Application Exit Lifecycle Fix (`LIFE-01`, `UndoController::startNativeHistoryJob()`):** Scheduled `completed->deleteLater()` on finished `setAutoDelete(false)` Undo/Redo `KJob`s so `KJob`'s `QEventLoopLocker` is released and the application exits cleanly after closing all windows.
+- **Known Limitations & External Findings:**
+  - `KIO::RenameDialog` (`libKF6KIOWidgets.so.6`, KF6 6.31.0) exhibits a ~3 KiB/dialog external `QMenu` leak (`18,400 B / 130 allocations` across 6 dialogs in `actions` LSan) when `MultipleItems` and valid `mtime`s are passed.
+  - `local_batch_move` coverage (`330` assertions) reflects reconstructed coverage after an earlier uncommitted test-file reset.
+
 ## 0.44.0 — Transfer Queue & Control
 
 - **Transfer Queue & Scheduler (`TransferQueueController`, `TransferTaskDescriptor`, `TransferQueueSettings`):**
