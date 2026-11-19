@@ -2,6 +2,18 @@
 
 # Changelog
 
+## 0.45.1 — Bezpieczne rekurencyjne scalanie folderów (`FOLDER-MERGE-01`)
+
+### Dodano
+- **Rekurencyjne scalanie folderów (`LocalMergePlanJob`, `LocalMergeOrchestrator`, `LocalMergeExecutionJob`, `LocalMergeQueueBridge`):** Zintegrowano lokalne scalanie katalogów przy kopiowaniu z `FileActions` i `TransferQueueController`, z planowaniem przed wykonaniem, rezerwacją ścieżek (`TransferReservationRegistry`), rewalidacją po rozstrzygnięciu konfliktów oraz raportowaniem postępu i prędkości w `OperationWindow` / `OperationPopup`.
+- **Niezależne dialogi konfliktów katalogów i plików (`LocalFolderMergeConflictDialog`, `LocalFileConflictResolutionDialog`):** Rekurencyjne rozstrzyganie konfliktów z niezależnymi politykami dla katalogów (`Merge`, `Rename`, `Skip`, `Abort`) i plików (`Overwrite`, `Rename`, `Skip`, `Abort`, `Zastosuj do wszystkich`), obsługą PL/EN, motywów Dark/Light oraz odraczaniem `OperationWindow` (`deferShowForModal()` / `flushDeferredShow()`).
+- **Crash Recovery i ochrona TOCTOU (`LocalMergeTransaction`):** Operacje oparte o deskryptory `openat(O_NOFOLLOW)`, `RENAME_NOREPLACE`, dwufazowy `RENAME_EXCHANGE` z dziennikiem `.thispc-tx.*` (`0700`), bezpieczne `Rename` całych poddrzew oraz czyszczenie po `SIGKILL` i `Cancel`.
+
+### Ograniczenia i bezpieczeństwo
+- **Allowlista systemów plików dla `Overwrite`:** Bezpieczne atomowe nadpisywanie działa wyłącznie na **Btrfs, ext4, XFS i tmpfs**. Na **NTFS (`ntfs3`/NTFS-3G), VFAT oraz zdalnych backendach KIO** opcja `Overwrite` jest zablokowana (fail-closed; dostępne `Rename`, `Skip`, `Abort`).
+- **Brak Undo dla Folder Merge:** Operacje Folder Merge wywołują `UndoController::fenceIrreversibleOperation()`.
+- **Zakres Move:** Pełne przenoszenie (`Move`) z konfliktami pozostaje przyszłym etapem i nie zostało zmienione w `0.45.1`.
+
 ## 0.45.0.1 — Hotfix kolizji katalogów i samokopiowania plików
 
 ### Poprawki

@@ -17,6 +17,8 @@
 #include "undocontroller.h"
 #include "transferqueuecontroller.h"
 #include "transferqueueui.h"
+#include "localmergequeuebridge.h"
+#include <sys/vfs.h>
 #include <KDirNotify>
 #include <KIO/DeleteJob>
 #include <KIO/EmptyTrashJob>
@@ -131,6 +133,16 @@ public:
         const FileOperationContext context = FileOperationContext::create(
             cut ? FileOperationType::Move : FileOperationType::Copy,
             urls, destination);
+
+#ifdef THISPC_ENABLE_FOLDER_MERGE_DEV_BUILD
+        if (tryEnqueueDevFolderMerge(urls, destination, cut, context)) {
+            return;
+        }
+#else
+        if (tryEnqueueProductionFolderMerge(urls, destination, cut, context)) {
+            return;
+        }
+#endif
 
         THISPC_TRACE("GUI pasteClipboardInto: dest=%s, urls=%lld, cut=%d, m_queueController=%p, prodDispatch=%d",
                      qPrintable(destination.toString()), static_cast<long long>(urls.size()),
@@ -252,6 +264,16 @@ public:
 
         const FileOperationContext context = FileOperationContext::create(
             FileOperationType::Copy, urls, QUrl::fromLocalFile(directory));
+
+#ifdef THISPC_ENABLE_FOLDER_MERGE_DEV_BUILD
+        if (tryEnqueueDevFolderMerge(urls, QUrl::fromLocalFile(directory), false, context)) {
+            return;
+        }
+#else
+        if (tryEnqueueProductionFolderMerge(urls, QUrl::fromLocalFile(directory), false, context)) {
+            return;
+        }
+#endif
 
         THISPC_TRACE("GUI copySelectionToDirectory: dir=%s, urls=%lld, m_queueController=%p, prodDispatch=%d",
                      qPrintable(directory), static_cast<long long>(urls.size()),
@@ -1460,6 +1482,16 @@ public:
             action == Qt::MoveAction ? FileOperationType::Move : FileOperationType::Copy,
             urls, destination);
 
+#ifdef THISPC_ENABLE_FOLDER_MERGE_DEV_BUILD
+        if (tryEnqueueDevFolderMerge(urls, destination, move, context)) {
+            return;
+        }
+#else
+        if (tryEnqueueProductionFolderMerge(urls, destination, move, context)) {
+            return;
+        }
+#endif
+
         THISPC_TRACE("GUI transfer (drop): dest=%s, urls=%lld, move=%d, m_queueController=%p, prodDispatch=%d",
                      qPrintable(destination.toString()), static_cast<long long>(urls.size()),
                      move ? 1 : 0, static_cast<void*>(m_queueController.data()), isTransferQueueProductionDispatchConnected() ? 1 : 0);
@@ -2215,8 +2247,8 @@ private:
                                       "Cannot copy folder \"%1\" into its own parent directory because a folder with the same name already exists.")
                                       .arg(singleSourceName)
                                 : trLocal(
-                                      "W katalogu docelowym istnieje już folder o tej samej nazwie („%1”). Scalanie folderów nie jest jeszcze włączone — użyj innej nazwy lub skopiuj samą zawartość.",
-                                      "A folder with the same name (\"%1\") already exists at the destination. Folder merging is not yet enabled — use a different name or copy its contents instead.")
+                                      "W katalogu docelowym istnieje już folder o tej samej nazwie („%1”). Scalanie folderów wymaga aktywnej kolejki transferów — użyj innej nazwy lub włącz domyślną kolejkę.",
+                                      "A folder with the same name (\"%1\") already exists at the destination. Folder merging requires the active transfer queue — use a different name or enable the default queue.")
                                       .arg(singleSourceName);
                             if (m_showRecoveryFence) m_showRecoveryFence(collisionMsg);
                             return false;
@@ -2716,4 +2748,238 @@ public:
     MtpMoveSafetyEvaluation lastMtpMoveEvaluation() const { return m_lastMtpMoveEvaluation; }
     MoveOperationClassification lastMovePolicyEvaluation() const { return m_lastMovePolicyEvaluation; }
     int mtpMoveRefusalCount() const { return m_mtpMoveRefusalCount; }
+
+    static LocalMergeBackendCapabilities detectLocalMergeCapabilities(const QString &destPath)
+    {
+        LocalMergeBackendCapabilities caps;
+        struct statfs fs {};
+        if (::statfs(QFile::encodeName(destPath).constData(), &fs) == 0) {
+            const unsigned long magic = static_cast<unsigned long>(fs.f_type);
+            if (magic == 0x9123683eUL || magic == 0xef53UL || magic == 0x58465342UL || magic == 0x01021994UL) {
+                caps.canSafeOverwrite = true;
+                caps.filesystemLabel = (magic == 0x9123683eUL) ? QStringLiteral("btrfs")
+                    : (magic == 0xef53UL) ? QStringLiteral("ext4")
+                    : (magic == 0x58465342UL) ? QStringLiteral("xfs")
+                                              : QStringLiteral("tmpfs");
+            } else {
+                caps.canSafeOverwrite = false;
+                caps.filesystemLabel = QStringLiteral("restricted-fs");
+                caps.overwriteUnavailableReason = trLocal(
+                    "Nadpisywanie zablokowane na tym systemie plików (NTFS/FUSE/niezweryfikowany)",
+                    "Overwrite is blocked on this filesystem (NTFS/FUSE/unverified)");
+            }
+        }
+        return caps;
+    }
+
+private:
+
+#ifdef THISPC_ENABLE_FOLDER_MERGE_DEV_BUILD
+    bool tryEnqueueDevFolderMerge(const QList<QUrl> &urls,
+                                  const QUrl &destination,
+                                  bool move,
+                                  const FileOperationContext &context)
+    {
+        if (move || !LocalMergeQueueBridge::isDeveloperFeatureEnabled()) {
+            return false;
+        }
+        if (!destination.isValid() || !destination.isLocalFile() || urls.isEmpty()) {
+            return false;
+        }
+        const QFileInfo destDirInfo(QDir::cleanPath(destination.toLocalFile()));
+        if (!destDirInfo.exists() || !destDirInfo.isDir()) {
+            return false;
+        }
+        const QString canonDestDir = destDirInfo.canonicalFilePath();
+        bool hasLocalDir = false;
+        for (const QUrl &u : urls) {
+            if (!u.isValid() || !u.isLocalFile()) {
+                return false;
+            }
+            const QString cleanSrc = QDir::cleanPath(u.toLocalFile());
+            const QFileInfo srcInfo(cleanSrc);
+            if (srcInfo.isDir() && !srcInfo.isSymLink()) {
+                hasLocalDir = true;
+                const QString canonSrc = srcInfo.canonicalFilePath();
+                const QFileInfo targetChild(QDir(destDirInfo.absoluteFilePath()).filePath(srcInfo.fileName()));
+                const bool isSelfCopy = !canonSrc.isEmpty()
+                    && targetChild.exists()
+                    && targetChild.canonicalFilePath() == canonSrc;
+                const bool isIntoSelf = !canonSrc.isEmpty() && !canonDestDir.isEmpty()
+                    && (canonDestDir == canonSrc
+                        || canonDestDir.startsWith(canonSrc + QLatin1Char('/')));
+                if (isSelfCopy || isIntoSelf) {
+                    const QString collisionMsg = trLocal(
+                        "Nie można skopiować folderu „%1” do niego samego ani do jego własnego podkatalogu.",
+                        "Cannot copy folder \"%1\" into itself or one of its own subdirectories.")
+                        .arg(srcInfo.fileName());
+                    if (m_showRecoveryFence) {
+                        m_showRecoveryFence(collisionMsg);
+                    } else {
+                        QMessageBox::warning(
+                            m_parentWidget,
+                            trLocal("Scalanie folderów — operacja zablokowana", "Folder Merge — operation blocked"),
+                            collisionMsg);
+                    }
+                    return true;
+                }
+            }
+        }
+        if (!hasLocalDir) {
+            return false;
+        }
+        if (!m_queueController) {
+            return false;
+        }
+        const QString devRoot = LocalMergeDevSandbox::devTestRootFromEnv();
+        LocalMergeQueueRequest req;
+        req.sources = urls;
+        req.destinationDir = destination;
+        const QString firstSrcName = QFileInfo(QDir::cleanPath(urls.first().toLocalFile())).fileName();
+        req.title = QStringLiteral("[DEV MERGE SANDBOX] %1").arg(firstSrcName);
+        req.context = context;
+        req.capabilities = detectLocalMergeCapabilities(destination.toLocalFile());
+        req.undoController = m_undoController;
+        req.folderPrompt = LocalMergeQueueBridge::createGuiFolderPrompt(m_parentWidget);
+        req.filePrompt = LocalMergeQueueBridge::createGuiFilePrompt(m_parentWidget);
+
+        const TransferEnqueueResult enq = LocalMergeQueueBridge::enqueueDevSandboxedMerge(
+            m_queueController.data(), devRoot, std::move(req));
+        if (!enq.accepted()) {
+            QMessageBox::warning(
+                m_parentWidget,
+                trLocal("Tryb DEV MERGE — zapis zablokowany", "DEV MERGE — write blocked"),
+                trLocal("Tryb DEV MERGE zablokował zapis poza izolowanym katalogiem testowym:\n%1",
+                        "DEV MERGE blocked write outside isolated test root:\n%1")
+                    .arg(enq.diagnostic));
+            return true;  // Fail-closed: never fall back to legacy copy outside sandbox!
+        }
+        THISPC_TRACE("[DEV MERGE SANDBOX] Queued folder merge #%llu",
+                     static_cast<unsigned long long>(enq.id));
+        return true;
+    }
+#else
+    bool tryEnqueueProductionFolderMerge(const QList<QUrl> &urls,
+                                         const QUrl &destination,
+                                         bool move,
+                                         const FileOperationContext &context)
+    {
+        if (move || !mutationAllowed()) {
+            return false;
+        }
+        if (!isTransferQueueProductionDispatchConnected() || !m_queueController) {
+            return false;
+        }
+        if (!destination.isValid() || !destination.isLocalFile() || urls.isEmpty()) {
+            return false;
+        }
+        const QString cleanDestDirPath = QDir::cleanPath(destination.toLocalFile());
+        const QFileInfo destDirInfo(cleanDestDirPath);
+        if (!destDirInfo.exists() || !destDirInfo.isDir()) {
+            return false;
+        }
+        const QString canonDestDir = destDirInfo.canonicalFilePath();
+        bool hasLocalDir = false;
+        bool hasTopLevelCollision = false;
+        QSet<QString> seenChildNames;
+        for (const QUrl &u : urls) {
+            if (!u.isValid() || !u.isLocalFile()) {
+                return false;
+            }
+            const QString cleanSrc = QDir::cleanPath(u.toLocalFile());
+            const QFileInfo srcInfo(cleanSrc);
+            const QString childName = srcInfo.fileName();
+            if (childName.isEmpty()) {
+                return false;
+            }
+            if (seenChildNames.contains(childName)) {
+                hasTopLevelCollision = true;
+            }
+            seenChildNames.insert(childName);
+
+            struct stat childDstSt {};
+            const QString childDestPath = QDir(destDirInfo.absoluteFilePath()).filePath(childName);
+            if (::lstat(QFile::encodeName(childDestPath).constData(), &childDstSt) == 0 || errno != ENOENT) {
+                hasTopLevelCollision = true;
+            }
+
+            if (srcInfo.isDir() && !srcInfo.isSymLink()) {
+                hasLocalDir = true;
+                const QString canonSrc = srcInfo.canonicalFilePath();
+                const QFileInfo targetChild(childDestPath);
+                const bool isSelfCopy = !canonSrc.isEmpty()
+                    && targetChild.exists()
+                    && targetChild.canonicalFilePath() == canonSrc;
+                const bool isIntoSelf = !canonSrc.isEmpty() && !canonDestDir.isEmpty()
+                    && (canonDestDir == canonSrc
+                        || canonDestDir.startsWith(canonSrc + QLatin1Char('/')));
+                if (isSelfCopy || isIntoSelf) {
+                    const QString collisionMsg = trLocal(
+                        "Nie można skopiować folderu „%1” do niego samego ani do jego własnego podkatalogu.",
+                        "Cannot copy folder \"%1\" into itself or one of its own subdirectories.")
+                        .arg(childName);
+                    if (m_showRecoveryFence) {
+                        m_showRecoveryFence(collisionMsg);
+                    } else {
+                        QMessageBox::warning(
+                            m_parentWidget,
+                            trLocal("Scalanie folderów — operacja zablokowana", "Folder Merge — operation blocked"),
+                            collisionMsg);
+                    }
+                    return true;
+                }
+            }
+        }
+        if (!hasLocalDir || !hasTopLevelCollision) {
+            return false;
+        }
+
+        LocalMergeQueueRequest req;
+        req.sources = urls;
+        req.destinationDir = destination;
+        const QString firstSrcName = QFileInfo(QDir::cleanPath(urls.first().toLocalFile())).fileName();
+        req.title = urls.size() == 1
+            ? firstSrcName
+            : trLocal("Scalanie (%1 elementów)", "Merge (%1 items)").arg(urls.size());
+        req.context = context;
+        req.capabilities = detectLocalMergeCapabilities(cleanDestDirPath);
+        req.undoController = m_undoController;
+        req.folderPrompt = LocalMergeQueueBridge::createGuiFolderPrompt(m_parentWidget);
+        req.filePrompt = LocalMergeQueueBridge::createGuiFilePrompt(m_parentWidget);
+
+        const TransferEnqueueResult enq = LocalMergeQueueBridge::enqueueMerge(
+            m_queueController.data(), std::move(req),
+            [this, context](LocalMergeQueueJob *job) {
+                if (!job) {
+                    return;
+                }
+                connect(job, &KJob::result, this, [this, context](KJob *res) {
+                    emitAffectedDirectories(context);
+                    if (res && res->error() != KJob::NoError
+                        && (res->property("thispcBatchPartiallyCompleted").toBool()
+                            || res->property("thispcPartialMoveOutcome").toBool()
+                            || res->property("thispcMergeRecoveryRequired").toBool())
+                        && !res->errorText().isEmpty()
+                        && m_showRecoveryFence) {
+                        m_showRecoveryFence(res->errorText());
+                    }
+                });
+            });
+        if (!enq.accepted()) {
+            THISPC_TRACE("Folder merge enqueue rejected: %s", qPrintable(enq.diagnostic));
+            if (m_showRecoveryFence) {
+                m_showRecoveryFence(enq.diagnostic);
+            } else {
+                QMessageBox::warning(
+                    m_parentWidget,
+                    trLocal("Scalanie folderów — operacja zablokowana", "Folder Merge — operation blocked"),
+                    enq.diagnostic);
+            }
+            return true;  // Fail-closed: never fall back to legacy copy when merge preflight rejects.
+        }
+        THISPC_TRACE("Queued production folder merge #%llu",
+                     static_cast<unsigned long long>(enq.id));
+        return true;
+    }
+#endif
 };

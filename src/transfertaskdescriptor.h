@@ -175,6 +175,9 @@ struct TransferTaskDescriptor {
     // reservations were granted and the preflight succeeded. Never called for
     // tasks cancelled while queued.
     std::function<KJob *()> jobFactory;
+    // Optional async cancel handler for jobs that finalize & emit result() only after
+    // worker threads unwind cleanly instead of synchronous KJob::kill(EmitResult).
+    std::function<bool(KJob *)> cancelHandler;
     TransferJobStartMode startMode = TransferJobStartMode::ControllerStarts;
 
     // Optional extra revalidation immediately before the job is created.
@@ -183,6 +186,10 @@ struct TransferTaskDescriptor {
 
     // Stage 3 (Safe Retry): task linkage
     quint64 retryOfTaskId = 0;
+
+    // Stage 3B.3B-2: identifies Folder Merge tasks from initial Running transition
+    // before jobFactory() attaches the live KJob.
+    bool isFolderMerge = false;
 };
 
 // Strict weak ordering used by the scheduler: higher priority first, then

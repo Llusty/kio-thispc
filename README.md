@@ -1,6 +1,6 @@
 [English](README.md) | [Polski](README.pl.md)
 
-# kio-thispc (This PC) 0.45.0.1
+# kio-thispc (This PC) 0.45.1
 
 ThisPC is a native KDE/Qt file manager focused on a Windows Explorer-like workflow, dual-pane operation, KIO integration, safe local file operations, and native KDE/Linux device handling.
 
@@ -9,6 +9,16 @@ ThisPC is a native KDE/Qt file manager focused on a Windows Explorer-like workfl
 - **License:** MIT License
 
 ---
+
+## 0.45.1 — Safe Recursive Folder Merge (`FOLDER-MERGE-01`)
+
+- **Recursive Folder Merge (`LocalMergePlanJob`, `LocalMergeOrchestrator`, `LocalMergeExecutionJob`):** Local directory Copy operations (Paste and Drag & Drop across Primary and Split panes) now support recursive folder merging with pre-execution planning, revalidation, and Transfer Queue / `OperationWindow` progress & speed integration.
+- **Independent Folder & File Conflict Policies:** Compact KDE Dolphin-inspired conflict dialogs resolve directory collisions (`Merge`, `Rename`, `Skip`, `Abort`) and file collisions (`Overwrite`, `Rename`, `Skip`, `Abort`, plus `Apply to all`) independently, without `OperationWindow` obscuring modal prompts.
+- **Crash Recovery & TOCTOU Protection:** File and subtree operations use descriptor-anchored `openat(O_NOFOLLOW)`, `RENAME_NOREPLACE`, `RENAME_EXCHANGE`, and `0700` `.thispc-tx.*` transaction journals for safe recovery and cancellation cleanup.
+- **Explicit Limitations:**
+  - Safe atomic `Overwrite` is restricted to verified local filesystems (**Btrfs, ext4, XFS, tmpfs**); on **NTFS (`ntfs3`/NTFS-3G), VFAT, and remote KIO backends**, `Overwrite` is intentionally blocked (fail-closed; `Rename`, `Skip`, and `Abort` remain available).
+  - **Undo (`Ctrl+Z`)** is disabled/fenced (`fenceIrreversibleOperation()`) for Folder Merge operations.
+  - Full **Move with conflicts** remains planned for a future milestone and is not part of `0.45.1`.
 
 ## 0.45.0.1 — Folder & Self-Copy Collision Hotfix
 
@@ -466,8 +476,8 @@ Features from 0.15.4 — compact operations popup, dynamic height, task cancella
 
 ```bash
 cd ~/Downloads
-tar -xzf kio-thispc-0.45.0.1.tar.gz
-cd kio-thispc-0.45.0.1
+tar -xzf kio-thispc-0.45.1.tar.gz
+cd kio-thispc-0.45.1
 chmod +x install.sh
 ./install.sh
 ```

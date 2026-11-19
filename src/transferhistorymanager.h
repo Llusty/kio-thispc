@@ -107,6 +107,15 @@ struct TransferHistoryRecord {
     QString title;
     int itemCount = 0;
 
+    // Stage 3B.3B-2: persistent Retry policy & Merge outcome flags
+    bool isFolderMerge = false;
+    bool retryBlocked = false;
+    bool partialSuccess = false;
+    bool uncertainDurability = false;
+    bool recoveryRequired = false;
+    int mergeSkippedCount = 0;
+    int mergeReplacedCount = 0;
+
     static QUrl sanitizeUrl(const QUrl &url)
     {
         if (!url.isValid()) {
@@ -301,6 +310,27 @@ struct TransferHistoryRecord {
         if (itemCount > 0) {
             obj[QStringLiteral("itemCount")] = itemCount;
         }
+        if (isFolderMerge) {
+            obj[QStringLiteral("isFolderMerge")] = true;
+        }
+        if (retryBlocked) {
+            obj[QStringLiteral("retryBlocked")] = true;
+        }
+        if (partialSuccess) {
+            obj[QStringLiteral("partialSuccess")] = true;
+        }
+        if (uncertainDurability) {
+            obj[QStringLiteral("uncertainDurability")] = true;
+        }
+        if (recoveryRequired) {
+            obj[QStringLiteral("recoveryRequired")] = true;
+        }
+        if (mergeSkippedCount > 0) {
+            obj[QStringLiteral("mergeSkippedCount")] = mergeSkippedCount;
+        }
+        if (mergeReplacedCount > 0) {
+            obj[QStringLiteral("mergeReplacedCount")] = mergeReplacedCount;
+        }
 
         return obj;
     }
@@ -444,6 +474,13 @@ struct TransferHistoryRecord {
         } else {
             rec.itemCount = rec.sourceUrls.size();
         }
+        rec.isFolderMerge = obj.value(QStringLiteral("isFolderMerge")).toBool(false);
+        rec.retryBlocked = obj.value(QStringLiteral("retryBlocked")).toBool(false);
+        rec.partialSuccess = obj.value(QStringLiteral("partialSuccess")).toBool(false);
+        rec.uncertainDurability = obj.value(QStringLiteral("uncertainDurability")).toBool(false);
+        rec.recoveryRequired = obj.value(QStringLiteral("recoveryRequired")).toBool(false);
+        rec.mergeSkippedCount = obj.value(QStringLiteral("mergeSkippedCount")).toInt(0);
+        rec.mergeReplacedCount = obj.value(QStringLiteral("mergeReplacedCount")).toInt(0);
 
         return rec;
     }

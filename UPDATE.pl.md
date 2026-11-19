@@ -1,14 +1,20 @@
 [English](UPDATE.md) | [Polski](UPDATE.pl.md)
 
-# Aktualizacja do 0.45.0.1 (Hotfix)
+# Aktualizacja do 0.45.1
 
 ```bash
 cd ~/Pobrane
-tar -xzf kio-thispc-0.45.0.1.tar.gz
-cd kio-thispc-0.45.0.1
+tar -xzf kio-thispc-0.45.1.tar.gz
+cd kio-thispc-0.45.1
 chmod +x install.sh
 ./install.sh
 ```
+
+- **Rekurencyjne scalanie folderów (`FOLDER-MERGE-01`):** Lokalne operacje kopiowania katalogów obsługują rekurencyjne scalanie z niezależnymi decyzjami dla katalogów (`Merge`, `Rename`, `Skip`, `Abort`) i plików (`Overwrite`, `Rename`, `Skip`, `Abort`), mechanizmem Crash Recovery (`.thispc-tx.*`) oraz raportowaniem postępu i prędkości w `OperationWindow`.
+- **Ograniczenia bezpiecznego `Overwrite`:** Atomowe nadpisywanie działa wyłącznie na **Btrfs, ext4, XFS i tmpfs**; na **NTFS (`ntfs3`/NTFS-3G), VFAT oraz zdalnych backendach KIO** opcja `Overwrite` jest zablokowana fail-closed (dostępne są `Rename`, `Skip` i `Abort`).
+- **Zakres Undo i Move:** Operacje Folder Merge wywołują ogrodzenie `UndoController::fenceIrreversibleOperation()` (brak Undo `Ctrl+Z`), a pełne `Move` z konfliktami pozostaje przyszłym etapem prac.
+
+## 0.45.0.1 — Poprzednie wydanie (Hotfix)
 
 - Poprawka obsługi kolizji i kopiowania katalogów (`FOLDER-COLLISION-01`): jawne odrzucenie samokopiowania/kolizji pojedynczego katalogu przed transferem oraz obsługa lokalnych drzew przez `LocalTransferJob` (z fallbackiem `KIO::copy()`).
 - Jawne odrzucenie źródeł katalogowych w `KioStagedTransferJob` (`KIO::ERR_IS_DIRECTORY`) przed utworzeniem plików tymczasowych `.thispc-part.*`.

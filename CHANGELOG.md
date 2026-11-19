@@ -2,6 +2,18 @@
 
 # Changelog
 
+## 0.45.1 — Safe Recursive Folder Merge (`FOLDER-MERGE-01`)
+
+### Added
+- **Recursive Folder Merge (`LocalMergePlanJob`, `LocalMergeOrchestrator`, `LocalMergeExecutionJob`, `LocalMergeQueueBridge`):** Integrated recursive local directory Copy/Merge into `FileActions` and `TransferQueueController` with pre-execution planning, target reservation (`TransferReservationRegistry`), post-conflict revalidation, and live `OperationWindow` / `OperationPopup` progress and throughput reporting.
+- **Independent Folder & File Conflict Dialogs (`LocalFolderMergeConflictDialog`, `LocalFileConflictResolutionDialog`):** Recursive conflict resolution supporting independent directory policies (`Merge`, `Rename`, `Skip`, `Abort`) and file policies (`Overwrite`, `Rename`, `Skip`, `Abort`, plus `Apply to all`), PL/EN localization, Dark/Light palette support, and deferred `OperationWindow` presentation (`deferShowForModal()` / `flushDeferredShow()`) so modal conflict prompts are never obscured.
+- **Crash Recovery & TOCTOU Hardening (`LocalMergeTransaction`):** Descriptor-anchored `openat(O_NOFOLLOW)`, `RENAME_NOREPLACE`, two-phase `RENAME_EXCHANGE` with `0700` `.thispc-tx.*` journals, safe subtree rename execution, and verified `SIGKILL` / `Cancel` cleanup.
+
+### Limitations & Fencing
+- **Filesystem Allowlist for `Overwrite`:** Safe atomic `Overwrite` is enabled only on **Btrfs, ext4, XFS, and tmpfs**. On **NTFS (`ntfs3`/NTFS-3G), VFAT, and remote KIO backends**, `Overwrite` is blocked fail-closed (`canSafeOverwrite = false`), leaving `Rename`, `Skip`, and `Abort` available.
+- **Undo Fencing:** Folder Merge operations fence `UndoController` (`fenceIrreversibleOperation()`); `Ctrl+Z` Undo is not supported for Folder Merge.
+- **Move Scope:** Full Move with recursive conflict resolution remains a future milestone and is unchanged in `0.45.1`.
+
 ## 0.45.0.1 — Folder & Self-Copy Collision Hotfix
 
 ### Fixed

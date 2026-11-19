@@ -577,6 +577,20 @@ public:
             job);
     }
 
+    // Stage 3B.3B-1: fail-closed Undo barrier for irreversible or partial Folder Merge outcomes.
+    quint64 fenceIrreversibleOperation()
+    {
+        const quint64 fenceSerial = m_manager
+            ? m_manager->newCommandSerialNumber()
+            : (m_irreversibleSerial + 1);
+        m_irreversibleSerial = qMax(m_irreversibleSerial, fenceSerial);
+        m_redoKinds.clear();
+        updateActions();
+        return m_irreversibleSerial;
+    }
+
+    quint64 irreversibleSerial() const { return m_irreversibleSerial; }
+
 private:
     bool recoveryBlocked()
     {

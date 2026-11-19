@@ -292,11 +292,14 @@ public:
     };
 
     // First (lowest id, deterministic) holder that conflicts with `request`.
-    std::optional<Conflict> findConflict(const ReservationRequest &request) const
+    std::optional<Conflict> findConflict(const ReservationRequest &request, Holder excludeHolder = 0) const
     {
         QList<Holder> ids = m_holders.keys();
         std::sort(ids.begin(), ids.end());
         for (Holder id : std::as_const(ids)) {
+            if (excludeHolder != 0 && id == excludeHolder) {
+                continue;
+            }
             if (TransferReservation::conflicts(request, m_holders.value(id))) {
                 return Conflict{id};
             }
@@ -310,6 +313,33 @@ public:
             return false;
         }
         m_holders.insert(holder, request);
+        return true;
+    }
+
+    bool tryAddTargetClaim(Holder holder, const QUrl &targetUrl)
+    {
+        if (holder == 0 || !m_holders.contains(holder)) {
+            return false;
+        }
+        const TransferReservation::ResolvedPath dst = TransferReservation::resolveLocal(targetUrl);
+        if (!dst.ok) {
+            return false;  // fail-closed on imprecise/symlink/non-local target
+        }
+        ResourceClaim claim;
+        claim.key = dst.key;
+        claim.mode = ReservationMode::ExclusiveWrite;
+        claim.exists = dst.exists;
+        claim.device = dst.device;
+        claim.inode = dst.inode;
+
+        ReservationRequest probe;
+        probe.valid = true;
+        probe.precise = true;
+        probe.claims.push_back(claim);
+        if (findConflict(probe, holder)) {
+            return false;
+        }
+        m_holders[holder].claims.push_back(claim);
         return true;
     }
 

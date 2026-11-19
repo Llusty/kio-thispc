@@ -538,6 +538,7 @@ int main(int argc, char **argv)
                "Scenario A: single regular local file moved safely via queue");
 
         setTransferQueueProductionDispatchConnected(false);
+        undo.setQueueController(nullptr);
         actions.setQueueController(nullptr);
     }
 
@@ -868,6 +869,7 @@ int main(int argc, char **argv)
         }
 
         setTransferQueueProductionDispatchConnected(false);
+        undo.setQueueController(nullptr);
         actions.setQueueController(nullptr);
     }
 
@@ -978,6 +980,7 @@ int main(int argc, char **argv)
                "H.1.1-B4: multi-file local copy remains fully functional");
 
         setTransferQueueProductionDispatchConnected(false);
+        undo.setQueueController(nullptr);
         actions.setQueueController(nullptr);
     }
 
@@ -1236,6 +1239,7 @@ int main(int argc, char **argv)
         watcher.clear();
 
         setTransferQueueProductionDispatchConnected(false);
+        undo.setQueueController(nullptr);
         actions.setQueueController(nullptr);
     }
 
@@ -1436,6 +1440,7 @@ int main(int argc, char **argv)
         }
 
         setTransferQueueProductionDispatchConnected(false);
+        undo.setQueueController(nullptr);
         actions.setQueueController(nullptr);
     }
 
@@ -1596,15 +1601,25 @@ int main(int argc, char **argv)
                    && fixtureData(wtfSrc + QStringLiteral("/Config.wtf")) == "SRC_CFG",
                "FOLDER-COLLISION-01-1: self-copy of directory refused fail-closed with 0 .thispc-part artifacts");
 
-        // 2. Cross-directory collision: copy WTF into fcDstRoot where WTF already exists
-        lastFenceMessage.clear();
-        actions.transfer({QUrl::fromLocalFile(wtfSrc)}, QUrl::fromLocalFile(fcDstRoot), Qt::CopyAction);
-        verify(!lastFenceMessage.isEmpty()
-                   && fcQueue.snapshot().tasks.isEmpty()
-                   && !hasStagingArtifact(fcDstRoot)
-                   && fixtureData(wtfDst + QStringLiteral("/Config.wtf")) == "DST_CFG"
-                   && fixtureData(wtfDst + QStringLiteral("/Sub/dst_only.txt")) == "DST_ONLY",
-               "FOLDER-COLLISION-01-2: cross-dir folder collision refused fail-closed with 0 .thispc-part artifacts");
+        // 2. Cross-directory collision: copy WTF into fcDstRoot where WTF already exists -> routes to Folder Merge
+        {
+            TransferQueueController mergeQueue;
+            actions.setQueueController(&mergeQueue);
+            lastFenceMessage.clear();
+            actions.transfer({QUrl::fromLocalFile(wtfSrc)}, QUrl::fromLocalFile(fcDstRoot), Qt::CopyAction);
+            const TransferQueueSnapshot mergeSnap = mergeQueue.snapshot();
+            verify(lastFenceMessage.isEmpty()
+                       && mergeSnap.tasks.size() == 1
+                       && mergeSnap.tasks.first().type == TransferOperationType::Copy
+                       && mergeSnap.tasks.first().backend == TransferBackendKind::LocalNative
+                       && mergeSnap.tasks.first().destination == QUrl::fromLocalFile(fcDstRoot)
+                       && !hasStagingArtifact(fcDstRoot)
+                       && fixtureData(wtfDst + QStringLiteral("/Config.wtf")) == "DST_CFG"
+                       && fixtureData(wtfDst + QStringLiteral("/Sub/dst_only.txt")) == "DST_ONLY",
+                   "FOLDER-COLLISION-01-2: cross-dir folder collision routes to Folder Merge with 0 .thispc-part artifacts");
+            mergeQueue.cancelAll();
+            actions.setQueueController(&fcQueue);
+        }
 
         // 3. Direct KioStagedTransferJob defense-in-depth rejects local directory before creating .thispc-part
         auto *dirStaged = new KioStagedTransferJob(
@@ -1746,6 +1761,179 @@ int main(int argc, char **argv)
         actions.setConflictDecisionOverride({});
 
         setTransferQueueProductionDispatchConnected(false);
+        undo.setQueueController(nullptr);
+        actions.setQueueController(nullptr);
+    }
+
+    // =========================================================================
+    // 0.45.1 Multi-Agent Remediation (R1/R5/R6 & Production Routing)
+    // =========================================================================
+    {
+        TransferQueueController remQueue;
+        actions.setQueueController(&remQueue);
+        undo.setQueueController(&remQueue);
+        setTransferQueueProductionDispatchConnected(true);
+
+        const QString remRoot = files.filePath(QStringLiteral("rem0451"));
+        const QString remDst = remRoot + QStringLiteral("/Dst");
+        const QString remOut = remRoot + QStringLiteral("/Outside");
+        verify(QDir().mkpath(remDst) && QDir().mkpath(remOut), "REM-0451: roots created");
+        createFixture(remOut + QStringLiteral("/secret.txt"), "OUTSIDE-SECRET");
+
+        // R1 + R6: Non-conflicting directory Copy with mixed symlinks routes through LocalTransferJob,
+        // preserves symlinks without dereferencing, AND remains Ctrl+Z reversible via UndoController.
+        const QString cleanDir = remRoot + QStringLiteral("/CleanSymDir");
+        verify(QDir().mkpath(cleanDir + QStringLiteral("/Sub")), "REM-R1-R6: clean dir created");
+        createFixture(cleanDir + QStringLiteral("/reg.txt"), "REG-DATA");
+        createFixture(cleanDir + QStringLiteral("/Sub/sub.txt"), "SUB-DATA");
+        verify(::symlink("reg.txt", QFile::encodeName(cleanDir + QStringLiteral("/rel.lnk")).constData()) == 0
+                   && ::symlink(QFile::encodeName(cleanDir + QStringLiteral("/reg.txt")).constData(),
+                                QFile::encodeName(cleanDir + QStringLiteral("/abs.lnk")).constData()) == 0
+                   && ::symlink(QFile::encodeName(remOut).constData(),
+                                QFile::encodeName(cleanDir + QStringLiteral("/dir.lnk")).constData()) == 0
+                   && ::symlink("no_such_target",
+                                QFile::encodeName(cleanDir + QStringLiteral("/broken.lnk")).constData()) == 0,
+               "REM-R1-R6: symlinks created");
+
+        actions.transfer({QUrl::fromLocalFile(cleanDir)}, QUrl::fromLocalFile(remDst), Qt::CopyAction);
+        verify(QTest::qWaitFor([&] {
+            const auto snap = remQueue.snapshot();
+            return snap.tasks.size() == 1 && snap.tasks.at(0).state == TransferTaskState::Completed;
+        }, 10000), "REM-R1-R6: non-conflicting dir copy with symlinks completes");
+
+        const QString copiedCleanDir = remDst + QStringLiteral("/CleanSymDir");
+        struct stat stCopiedDirLnk {};
+        verify(fixtureData(copiedCleanDir + QStringLiteral("/reg.txt")) == "REG-DATA"
+                   && fixtureData(copiedCleanDir + QStringLiteral("/Sub/sub.txt")) == "SUB-DATA"
+                   && readLocalLink(copiedCleanDir + QStringLiteral("/rel.lnk")) == "reg.txt"
+                   && readLocalLink(copiedCleanDir + QStringLiteral("/abs.lnk")) == QFile::encodeName(cleanDir + QStringLiteral("/reg.txt"))
+                   && readLocalLink(copiedCleanDir + QStringLiteral("/dir.lnk")) == QFile::encodeName(remOut)
+                   && readLocalLink(copiedCleanDir + QStringLiteral("/broken.lnk")) == "no_such_target"
+                   && ::lstat(QFile::encodeName(copiedCleanDir + QStringLiteral("/dir.lnk")).constData(), &stCopiedDirLnk) == 0
+                   && S_ISLNK(stCopiedDirLnk.st_mode),
+               "REM-R1: non-conflicting directory copy preserves all 4 symlinks without dereferencing");
+        verify(undo.treeUndoAvailable() && undoAction.isEnabled(),
+               "REM-R6: Ctrl+Z Undo remains available after non-conflicting directory copy");
+        undo.undo();
+        verify(QTest::qWaitFor([&] {
+            return !undo.m_busy && !QFileInfo::exists(copiedCleanDir);
+        }, 10000), "REM-R6: Ctrl+Z Undo cleanly removes non-conflicting copied directory");
+
+        // R1: Standalone symlink-to-directory Copy is preserved as a symlink (not dereferenced or merged)
+        const QString soloLink = remRoot + QStringLiteral("/solo_dir.lnk");
+        verify(::symlink(QFile::encodeName(remOut).constData(), QFile::encodeName(soloLink).constData()) == 0,
+               "REM-R1-solo: standalone symlink created");
+        actions.transfer({QUrl::fromLocalFile(soloLink)}, QUrl::fromLocalFile(remDst), Qt::CopyAction);
+        verify(QTest::qWaitFor([&] {
+            const auto snap = remQueue.snapshot();
+            return snap.tasks.size() == 2 && snap.tasks.at(1).state == TransferTaskState::Completed;
+        }, 10000), "REM-R1-solo: standalone symlink-to-dir copy completes");
+        struct stat stSoloCopied {};
+        verify(::lstat(QFile::encodeName(remDst + QStringLiteral("/solo_dir.lnk")).constData(), &stSoloCopied) == 0
+                   && S_ISLNK(stSoloCopied.st_mode)
+                   && readLocalLink(remDst + QStringLiteral("/solo_dir.lnk")) == QFile::encodeName(remOut),
+               "REM-R1-solo: standalone symlink-to-dir preserved as symlink without dereference");
+
+        // R6: Conflicting directory Copy routes to Folder Merge and fences UndoController
+        const QString mergeSrc = remRoot + QStringLiteral("/MergeDir");
+        const QString mergeDstExisting = remDst + QStringLiteral("/MergeDir");
+        verify(QDir().mkpath(mergeSrc) && QDir().mkpath(mergeDstExisting), "REM-R6-fence: merge dirs created");
+        createFixture(mergeSrc + QStringLiteral("/new.txt"), "NEW-MERGED");
+        createFixture(mergeDstExisting + QStringLiteral("/keep.txt"), "KEEP-EXISTING");
+        verify(::symlink("new.txt", QFile::encodeName(mergeSrc + QStringLiteral("/m.lnk")).constData()) == 0,
+               "REM-R6-fence: symlink in merge source created");
+
+        const quint64 serialBeforeMerge = undo.irreversibleSerial();
+        bool sawFolderDlg = false;
+        QTimer autoMergeTimer;
+        autoMergeTimer.setInterval(10);
+        QObject::connect(&autoMergeTimer, &QTimer::timeout, &parent, [&] {
+            for (QWidget *w : QApplication::topLevelWidgets()) {
+                if (auto *dlg = dynamic_cast<LocalFolderMergeConflictDialog *>(w); dlg && dlg->isVisible()) {
+                    sawFolderDlg = true;
+                    dlg->mergeButton()->click();
+                    break;
+                }
+            }
+        });
+        autoMergeTimer.start();
+        actions.transfer({QUrl::fromLocalFile(mergeSrc)}, QUrl::fromLocalFile(remDst), Qt::CopyAction);
+        verify(QTest::qWaitFor([&] {
+            const auto snap = remQueue.snapshot();
+            return snap.tasks.size() == 3 && snap.tasks.at(2).state == TransferTaskState::Completed;
+        }, 10000), "REM-R6-fence: colliding directory copy completes via Folder Merge");
+        autoMergeTimer.stop();
+        verify(sawFolderDlg
+                   && fixtureData(mergeDstExisting + QStringLiteral("/new.txt")) == "NEW-MERGED"
+                   && fixtureData(mergeDstExisting + QStringLiteral("/keep.txt")) == "KEEP-EXISTING"
+                   && readLocalLink(mergeDstExisting + QStringLiteral("/m.lnk")) == "new.txt"
+                   && undo.irreversibleSerial() > serialBeforeMerge,
+               "REM-R6-fence: Folder Merge merged regular file + symlink, preserved existing file, and fenced UndoController");
+
+        // R5: "Send To" (copySelectionToDirectory) routes colliding local directory through Folder Merge & emits KDirNotify
+        const QString sendRoot = remRoot + QStringLiteral("/SendToDst");
+        const QString sendSrc = remRoot + QStringLiteral("/SendFolder");
+        const QString sendDstSub = sendRoot + QStringLiteral("/SendFolder");
+        verify(QDir().mkpath(sendSrc) && QDir().mkpath(sendDstSub), "REM-R5: Send To fixtures created");
+        createFixture(sendSrc + QStringLiteral("/sent.txt"), "SENT-PAYLOAD");
+        createFixture(sendDstSub + QStringLiteral("/old.txt"), "OLD-SEND-DST");
+
+        org::kde::KDirNotify dirNotifySpy(QString(), QString(), QDBusConnection::sessionBus(), &parent);
+        QSignalSpy filesAddedSpy(&dirNotifySpy, &org::kde::KDirNotify::FilesAdded);
+        bool sawSendMergeDlg = false;
+        QTimer autoSendTimer;
+        autoSendTimer.setInterval(10);
+        QObject::connect(&autoSendTimer, &QTimer::timeout, &parent, [&] {
+            for (QWidget *w : QApplication::topLevelWidgets()) {
+                if (auto *dlg = dynamic_cast<LocalFolderMergeConflictDialog *>(w); dlg && dlg->isVisible()) {
+                    sawSendMergeDlg = true;
+                    dlg->mergeButton()->click();
+                    break;
+                }
+            }
+        });
+        autoSendTimer.start();
+        actions.copySelectionToDirectory({QUrl::fromLocalFile(sendSrc)}, sendRoot, QStringLiteral("Send done"));
+        verify(QTest::qWaitFor([&] {
+            const auto snap = remQueue.snapshot();
+            return snap.tasks.size() == 4 && snap.tasks.at(3).state == TransferTaskState::Completed;
+        }, 10000), "REM-R5: Send To routes colliding folder through Folder Merge and completes");
+        autoSendTimer.stop();
+        verify(QTest::qWaitFor([&] {
+            for (const QList<QVariant> &args : std::as_const(filesAddedSpy)) {
+                if (!args.isEmpty() && args.first().toString().contains(QStringLiteral("SendToDst"))) {
+                    return true;
+                }
+            }
+            return false;
+        }, 5000), "REM-R5: Folder Merge emits KDirNotify::FilesAdded for destination view refresh");
+        verify(sawSendMergeDlg
+                   && fixtureData(sendDstSub + QStringLiteral("/sent.txt")) == "SENT-PAYLOAD"
+                   && fixtureData(sendDstSub + QStringLiteral("/old.txt")) == "OLD-SEND-DST",
+               "REM-R5: Send To merged colliding directory without legacy fallback");
+
+        // Production Routing safety: isIntoSelf (even without top-level collision) & isSelfCopy blocked fail-closed
+        const QString selfParent = remRoot + QStringLiteral("/SelfDir");
+        const QString selfChild = selfParent + QStringLiteral("/SubIntoSelf");
+        verify(QDir().mkpath(selfChild), "REM-SELF: cycle dirs created");
+        lastFenceMessage.clear();
+        actions.transfer({QUrl::fromLocalFile(selfParent)}, QUrl::fromLocalFile(selfChild), Qt::CopyAction);
+        verify(!lastFenceMessage.isEmpty() && remQueue.snapshot().tasks.size() == 4
+                   && !QFileInfo::exists(selfChild + QStringLiteral("/SelfDir")),
+               "REM-SELF: copying directory into its own subdirectory refused fail-closed without queue task");
+
+        lastFenceMessage.clear();
+        actions.transfer({QUrl::fromLocalFile(selfParent)}, QUrl::fromLocalFile(remRoot), Qt::CopyAction);
+        verify(!lastFenceMessage.isEmpty() && remQueue.snapshot().tasks.size() == 4,
+               "REM-SELF: self-copy into same parent refused fail-closed without queue task");
+
+        // FileActions::detectLocalMergeCapabilities on local filesystem
+        const LocalMergeBackendCapabilities caps = FileActions::detectLocalMergeCapabilities(remDst);
+        verify(caps.canMergeDirectories && caps.canRenameConflictingCopies && caps.canSafeOverwrite,
+               "REM-CAPS: detectLocalMergeCapabilities reports safe overwrite/rename/merge on local temp fs");
+
+        setTransferQueueProductionDispatchConnected(false);
+        undo.setQueueController(nullptr);
         actions.setQueueController(nullptr);
     }
 

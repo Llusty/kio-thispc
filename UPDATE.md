@@ -1,14 +1,20 @@
 [English](UPDATE.md) | [Polski](UPDATE.pl.md)
 
-# Update to 0.45.0.1 (Hotfix)
+# Update to 0.45.1
 
 ```bash
 cd ~/Pobrane
-tar -xzf kio-thispc-0.45.0.1.tar.gz
-cd kio-thispc-0.45.0.1
+tar -xzf kio-thispc-0.45.1.tar.gz
+cd kio-thispc-0.45.1
 chmod +x install.sh
 ./install.sh
 ```
+
+- **Recursive Folder Merge (`FOLDER-MERGE-01`):** Local directory Copy operations now support recursive folder merging with independent folder (`Merge`, `Rename`, `Skip`, `Abort`) and file (`Overwrite`, `Rename`, `Skip`, `Abort`) conflict decisions, Crash Recovery (`.thispc-tx.*` journals), and `OperationWindow` progress/speed tracking.
+- **Safe `Overwrite` Limitations:** Atomic `Overwrite` is enabled only on **Btrfs, ext4, XFS, and tmpfs**; on **NTFS (`ntfs3`/NTFS-3G), VFAT, and remote KIO backends**, `Overwrite` is blocked fail-closed (`Rename`, `Skip`, and `Abort` remain available).
+- **Undo & Move Scope:** Folder Merge operations fence Undo (`fenceIrreversibleOperation()`, no `Ctrl+Z` Undo), and full Move with conflicts remains a future milestone.
+
+## 0.45.0.1 — Previous Release (Hotfix)
 
 - Fixes local directory copy & collision handling (`FOLDER-COLLISION-01`): rejects single-folder self-copy/collisions upfront and executes valid local tree copies via `LocalTransferJob` (with `KIO::copy()` fallback).
 - Explicitly rejects directory sources in `KioStagedTransferJob` (`KIO::ERR_IS_DIRECTORY`) before creating `.thispc-part.*` staging entries.

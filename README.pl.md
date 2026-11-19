@@ -1,6 +1,6 @@
 [English](README.md) | [Polski](README.pl.md)
 
-# kio-thispc (Ten komputer) 0.45.0.1
+# kio-thispc (Ten komputer) 0.45.1
 
 ThisPC to natywny menedżer plików dla środowiska KDE/Qt, łączący ergonomię inspirowaną Eksploratorem Windows z pracą dwupanelową (Split View), integracją KIO, bezpiecznymi lokalnymi operacjami plikowymi oraz natywną obsługą urządzeń w systemie Linux/KDE.
 
@@ -9,6 +9,16 @@ ThisPC to natywny menedżer plików dla środowiska KDE/Qt, łączący ergonomi�
 - **Licencja:** Licencja MIT
 
 ---
+
+## 0.45.1 — Bezpieczne rekurencyjne scalanie folderów (`FOLDER-MERGE-01`)
+
+- **Rekurencyjne scalanie folderów (`LocalMergePlanJob`, `LocalMergeOrchestrator`, `LocalMergeExecutionJob`):** Lokalne operacje kopiowania katalogów (Wklej oraz Przeciągnij i upuść w panelu głównym i Split View) obsługują rekurencyjne scalanie z planowaniem, rewalidacją oraz raportowaniem postępu i prędkości w kolejce transferów i `OperationWindow`.
+- **Niezależne decyzje dla katalogów i plików:** Kompaktowe dialogi konfliktów umożliwiają niezależne wybory dla katalogów (`Scal`, `Zmień nazwę`, `Pomiń`, `Przerwij`) oraz plików (`Nadpisz`, `Zmień nazwę`, `Pomiń`, `Przerwij`, z opcją `Zastosuj do wszystkich`), bez zasłaniania okien modalnych przez `OperationWindow`.
+- **Crash Recovery i ochrona TOCTOU:** Operacje używają deskryptorów `openat(O_NOFOLLOW)`, `RENAME_NOREPLACE`, `RENAME_EXCHANGE` oraz dziennika transakcji `.thispc-tx.*` (`0700`).
+- **Jawne ograniczenia:**
+  - Bezpieczne atomowe **Nadpisz (`Overwrite`)** jest dozwolone wyłącznie na zweryfikowanych systemach plików (**Btrfs, ext4, XFS, tmpfs**); na **NTFS (`ntfs3`/NTFS-3G), VFAT oraz zdalnych backendach KIO** nadpisywanie jest celowo zablokowane (dostępne są `Zmień nazwę`, `Pomiń`, `Przerwij`).
+  - **Cofnij (`Undo` / `Ctrl+Z`)** jest celowo wyłączone/ogrodzone (`fenceIrreversibleOperation()`) dla operacji Folder Merge.
+  - Pełne **Przenoszenie (`Move`) z konfliktami** pozostaje przyszłym etapem prac i nie wchodzi w zakres `0.45.1`.
 
 ## 0.45.0.1 — Hotfix kolizji katalogów i samokopiowania plików
 
@@ -489,8 +499,8 @@ Funkcje z 0.15.4 — kompaktowy popup operacji, dynamiczna wysokość, anulowani
 
 ```bash
 cd ~/Pobrane
-tar -xzf kio-thispc-0.45.0.1.tar.gz
-cd kio-thispc-0.45.0.1
+tar -xzf kio-thispc-0.45.1.tar.gz
+cd kio-thispc-0.45.1
 chmod +x install.sh
 ./install.sh
 ```

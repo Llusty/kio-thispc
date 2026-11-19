@@ -906,6 +906,44 @@ public:
         return true;
     }
 
+    // Stage 3B.3B-2: persistent Retry policy check after app restart / history reload.
+    static bool canRetryFromHistoryRecord(const TransferHistoryRecord &rec)
+    {
+        if (rec.terminalState != TransferTaskState::Failed) {
+            return false;
+        }
+        if (rec.isFolderMerge || rec.retryBlocked || rec.partialSuccess
+            || rec.uncertainDurability || rec.recoveryRequired) {
+            return false;
+        }
+        return true;
+    }
+
+    bool hasActiveMergeInDecisionPhase() const
+    {
+        for (const auto &entry : m_tasks) {
+            if (entry.second && entry.second->state == TransferTaskState::Running) {
+                if (!entry.second->job && entry.second->desc.isFolderMerge) {
+                    return true;
+                }
+                if (entry.second->job && entry.second->job->property("thispcMergeInDecisionPhase").toBool()) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    // Shared reservation extension for dynamic Merge Rename targets (Stage 3B.3B-1).
+    bool tryReserveAdditionalTarget(quint64 taskId, const QUrl &targetUrl)
+    {
+        Task *task = find(taskId);
+        if (!task || !m_registry.holds(taskId)) {
+            return false;
+        }
+        return m_registry.tryAddTargetClaim(taskId, targetUrl);
+    }
+
     // ------------------------------------------------------------------
     // Safe Retry (Stage 3)
     // ------------------------------------------------------------------
@@ -956,6 +994,12 @@ public:
         if (task->partialBatchPublished) {
             return reject(trLocal("Część plików z partii została już przeniesiona — automatyczne ani ręczne ponowienie całej partii jest zablokowane",
                                   "Part of the batch was already moved — batch retry is blocked"));
+        }
+        if (task->desc.isFolderMerge
+            && (task->failureKind == TransferFailureKind::PreflightFailed
+                || task->errorText.contains(QStringLiteral("RecoveryRequired")))) {
+            return reject(trLocal("Scalanie folderów zostało zablokowane przed startem (wykryto nieukończoną transakcję) — ponowienie jest niedozwolone",
+                                  "Folder merge was blocked during preflight (incomplete transaction detected) — retry is not permitted"));
         }
 
         // Rule: Must have a valid descriptor and job factory
@@ -1351,6 +1395,7 @@ private:
         quint64 boostSequence = 0;
         QElapsedTimer elapsedTimer;
         qulonglong speedBytesPerSecond = 0;
+        qint64 lastExplicitSpeedMs = -1;
         qulonglong averageSpeedBytesPerSecond = 0;
         qint64 etaSeconds = -1;
         QList<qulonglong> speedSamples;
@@ -1442,6 +1487,7 @@ private:
     bool taskSupportsThrottling(const Task &task) const
     {
         if (task.desc.capabilities.supportsThrottling) return true;
+        if (task.desc.isFolderMerge) return false;
         if (task.desc.backend == TransferBackendKind::LocalNative && task.desc.type == TransferOperationType::Copy) {
             return true;
         }
@@ -1603,15 +1649,18 @@ private:
         }
         if (task->elapsedTimer.isValid()) {
             const qint64 nowMs = task->elapsedTimer.elapsed();
-            if (nowMs - task->lastSampleElapsedMs >= 500) {
+            if (task->processedBytes == 0) {
+                // Do not count planning / conflict-dialog wait time in the first speed window.
+                task->lastSampleElapsedMs = nowMs;
+            } else if (nowMs - task->lastSampleElapsedMs >= 500) {
                 const qint64 dt = nowMs - task->lastSampleElapsedMs;
-                if (dt > 0 && task->processedBytes >= task->lastSampleProcessedBytes) {
+                const bool hasRecentExplicitSpeed = (task->lastExplicitSpeedMs >= 0
+                                                   && (nowMs - task->lastExplicitSpeedMs) < 1000);
+                if (dt > 0 && task->processedBytes > task->lastSampleProcessedBytes && !hasRecentExplicitSpeed) {
                     const quint64 dBytes = task->processedBytes - task->lastSampleProcessedBytes;
                     const qulonglong calcSpeed = (dBytes * 1000) / dt;
-                    if (task->speedBytesPerSecond == 0) {
-                        task->speedBytesPerSecond = calcSpeed;
-                    }
-                    task->speedSamples.push_back(task->speedBytesPerSecond > 0 ? task->speedBytesPerSecond : calcSpeed);
+                    task->speedBytesPerSecond = calcSpeed;
+                    task->speedSamples.push_back(calcSpeed);
                     if (task->speedSamples.size() > 120) {
                         task->speedSamples.removeFirst();
                     }
@@ -1647,6 +1696,7 @@ private:
         }
         if (task->elapsedTimer.isValid()) {
             const qint64 elapsedMs = task->elapsedTimer.elapsed();
+            task->lastExplicitSpeedMs = elapsedMs;
             if (elapsedMs > 0 && task->processedBytes > 0) {
                 task->averageSpeedBytesPerSecond = (task->processedBytes * 1000) / elapsedMs;
             }
@@ -1902,8 +1952,10 @@ private:
         rec.sourceUrls = TransferHistoryRecord::sanitizeUrls(task->desc.sources);
         rec.destinationUrl = TransferHistoryRecord::sanitizeUrl(task->desc.destination);
         rec.targetUrls = TransferHistoryRecord::sanitizeUrls(task->desc.targetUrls);
-        rec.startTimeUtc = task->startTimeUtc;
         rec.endTimeUtc = task->endTimeUtc.isValid() ? task->endTimeUtc : QDateTime::currentDateTimeUtc();
+        rec.startTimeUtc = (task->startTimeUtc.isValid() || terminal == TransferTaskState::Cancelled)
+            ? task->startTimeUtc
+            : rec.endTimeUtc;
 
         if (rec.startTimeUtc.isValid() && rec.endTimeUtc.isValid()) {
             rec.durationMs = std::max<qint64>(0, rec.startTimeUtc.msecsTo(rec.endTimeUtc));
@@ -1924,6 +1976,28 @@ private:
         rec.errorText = task->errorText;
         rec.title = task->desc.title;
         rec.itemCount = task->desc.sources.size();
+
+        if (task->job) {
+            const QString mergeState = task->job->property("thispcMergeState").toString();
+            rec.isFolderMerge = task->desc.isFolderMerge || !mergeState.isEmpty();
+            rec.retryBlocked = task->job->property("thispcMergeRetryBlocked").toBool()
+                || task->partialBatchPublished || task->partialMoveOutcome;
+            rec.partialSuccess = task->job->property("thispcBatchPartiallyCompleted").toBool()
+                || task->partialBatchPublished;
+            rec.uncertainDurability = task->job->property("thispcPartialMoveOutcome").toBool()
+                || task->partialMoveOutcome;
+            rec.recoveryRequired = task->job->property("thispcMergeRecoveryRequired").toBool();
+            rec.mergeSkippedCount = task->job->property("thispcMergeSkippedCount").toInt();
+            rec.mergeReplacedCount = task->job->property("thispcMergeReplacedCount").toInt();
+        } else {
+            rec.isFolderMerge = task->desc.isFolderMerge;
+            rec.recoveryRequired = task->desc.isFolderMerge
+                && task->errorText.contains(QStringLiteral("RecoveryRequired"));
+            rec.retryBlocked = task->partialBatchPublished || task->partialMoveOutcome
+                || rec.recoveryRequired || task->desc.isFolderMerge;
+            rec.partialSuccess = task->partialBatchPublished;
+            rec.uncertainDurability = task->partialMoveOutcome;
+        }
 
         m_historyManager->addRecord(rec, true);
     }
@@ -1989,7 +2063,9 @@ private:
         task->stateBeforeCancel = task->state;
         task->cancelRequested = true;
         setState(task, TransferTaskState::Cancelling);
-        const bool accepted = job->kill(KJob::EmitResult);
+        const bool accepted = task->desc.cancelHandler
+            ? task->desc.cancelHandler(job)
+            : job->kill(KJob::EmitResult);
         task = find(id);  // kill() may complete the job synchronously
         if (!task || isTerminalTransferState(task->state)) return true;
         if (!accepted) {
@@ -2013,13 +2089,16 @@ private:
                      static_cast<unsigned long long>(id), error,
                      job ? qPrintable(job->errorString()) : "");
         if (error == 0) {
-            finalize(task, TransferTaskState::Completed, TransferFailureKind::None, 0, {});
+            const QString note = job->property("thispcMergeHistoryNote").toString();
+            finalize(task, TransferTaskState::Completed, TransferFailureKind::None, 0, note);
         } else if (error == KJob::KilledJobError || error == KIO::ERR_USER_CANCELED) {
             if (job->property("thispcBatchPublishedCount").toInt() > 0
-                || job->property("thispcBatchPartiallyCompleted").toBool()) {
+                || job->property("thispcBatchPartiallyCompleted").toBool()
+                || job->property("thispcMergeRetryBlocked").toBool()) {
                 task->partialBatchPublished = true;
             }
-            const QString cancelText = (task->partialBatchPublished && !job->errorText().isEmpty())
+            const QString cancelText = ((task->partialBatchPublished || job->property("thispcMergeRetryBlocked").toBool())
+                                        && !job->errorText().isEmpty())
                 ? job->errorText()
                 : QString();
             finalize(task, TransferTaskState::Cancelled, TransferFailureKind::None, error, cancelText);
@@ -2028,11 +2107,13 @@ private:
                 task->partialMoveOutcome = true;
             }
             if (job->property("thispcBatchPublishedCount").toInt() > 0
-                || job->property("thispcBatchPartiallyCompleted").toBool()) {
+                || job->property("thispcBatchPartiallyCompleted").toBool()
+                || job->property("thispcMergeRetryBlocked").toBool()) {
                 task->partialBatchPublished = true;
             }
             const QString errMsg = ((job->property("thispcPartialMoveOutcome").toBool()
-                                     || job->property("thispcBatchPartiallyCompleted").toBool())
+                                     || job->property("thispcBatchPartiallyCompleted").toBool()
+                                     || job->property("thispcMergeRetryBlocked").toBool())
                                     && !job->errorText().isEmpty())
                 ? job->errorText()
                 : job->errorString();

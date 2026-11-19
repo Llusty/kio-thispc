@@ -433,7 +433,8 @@ public:
         connect(m_autoShowTimer, &QTimer::timeout, this, [this] {
             const int active = activeCount()
                 + (m_queueController ? (m_queueController->activeCount() + m_queueController->queuedCount()) : 0);
-            if (active > 0 && !m_userDismissedThisBatch) {
+            if (m_autoShowEnabled && !m_userDismissedThisBatch
+                && (active > 0 || m_deferredShowPending)) {
                 showDetailedWindow();
             }
         });
@@ -942,9 +943,30 @@ public:
 
     bool isCloseOnComplete() const { return m_closeOnComplete; }
     void setCloseOnComplete(bool close);
-    void setUserDismissed(bool dismissed) { m_userDismissedThisBatch = dismissed; }
+    bool isAutoShowEnabled() const { return m_autoShowEnabled; }
+    void setAutoShowEnabled(bool enabled)
+    {
+        m_autoShowEnabled = enabled;
+        if (!enabled) {
+            m_deferredShowPending = false;
+            if (m_autoShowTimer && m_autoShowTimer->isActive()) {
+                m_autoShowTimer->stop();
+            }
+        }
+    }
+    void setUserDismissed(bool dismissed)
+    {
+        m_userDismissedThisBatch = dismissed;
+        if (dismissed) {
+            m_deferredShowPending = false;
+            if (m_autoShowTimer && m_autoShowTimer->isActive()) {
+                m_autoShowTimer->stop();
+            }
+        }
+    }
     bool userDismissed() const { return m_userDismissedThisBatch; }
     void resetUserDismissal() { m_userDismissedThisBatch = false; }
+    bool hasDeferredShowPending() const { return m_deferredShowPending; }
     int autoShowGracePeriodMs() const { return m_autoShowGracePeriodMs; }
     void setAutoShowGracePeriodMs(int ms) { m_autoShowGracePeriodMs = ms; }
     QTimer *autoShowTimer() const { return m_autoShowTimer; }
@@ -1098,6 +1120,8 @@ private:
     }
 
     void showDetailedWindow();
+    void deferShowForModal(QWidget *modal);
+    void flushDeferredShow();
 
     void build(QToolBar *toolbar)
     {
@@ -1146,6 +1170,10 @@ private:
 
                 if (m_popup->isVisible()) {
                     m_popup->hide();
+                    return;
+                }
+
+                if (QApplication::activeModalWidget() != nullptr) {
                     return;
                 }
 
@@ -1537,11 +1565,11 @@ private:
         }
     }
 
-    QMainWindow *m_window = nullptr;
+    QPointer<QMainWindow> m_window;
     QToolButton *m_button = nullptr;
     QLabel *m_badgeLabel = nullptr;
-    OperationPopup *m_popup = nullptr;
-    OperationWindow *m_detailedWindow = nullptr;
+    QPointer<OperationPopup> m_popup;
+    QPointer<OperationWindow> m_detailedWindow;
     TransferNotificationManager *m_notificationManager = nullptr;
     QPointer<TransferHistoryManager> m_historyManager;
     QPointer<TransferQueueController> m_queueController;
@@ -1550,7 +1578,10 @@ private:
     quint64 m_nextId = 1;
     QTimer *m_autoShowTimer = nullptr;
     int m_autoShowGracePeriodMs = 500;
+    bool m_autoShowEnabled = true;
     bool m_userDismissedThisBatch = false;
+    bool m_deferredShowPending = false;
+    QPointer<QWidget> m_deferredModalWatcher;
     bool m_closeOnComplete = false;
 };
 
@@ -4480,8 +4511,64 @@ inline void OperationManager::onOperationTracked()
     }
 }
 
+inline void OperationManager::deferShowForModal(QWidget *modal)
+{
+    m_deferredShowPending = true;
+    if (modal && m_deferredModalWatcher.data() != modal) {
+        m_deferredModalWatcher = modal;
+        QPointer<OperationManager> self(this);
+        connect(modal, &QObject::destroyed, this, [self] {
+            if (!self) return;
+            QTimer::singleShot(0, self.data(), [self] {
+                if (self) self->flushDeferredShow();
+            });
+        });
+    }
+}
+
+inline void OperationManager::flushDeferredShow()
+{
+    if (!m_deferredShowPending || m_userDismissedThisBatch || !m_autoShowEnabled) {
+        m_deferredShowPending = false;
+        return;
+    }
+    if (QWidget *modal = QApplication::activeModalWidget()) {
+        deferShowForModal(modal);
+        return;
+    }
+    if (m_queueController && m_queueController->hasActiveMergeInDecisionPhase()) {
+        return;
+    }
+    showDetailedWindow();
+}
+
 inline void OperationManager::showDetailedWindow()
 {
+    if (!m_window) {
+        m_deferredShowPending = false;
+        return;
+    }
+    const bool mergeInDecision = m_queueController && m_queueController->hasActiveMergeInDecisionPhase();
+    if (QWidget *modal = QApplication::activeModalWidget()) {
+        // GUI-STACK-01 + GUI-OPS-02: never show/raise/activate OperationWindow over an active
+        // modal conflict dialog; defer cleanly until the modal closes (no polling loop).
+        if (m_detailedWindow && m_detailedWindow->isVisible()) {
+            m_detailedWindow->rebuild();
+            return;
+        }
+        deferShowForModal(modal);
+        return;
+    }
+    if (mergeInDecision) {
+        if (m_detailedWindow && m_detailedWindow->isVisible()) {
+            m_detailedWindow->rebuild();
+            return;
+        }
+        m_deferredShowPending = true;
+        return;
+    }
+    m_deferredShowPending = false;
+
     if (!m_detailedWindow) {
         m_detailedWindow = new OperationWindow(this, m_window);
         m_detailedWindow->setQueueController(m_queueController);
@@ -4647,13 +4734,17 @@ inline void OperationManager::setQueueController(TransferQueueController *contro
         connect(m_queueController, &TransferQueueController::queueChanged,
                 this, [this] {
                     updateSummary();
+                    if (m_deferredShowPending) {
+                        QTimer::singleShot(0, this, [this] { flushDeferredShow(); });
+                    }
                     checkAutoCloseOrStopTimer();
                 });
         connect(m_queueController, &TransferQueueController::taskStateChanged,
                 this, [this](quint64, TransferTaskState, TransferTaskState to) {
                     updateSummary();
                     if (to == TransferTaskState::Running) {
-                        if (!m_userDismissedThisBatch && (!m_detailedWindow || !m_detailedWindow->isVisible())) {
+                        if (m_autoShowEnabled && !m_userDismissedThisBatch
+                            && (!m_detailedWindow || !m_detailedWindow->isVisible())) {
                             if (!isTransferQueueProductionDispatchConnected()) {
                                 showDetailedWindow();
                             } else if (m_autoShowGracePeriodMs <= 0) {
@@ -4666,13 +4757,30 @@ inline void OperationManager::setQueueController(TransferQueueController *contro
                     checkAutoCloseOrStopTimer();
                 });
         connect(m_queueController, &TransferQueueController::taskFinished,
-                this, [this](quint64, TransferTaskState) {
+                this, [this](quint64 id, TransferTaskState terminalState) {
                     updateSummary();
+                    if (m_deferredShowPending && m_autoShowEnabled && !m_userDismissedThisBatch) {
+                        bool shouldFlush = (terminalState != TransferTaskState::Cancelled);
+                        if (!shouldFlush && m_queueController) {
+                            if (const auto snap = m_queueController->taskSnapshot(id)) {
+                                // Show if cancelled with partial writes (errorText non-empty)
+                                shouldFlush = !snap->errorText.isEmpty();
+                            }
+                        }
+                        if (shouldFlush) {
+                            QTimer::singleShot(0, this, [this] { flushDeferredShow(); });
+                        } else {
+                            m_deferredShowPending = false;
+                        }
+                    }
                     checkAutoCloseOrStopTimer();
                 });
         connect(m_queueController, &TransferQueueController::taskProgressChanged,
                 this, [this](quint64, quint64, quint64, int) {
                     updateSummary();
+                    if (m_deferredShowPending) {
+                        QTimer::singleShot(0, this, [this] { flushDeferredShow(); });
+                    }
                 });
         connect(m_queueController, &TransferQueueController::closeWindowOnCompleteChanged,
                 this, &OperationManager::setCloseOnComplete);
