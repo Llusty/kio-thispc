@@ -3,15 +3,122 @@
 
 #include "acldata.h"
 
+#include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QStorageInfo>
 
 #include <acl/libacl.h>
+#include <fcntl.h>
 #include <grp.h>
 #include <pwd.h>
 #include <sys/acl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <cerrno>
+
+namespace AclFsDetail {
+
+struct UniqueFd
+{
+    int fd = -1;
+    UniqueFd() = default;
+    explicit UniqueFd(int f) : fd(f) {}
+    ~UniqueFd() { reset(); }
+    UniqueFd(const UniqueFd &) = delete;
+    UniqueFd &operator=(const UniqueFd &) = delete;
+    UniqueFd(UniqueFd &&other) noexcept : fd(other.fd) { other.fd = -1; }
+    UniqueFd &operator=(UniqueFd &&other) noexcept
+    {
+        if (this != &other) {
+            reset();
+            fd = other.fd;
+            other.fd = -1;
+        }
+        return *this;
+    }
+    bool valid() const { return fd >= 0; }
+    void reset(int newFd = -1)
+    {
+        if (fd >= 0) {
+            const int saved = errno;
+            ::close(fd);
+            errno = saved;
+        }
+        fd = newFd;
+    }
+};
+
+inline QByteArray procFdPath(int fd)
+{
+    return QByteArrayLiteral("/proc/self/fd/") + QByteArray::number(fd);
+}
+
+// SEC-046-11: Component-by-component symlink-free open anchored from "/".
+// Uses O_PATH | O_NOFOLLOW | O_CLOEXEC so:
+// - Ancestor symlinks cannot redirect path traversal (ACL10).
+// - Leaf symlinks are never followed (ACL5/ACL6).
+// - FIFOs / devices / sockets never block on open() and are rejected via fstat() (ACL7/ACL8).
+// - Owned unreadable (mode 0000) regular files and directories still open safely without EACCES (ACL4).
+inline UniqueFd openAnchoredNoSymlinks(
+    const QString &absPath,
+    struct stat *outStat,
+    int *outErrno)
+{
+    if (outErrno) *outErrno = 0;
+    const QString clean = QDir::cleanPath(absPath);
+    if (clean.isEmpty() || !clean.startsWith(QLatin1Char('/'))) {
+        if (outErrno) *outErrno = EINVAL;
+        return {};
+    }
+
+    constexpr int kAncFlags = O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC;
+    constexpr int kLeafFlags = O_PATH | O_NOFOLLOW | O_CLOEXEC;
+
+    UniqueFd cur(::open("/", O_PATH | O_DIRECTORY | O_CLOEXEC));
+    if (!cur.valid()) {
+        if (outErrno) *outErrno = errno;
+        return {};
+    }
+
+    const QStringList parts = clean.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    for (qsizetype i = 0; i < parts.size(); ++i) {
+        const QByteArray comp = QFile::encodeName(parts.at(i));
+        const bool isLeaf = (i + 1 == parts.size());
+        UniqueFd next(::openat(cur.fd, comp.constData(), isLeaf ? kLeafFlags : kAncFlags));
+        if (!next.valid()) {
+            int err = errno;
+            if (!isLeaf && err == ENOTDIR) {
+                struct stat ast {};
+                if (::fstatat(cur.fd, comp.constData(), &ast, AT_SYMLINK_NOFOLLOW) == 0
+                    && S_ISLNK(ast.st_mode)) {
+                    err = ELOOP;
+                }
+            }
+            if (outErrno) *outErrno = err;
+            return {};
+        }
+        cur = std::move(next);
+    }
+
+    struct stat st {};
+    if (::fstat(cur.fd, &st) != 0) {
+        if (outErrno) *outErrno = errno;
+        return {};
+    }
+    if (S_ISLNK(st.st_mode)) {
+        if (outErrno) *outErrno = ELOOP;
+        return {};
+    }
+    if (!S_ISREG(st.st_mode) && !S_ISDIR(st.st_mode)) {
+        if (outErrno) *outErrno = ENOTSUP;
+        return {};
+    }
+    if (outStat) *outStat = st;
+    return cur;
+}
+
+} // namespace AclFsDetail
 
 class AclProvider
 {
@@ -22,13 +129,23 @@ public:
         out.errorMessage = QStringLiteral("POSIX ACL is unavailable for remote URLs."); return out;
     }
 
-    static AclData load(const QString &path, bool local, bool symlink, bool directory, bool readOnly = false)
+    static AclData loadFromFd(int fd, const QString &path, const struct stat &st, bool directory, bool readOnly = false)
     {
-        if (!local) return unavailableForRemote();
-        AclData out; out.path = path; out.isDirectory = directory;
-        if (symlink) { out.capability = AclCapability::SymlinkUnavailable; out.errorMessage = QStringLiteral("POSIX ACL is unavailable for symbolic links."); return out; }
-        if (path.isEmpty()) { out.capability = AclCapability::InvalidData; out.errorMessage = QStringLiteral("Missing local path."); return out; }
-        acl_t access = acl_get_file(QFile::encodeName(path).constData(), ACL_TYPE_ACCESS);
+        AclData out;
+        out.path = path;
+        out.isDirectory = directory;
+        out.statDev = quint64(st.st_dev);
+        out.statIno = quint64(st.st_ino);
+        out.statIdentityValid = true;
+
+        if (bool(S_ISDIR(st.st_mode)) != directory) {
+            out.capability = AclCapability::InvalidData;
+            out.errorMessage = QStringLiteral("Target file type does not match requested ACL type.");
+            return out;
+        }
+
+        const QByteArray procPath = AclFsDetail::procFdPath(fd);
+        acl_t access = acl_get_file(procPath.constData(), ACL_TYPE_ACCESS);
         if (!access) { setError(out, errno); return out; }
         QString parseError;
         if (!parse(access, &out.accessEntries, &parseError)) {
@@ -40,7 +157,7 @@ public:
 
         if (directory) {
             errno = 0;
-            acl_t def = acl_get_file(QFile::encodeName(path).constData(), ACL_TYPE_DEFAULT);
+            acl_t def = acl_get_file(procPath.constData(), ACL_TYPE_DEFAULT);
             if (def) {
                 if (!parse(def, &out.defaultEntries, &parseError)) {
                     acl_free(def); out.capability = AclCapability::InvalidData; out.errorMessage = parseError; return out;
@@ -52,6 +169,28 @@ public:
         }
         out.capability = readOnly ? AclCapability::AvailableReadOnly : AclCapability::AvailableReadWrite;
         return out;
+    }
+
+    static AclData load(const QString &path, bool local, bool symlink, bool directory, bool readOnly = false)
+    {
+        if (!local) return unavailableForRemote();
+        AclData out; out.path = path; out.isDirectory = directory;
+        if (symlink) { out.capability = AclCapability::SymlinkUnavailable; out.errorMessage = QStringLiteral("POSIX ACL is unavailable for symbolic links."); return out; }
+        if (path.isEmpty()) { out.capability = AclCapability::InvalidData; out.errorMessage = QStringLiteral("Missing local path."); return out; }
+
+        struct stat st {};
+        int openErr = 0;
+        AclFsDetail::UniqueFd fd = AclFsDetail::openAnchoredNoSymlinks(path, &st, &openErr);
+        if (!fd.valid()) {
+            if (openErr == ELOOP) {
+                out.capability = AclCapability::SymlinkUnavailable;
+                out.errorMessage = QStringLiteral("POSIX ACL is unavailable for symbolic links.");
+                return out;
+            }
+            setError(out, openErr ? openErr : EINVAL);
+            return out;
+        }
+        return loadFromFd(fd.fd, path, st, directory, readOnly);
     }
 
     static QString userName(uint uid)

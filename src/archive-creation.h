@@ -218,7 +218,9 @@ private:
         const QByteArray name = (item.name + (item.directory ? QStringLiteral("/") : QString())).toUtf8();
         archive_entry_set_pathname_utf8(entry, name.constData());
         archive_entry_set_filetype(entry, item.directory ? AE_IFDIR : AE_IFREG);
-        archive_entry_set_perm(entry, item.directory ? 0755 : (0644 | (initial.st_mode & 0111)));
+        // SEC-046-04: Preserve source ordinary POSIX rwx permissions faithfully without
+        // widening private modes (0700->0755, 0600->0644) and without storing SUID/SGID/sticky.
+        archive_entry_set_perm(entry, initial.st_mode & static_cast<mode_t>(0777));
         archive_entry_set_size(entry, item.directory ? 0 : initial.st_size);
         archive_entry_set_mtime(entry, initial.st_mtim.tv_sec, initial.st_mtim.tv_nsec);
         if (archive_write_header(writer, entry) != ARCHIVE_OK) return problem(item.name);
@@ -338,7 +340,21 @@ private:
         const QString anchored = QStringLiteral("/proc/self/fd/%1").arg(destFd);
         QTemporaryDir privateDir(anchored + QStringLiteral("/.thispc-create-XXXXXX"));
         if (!privateDir.isValid()) return problem(target);
-        const QString temporary = privateDir.filePath(QStringLiteral("output") + thispcArchiveSuffix(m_format));
+        const int privateDirFd = ::open(encoded(privateDir.path()).constData(),
+                                        O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+        if (privateDirFd < 0) return problem(target);
+        const auto closePrivateDir = qScopeGuard([&] { ::close(privateDirFd); });
+
+        // SEC-046-04: Fail-safe archive confidentiality default on POSIX filesystems:
+        // create temporary archive output at 0600 (O_EXCL | O_NOFOLLOW) inside the 0700
+        // staging directory and publish at 0600 regardless of source/parent modes.
+        // Note: non-POSIX filesystems (FAT/exFAT/NTFS with synthetic modes) cannot enforce 0600.
+        const QString tempName = QStringLiteral("output") + thispcArchiveSuffix(m_format);
+        const int tempFd = ::openat(privateDirFd, encoded(tempName).constData(),
+                                    O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+        if (tempFd < 0) return problem(target);
+        const auto closeTempFd = qScopeGuard([&] { ::close(tempFd); });
+
         auto *writer = archive_write_new();
         if (!writer) return problem(target);
         const auto release = qScopeGuard([&] { archive_write_free(writer); });
@@ -351,7 +367,7 @@ private:
             if (configured == ARCHIVE_OK) configured = archive_write_add_filter_gzip(writer);
             break;
         }
-        if (configured != ARCHIVE_OK || archive_write_open_filename(writer, encoded(temporary).constData()) != ARCHIVE_OK)
+        if (configured != ARCHIVE_OK || archive_write_open_fd(writer, tempFd) != ARCHIVE_OK)
             return problem(target);
         announce(trLocal("Tworzenie archiwum…", "Creating archive…"));
         qint64 done = 0;
@@ -365,6 +381,12 @@ private:
         const int closed = archive_write_close(writer);
         if (!error.isEmpty() || m_cancelled) return error;
         if (closed != ARCHIVE_OK || done != total) return problem(target);
+        if (::fchmod(tempFd, static_cast<mode_t>(0600)) != 0) {
+            const int chmodErr = errno;
+            if (chmodErr != ENOTSUP && chmodErr != ENOSYS && chmodErr != EPERM) {
+                return problem(target);
+            }
+        }
         QMutexLocker lock(&m_commitMutex);
         if (m_cancelled) return {};
         struct stat currentDestination {};
@@ -376,7 +398,7 @@ private:
             || originalDestination.st_ino != currentDestination.st_ino)
             return trLocal("Katalog docelowy zmienił się. Archiwum nie zostało zapisane.",
                            "Destination directory changed. The archive was not published.");
-        if (::syscall(SYS_renameat2, AT_FDCWD, encoded(temporary).constData(), destFd,
+        if (::syscall(SYS_renameat2, privateDirFd, encoded(tempName).constData(), destFd,
                       encoded(base).constData(), RENAME_NOREPLACE))
             return trLocal("Nie można zapisać archiwum bez nadpisywania: %1.",
                            "Cannot publish the archive without overwriting: %1.").arg(target);

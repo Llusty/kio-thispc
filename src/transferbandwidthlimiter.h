@@ -212,29 +212,37 @@ public:
     {
         if (bytes <= 0) return 0;
 
+        qint64 remaining = bytes;
+        qint64 granted = 0;
+
         QMutexLocker locker(&m_mutex);
-        while (true) {
+        while (remaining > 0) {
             if (isCancelled && isCancelled()) {
-                return 0;
+                return granted;
             }
 
             if (!m_enabled || m_bytesPerSec == 0) {
-                recordTransferredLocked(taskId, bytes);
-                return bytes;
+                recordTransferredLocked(taskId, remaining);
+                granted += remaining;
+                return granted;
             }
 
             const qint64 now = nowMs();
             refillLocked(now);
 
+            const qint64 step = std::min(remaining, std::max<qint64>(1, m_maxBurst));
+
             // If tokens are available and no pending async request has priority
-            if (m_tokens >= static_cast<double>(bytes) && m_pendingRequests.isEmpty()) {
-                m_tokens -= static_cast<double>(bytes);
-                recordTransferredLocked(taskId, bytes);
-                return bytes;
+            if (m_tokens >= static_cast<double>(step) && m_pendingRequests.isEmpty()) {
+                m_tokens -= static_cast<double>(step);
+                recordTransferredLocked(taskId, step);
+                granted += step;
+                remaining -= step;
+                continue;
             }
 
             // Calculate deficit wait time
-            const double needed = static_cast<double>(bytes) - m_tokens;
+            const double needed = static_cast<double>(step) - m_tokens;
             qint64 waitMs = 10;
             if (needed > 0 && m_bytesPerSec > 0) {
                 waitMs = static_cast<qint64>(std::ceil((needed * 1000.0) / static_cast<double>(m_bytesPerSec)));
@@ -243,6 +251,7 @@ public:
 
             m_waitCondition.wait(&m_mutex, static_cast<unsigned long>(waitMs));
         }
+        return granted;
     }
 
     // --- Asynchronous Token Request (for event-driven/GUI thread) ---

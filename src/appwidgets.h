@@ -129,6 +129,7 @@ Q_SIGNALS:
     void safelyRemoveRequested(const DriveInfo &drive);
     void ejectRequested(const DriveInfo &drive);
     void propertiesRequested(const DriveInfo &drive);
+    void contextMenuActiveChanged(bool active);
 
 protected:
     void contextMenuEvent(QContextMenuEvent *event) override;

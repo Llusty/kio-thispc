@@ -1,10 +1,14 @@
 /* Native POSIX ACL Stage 3 regression. All writes stay in QTemporaryDir. */
 #include "aclcontroller.h"
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QTemporaryDir>
+#include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 static int aclChecks = 0;
@@ -91,6 +95,251 @@ int main(int argc, char **argv)
     aclVerify(::stat(QFile::encodeName(filePath).constData(), &afterSymStat) == 0
                   && (beforeSymStat.st_mode & 0777) == (afterSymStat.st_mode & 0777),
               "SEC-045-06: symlink target mode unchanged after rejected ACL write");
+
+    // ==================== Stage 1B.9B-3A (SEC-046-11): ACL Symlink TOCTOU & FIFO Safety (ACL1–ACL16) ====================
+    auto sha256Of = [](const QString &p) -> QByteArray {
+        QFile f(p);
+        aclVerify(f.open(QIODevice::ReadOnly), "sha256 open");
+        return QCryptographicHash::hash(f.readAll(), QCryptographicHash::Sha256).toHex();
+    };
+    auto aclTextOf = [](const QString &p, acl_type_t type) -> QByteArray {
+        acl_t a = acl_get_file(QFile::encodeName(p).constData(), type);
+        if (!a) return {};
+        ssize_t len = 0;
+        char *txt = acl_to_text(a, &len);
+        QByteArray out = txt ? QByteArray(txt, int(len)) : QByteArray();
+        if (txt) acl_free(txt);
+        acl_free(a);
+        return out;
+    };
+    auto countOpenFds = []() -> int {
+        return QDir(QStringLiteral("/proc/self/fd")).entryList(QDir::NoDotAndDotDot | QDir::AllEntries).size();
+    };
+
+    // ACL2 & ACL3 — Directory access ACL update while preserving default ACL
+    {
+        const QString d2 = temp.filePath(QStringLiteral("acl2_dir"));
+        aclVerify(QDir().mkpath(d2), "ACL2 dir created");
+        AclData da = AclProvider::load(d2, true, false, true, false);
+        aclVerify(da.canWrite() && da.statIdentityValid, "ACL2 dir loaded with stat identity");
+        da.accessEntries << aclEntry(AclTag::NamedUser, 7, uint(geteuid())) << aclEntry(AclTag::Mask, 5);
+        da.defaultEntries = AclController::minimalFromMode(0750);
+        auto res = AclController::write(da);
+        aclVerify(res.success && res.data.hasExtendedAccess && res.data.hasDefaultAcl,
+                  "ACL2/ACL3: directory access + default ACL written via pinned descriptor");
+    }
+
+    // ACL4 — Mode 0000 (unreadable owned) regular file works safely via O_PATH without raw pathname fallback
+    {
+        const QString roFile = temp.filePath(QStringLiteral("acl4_mode0000.txt"));
+        {
+            QFile f(roFile);
+            aclVerify(f.open(QIODevice::WriteOnly), "ACL4 create file");
+            f.write("mode0000-secret");
+        }
+        aclVerify(::chmod(QFile::encodeName(roFile).constData(), 0000) == 0, "ACL4 chmod 0000");
+        AclData roData = AclProvider::load(roFile, true, false, false, false);
+        aclVerify(roData.canWrite(), "ACL4: mode 0000 owned file loads safely via O_PATH");
+        roData.accessEntries = AclController::minimalFromMode(0600);
+        auto roRes = AclController::write(roData);
+        aclVerify(roRes.success, "ACL4: mode 0000 owned file ACL write succeeds via pinned O_PATH FD");
+        aclVerify(sha256Of(roFile) == QCryptographicHash::hash("mode0000-secret", QCryptographicHash::Sha256).toHex(),
+                  "ACL4/ACL16: file content unchanged");
+    }
+
+    // ACL6 & ACL16 — Directory symlink rejected by both load() and write(); external dir & sentinel untouched
+    {
+        const QString extDir = temp.filePath(QStringLiteral("acl6_ext_dir"));
+        const QString extFile = extDir + QStringLiteral("/sentinel.txt");
+        aclVerify(QDir().mkpath(extDir), "ACL6 extDir");
+        {
+            QFile f(extFile);
+            aclVerify(f.open(QIODevice::WriteOnly), "ACL6 sentinel");
+            f.write("acl6-dir-sentinel");
+        }
+        const QByteArray extAclBefore = aclTextOf(extDir, ACL_TYPE_ACCESS);
+        const QByteArray extHashBefore = sha256Of(extFile);
+        const QString dirSym = temp.filePath(QStringLiteral("acl6_dir_symlink"));
+        aclVerify(::symlink(QFile::encodeName(extDir).constData(), QFile::encodeName(dirSym).constData()) == 0,
+                  "ACL6 create dir symlink");
+        // Even if caller passes symlink=false, AclProvider::load must detect symlink via O_PATH|O_NOFOLLOW
+        const AclData loadedSym = AclProvider::load(dirSym, true, false, true, false);
+        aclVerify(loadedSym.capability == AclCapability::SymlinkUnavailable,
+                  "ACL6: AclProvider::load detects directory symlink even with symlink=false");
+        AclData forgedDir = AclProvider::load(extDir, true, false, true, false);
+        forgedDir.path = dirSym;
+        forgedDir.statIdentityValid = false;
+        forgedDir.accessEntries = AclController::minimalFromMode(0777);
+        forgedDir.defaultEntries = AclController::minimalFromMode(0777);
+        aclVerify(!AclController::write(forgedDir).success, "ACL6: AclController::write rejects directory symlink");
+        aclVerify(aclTextOf(extDir, ACL_TYPE_ACCESS) == extAclBefore
+            && aclTextOf(extDir, ACL_TYPE_DEFAULT).isEmpty()
+            && sha256Of(extFile) == extHashBefore,
+                  "ACL6/ACL16: external directory ACL and sentinel unchanged");
+    }
+
+    // ACL7 — FIFO without active writer/reader returns promptly without blocking
+    {
+        const QString fifoPath = temp.filePath(QStringLiteral("acl7_test.fifo"));
+        aclVerify(::mkfifo(QFile::encodeName(fifoPath).constData(), 0600) == 0, "ACL7 mkfifo");
+        QElapsedTimer timer;
+        timer.start();
+        const AclData fifoLoaded = AclProvider::load(fifoPath, true, false, false, false);
+        const qint64 loadMs = timer.elapsed();
+        aclVerify(loadMs < 1000 && fifoLoaded.capability == AclCapability::Unsupported,
+                  "ACL7: AclProvider::load rejects FIFO promptly without blocking");
+
+        AclData forgedFifo;
+        forgedFifo.path = fifoPath;
+        forgedFifo.capability = AclCapability::AvailableReadWrite;
+        forgedFifo.isDirectory = false;
+        forgedFifo.accessEntries = AclController::minimalFromMode(0666);
+        timer.restart();
+        const auto fifoWrite = AclController::write(forgedFifo);
+        const qint64 writeMs = timer.elapsed();
+        aclVerify(writeMs < 1000 && !fifoWrite.success,
+                  "ACL7: AclController::write rejects FIFO promptly without blocking");
+    }
+
+    // ACL8 — Unsupported special file (Unix domain socket) rejected safely without blocking
+    {
+        const QString sockPath = temp.filePath(QStringLiteral("acl8_test.sock"));
+        const int sfd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+        aclVerify(sfd >= 0, "ACL8 socket()");
+        struct sockaddr_un addr {};
+        addr.sun_family = AF_UNIX;
+        const QByteArray sockEnc = QFile::encodeName(sockPath);
+        aclVerify(size_t(sockEnc.size()) < sizeof(addr.sun_path), "ACL8 sockPath fits sun_path");
+        std::memcpy(addr.sun_path, sockEnc.constData(), size_t(sockEnc.size()) + 1);
+        aclVerify(::bind(sfd, reinterpret_cast<struct sockaddr *>(&addr), sizeof(addr)) == 0, "ACL8 bind()");
+        ::close(sfd);
+
+        const AclData sockLoaded = AclProvider::load(sockPath, true, false, false, false);
+        aclVerify(sockLoaded.capability == AclCapability::Unsupported, "ACL8: socket classified Unsupported");
+        AclData forgedSock;
+        forgedSock.path = sockPath;
+        forgedSock.capability = AclCapability::AvailableReadWrite;
+        forgedSock.accessEntries = AclController::minimalFromMode(0666);
+        aclVerify(!AclController::write(forgedSock).success, "ACL8: AclController::write rejects socket");
+    }
+
+    // ACL5 & ACL9 & ACL16 — Target replacement (post-load inode swap AND mid-write symlink swap via hook)
+    {
+        // ACL9a: Post-load inode replacement
+        const QString targetPath = temp.filePath(QStringLiteral("acl9_target.txt"));
+        const QString replPath = temp.filePath(QStringLiteral("acl9_repl.txt"));
+        {
+            QFile f1(targetPath); aclVerify(f1.open(QIODevice::WriteOnly), "ACL9a orig"); f1.write("orig");
+            QFile f2(replPath); aclVerify(f2.open(QIODevice::WriteOnly), "ACL9a repl"); f2.write("replacement-sentinel");
+        }
+        aclVerify(::chmod(QFile::encodeName(replPath).constData(), 0600) == 0, "ACL9a repl chmod 0600");
+        const QByteArray replAclBefore = aclTextOf(replPath, ACL_TYPE_ACCESS);
+        const QByteArray replHashBefore = sha256Of(replPath);
+
+        AclData loadedOrig = AclProvider::load(targetPath, true, false, false, false);
+        aclVerify(loadedOrig.canWrite() && loadedOrig.statIdentityValid, "ACL9a load orig");
+        aclVerify(::rename(QFile::encodeName(replPath).constData(), QFile::encodeName(targetPath).constData()) == 0,
+                  "ACL9a replace target with distinct inode");
+        loadedOrig.accessEntries = AclController::minimalFromMode(0777);
+        const auto res9a = AclController::write(loadedOrig);
+        aclVerify(!res9a.success, "ACL9a: post-load inode replacement rejected fail-closed");
+        aclVerify(aclTextOf(targetPath, ACL_TYPE_ACCESS) == replAclBefore
+            && sha256Of(targetPath) == replHashBefore,
+                  "ACL9a/ACL16: replacement inode ACL and SHA-256 unchanged");
+
+        // ACL5/ACL9b: Mid-write file->symlink swap via deterministic PreWriteHook
+        const QString victimPath = temp.filePath(QStringLiteral("acl9b_victim.txt"));
+        const QString extSentinel = temp.filePath(QStringLiteral("acl9b_ext_sentinel.txt"));
+        {
+            QFile f1(victimPath); aclVerify(f1.open(QIODevice::WriteOnly), "ACL9b victim"); f1.write("victim");
+            QFile f2(extSentinel); aclVerify(f2.open(QIODevice::WriteOnly), "ACL9b ext"); f2.write("ext-sentinel-payload");
+        }
+        aclVerify(::chmod(QFile::encodeName(extSentinel).constData(), 0600) == 0, "ACL9b ext chmod 0600");
+        const QByteArray extAclBefore = aclTextOf(extSentinel, ACL_TYPE_ACCESS);
+        const QByteArray extHashBefore = sha256Of(extSentinel);
+
+        AclData victimData = AclProvider::load(victimPath, true, false, false, false);
+        victimData.accessEntries = AclController::minimalFromMode(0777);
+        bool hookFired = false;
+        AclController::setPreWriteHook([&](const QString &p) {
+            hookFired = true;
+            ::unlink(QFile::encodeName(p).constData());
+            ::symlink(QFile::encodeName(extSentinel).constData(), QFile::encodeName(p).constData());
+        });
+        const auto res9b = AclController::write(victimData);
+        AclController::setPreWriteHook({});
+        aclVerify(hookFired && !res9b.success, "ACL5/ACL9b: mid-write symlink swap rejected fail-closed");
+        aclVerify(aclTextOf(extSentinel, ACL_TYPE_ACCESS) == extAclBefore
+            && sha256Of(extSentinel) == extHashBefore,
+                  "ACL5/ACL9b/ACL16: external sentinel ACL and SHA-256 untouched");
+    }
+
+    // ACL10 & ACL16 — Ancestor symlink substitution (both upfront and mid-write via PreWriteHook)
+    {
+        const QString realDir = temp.filePath(QStringLiteral("acl10_real"));
+        const QString linkDir = temp.filePath(QStringLiteral("acl10_link"));
+        const QString realFile = realDir + QStringLiteral("/secret.txt");
+        aclVerify(QDir().mkpath(realDir), "ACL10 realDir");
+        {
+            QFile f(realFile); aclVerify(f.open(QIODevice::WriteOnly), "ACL10 realFile"); f.write("ancestor-secret");
+        }
+        aclVerify(::chmod(QFile::encodeName(realFile).constData(), 0600) == 0, "ACL10 chmod 0600");
+        aclVerify(::symlink(QFile::encodeName(realDir).constData(), QFile::encodeName(linkDir).constData()) == 0,
+                  "ACL10 ancestor symlink");
+        const QByteArray realAclBefore = aclTextOf(realFile, ACL_TYPE_ACCESS);
+        const QByteArray realHashBefore = sha256Of(realFile);
+
+        const QString viaSym = linkDir + QStringLiteral("/secret.txt");
+        aclVerify(AclProvider::load(viaSym, true, false, false, false).capability == AclCapability::SymlinkUnavailable,
+                  "ACL10: AclProvider::load rejects ancestor symlink");
+        AclData forgedAnc;
+        forgedAnc.path = viaSym;
+        forgedAnc.capability = AclCapability::AvailableReadWrite;
+        forgedAnc.accessEntries = AclController::minimalFromMode(0777);
+        aclVerify(!AclController::write(forgedAnc).success, "ACL10: AclController::write rejects ancestor symlink");
+        aclVerify(aclTextOf(realFile, ACL_TYPE_ACCESS) == realAclBefore
+            && sha256Of(realFile) == realHashBefore,
+                  "ACL10/ACL16: target behind ancestor symlink unchanged");
+
+        // Mid-write ancestor swap via PreWriteHook
+        const QString workAnc = temp.filePath(QStringLiteral("acl10_work"));
+        const QString workAside = temp.filePath(QStringLiteral("acl10_work_aside"));
+        const QString workFile = workAnc + QStringLiteral("/secret.txt");
+        aclVerify(QDir().mkpath(workAnc), "ACL10 workAnc");
+        {
+            QFile f(workFile); aclVerify(f.open(QIODevice::WriteOnly), "ACL10 workFile"); f.write("work-file");
+        }
+        AclData workData = AclProvider::load(workFile, true, false, false, false);
+        workData.accessEntries = AclController::minimalFromMode(0777);
+        AclController::setPreWriteHook([&](const QString &) {
+            ::rename(QFile::encodeName(workAnc).constData(), QFile::encodeName(workAside).constData());
+            ::symlink(QFile::encodeName(realDir).constData(), QFile::encodeName(workAnc).constData());
+        });
+        const auto ancSwapRes = AclController::write(workData);
+        AclController::setPreWriteHook({});
+        aclVerify(!ancSwapRes.success, "ACL10: mid-write ancestor symlink swap rejected fail-closed");
+        aclVerify(aclTextOf(realFile, ACL_TYPE_ACCESS) == realAclBefore
+            && sha256Of(realFile) == realHashBefore,
+                  "ACL10/ACL16: external target behind swapped ancestor unchanged");
+    }
+
+    // ACL15 — Resource lifecycle: zero FD leaks across success and failure paths
+    {
+        const int fdsBefore = countOpenFds();
+        const QString okFile = temp.filePath(QStringLiteral("acl15_fd_ok.txt"));
+        {
+            QFile f(okFile); aclVerify(f.open(QIODevice::WriteOnly), "ACL15 okFile"); f.write("fd-check");
+        }
+        for (int i = 0; i < 10; ++i) {
+            AclData d = AclProvider::load(okFile, true, false, false, false);
+            d.accessEntries = AclController::minimalFromMode(0640);
+            aclVerify(AclController::write(d).success, "ACL15 write ok");
+            AclProvider::load(temp.filePath(QStringLiteral("acl15_missing")), true, false, false, false);
+            AclProvider::load(temp.filePath(QStringLiteral("acl7_test.fifo")), true, false, false, false);
+        }
+        const int fdsAfter = countOpenFds();
+        aclVerify(fdsAfter == fdsBefore, "ACL15: zero file descriptor leaks across repeated load/write/error paths");
+    }
 
     qInfo("PASS: %d ACL assertions; native libacl, validation, effective mask, add/remove, default ACL, reread", aclChecks);
 }

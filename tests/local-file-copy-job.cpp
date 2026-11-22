@@ -683,6 +683,269 @@ int main(int argc, char **argv)
         simulateDescriptorLinkatUnsupported() = false;
     }
 
+    // =========================================================================
+    // SEC-046-05: Bandwidth Limiter Livelock (< 256 KiB/s) & Worker Sync Tests
+    // =========================================================================
+    {
+        // 1 & 4. Controlled-clock acquire() with request (256 KiB) > m_maxBurst (64 KiB) at 1 KiB/s & 64 KiB/s
+        {
+            TransferBandwidthLimiter limiter;
+            std::atomic<qint64> fakeNow{1000};
+            limiter.setClock([&fakeNow]() { return fakeNow.load(); });
+            limiter.setLimit(true, 64 * 1024); // m_maxBurst == 64 KiB
+
+            std::atomic<qint64> granted{0};
+            QThread *worker = QThread::create([&] {
+                granted.store(limiter.acquire(1, 256 * 1024, [] { return false; }));
+            });
+            worker->start();
+            for (int tick = 0; tick < 80 && !worker->isFinished(); ++tick) {
+                fakeNow.fetch_add(250);
+                QThread::msleep(10);
+            }
+            verify(worker->wait(5000), "SEC-046-05: acquire(256 KiB) at 64 KiB/s completes without livelock");
+            delete worker;
+            verify(granted.load() == 256 * 1024, "SEC-046-05: full 256 KiB granted");
+            verify(limiter.bytesTransferredForTask(1) == 256 * 1024, "SEC-046-05: exact task accounting");
+
+            // 1 KiB/s lower boundary with controlled clock
+            limiter.resetStats();
+            limiter.setLimit(true, TransferBandwidthLimiter::MinBandwidthLimitBytes); // 1 KiB/s, maxBurst=64 KiB
+            granted.store(0);
+            QThread *slowWorker = QThread::create([&] {
+                granted.store(limiter.acquire(2, 128 * 1024, [] { return false; }));
+            });
+            slowWorker->start();
+            for (int tick = 0; tick < 200 && !slowWorker->isFinished(); ++tick) {
+                fakeNow.fetch_add(1000); // +1 KiB/tick
+                QThread::msleep(5);
+            }
+            verify(slowWorker->wait(5000), "SEC-046-05: 1 KiB/s boundary acquire(128 KiB) completes");
+            delete slowWorker;
+            verify(granted.load() == 128 * 1024 && limiter.bytesTransferredForTask(2) == 128 * 1024,
+                   "SEC-046-05: 1 KiB/s boundary accounting exact");
+
+            // Partial grant on cancel mid-acquire() accounts only granted bytes
+            limiter.resetStats();
+            limiter.setLimit(false, 0);
+            limiter.setLimit(true, 64 * 1024); // initial 64 KiB burst available
+            std::atomic<bool> cancelFlag{false};
+            granted.store(0);
+            QThread *cancelWorker = QThread::create([&] {
+                granted.store(limiter.acquire(3, 256 * 1024, [&] { return cancelFlag.load(); }));
+            });
+            cancelWorker->start();
+            verify(QTest::qWaitFor([&] { return limiter.bytesTransferredForTask(3) >= 64 * 1024; }, 2000),
+                   "SEC-046-05: first 64 KiB burst consumed before cancel");
+            cancelFlag.store(true);
+            verify(cancelWorker->wait(5000), "SEC-046-05: cancelled acquire() exits promptly");
+            delete cancelWorker;
+            verify(granted.load() == static_cast<qint64>(limiter.bytesTransferredForTask(3))
+                   && granted.load() < 256 * 1024,
+                   "SEC-046-05: partial grant on cancel matches accounted bytes exactly");
+
+            // Unlimited mode
+            limiter.setLimit(false, 0);
+            verify(limiter.acquire(4, 512 * 1024, [] { return false; }) == 512 * 1024,
+                   "SEC-046-05: unlimited mode grants immediately");
+        }
+
+        // 2 & 3. Real LocalFileCopyJob at 64 KiB/s and 100 KiB/s (256 KiB chunkSize)
+        const QByteArray payload260k(260 * 1024, 'B');
+        const QString src260 = directory.filePath(QStringLiteral("sec046_05_260k.bin"));
+        verify(writeFile(src260, payload260k), "SEC-046-05: 260 KiB source written");
+        const QByteArray expectedSha = QCryptographicHash::hash(payload260k, QCryptographicHash::Sha256);
+
+        for (const quint64 rate : {quint64(64 * 1024), quint64(100 * 1024)}) {
+            auto lim = std::make_shared<TransferBandwidthLimiter>();
+            lim->setLimit(true, rate);
+            const QString dst = directory.filePath(QStringLiteral("sec046_05_%1.bin").arg(rate));
+            LocalFileCopyJob job(QUrl::fromLocalFile(src260), QUrl::fromLocalFile(dst));
+            job.setAutoDelete(false);
+            job.setBandwidthLimiter(lim, 10);
+            QSignalSpy spy(&job, &KJob::result);
+            job.start();
+            verify(waitUntil([&] { return spy.count() == 1; }, 10000) && job.error() == 0,
+                   "SEC-046-05: LocalFileCopyJob completes at sub-256KiB/s rate");
+            QFile out(dst);
+            verify(out.open(QIODevice::ReadOnly)
+                   && QCryptographicHash::hash(out.readAll(), QCryptographicHash::Sha256) == expectedSha,
+                   "SEC-046-05: copied payload SHA-256 matches");
+            out.close();
+            QFile::remove(dst);
+        }
+
+        // 5, 6, 7 & 9. Pause/Resume + Dynamic Limit Change + Cancel during 64 KiB/s transfer
+        {
+            const QByteArray payload512k(512 * 1024, 'P');
+            const QString src512 = directory.filePath(QStringLiteral("sec046_05_512k.bin"));
+            verify(writeFile(src512, payload512k), "SEC-046-05: 512 KiB source written");
+
+            auto lim = std::make_shared<TransferBandwidthLimiter>();
+            lim->setLimit(true, 64 * 1024);
+            const QString dstPause = directory.filePath(QStringLiteral("sec046_05_pause.bin"));
+            LocalFileCopyJob pauseJob(QUrl::fromLocalFile(src512), QUrl::fromLocalFile(dstPause));
+            pauseJob.setAutoDelete(false);
+            pauseJob.setBandwidthLimiter(lim, 20);
+            QSignalSpy pauseSpy(&pauseJob, &KJob::result);
+            pauseJob.start();
+
+            verify(waitUntil([&] { return lim->bytesTransferredForTask(20) > 0; }, 2000),
+                   "SEC-046-05: transfer started acquiring tokens");
+            verify(pauseJob.suspend(), "SEC-046-05: Pause succeeds while throttled at 64 KiB/s");
+            verify(pauseSpy.count() == 0, "SEC-046-05: paused job stays active");
+            // Change limit to unlimited while resuming -> completes promptly
+            lim->setLimit(false, 0);
+            verify(pauseJob.resume(), "SEC-046-05: Resume succeeds");
+            verify(waitUntil([&] { return pauseSpy.count() == 1; }, 5000) && pauseJob.error() == 0,
+                   "SEC-046-05: resumed job completes after dynamic limit change");
+            QFile::remove(dstPause);
+
+            // Cancel during 64 KiB/s transfer inside TransferQueueController -> slot/reservation released
+            TransferQueueController qc;
+            qc.setBandwidthLimit(true, 64 * 1024);
+            const QString dstCancel = directory.filePath(QStringLiteral("sec046_05_qcancel.bin"));
+            TransferTaskDescriptor desc;
+            desc.title = QStringLiteral("Throttled Cancel");
+            desc.type = TransferOperationType::Copy;
+            desc.backend = TransferBackendKind::LocalNative;
+            desc.sources = {QUrl::fromLocalFile(src512)};
+            desc.destination = QUrl::fromLocalFile(directory.path());
+            desc.targetUrls = {QUrl::fromLocalFile(dstCancel)};
+            desc.capabilities.canCancelRunning = true;
+            desc.jobFactory = [&]() -> KJob * {
+                return new LocalFileCopyJob(QUrl::fromLocalFile(src512), QUrl::fromLocalFile(dstCancel));
+            };
+            const auto enq = qc.enqueue(std::move(desc));
+            verify(enq.accepted(), "SEC-046-05: throttled task enqueued");
+            verify(waitUntil([&] {
+                auto snap = qc.taskSnapshot(enq.id);
+                return snap.has_value() && snap->state == TransferTaskState::Running;
+            }, 2000), "SEC-046-05: throttled task running");
+            verify(qc.cancelTask(enq.id), "SEC-046-05: cancelTask accepted");
+            verify(waitUntil([&] { return qc.isQueueIdle(); }, 5000),
+                   "SEC-046-05: queue becomes idle and releases slot/reservation after cancel");
+            verify(!QFileInfo::exists(dstCancel) && !QFileInfo::exists(dstCancel + QStringLiteral(".thispc-part")),
+                   "SEC-046-05: cancelled throttled copy leaves no destination or staging file");
+
+            // Deterministic cancellation/cleanup ordering regression (Stage 1B.10B-4):
+            // Hold the worker right before removeVerifiedPartial() and prove that
+            // TransferQueueController stays in Cancelling (not idle/Cancelled) until
+            // staging cleanup actually completes on the worker thread.
+            {
+                const QByteArray expectedSrcHash = QCryptographicHash::hash(payload512k, QCryptographicHash::Sha256);
+                TransferQueueController detQc;
+                detQc.setBandwidthLimit(true, 64 * 1024);
+                const QString dstDet = directory.filePath(QStringLiteral("sec046_05_det_cancel.bin"));
+                const QString partDet = dstDet + QStringLiteral(".thispc-part");
+
+                QMutex hookMutex;
+                QWaitCondition hookCv;
+                bool workerAtCleanup = false;
+                bool allowCleanup = false;
+
+                TransferTaskDescriptor detDesc;
+                detDesc.title = QStringLiteral("Deterministic Throttled Cancel");
+                detDesc.type = TransferOperationType::Copy;
+                detDesc.backend = TransferBackendKind::LocalNative;
+                detDesc.sources = {QUrl::fromLocalFile(src512)};
+                detDesc.destination = QUrl::fromLocalFile(directory.path());
+                detDesc.targetUrls = {QUrl::fromLocalFile(dstDet)};
+                detDesc.capabilities.canCancelRunning = true;
+                detDesc.jobFactory = [&]() -> KJob * {
+                    auto *job = new LocalFileCopyJob(QUrl::fromLocalFile(src512), QUrl::fromLocalFile(dstDet));
+                    job->setBeforeCancelCleanupHookForTest([&]() {
+                        QMutexLocker lk(&hookMutex);
+                        workerAtCleanup = true;
+                        hookCv.wakeAll();
+                        while (!allowCleanup) {
+                            hookCv.wait(&hookMutex, 50);
+                        }
+                    });
+                    return job;
+                };
+
+                QSignalSpy detFinishedSpy(&detQc, &TransferQueueController::taskFinished);
+                const auto detEnq = detQc.enqueue(std::move(detDesc));
+                verify(detEnq.accepted(), "SEC-046-05 det: throttled task enqueued");
+                verify(waitUntil([&] {
+                    auto snap = detQc.taskSnapshot(detEnq.id);
+                    return snap.has_value()
+                        && snap->state == TransferTaskState::Running
+                        && QFileInfo::exists(partDet);
+                }, 5000), "SEC-046-05 det: throttled task running with staging file created");
+
+                verify(detQc.cancelTask(detEnq.id), "SEC-046-05 det: cancelTask accepted");
+                verify(waitUntil([&] {
+                    QMutexLocker lk(&hookMutex);
+                    return workerAtCleanup;
+                }, 5000), "SEC-046-05 det: worker reached pre-cleanup hook promptly");
+
+                QCoreApplication::processEvents();
+                const auto midSnap = detQc.taskSnapshot(detEnq.id);
+                verify(midSnap.has_value() && midSnap->state == TransferTaskState::Cancelling,
+                       "SEC-046-05 det: task remains Cancelling while worker cleanup is in progress");
+                verify(!detQc.isQueueIdle(),
+                       "SEC-046-05 det: queue does not report idle before staging cleanup finishes");
+                verify(detFinishedSpy.count() == 0,
+                       "SEC-046-05 det: no premature taskFinished before worker cleanup completes");
+                verify(QFileInfo::exists(partDet),
+                       "SEC-046-05 det: staging file still exists prior to releasing cleanup hook");
+
+                {
+                    QMutexLocker lk(&hookMutex);
+                    allowCleanup = true;
+                    hookCv.wakeAll();
+                }
+
+                verify(waitUntil([&] { return detQc.isQueueIdle(); }, 5000),
+                       "SEC-046-05 det: queue becomes idle once worker cleanup completes");
+                const auto endSnap = detQc.taskSnapshot(detEnq.id);
+                verify(endSnap.has_value() && endSnap->state == TransferTaskState::Cancelled,
+                       "SEC-046-05 det: terminal state is Cancelled");
+                verify(detFinishedSpy.count() == 1,
+                       "SEC-046-05 det: exactly one taskFinished signal emitted");
+                verify(!QFileInfo::exists(dstDet) && !QFileInfo::exists(partDet),
+                       "SEC-046-05 det: neither destination nor staging file remains when idle");
+                QFile srcCheck(src512);
+                verify(srcCheck.open(QIODevice::ReadOnly)
+                           && QCryptographicHash::hash(srcCheck.readAll(), QCryptographicHash::Sha256) == expectedSrcHash,
+                       "SEC-046-05 det: source file SHA-256 preserved byte-for-byte");
+                QTest::qWait(50);
+                verify(detFinishedSpy.count() == 1,
+                       "SEC-046-05 det: no duplicate completion after worker exit");
+            }
+            QFile::remove(src512);
+        }
+
+        // 8. Two parallel LocalFileCopyJobs sharing 100 KiB/s limiter
+        {
+            auto lim = std::make_shared<TransferBandwidthLimiter>();
+            lim->setLimit(true, 100 * 1024);
+            const QString dstA = directory.filePath(QStringLiteral("sec046_05_parA.bin"));
+            const QString dstB = directory.filePath(QStringLiteral("sec046_05_parB.bin"));
+            LocalFileCopyJob jobA(QUrl::fromLocalFile(src260), QUrl::fromLocalFile(dstA));
+            LocalFileCopyJob jobB(QUrl::fromLocalFile(src260), QUrl::fromLocalFile(dstB));
+            jobA.setAutoDelete(false);
+            jobB.setAutoDelete(false);
+            jobA.setBandwidthLimiter(lim, 31);
+            jobB.setBandwidthLimiter(lim, 32);
+            QSignalSpy spyA(&jobA, &KJob::result);
+            QSignalSpy spyB(&jobB, &KJob::result);
+            jobA.start();
+            jobB.start();
+            verify(waitUntil([&] { return spyA.count() == 1 && spyB.count() == 1; }, 12000)
+                   && jobA.error() == 0 && jobB.error() == 0,
+                   "SEC-046-05: two parallel 100 KiB/s jobs complete without deadlock");
+            verify(lim->totalBytesTransferred() == static_cast<quint64>(2 * 260 * 1024),
+                   "SEC-046-05: shared limiter accounts both parallel transfers");
+            QFile::remove(dstA);
+            QFile::remove(dstB);
+        }
+
+        QFile::remove(src260);
+    }
+
     qInfo("PASS: %d LocalFileCopyJob assertions", checks);
     return 0;
 }

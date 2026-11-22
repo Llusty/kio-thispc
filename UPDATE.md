@@ -1,14 +1,23 @@
 [English](UPDATE.md) | [Polski](UPDATE.pl.md)
 
-# Update to 0.45.1
+# Update to 0.45.2
 
 ```bash
 cd ~/Pobrane
-tar -xzf kio-thispc-0.45.1.tar.gz
-cd kio-thispc-0.45.1
+tar -xzf kio-thispc-0.45.2.tar.gz
+cd kio-thispc-0.45.2
 chmod +x install.sh
 ./install.sh
 ```
+
+- **Security & Stability Hotfix (`SEC-046`):**
+  - **`SEC-046-05`:** Asynchronous cancellation (`LocalFileCopyJob::requestCancelAsync()`) with immediate bandwidth-limiter wake-up ensures `.thispc-part` staging cleanup completes before queue slots/reservations release or `Cancelled` is reported; fixes sub-256 KiB/s limiter livelock.
+  - **`SEC-046-08`:** Destination-root `(st_dev, st_ino)` anchoring and no-symlink verification protect Folder Merge against destination-directory replacement between planning and execution and during execution (`DR1–DR15`).
+  - **`SEC-046-11` & FIFO GUI Safety:** Eliminates GUI hangs (`wait_for_partner`) on unconnected FIFOs, symlinks to FIFOs, and broken symlinks across Properties, ACL, Metadata, Checksums, Preview, context menus, and archive detection.
+  - **`SEC-046-17` & Lifecycle Hardening:** Adds KIO `thispc:/` mount-point confinement (`ThisPcConfinement`), worker-lifetime hardening (`SEC-046-12`), and conflict-dialog lifecycle fixes (`SEC-046-22A/B`).
+- **Known Limitations:** `SEC-046-17` post-redirection `kio_file` TOCTOU is mitigated rather than eliminated; Folder Merge does not yet integrate the shared bandwidth limiter (`supportsThrottling = false`); ASan/UBSan tests run with `detect_leaks=0` (pre-existing `ChecksumJob`/`QThread` LSan finding remains); pre-existing Directory Refresh items `DR-058/059/062` (not implemented) and `DR-009/010` (interactive) are unchanged.
+
+## 0.45.1 — Previous Release
 
 - **Recursive Folder Merge (`FOLDER-MERGE-01`):** Local directory Copy operations now support recursive folder merging with independent folder (`Merge`, `Rename`, `Skip`, `Abort`) and file (`Overwrite`, `Rename`, `Skip`, `Abort`) conflict decisions, Crash Recovery (`.thispc-tx.*` journals), and `OperationWindow` progress/speed tracking.
 - **Safe `Overwrite` Limitations:** Atomic `Overwrite` is enabled only on **Btrfs, ext4, XFS, and tmpfs**; on **NTFS (`ntfs3`/NTFS-3G), VFAT, and remote KIO backends**, `Overwrite` is blocked fail-closed (`Rename`, `Skip`, and `Abort` remain available).

@@ -228,6 +228,130 @@ int main(int argc, char **argv)
         verify(denied.planError() == LocalTransferPlanError::SourceRead,
                "unreadable directory fails rather than appearing empty");
     }
+
+    // =========================================================================
+    // STAGE 1B.9B-1A (SEC-046-12): WORKER LIFETIME & THREAD-AFFINITY TESTS W1–W12
+    // =========================================================================
+
+    // W1, W9, W10 — Normal completion: 1 result, worker destroyed once on its own affinity thread
+    {
+        std::atomic<int> destroyCount{0};
+        std::atomic<bool> destroyedOnWorkerThread{false};
+        QThread *mainThread = QThread::currentThread();
+        {
+            LocalTransferPlanJob job({QUrl::fromLocalFile(cancellationRoot)}, QUrl::fromLocalFile(destination));
+            job.setAutoDelete(false);
+            job.setWorkerDestroyedCallback([&](QThread *t) {
+                destroyCount.fetch_add(1, std::memory_order_relaxed);
+                if (t && t != mainThread) {
+                    destroyedOnWorkerThread.store(true, std::memory_order_release);
+                }
+            });
+            QSignalSpy spy(&job, &KJob::result);
+            job.start();
+            waitForResult(spy, "W1 normal completion emits result");
+            verify(spy.count() == 1 && job.error() == KJob::NoError, "W1: 1 result, NoError");
+            verify(waitUntil([&] { return !job.isWorkerThreadRunning() && destroyCount.load() == 1; }, 3000),
+                   "W9/W10: worker thread stops and worker destroyed once");
+        }
+        verify(destroyCount.load() == 1 && destroyedOnWorkerThread.load(),
+               "W9: worker destroyed exactly once on worker affinity thread");
+    }
+
+    // W2 — Immediate cancellation right after start()
+    {
+        std::atomic<int> destroyCount{0};
+        {
+            LocalTransferPlanJob job({QUrl::fromLocalFile(cancellationRoot)}, QUrl::fromLocalFile(destination), nullptr, 2);
+            job.setAutoDelete(false);
+            job.setWorkerDestroyedCallback([&](QThread *) { destroyCount.fetch_add(1, std::memory_order_relaxed); });
+            QSignalSpy spy(&job, &KJob::result);
+            job.start();
+            verify(job.kill(KJob::EmitResult), "W2: immediate kill accepted");
+            waitForResult(spy, "W2 immediate cancel emits result");
+            verify(spy.count() == 1 && job.error() == KJob::KilledJobError, "W2: KilledJobError");
+        }
+        verify(destroyCount.load() == 1, "W2: worker destroyed once after immediate cancel");
+    }
+
+    // W4 — Late cancellation after completion is harmless and emits no second result
+    {
+        LocalTransferPlanJob job({QUrl::fromLocalFile(cancellationRoot)}, QUrl::fromLocalFile(destination));
+        job.setAutoDelete(false);
+        QSignalSpy spy(&job, &KJob::result);
+        job.start();
+        waitForResult(spy, "W4 completes");
+        verify(waitUntil([&] { return !job.isWorkerThreadRunning(); }, 3000), "W4 thread finished");
+        job.kill(KJob::EmitResult);
+        QCoreApplication::processEvents();
+        verify(spy.count() == 1 && job.error() == KJob::NoError,
+               "W4: late kill after completion is harmless and emits no duplicate result");
+    }
+
+    // W5 — Repeated cancellation emits exactly one result and no UAF
+    {
+        std::atomic<int> destroyCount{0};
+        {
+            LocalTransferPlanJob job({QUrl::fromLocalFile(cancellationRoot)}, QUrl::fromLocalFile(destination), nullptr, 2);
+            job.setAutoDelete(false);
+            job.setWorkerDestroyedCallback([&](QThread *) { destroyCount.fetch_add(1, std::memory_order_relaxed); });
+            QSignalSpy spy(&job, &KJob::result);
+            job.start();
+            for (int i = 0; i < 5; ++i) {
+                job.kill(KJob::EmitResult);
+            }
+            waitForResult(spy, "W5 emits one result");
+            QCoreApplication::processEvents();
+            verify(spy.count() == 1 && job.error() == KJob::KilledJobError,
+                   "W5: repeated kill emits exactly one KilledJobError result");
+        }
+        verify(destroyCount.load() == 1, "W5: worker destroyed once");
+    }
+
+    // W6 — Destruction before start() is safe and leak-free
+    {
+        std::atomic<int> destroyCount{0};
+        {
+            LocalTransferPlanJob unstarted({QUrl::fromLocalFile(cancellationRoot)}, QUrl::fromLocalFile(destination));
+            unstarted.setAutoDelete(false);
+            unstarted.setWorkerDestroyedCallback([&](QThread *) { destroyCount.fetch_add(1, std::memory_order_relaxed); });
+        }
+        verify(destroyCount.load() == 0, "W6: unstarted job allocates/leaks zero workers");
+    }
+
+    // W7 & W8 — Destruction immediately after start() + pumping late queued events
+    {
+        std::atomic<int> destroyCount{0};
+        for (int round = 0; round < 5; ++round) {
+            auto *job = new LocalTransferPlanJob(
+                {QUrl::fromLocalFile(cancellationRoot)}, QUrl::fromLocalFile(destination), nullptr, 1);
+            job->setAutoDelete(false);
+            job->setWorkerDestroyedCallback([&](QThread *) { destroyCount.fetch_add(1, std::memory_order_relaxed); });
+            job->start();
+            delete job;
+            QCoreApplication::processEvents();
+        }
+        verify(destroyCount.load() == 5, "W7/W8: 5 immediate-destroy rounds safely join and destroy each worker once");
+    }
+
+    // W11 — Error path cleans up worker once on worker thread
+    {
+        std::atomic<int> destroyCount{0};
+        {
+            LocalTransferPlanJob errJob(
+                {QUrl::fromLocalFile(cancellationRoot)},
+                QUrl::fromLocalFile(temporary.filePath(QStringLiteral("w11-absent-dest"))));
+            errJob.setAutoDelete(false);
+            errJob.setWorkerDestroyedCallback([&](QThread *) { destroyCount.fetch_add(1, std::memory_order_relaxed); });
+            QSignalSpy spy(&errJob, &KJob::result);
+            errJob.start();
+            waitForResult(spy, "W11 error finishes");
+            verify(spy.count() == 1 && errJob.planError() == LocalTransferPlanError::DestinationInvalid,
+                   "W11: DestinationInvalid reported");
+        }
+        verify(destroyCount.load() == 1, "W11: error path destroys worker once");
+    }
+
     qInfo("PASS: %d LocalTransferPlan assertions", checks);
     return 0;
 }

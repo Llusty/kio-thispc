@@ -19,6 +19,9 @@
 #include <QThread>
 #include <QUrl>
 
+#include <atomic>
+#include <functional>
+#include <memory>
 #include <utility>
 #include <cerrno>
 #include <dirent.h>
@@ -95,21 +98,29 @@ public:
     LocalTransferPlanWorker(
         QList<QUrl> sources,
         QUrl destinationDirectory,
-        int entryDelayMilliseconds)
+        int entryDelayMilliseconds,
+        std::shared_ptr<std::atomic_bool> cancelFlag = nullptr)
         : m_sources(std::move(sources))
         , m_destinationDirectory(std::move(destinationDirectory))
         , m_entryDelayMilliseconds(qMax(0, entryDelayMilliseconds))
+        , m_cancelFlag(cancelFlag ? std::move(cancelFlag) : std::make_shared<std::atomic_bool>(false))
     {
     }
 
     void requestCancel()
     {
-        m_cancelled.storeRelease(true);
+        if (m_cancelFlag) {
+            m_cancelFlag->store(true, std::memory_order_release);
+        }
     }
 
 public Q_SLOTS:
     void run()
     {
+        if (cancelled()) {
+            fail(LocalTransferPlanError::Cancelled, {});
+            return;
+        }
         if (!m_destinationDirectory.isLocalFile()) {
             fail(LocalTransferPlanError::NonLocalUrl,
                  tr("The destination is not a local directory."));
@@ -268,7 +279,7 @@ private:
 
     bool cancelled() const
     {
-        return m_cancelled.loadAcquire();
+        return m_cancelFlag && m_cancelFlag->load(std::memory_order_acquire);
     }
 
     void fail(LocalTransferPlanError error, const QString &message)
@@ -279,7 +290,7 @@ private:
     QList<QUrl> m_sources;
     QUrl m_destinationDirectory;
     int m_entryDelayMilliseconds;
-    QAtomicInteger<bool> m_cancelled = false;
+    std::shared_ptr<std::atomic_bool> m_cancelFlag;
     bool m_sourceReadFailed = false;
 };
 
@@ -295,72 +306,99 @@ public:
         QObject *parent = nullptr,
         int entryDelayMilliseconds = 0)
         : KJob(parent)
-        , m_worker(new LocalTransferPlanWorker(
-              std::move(sources),
-              destinationDirectory,
-              entryDelayMilliseconds))
+        , m_sources(std::move(sources))
+        , m_destinationDirectory(destinationDirectory)
+        , m_entryDelayMilliseconds(qMax(0, entryDelayMilliseconds))
+        , m_cancelFlag(std::make_shared<std::atomic_bool>(false))
     {
         qRegisterMetaType<LocalTransferPlan>();
         qRegisterMetaType<LocalTransferPlanError>();
         setCapabilities(KJob::Killable);
-        m_worker->moveToThread(&m_thread);
-        connect(&m_thread, &QThread::started,
-                m_worker, &LocalTransferPlanWorker::run);
-        connect(m_worker, &LocalTransferPlanWorker::entryPlanned,
-                this, [this](qsizetype count, qulonglong bytes) {
-                    m_plannedEntryCount = count;
-                    setProcessedAmount(KJob::Bytes, bytes);
-                });
-        connect(m_worker, &LocalTransferPlanWorker::completed,
-                this, [this](const LocalTransferPlan &plan) {
-                    m_plan = plan;
-                    setTotalAmount(KJob::Bytes, plan.totalBytes);
-                    setProcessedAmount(KJob::Bytes, plan.totalBytes);
-                    finish(LocalTransferPlanError::None, {});
-                });
-        connect(m_worker, &LocalTransferPlanWorker::failed,
-                this, [this](LocalTransferPlanError error, const QString &message) {
-                    finish(error, message);
-                });
-        connect(m_worker, &LocalTransferPlanWorker::completed,
-                &m_thread, &QThread::quit);
-        connect(m_worker, &LocalTransferPlanWorker::failed,
-                &m_thread, &QThread::quit);
-        connect(&m_thread, &QThread::finished,
-                m_worker, &QObject::deleteLater);
     }
 
     ~LocalTransferPlanJob() override
     {
+        // SEC-046-12: Signal cancellation via shared atomic flag (never dereferencing a
+        // worker pointer that may already be deleted on m_thread), then join m_thread so
+        // QThread::finished -> QObject::deleteLater destroys the worker on its own thread.
+        m_cancelFlag->store(true, std::memory_order_release);
         if (m_thread.isRunning()) {
-            m_worker->requestCancel();
             m_thread.quit();
             m_thread.wait();
         }
     }
 
+    void setWorkerDestroyedCallback(std::function<void(QThread *)> cb)
+    {
+        m_onWorkerDestroyed = std::move(cb);
+    }
+
     void start() override
     {
-        if (m_started) {
+        if (m_started || m_finished) {
             return;
         }
         m_started = true;
+
+        auto *worker = new LocalTransferPlanWorker(
+            m_sources,
+            m_destinationDirectory,
+            m_entryDelayMilliseconds,
+            m_cancelFlag);
+        worker->moveToThread(&m_thread);
+        connect(&m_thread, &QThread::started,
+                worker, &LocalTransferPlanWorker::run);
+        connect(worker, &LocalTransferPlanWorker::entryPlanned,
+                this, [this](qsizetype count, qulonglong bytes) {
+                    if (m_finished) return;
+                    m_plannedEntryCount = count;
+                    setProcessedAmount(KJob::Bytes, bytes);
+                });
+        connect(worker, &LocalTransferPlanWorker::completed,
+                this, [this](const LocalTransferPlan &plan) {
+                    if (m_finished) return;
+                    m_plan = plan;
+                    setTotalAmount(KJob::Bytes, plan.totalBytes);
+                    setProcessedAmount(KJob::Bytes, plan.totalBytes);
+                    finish(LocalTransferPlanError::None, {});
+                });
+        connect(worker, &LocalTransferPlanWorker::failed,
+                this, [this](LocalTransferPlanError error, const QString &message) {
+                    finish(error, message);
+                });
+        connect(worker, &LocalTransferPlanWorker::completed,
+                &m_thread, &QThread::quit);
+        connect(worker, &LocalTransferPlanWorker::failed,
+                &m_thread, &QThread::quit);
+        connect(&m_thread, &QThread::finished,
+                worker, &QObject::deleteLater);
+        if (m_onWorkerDestroyed) {
+            auto cb = m_onWorkerDestroyed;
+            connect(worker, &QObject::destroyed, worker, [cb]() {
+                cb(QThread::currentThread());
+            });
+        }
+
         m_thread.start();
     }
 
     const LocalTransferPlan &plan() const { return m_plan; }
     LocalTransferPlanError planError() const { return m_error; }
     qsizetype plannedEntryCount() const { return m_plannedEntryCount; }
+    bool isWorkerThreadRunning() const { return m_thread.isRunning(); }
 
 protected:
     bool doKill() override
     {
-        if (!m_thread.isRunning()) {
+        if (m_finished) {
             return false;
         }
         m_finished = true;
         m_error = LocalTransferPlanError::Cancelled;
-        m_worker->requestCancel();
+        m_cancelFlag->store(true, std::memory_order_release);
+        if (m_thread.isRunning()) {
+            m_thread.quit();
+        }
         return true;
     }
 
@@ -382,7 +420,11 @@ private:
     }
 
     QThread m_thread;
-    LocalTransferPlanWorker *m_worker;
+    QList<QUrl> m_sources;
+    QUrl m_destinationDirectory;
+    int m_entryDelayMilliseconds = 0;
+    std::shared_ptr<std::atomic_bool> m_cancelFlag;
+    std::function<void(QThread *)> m_onWorkerDestroyed;
     LocalTransferPlan m_plan;
     LocalTransferPlanError m_error = LocalTransferPlanError::None;
     qsizetype m_plannedEntryCount = 0;

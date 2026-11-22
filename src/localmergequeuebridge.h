@@ -111,6 +111,8 @@ struct LocalMergeQueueRequest {
     LocalMergeBackendCapabilities capabilities;
     LocalMergeOrchestrator::FolderPromptFn folderPrompt;
     LocalMergeOrchestrator::FilePromptFn filePrompt;
+    LocalMergeOrchestrator::AsyncFolderPromptFn asyncFolderPrompt;
+    LocalMergeOrchestrator::AsyncFilePromptFn asyncFilePrompt;
     std::function<void(LocalMergeExecutionJob *)> executionJobConfigurator;
     QPointer<UndoController> undoController;
     bool forceRecoveryRequired = false;
@@ -203,11 +205,21 @@ public:
         }
         m_started = true;
 
+        if (!m_queueController || m_queueTaskId == 0) {
+            LocalMergeOrchestratorResult failed;
+            failed.finalState = LocalMergeOrchestratorState::FailedNoChanges;
+            failed.progress.state = LocalMergeOrchestratorState::FailedNoChanges;
+            failed.progress.retryAllowed = false;
+            failed.diagnostic = QStringLiteral("Queue controller or live task ID missing for Folder Merge");
+            handleOrchestratorFinished(failed);
+            return;
+        }
+
         auto *orch = new LocalMergeOrchestrator(
             m_request.sources,
             m_request.destinationDir,
             nullptr,  // Shared reservation is managed by TransferQueueController::m_registry
-            m_queueTaskId != 0 ? m_queueTaskId : 1,
+            m_queueTaskId,
             m_request.capabilities,
             this);
         m_orchestrator = orch;
@@ -217,6 +229,12 @@ public:
         }
         if (m_request.filePrompt) {
             orch->setFilePrompt(m_request.filePrompt);
+        }
+        if (m_request.asyncFolderPrompt) {
+            orch->setAsyncFolderPrompt(m_request.asyncFolderPrompt);
+        }
+        if (m_request.asyncFilePrompt) {
+            orch->setAsyncFilePrompt(m_request.asyncFilePrompt);
         }
         if (m_request.executionJobConfigurator) {
             orch->setExecutionJobConfigurator(m_request.executionJobConfigurator);
@@ -229,7 +247,11 @@ public:
         const quint64 taskId = m_queueTaskId;
         orch->setDynamicTargetReservationFn([qc, taskId](const QUrl &targetUrl, QString *reasonOut) -> bool {
             if (!qc || taskId == 0) {
-                return true;
+                if (reasonOut) {
+                    *reasonOut = QStringLiteral("Queue controller or task ID unavailable for dynamic target reservation: %1")
+                                     .arg(targetUrl.toLocalFile());
+                }
+                return false;
             }
             if (!qc->tryReserveAdditionalTarget(taskId, targetUrl)) {
                 if (reasonOut) {
@@ -499,7 +521,6 @@ public:
         }
 
         auto sharedReq = std::make_shared<LocalMergeQueueRequest>(std::move(request));
-        auto assignedId = std::make_shared<quint64>(0);
         QPointer<TransferQueueController> qc(controller);
 
         TransferTaskDescriptor desc;
@@ -527,12 +548,18 @@ public:
             return {};
         };
 
-        desc.jobFactory = [qc, sharedReq, assignedId, onJobCreated]() -> KJob * {
-            auto *job = new LocalMergeQueueJob(*sharedReq, qc, *assignedId);
+        desc.jobFactory = [qc, sharedReq, onJobCreated]() -> KJob * {
+            auto *job = new LocalMergeQueueJob(*sharedReq, qc, 0);
             if (onJobCreated) {
                 onJobCreated(job);
             }
             return job;
+        };
+
+        desc.configureJob = [](KJob *job, quint64 liveTaskId) {
+            if (auto *mergeJob = dynamic_cast<LocalMergeQueueJob *>(job)) {
+                mergeJob->setQueueTaskId(liveTaskId);
+            }
         };
 
         desc.cancelHandler = [](KJob *job) -> bool {
@@ -542,11 +569,7 @@ public:
             return false;
         };
 
-        const TransferEnqueueResult res = controller->enqueue(std::move(desc));
-        if (res.accepted()) {
-            *assignedId = res.id;
-        }
-        return res;
+        return controller->enqueue(std::move(desc));
     }
 
     // Stage 3B.3B-2: strictly gated developer sandbox entry point for controlled GUI testing.
@@ -580,12 +603,18 @@ public:
         return enqueueMerge(controller, std::move(request), std::move(onJobCreated));
     }
 
-    static LocalMergeOrchestrator::FolderPromptFn createGuiFolderPrompt(QPointer<QWidget> parentWidget)
+    // Heap-allocated, non-blocking (QDialog::open) GUI folder conflict prompt.
+    // Ownership: parented to parentWidget (if alive), tracked via QPointer, explicitly
+    // deleted via deleteLater() after decision capture on finished() or on orchestrator cancel.
+    // Unexpected destruction without finished() fails closed with Abort.
+    static LocalMergeOrchestrator::AsyncFolderPromptFn createAsyncGuiFolderPrompt(QPointer<QWidget> parentWidget)
     {
         return [parentWidget](const LocalMergePlanEntry &entry,
                               qsizetype remainingFolderConflicts,
-                              LocalMergeConflictProgress progress) -> LocalFolderConflictDecision {
-            LocalFolderMergeConflictDialog dlg(
+                              LocalMergeConflictProgress progress,
+                              std::function<void(const LocalFolderConflictDecision &)> complete)
+            -> LocalMergeOrchestrator::AsyncPromptCancelFn {
+            auto *dlg = new LocalFolderMergeConflictDialog(
                 entry,
                 QSet<QString>{},
                 false,
@@ -593,23 +622,79 @@ public:
                 parentWidget.data(),
                 remainingFolderConflicts,
                 progress);
-            dlg.setWindowModality(Qt::ApplicationModal);
-            QTimer::singleShot(0, &dlg, [&dlg] {
-                dlg.raise();
-                dlg.activateWindow();
+            dlg->setWindowModality(Qt::ApplicationModal);
+
+            QPointer<LocalFolderMergeConflictDialog> dlgPtr(dlg);
+            auto settled = std::make_shared<bool>(false);
+            auto sharedComplete = std::make_shared<std::function<void(const LocalFolderConflictDecision &)>>(
+                std::move(complete));
+
+            QObject::connect(dlg, &QDialog::finished, dlg, [dlgPtr, settled, sharedComplete](int) {
+                if (*settled) {
+                    return;
+                }
+                *settled = true;
+                LocalFolderConflictDecision dec;
+                if (dlgPtr) {
+                    dec = dlgPtr->decision();
+                    dlgPtr->deleteLater();
+                } else {
+                    dec.accepted = false;
+                    dec.action = LocalMergeApprovedAction::Abort;
+                }
+                if (sharedComplete && *sharedComplete) {
+                    (*sharedComplete)(dec);
+                }
             });
-            dlg.exec();
-            return dlg.decision();
+
+            QObject::connect(dlg, &QObject::destroyed, [settled, sharedComplete]() {
+                if (*settled) {
+                    return;
+                }
+                *settled = true;
+                LocalFolderConflictDecision abortDec;
+                abortDec.accepted = false;
+                abortDec.action = LocalMergeApprovedAction::Abort;
+                if (sharedComplete && *sharedComplete) {
+                    (*sharedComplete)(abortDec);
+                }
+            });
+
+            // Use non-blocking show() after setWindowModality(Qt::ApplicationModal)
+            // because QDialog::open() would downgrade modality to Qt::WindowModal.
+            dlg->show();
+            QTimer::singleShot(0, dlg, [dlgPtr] {
+                if (!dlgPtr) {
+                    return;
+                }
+                dlgPtr->raise();
+                dlgPtr->activateWindow();
+            });
+
+            return [dlgPtr, settled]() {
+                *settled = true;
+                if (dlgPtr) {
+                    dlgPtr->hide();
+                    dlgPtr->reject();
+                    dlgPtr->deleteLater();
+                }
+            };
         };
     }
 
-    static LocalMergeOrchestrator::FilePromptFn createGuiFilePrompt(QPointer<QWidget> parentWidget)
+    // Heap-allocated, non-blocking (QDialog::open) GUI file conflict prompt.
+    // Ownership: parented to parentWidget (if alive), tracked via QPointer, explicitly
+    // deleted via deleteLater() after decision capture on finished() or on orchestrator cancel.
+    // Unexpected destruction without finished() fails closed with Abort.
+    static LocalMergeOrchestrator::AsyncFilePromptFn createAsyncGuiFilePrompt(QPointer<QWidget> parentWidget)
     {
         return [parentWidget](const LocalMergePlanEntry &entry,
                               const LocalMergeBackendCapabilities &capabilities,
                               qsizetype remainingExactFileConflicts,
-                              LocalMergeConflictProgress progress) -> LocalFileConflictDecision {
-            LocalFileConflictResolutionDialog dlg(
+                              LocalMergeConflictProgress progress,
+                              std::function<void(const LocalFileConflictDecision &)> complete)
+            -> LocalMergeOrchestrator::AsyncPromptCancelFn {
+            auto *dlg = new LocalFileConflictResolutionDialog(
                 entry,
                 capabilities,
                 remainingExactFileConflicts,
@@ -617,13 +702,63 @@ public:
                 QLocale(),
                 parentWidget.data(),
                 progress);
-            dlg.setWindowModality(Qt::ApplicationModal);
-            QTimer::singleShot(0, &dlg, [&dlg] {
-                dlg.raise();
-                dlg.activateWindow();
+            dlg->setWindowModality(Qt::ApplicationModal);
+
+            QPointer<LocalFileConflictResolutionDialog> dlgPtr(dlg);
+            auto settled = std::make_shared<bool>(false);
+            auto sharedComplete = std::make_shared<std::function<void(const LocalFileConflictDecision &)>>(
+                std::move(complete));
+
+            QObject::connect(dlg, &QDialog::finished, dlg, [dlgPtr, settled, sharedComplete](int) {
+                if (*settled) {
+                    return;
+                }
+                *settled = true;
+                LocalFileConflictDecision dec;
+                if (dlgPtr) {
+                    dec = dlgPtr->decision();
+                    dlgPtr->deleteLater();
+                } else {
+                    dec.accepted = false;
+                    dec.action = LocalMergeApprovedAction::Abort;
+                }
+                if (sharedComplete && *sharedComplete) {
+                    (*sharedComplete)(dec);
+                }
             });
-            dlg.exec();
-            return dlg.decision();
+
+            QObject::connect(dlg, &QObject::destroyed, [settled, sharedComplete]() {
+                if (*settled) {
+                    return;
+                }
+                *settled = true;
+                LocalFileConflictDecision abortDec;
+                abortDec.accepted = false;
+                abortDec.action = LocalMergeApprovedAction::Abort;
+                if (sharedComplete && *sharedComplete) {
+                    (*sharedComplete)(abortDec);
+                }
+            });
+
+            // Use non-blocking show() after setWindowModality(Qt::ApplicationModal)
+            // because QDialog::open() would downgrade modality to Qt::WindowModal.
+            dlg->show();
+            QTimer::singleShot(0, dlg, [dlgPtr] {
+                if (!dlgPtr) {
+                    return;
+                }
+                dlgPtr->raise();
+                dlgPtr->activateWindow();
+            });
+
+            return [dlgPtr, settled]() {
+                *settled = true;
+                if (dlgPtr) {
+                    dlgPtr->hide();
+                    dlgPtr->reject();
+                    dlgPtr->deleteLater();
+                }
+            };
         };
     }
 

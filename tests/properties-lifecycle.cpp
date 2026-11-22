@@ -294,6 +294,24 @@ int main(int argc, char **argv)
             verify(modeOf(fileB) == before, "Cancel discards unapplied changes");
         }
 
+        // P1 FIFO Properties GUI-hang regression: opening and closing Properties on an
+        // unconnected FIFO with no active reader/writer must never block the GUI thread.
+        {
+            const QString fifoPath = dir.filePath(QStringLiteral("props_unconnected.fifo"));
+            verify(::mkfifo(QFile::encodeName(fifoPath).constData(), 0600) == 0, "FIFO Properties fixture created");
+            QElapsedTimer timer;
+            timer.start();
+            verify(MetadataProvider::capabilityForUrl(QUrl::fromLocalFile(fifoPath)) == MetadataCapability::Unreadable,
+                   "MetadataProvider classifies FIFO as Unreadable without blocking");
+            verify(AclProvider::load(fifoPath, true, false, false, false).capability == AclCapability::Unsupported,
+                   "AclProvider classifies FIFO as Unsupported without blocking");
+            QDialog *fifoDlg = openProps(window, fifoPath, false);
+            verify(fifoDlg != nullptr && fifoDlg->isVisible(), "Properties dialog opens on FIFO without hanging");
+            button(fifoDlg, QDialogButtonBox::Cancel)->click();
+            flush();
+            verify(timer.elapsed() < 2000, "FIFO Properties open/close completed promptly (<2000ms)");
+        }
+
         // 19-20: drive removal while Drive Properties is open stays safe,
         // then main window close with several dialogs closes them all.
         {
@@ -331,6 +349,172 @@ int main(int argc, char **argv)
     // Properties headers' File/Folder path (none): show() returns immediately,
     // which every assertion above relies on (an exec() would never return).
     verify(PropertiesLifecycle::instance().openCount() == 0, "no leaked Properties dialogs at exit");
+
+    // 22. SEC-046-06: Asynchronous administrator unlock & lifetime safety
+    {
+        struct MockAdminStatJob final : public KJob
+        {
+            explicit MockAdminStatJob(QObject *parent = nullptr) : KJob(parent)
+            {
+                setCapabilities(KJob::Killable);
+                setAutoDelete(false);
+            }
+            void start() override { ++startedCount; }
+            void completeSuccess(qlonglong accessMode, const QString &owner, const QString &group)
+            {
+                setProperty("thispcStatAccess", accessMode);
+                setProperty("thispcStatUser", owner);
+                setProperty("thispcStatGroup", group);
+                setError(KJob::NoError);
+                emitResult();
+            }
+            void completeFailure(int err, const QString &text)
+            {
+                setError(err);
+                setErrorText(text);
+                emitResult();
+            }
+            bool doKill() override
+            {
+                killed = true;
+                return true;
+            }
+            int startedCount = 0;
+            bool killed = false;
+        };
+
+        QList<QPointer<MockAdminStatJob>> createdJobs;
+        QList<QUrl> requestedUrls;
+        PropertiesDialog::asyncAdminStatFactoryForTesting() = [&](const QUrl &url, QObject *parent) -> KJob * {
+            requestedUrls.append(url);
+            auto *j = new MockAdminStatJob(parent);
+            createdJobs.append(j);
+            return j;
+        };
+
+        const QString adminTarget = makeFile(dir.filePath("admin_target.txt"));
+        const int origMode = modeOf(adminTarget);
+
+        // 22a. Failure + Cancel + Retry + Rapid double-click + Success
+        {
+            g_boxes.clear();
+            QDialog *d = PropertiesDialog::show(
+                nullptr, QStringLiteral("admin_target.txt"), QUrl::fromLocalFile(adminTarget),
+                false, QStringLiteral("File"), {}, {},
+                [] { return true; }, {}, {}, {});
+            QPointer<QDialog> dGuard(d);
+            auto *unlockBtn = d->findChild<QPushButton *>(QStringLiteral("propertiesAdminUnlockButton"));
+            verify(unlockBtn != nullptr, "SEC-046-06: propertiesAdminUnlockButton exists");
+            unlockBtn->setVisible(true);
+
+            // Rapid repeated clicks must launch only ONE async job
+            unlockBtn->click();
+            unlockBtn->click();
+            unlockBtn->click();
+            verify(createdJobs.size() == 1 && !unlockBtn->isEnabled(),
+                   "SEC-046-06: rapid Unlock clicks spawn only 1 pending job and disable button");
+            verify(requestedUrls.last().scheme() == QLatin1String("admin"),
+                   "SEC-046-06: async stat targets admin:// URL");
+
+            // Failure restores button and shows warning without unlocking
+            createdJobs.last()->completeFailure(KIO::ERR_ACCESS_DENIED, QStringLiteral("Polkit failed"));
+            flush();
+            verify(unlockBtn->isEnabled() && !unlockBtn->isHidden() && !g_boxes.isEmpty(),
+                   "SEC-046-06: failure re-enables Unlock button and reports warning");
+            verify(modeOf(adminTarget) == origMode, "SEC-046-06: failed unlock leaves file mode untouched");
+
+            // User-canceled authorization re-enables button silently without warning box
+            g_boxes.clear();
+            unlockBtn->click();
+            verify(createdJobs.size() == 2, "SEC-046-06: retry after failure creates new job");
+            createdJobs.last()->completeFailure(KIO::ERR_USER_CANCELED, QStringLiteral("Cancelled"));
+            flush();
+            verify(unlockBtn->isEnabled() && g_boxes.isEmpty(),
+                   "SEC-046-06: user cancel re-enables button without warning spam");
+
+            // Retry -> Success populates POSIX boxes & hides Unlock button
+            unlockBtn->click();
+            verify(createdJobs.size() == 3, "SEC-046-06: second retry creates new job");
+            createdJobs.last()->completeSuccess(0640, QStringLiteral("root"), QStringLiteral("wheel"));
+            flush();
+            verify(unlockBtn->isHidden(), "SEC-046-06: successful async unlock hides button");
+            verify(modeOf(adminTarget) == origMode, "SEC-046-06: unlock stat alone does not mutate file mode");
+
+            d->close();
+            flush();
+            verify(dGuard.isNull(), "SEC-046-06: unlocked Properties dialog closes cleanly");
+        }
+
+        // 22b. Close Properties while async admin stat is pending + late completion safety
+        {
+            g_boxes.clear();
+            createdJobs.clear();
+            QDialog *d = PropertiesDialog::show(
+                nullptr, QStringLiteral("admin_target.txt"), QUrl::fromLocalFile(adminTarget),
+                false, QStringLiteral("File"), {}, {},
+                [] { return true; }, {}, {}, {});
+            QPointer<QDialog> dGuard(d);
+            auto *unlockBtn = d->findChild<QPushButton *>(QStringLiteral("propertiesAdminUnlockButton"));
+            unlockBtn->setVisible(true);
+            unlockBtn->click();
+            verify(createdJobs.size() == 1, "SEC-046-06: pending job created before close");
+            QPointer<MockAdminStatJob> jobGuard = createdJobs.last();
+
+            d->close();
+            flush();
+            verify(dGuard.isNull() && jobGuard.isNull(),
+                   "SEC-046-06: closing Properties cancels & destroys pending admin stat job cleanly");
+            verify(g_boxes.isEmpty(), "SEC-046-06: no stray warning box on close during pending unlock");
+        }
+
+        // 22c. Close ThisPcWindow while async admin stat is pending
+        {
+            g_boxes.clear();
+            createdJobs.clear();
+            ThisPcWindow win2(QUrl::fromLocalFile(dir.path()), false);
+            win2.show();
+            QDialog *d = PropertiesDialog::show(
+                &win2, QStringLiteral("admin_target.txt"), QUrl::fromLocalFile(adminTarget),
+                false, QStringLiteral("File"), {}, {},
+                [] { return true; }, {}, {}, {});
+            QPointer<QDialog> dGuard(d);
+            auto *unlockBtn = d->findChild<QPushButton *>(QStringLiteral("propertiesAdminUnlockButton"));
+            unlockBtn->setVisible(true);
+            unlockBtn->click();
+            QPointer<MockAdminStatJob> jobGuard = createdJobs.last();
+
+            win2.close();
+            flush();
+            verify(dGuard.isNull() && jobGuard.isNull(),
+                   "SEC-046-06: closing ThisPcWindow closes Properties and destroys pending admin job without UAF");
+        }
+
+        // 22d. Unowned late-emitting job after dialog destruction cannot UAF
+        {
+            createdJobs.clear();
+            QPointer<MockAdminStatJob> externalJob;
+            PropertiesDialog::asyncAdminStatFactoryForTesting() = [&](const QUrl &, QObject *) -> KJob * {
+                auto *j = new MockAdminStatJob(nullptr);
+                externalJob = j;
+                return j;
+            };
+            QDialog *d = PropertiesDialog::show(
+                nullptr, QStringLiteral("admin_target.txt"), QUrl::fromLocalFile(adminTarget),
+                false, QStringLiteral("File"), {}, {},
+                [] { return true; }, {}, {}, {});
+            QPointer<QDialog> dGuard(d);
+            auto *unlockBtn = d->findChild<QPushButton *>(QStringLiteral("propertiesAdminUnlockButton"));
+            unlockBtn->setVisible(true);
+            unlockBtn->click();
+            verify(!externalJob.isNull(), "SEC-046-06: pending job active");
+            d->close();
+            flush();
+            verify(dGuard.isNull() && externalJob.isNull(),
+                   "SEC-046-06: job reparented to dialog and cleaned up on teardown");
+        }
+
+        PropertiesDialog::asyncAdminStatFactoryForTesting() = nullptr;
+    }
 
     qInfo("PASS: %d properties lifecycle assertions; modeless file/folder/drive, coexistence, close safety, disappearing targets", checks);
     return 0;

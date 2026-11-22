@@ -31,6 +31,18 @@
 #include <QTextDocument>
 #include <QWidget>
 
+#include <sys/stat.h>
+
+namespace {
+bool isRegularLocalTarget(const QString &localPath)
+{
+    if (localPath.isEmpty()) return false;
+    struct stat st {};
+    return ::stat(QFile::encodeName(localPath).constData(), &st) == 0
+        && S_ISREG(st.st_mode);
+}
+} // namespace
+
 SelectionMenuController::SelectionMenuController(QWidget *parent) : m_parent(parent) {}
 
 void SelectionMenuController::addOpenWithSubmenu(QMenu &menu, const QList<QUrl> &urls) const
@@ -40,7 +52,18 @@ void SelectionMenuController::addOpenWithSubmenu(QMenu &menu, const QList<QUrl> 
                                   trLocal("Otwórz za pomocą", "Open with"));
     KFileItemList items;
     items.reserve(urls.size());
-    for (const QUrl &url : urls) items.push_back(KFileItem(url, KFileItem::NormalMimeTypeDetermination));
+    for (const QUrl &url : urls) {
+        KFileItem::MimeTypeDetermination mimeMode = KFileItem::NormalMimeTypeDetermination;
+        if (url.isLocalFile()) {
+            const QString localPath = url.toLocalFile();
+            struct stat st {};
+            if (::stat(QFile::encodeName(localPath).constData(), &st) != 0
+                || (!S_ISREG(st.st_mode) && !S_ISDIR(st.st_mode))) {
+                mimeMode = KFileItem::SkipMimeTypeFromContent;
+            }
+        }
+        items.push_back(KFileItem(url, mimeMode));
+    }
     auto *actions = new KFileItemActions(submenu);
     actions->setParentWidget(m_parent);
     actions->setItemListProperties(KFileItemListProperties(items));
@@ -235,7 +258,9 @@ void SelectionMenuController::addSortSubmenu(QMenu &menu, const ViewState &state
 SelectionMenuController::PrintableKind SelectionMenuController::printableKindForUrl(const QUrl &url, bool isDir) const
 {
     if (isDir || !url.isLocalFile()) return PrintableKind::None;
-    const QMimeType mime = QMimeDatabase().mimeTypeForFile(url.toLocalFile(), QMimeDatabase::MatchContent);
+    const QString localPath = url.toLocalFile();
+    if (!isRegularLocalTarget(localPath)) return PrintableKind::None;
+    const QMimeType mime = QMimeDatabase().mimeTypeForFile(localPath, QMimeDatabase::MatchContent);
     if (!mime.isValid()) return PrintableKind::None;
     if (mime.name() == QStringLiteral("application/pdf"))
         return QStandardPaths::findExecutable(QStringLiteral("okular")).isEmpty() ? PrintableKind::None : PrintableKind::Pdf;
@@ -248,7 +273,9 @@ bool SelectionMenuController::canPrintUrl(const QUrl &url, bool isDir) const { r
 bool SelectionMenuController::isLocalImageUrl(const QUrl &url, bool isDir) const
 {
     if (isDir || !url.isLocalFile()) return false;
-    const QMimeType mime = QMimeDatabase().mimeTypeForFile(url.toLocalFile(), QMimeDatabase::MatchContent);
+    const QString localPath = url.toLocalFile();
+    if (!isRegularLocalTarget(localPath)) return false;
+    const QMimeType mime = QMimeDatabase().mimeTypeForFile(localPath, QMimeDatabase::MatchContent);
     return mime.isValid() && mime.name().startsWith(QStringLiteral("image/"));
 }
 bool SelectionMenuController::canSetWallpaper(const QUrl &url, bool isDir) const

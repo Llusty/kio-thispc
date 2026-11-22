@@ -11,6 +11,9 @@
 #include <QSet>
 #include <KIO/CopyJob>
 #include <functional>
+#include <vector>
+#include <fcntl.h>
+#include <sys/statfs.h>
 
 class LocalTransferJob final : public KIO::Job
 {
@@ -44,9 +47,21 @@ public:
         m_preplanned = true;
     }
 
+    using PreDirPermFinalizeHook = std::function<void(const QString &destinationPath, int dirFd)>;
+
     void setFallbackFactory(std::function<KIO::CopyJob *()> factory)
     {
         m_fallbackFactory = std::move(factory);
+    }
+
+    void setPreDirPermFinalizeHook(PreDirPermFinalizeHook hook)
+    {
+        m_preDirPermFinalizeHook = std::move(hook);
+    }
+
+    void setSimulateDirChmodError(bool simulate)
+    {
+        m_simulateDirChmodError = simulate;
     }
 
     bool usedKio() const { return m_usedKio; }
@@ -229,13 +244,52 @@ private:
             return;
         }
         if (entry.type == LocalTransferEntryType::Directory) {
-            entry.destinationExists = destination.exists();
-            if (destination.isSymLink()
-                || (destination.exists() ? !destination.isDir() : !QDir().mkdir(entry.destinationPath))) {
+            const QFileInfo destInfo(entry.destinationPath);
+            const QString parentPath = destInfo.path();
+            const QString leafName = destInfo.fileName();
+            const QByteArray leafEnc = QFile::encodeName(leafName);
+            OwnedFd parentFd(::open(QFile::encodeName(parentPath).constData(),
+                                    O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
+            if (!parentFd.valid() || leafName.isEmpty()) {
                 fail(tr("Could not create the destination directory: %1").arg(entry.destinationPath));
                 return;
             }
-            m_directories.push_back(entry);
+            struct stat existingSt {};
+            if (::fstatat(parentFd.fd, leafEnc.constData(), &existingSt, AT_SYMLINK_NOFOLLOW) == 0) {
+                if (!S_ISDIR(existingSt.st_mode)) {
+                    fail(tr("Could not create the destination directory: %1").arg(entry.destinationPath));
+                    return;
+                }
+                entry.destinationExists = true;
+                CreatedDirectoryRecord rec;
+                rec.entry = entry;
+                rec.leafName = leafName;
+                m_directories.push_back(std::move(rec));
+            } else if (errno == ENOENT) {
+                entry.destinationExists = false;
+                // SEC-046-04: Create new directories restrictively (0700) and anchor via O_NOFOLLOW FD.
+                if (::mkdirat(parentFd.fd, leafEnc.constData(), 0700) != 0) {
+                    fail(tr("Could not create the destination directory: %1").arg(entry.destinationPath));
+                    return;
+                }
+                OwnedFd dirFd(::openat(parentFd.fd, leafEnc.constData(),
+                                       O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
+                struct stat createdSt {};
+                if (!dirFd.valid() || ::fstat(dirFd.fd, &createdSt) != 0 || !S_ISDIR(createdSt.st_mode)) {
+                    fail(tr("Could not create the destination directory: %1").arg(entry.destinationPath));
+                    return;
+                }
+                CreatedDirectoryRecord rec;
+                rec.entry = entry;
+                rec.leafName = leafName;
+                rec.parentFd = std::move(parentFd);
+                rec.dirFd = std::move(dirFd);
+                rec.createdStat = createdSt;
+                m_directories.push_back(std::move(rec));
+            } else {
+                fail(tr("Could not create the destination directory: %1").arg(entry.destinationPath));
+                return;
+            }
             m_completedEntries.push_back(entry);
             scheduleNext();
             return;
@@ -276,16 +330,67 @@ private:
         m_activeJob->start();
     }
 
+    static bool isNonPosixPermissionFs(int fd)
+    {
+        if (fd < 0) return false;
+        struct statfs sfs {};
+        if (::fstatfs(fd, &sfs) != 0) return false;
+        const unsigned long ftype = static_cast<unsigned long>(sfs.f_type);
+        return ftype == 0x4d44UL        // MSDOS_SUPER_MAGIC
+            || ftype == 0x65735546UL    // FUSE_SUPER_MAGIC
+            || ftype == 0x7366746eUL    // NTFS3_SUPER_MAGIC
+            || ftype == 0x5346544eUL;   // NTFS_SB_MAGIC
+    }
+
     void finishDirectories()
     {
-        if (!m_directories.isEmpty()) {
-            const auto directory = m_directories.takeLast();
-            if (!directory.destinationExists
-                && (::chmod(QFile::encodeName(directory.destinationPath).constData(),
-                            directory.sourceStat.st_mode & 07777) != 0
-                    || !applyTimes(directory.destinationPath, directory.sourceStat, false))) {
-                fail(tr("Could not preserve directory metadata: %1").arg(directory.destinationPath));
-                return;
+        if (!m_directories.empty()) {
+            CreatedDirectoryRecord rec = std::move(m_directories.back());
+            m_directories.pop_back();
+            const auto &directory = rec.entry;
+            if (!directory.destinationExists) {
+                if (m_preDirPermFinalizeHook) {
+                    m_preDirPermFinalizeHook(directory.destinationPath, rec.dirFd.fd);
+                }
+                struct stat curFdSt {};
+                struct stat pathSt {};
+                const QByteArray leafEnc = QFile::encodeName(rec.leafName);
+                const bool fdOk = rec.dirFd.valid()
+                    && ::fstat(rec.dirFd.fd, &curFdSt) == 0
+                    && S_ISDIR(curFdSt.st_mode)
+                    && curFdSt.st_dev == rec.createdStat.st_dev
+                    && curFdSt.st_ino == rec.createdStat.st_ino
+                    && curFdSt.st_nlink > 0;
+                const bool pathOk = rec.parentFd.valid()
+                    && ::fstatat(rec.parentFd.fd, leafEnc.constData(), &pathSt, AT_SYMLINK_NOFOLLOW) == 0
+                    && S_ISDIR(pathSt.st_mode)
+                    && pathSt.st_dev == rec.createdStat.st_dev
+                    && pathSt.st_ino == rec.createdStat.st_ino;
+                if (!fdOk || !pathOk) {
+                    fail(tr("Destination directory identity changed before permission finalization: %1")
+                             .arg(directory.destinationPath));
+                    return;
+                }
+                // SEC-046-04: Strip SUID/SGID/sticky and apply permissions via FD-anchored fchmod/futimens.
+                const mode_t safeMode = directory.sourceStat.st_mode & static_cast<mode_t>(0777);
+                if (m_simulateDirChmodError || ::fchmod(rec.dirFd.fd, safeMode) != 0) {
+                    const int chmodErr = m_simulateDirChmodError ? EACCES : errno;
+                    if (m_simulateDirChmodError
+                        || (!isNonPosixPermissionFs(rec.dirFd.fd)
+                            && chmodErr != ENOTSUP && chmodErr != EOPNOTSUPP && chmodErr != ENOSYS)) {
+                        fail(tr("Could not preserve directory metadata: %1").arg(directory.destinationPath));
+                        return;
+                    }
+                }
+                const timespec times[]{directory.sourceStat.st_atim, directory.sourceStat.st_mtim};
+                if (::futimens(rec.dirFd.fd, times) != 0) {
+                    const int timeErr = errno;
+                    if (!isNonPosixPermissionFs(rec.dirFd.fd)
+                        && timeErr != ENOTSUP && timeErr != EOPNOTSUPP && timeErr != ENOSYS) {
+                        fail(tr("Could not preserve directory metadata: %1").arg(directory.destinationPath));
+                        return;
+                    }
+                }
             }
             if (m_move && directory.removeSourceDirectory && (QFileInfo(directory.sourcePath).isSymLink()
                 || !QDir().rmdir(directory.sourcePath))) {
@@ -340,6 +445,38 @@ private:
         emitResult();
     }
 
+    struct OwnedFd {
+        int fd = -1;
+        OwnedFd() = default;
+        explicit OwnedFd(int value) : fd(value) {}
+        ~OwnedFd() { reset(); }
+        OwnedFd(const OwnedFd &) = delete;
+        OwnedFd &operator=(const OwnedFd &) = delete;
+        OwnedFd(OwnedFd &&other) noexcept : fd(other.fd) { other.fd = -1; }
+        OwnedFd &operator=(OwnedFd &&other) noexcept
+        {
+            if (this != &other) {
+                reset(other.fd);
+                other.fd = -1;
+            }
+            return *this;
+        }
+        void reset(int next = -1)
+        {
+            if (fd >= 0) ::close(fd);
+            fd = next;
+        }
+        bool valid() const { return fd >= 0; }
+    };
+
+    struct CreatedDirectoryRecord {
+        LocalTransferPlanEntry entry;
+        QString leafName;
+        OwnedFd parentFd;
+        OwnedFd dirFd;
+        struct stat createdStat {};
+    };
+
     QList<QUrl> m_sources;
     QUrl m_destinationDirectory;
     bool m_move;
@@ -347,7 +484,9 @@ private:
     int m_chunkDelayMilliseconds;
     LocalTransferPlan m_plan;
     QList<LocalTransferPlanEntry> m_completedEntries;
-    QList<LocalTransferPlanEntry> m_directories;
+    std::vector<CreatedDirectoryRecord> m_directories;
+    PreDirPermFinalizeHook m_preDirPermFinalizeHook;
+    bool m_simulateDirChmodError = false;
     QPointer<LocalTransferPlanJob> m_planner;
     QPointer<KJob> m_activeJob;
     qsizetype m_index = 0;

@@ -1,14 +1,23 @@
 [English](UPDATE.md) | [Polski](UPDATE.pl.md)
 
-# Aktualizacja do 0.45.1
+# Aktualizacja do 0.45.2
 
 ```bash
 cd ~/Pobrane
-tar -xzf kio-thispc-0.45.1.tar.gz
-cd kio-thispc-0.45.1
+tar -xzf kio-thispc-0.45.2.tar.gz
+cd kio-thispc-0.45.2
 chmod +x install.sh
 ./install.sh
 ```
+
+- **Hotfix bezpieczeństwa i stabilności (`SEC-046`):**
+  - **`SEC-046-05`:** Asynchroniczne anulowanie (`LocalFileCopyJob::requestCancelAsync()`) z natychmiastowym wybudzaniem limitera gwarantuje usunięcie pliku tymczasowego `.thispc-part` przed zwolnieniem slotu/rezerwacji i raportowaniem stanu `Cancelled`; usunięto livelock limitera poniżej 256 KiB/s.
+  - **`SEC-046-08`:** Kotwiczenie tożsamości katalogu docelowego `(st_dev, st_ino)` i weryfikacja bez symlinków chronią Folder Merge przed podmianą katalogu docelowego między planowaniem a wykonaniem oraz w trakcie wykonania (`DR1–DR15`).
+  - **`SEC-046-11` i ochrona GUI przed FIFO:** Eliminuje zawieszanie GUI (`wait_for_partner`) na niepodłączonych FIFO, symlinkach do FIFO i uszkodzonych symlinkach we Właściwościach, ACL, Metadanych, Sumach kontrolnych, Podglądzie, menu kontekstowym i wykrywaniu archiwów.
+  - **`SEC-046-17` i cykl życia:** Dodano ograniczenie do punktu montowania KIO `thispc:/` (`ThisPcConfinement`), wzmocnienie czasu życia workerów (`SEC-046-12`) oraz poprawki cyklu życia dialogów konfliktów (`SEC-046-22A/B`).
+- **Znane ograniczenia:** Pozostałe okno TOCTOU w `SEC-046-17` po przekierowaniu `file://` jest ograniczone, ale nie wyeliminowane; Folder Merge nie integruje jeszcze współdzielonego limitera prędkości (`supportsThrottling = false`); testy ASan/UBSan działają z `detect_leaks=0` (pozostaje wcześniejszy wyciek LSan w `ChecksumJob`/`QThread`); wcześniejsze punkty Directory Refresh `DR-058/059/062` (niezaimplementowane) i `DR-009/010` (interaktywne) pozostają bez zmian.
+
+## 0.45.1 — Poprzednie wydanie
 
 - **Rekurencyjne scalanie folderów (`FOLDER-MERGE-01`):** Lokalne operacje kopiowania katalogów obsługują rekurencyjne scalanie z niezależnymi decyzjami dla katalogów (`Merge`, `Rename`, `Skip`, `Abort`) i plików (`Overwrite`, `Rename`, `Skip`, `Abort`), mechanizmem Crash Recovery (`.thispc-tx.*`) oraz raportowaniem postępu i prędkości w `OperationWindow`.
 - **Ograniczenia bezpiecznego `Overwrite`:** Atomowe nadpisywanie działa wyłącznie na **Btrfs, ext4, XFS i tmpfs**; na **NTFS (`ntfs3`/NTFS-3G), VFAT oraz zdalnych backendach KIO** opcja `Overwrite` jest zablokowana fail-closed (dostępne są `Rename`, `Skip` i `Abort`).

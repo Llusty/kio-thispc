@@ -168,6 +168,8 @@ struct LocalMergePlan
     QList<LocalMergePlanEntry> entries;
     LocalMergePlanStats stats;
     QString destinationRootPath;
+    struct stat destinationRootStat {};
+    bool destinationRootStatValid = false;
     bool hasBlockingErrors = false;
     QString blockingReason;
 };
@@ -310,6 +312,10 @@ public Q_SLOTS:
 
         LocalMergePlan plan;
         plan.destinationRootPath = destRoot;
+        if (destRootKind == LocalMergeObjectKind::Directory && destRootValid) {
+            plan.destinationRootStat = destRootStat;
+            plan.destinationRootStatValid = true;
+        }
         for (const QUrl &sourceUrl : std::as_const(m_sources)) {
             if (cancelled()) {
                 fail(LocalMergePlanError::Cancelled, {});

@@ -306,5 +306,130 @@ int main(int argc, char **argv)
     delete closing;
     clean(closingTarget);
     verify(QDir(closingTarget).isEmpty(), "owner destruction cancels pending work safely");
+
+    // SEC-046-22(d): Process-group termination guard & injectable signal seam tests.
+    {
+        QList<QPair<pid_t, int>> recorded;
+        auto mockSignal = [&](pid_t g, int sig) -> int {
+            recorded.append({g, sig});
+            return 0;
+        };
+        const pid_t selfPgrp = ::getpgrp();
+
+        // 1. Zero process-group ID must never invoke ::kill(0, SIGKILL).
+        verify(!safeTerminateIsolatedProcessGroup(0, selfPgrp, mockSignal) && recorded.isEmpty(),
+               "zero process-group ID is refused without signalling");
+
+        // 2. Negative or caller-matching process-group IDs must fail safely.
+        verify(!safeTerminateIsolatedProcessGroup(-1, selfPgrp, mockSignal) && recorded.isEmpty(),
+               "negative process-group ID is refused without signalling");
+        verify(!safeTerminateIsolatedProcessGroup(-4242, selfPgrp, mockSignal) && recorded.isEmpty(),
+               "arbitrary negative process-group ID is refused without signalling");
+        verify(!safeTerminateIsolatedProcessGroup(selfPgrp, selfPgrp, mockSignal) && recorded.isEmpty(),
+               "caller process-group ID is refused without signalling");
+
+        // 3. Valid isolated positive process-group ID triggers exactly one SIGKILL.
+        const pid_t fakeIsolatedGroup = selfPgrp + 100000;
+        verify(safeTerminateIsolatedProcessGroup(fakeIsolatedGroup, selfPgrp, mockSignal)
+               && recorded.size() == 1
+               && recorded.first().first == fakeIsolatedGroup
+               && recorded.first().second == SIGKILL,
+               "isolated positive process-group ID invokes exactly one SIGKILL");
+    }
+
+    // 4. Immediate subprocess exit & child initialization failure via ArchiveExtractionJob.
+    {
+        QList<QPair<pid_t, int>> recordedSignals;
+        auto forwardAndRecord = [&](pid_t g, int sig) -> int {
+            recordedSignals.append({g, sig});
+            return ::kill(-g, sig);
+        };
+
+        // 4a. Immediate exit (exit 0 without producing output)
+        write(fake, "#!/usr/bin/env python3\nimport sys\nsys.exit(0)\n", true);
+        const QString immZeroTarget = destination();
+        auto *immZero = new ArchiveExtractionJob(QUrl::fromLocalFile(zip), QUrl::fromLocalFile(immZeroTarget), fake);
+        immZero->setAutoDelete(false);
+        immZero->setProcessGroupSignalFn(forwardAndRecord);
+        QSignalSpy immZeroSpy(immZero, &KJob::result);
+        immZero->start();
+        verify(immZeroSpy.wait(5000) && immZero->error() != 0,
+               "immediate exit(0) subprocess fails verification without crashing caller");
+        for (const auto &call : std::as_const(recordedSignals)) {
+            verify(call.first > 0 && call.first != ::getpgrp(),
+                   "immediate exit(0) never signals group <= 0 or caller pgroup");
+        }
+        verify(recordedSignals.size() <= 1, "at most one process-group signal on immediate exit(0)");
+        delete immZero;
+        clean(immZeroTarget);
+
+        // 4b. Immediate exit(125) simulating child setup/Landlock failure
+        recordedSignals.clear();
+        write(fake, "#!/usr/bin/env python3\nimport sys\nsys.exit(125)\n", true);
+        const QString imm125Target = destination();
+        auto *imm125 = new ArchiveExtractionJob(QUrl::fromLocalFile(zip), QUrl::fromLocalFile(imm125Target), fake);
+        imm125->setAutoDelete(false);
+        imm125->setProcessGroupSignalFn(forwardAndRecord);
+        QSignalSpy imm125Spy(imm125, &KJob::result);
+        imm125->start();
+        verify(imm125Spy.wait(5000) && imm125->error() != 0
+               && imm125->errorText().contains(QStringLiteral("Landlock")),
+               "immediate exit(125) reports Landlock failure safely");
+        for (const auto &call : std::as_const(recordedSignals)) {
+            verify(call.first > 0 && call.first != ::getpgrp(),
+                   "immediate exit(125) never signals group <= 0 or caller pgroup");
+        }
+        verify(recordedSignals.size() <= 1, "at most one process-group signal on exit(125)");
+        delete imm125;
+        clean(imm125Target);
+
+        // 5. Child initialization failure (non-existent binary)
+        recordedSignals.clear();
+        const QString missingBinTarget = destination();
+        auto *missingBin = new ArchiveExtractionJob(
+            QUrl::fromLocalFile(zip),
+            QUrl::fromLocalFile(missingBinTarget),
+            fake + QStringLiteral("-nonexistent-ark-binary"));
+        missingBin->setAutoDelete(false);
+        missingBin->setProcessGroupSignalFn(forwardAndRecord);
+        QSignalSpy missingSpy(missingBin, &KJob::result);
+        missingBin->start();
+        verify(missingSpy.wait(5000) && missingBin->error() != 0 && recordedSignals.isEmpty(),
+               "missing executable fails waitForStarted without any process-group signal");
+        delete missingBin;
+        clean(missingBinTarget);
+
+        // 6. Cancellation of forked helper records exactly one isolated group SIGKILL
+        recordedSignals.clear();
+        write(fake, python + "signal.alarm(20)\nchild=os.fork()\nif child==0:\n"
+            " signal.alarm(20)\n (d/'child-ready').write_text(str(os.getpid()))\n signal.pause()\nelse:\n"
+            " while not (d/'child-ready').exists(): time.sleep(.01)\n"
+            " (d/'partial').write_text(str(os.getpid()))\n signal.pause()\n", true);
+        const QString cancelVerifyTarget = destination();
+        auto *cancelVerify = new ArchiveExtractionJob(QUrl::fromLocalFile(zip), QUrl::fromLocalFile(cancelVerifyTarget), fake);
+        cancelVerify->setAutoDelete(false);
+        cancelVerify->setProcessGroupSignalFn(forwardAndRecord);
+        cancelVerify->start();
+        QString marker2;
+        verify(QTest::qWaitFor([&] {
+            QDirIterator it(cancelVerifyTarget, {"partial"}, QDir::Files | QDir::Hidden, QDirIterator::Subdirectories);
+            if (it.hasNext()) {
+                const QString candidate = it.next();
+                if (contents(candidate).trimmed().toLongLong() > 0) marker2 = candidate;
+            }
+            return !marker2.isEmpty();
+        }, 5000), "forked helper started for signal verification");
+        const auto pid2 = contents(marker2).trimmed().toLongLong();
+        verify(cancelVerify->kill(KJob::EmitResult), "cancellation succeeds with signal seam");
+        delete cancelVerify;
+        clean(cancelVerifyTarget);
+        verify(recordedSignals.size() == 1
+               && recordedSignals.first().first > 0
+               && recordedSignals.first().first != ::getpgrp()
+               && recordedSignals.first().second == SIGKILL,
+               "cancellation emits exactly one SIGKILL to isolated positive child group");
+        verify(::kill(pid2, 0) == -1 && errno == ESRCH, "child process reaped after recorded SIGKILL");
+    }
+
     qInfo("PASS: %d archive extraction assertions; real Ark, collisions, hostile entries, process lifecycle and confinement", checks);
 }

@@ -1270,8 +1270,9 @@ int main(int argc, char **argv)
         // ------------------------------------------------------------------
         // Scenario L: GUI stability & coexistence of Safe Retry + Show in Folder
         // ------------------------------------------------------------------
-        verify(manager.m_detailedWindow->hasShowInFolderButtonForTask(enqA.id),
-               "Scenario L: Completed card still has Show in Folder button");
+        verify(QTest::qWaitFor([&] {
+            return manager.m_detailedWindow->hasShowInFolderButtonForTask(enqA.id);
+        }, 2000), "Scenario L: Completed card still has Show in Folder button");
         verify(!manager.m_detailedWindow->hasShowInFolderButtonForTask(enqFail.id),
                "Scenario L: Failed card still does not have Show in Folder button");
         // Verify Failed card has Retry button while Completed card has Show in Folder button

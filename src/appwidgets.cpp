@@ -22,6 +22,7 @@
 #include <QLayout>
 #include <QMenu>
 #include <QMouseEvent>
+#include <QPointer>
 #include <QProcess>
 #include <QProgressBar>
 #include <QScrollBar>
@@ -379,7 +380,14 @@ DriveFrame::DriveFrame(const DriveInfo &drive,
 
 void DriveFrame::contextMenuEvent(QContextMenuEvent *event)
 {
-    QMenu menu(this);
+    // Keep both the menu and its payload independent from this widget:
+    // a drive refresh or window close can occur while QMenu::exec() runs its
+    // nested event loop.
+    const DriveInfo drive = m_drive;
+    const bool canSafelyRemove = m_canSafelyRemove;
+    const bool canEject = m_canEject;
+
+    QMenu menu;
     QAction *unmountAction = nullptr;
     QAction *safelyRemoveAction = nullptr;
     QAction *ejectAction = nullptr;
@@ -387,7 +395,7 @@ void DriveFrame::contextMenuEvent(QContextMenuEvent *event)
     QAction *copyPathAction = nullptr;
     QAction *propertiesAction = nullptr;
 
-    populateDriveContextMenu(menu, m_drive, m_canSafelyRemove, m_canEject,
+    populateDriveContextMenu(menu, drive, canSafelyRemove, canEject,
                              &unmountAction, &safelyRemoveAction, &ejectAction,
                              &openAction, &copyPathAction, &propertiesAction);
 
@@ -396,21 +404,33 @@ void DriveFrame::contextMenuEvent(QContextMenuEvent *event)
         return;
     }
 
+    QPointer<DriveFrame> self(this);
+    Q_EMIT contextMenuActiveChanged(true);
+
     QAction *chosen = menu.exec(event->globalPos());
+    if (!self) {
+        event->accept();
+        return;
+    }
+
     if (chosen) {
         if (chosen == unmountAction) {
-            Q_EMIT unmountRequested(m_drive);
+            Q_EMIT unmountRequested(drive);
         } else if (chosen == safelyRemoveAction) {
-            Q_EMIT safelyRemoveRequested(m_drive);
+            Q_EMIT safelyRemoveRequested(drive);
         } else if (chosen == ejectAction) {
-            Q_EMIT ejectRequested(m_drive);
+            Q_EMIT ejectRequested(drive);
         } else if (chosen == openAction) {
-            openInDolphin(m_drive.targetUrl);
+            openInDolphin(drive.targetUrl);
         } else if (chosen == copyPathAction) {
-            QGuiApplication::clipboard()->setText(m_drive.mountPoint);
+            QGuiApplication::clipboard()->setText(drive.mountPoint);
         } else if (chosen == propertiesAction) {
-            Q_EMIT propertiesRequested(m_drive);
+            Q_EMIT propertiesRequested(drive);
         }
+    }
+
+    if (self) {
+        Q_EMIT contextMenuActiveChanged(false);
     }
     event->accept();
 }

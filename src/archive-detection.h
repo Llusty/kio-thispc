@@ -9,6 +9,7 @@
 #include <QMimeDatabase>
 #include <QStandardPaths>
 #include <QUrl>
+#include <sys/stat.h>
 #include <zlib.h>
 
 inline QString thispcSafeArchiveEntryName(QString name, bool directory)
@@ -58,6 +59,11 @@ inline bool thispcIsArchiveCandidate(const QUrl &url, bool isDirectory)
     if (isDirectory || !url.isLocalFile() || url.hasQuery() || url.hasFragment()) return false;
     const QFileInfo file(url.toLocalFile());
     if (!file.isFile() || !file.isReadable()) return false;
+    struct stat st {};
+    if (::stat(QFile::encodeName(file.absoluteFilePath()).constData(), &st) != 0
+        || !S_ISREG(st.st_mode)) {
+        return false;
+    }
     const QString mime = QMimeDatabase().mimeTypeForFile(
         file.absoluteFilePath(), QMimeDatabase::MatchContent).name();
     if (mime == QStringLiteral("application/gzip")

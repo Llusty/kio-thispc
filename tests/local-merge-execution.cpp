@@ -1261,6 +1261,777 @@ int main(int argc, char **argv)
                "R4: swapped intermediate directory under second source root must fail closed");
     }
 
+    // =========================================================================
+    // STAGE 1B.7A (SEC-046-04): FOLDER MERGE POSIX PERMISSIONS TESTS P1–P12
+    // =========================================================================
+    auto statMode = [](const QString &path, bool *ok = nullptr) -> mode_t {
+        struct stat st {};
+        const bool good = (::lstat(QFile::encodeName(path).constData(), &st) == 0);
+        if (ok) *ok = good;
+        return good ? (st.st_mode & 07777) : 0;
+    };
+
+    // P1 — Private directory (0700) never exposed as 0755 during copy and ends 0700
+    {
+        const QString srcRoot = tmp.filePath(QStringLiteral("p1_priv/src"));
+        const QString dstRoot = tmp.filePath(QStringLiteral("p1_priv/dst"));
+        const QString srcDir = srcRoot + QStringLiteral("/Secret");
+        verify(QDir().mkpath(srcDir) && QDir().mkpath(dstRoot)
+            && writeFile(srcDir + QStringLiteral("/note.txt"), "top-secret"), "p1 setup");
+        verify(::chmod(QFile::encodeName(srcDir).constData(), 0700) == 0, "p1 chmod src 0700");
+
+        LocalMergePlan plan = makePlan({QUrl::fromLocalFile(srcDir)}, QUrl::fromLocalFile(dstRoot));
+        approveAdditiveMergePlan(plan);
+
+        mode_t observedModeDuringCopy = 0;
+        LocalMergeExecutionJob job(plan);
+        job.setAutoDelete(false);
+        job.setPrePublishHook([&](const QString &relPath, int) {
+            if (relPath == QStringLiteral("Secret/note.txt")) {
+                observedModeDuringCopy = statMode(dstRoot + QStringLiteral("/Secret"));
+            }
+        });
+        QSignalSpy spy(&job, &KJob::result);
+        job.start();
+        verify(waitUntil([&spy] { return spy.count() == 1; }, 5000), "p1 job finishes");
+        verify(job.error() == KJob::NoError, "p1 succeeds");
+        verify(observedModeDuringCopy == 0700, "P1: private dir created as 0700 during copy (not 0755)");
+        verify(statMode(dstRoot + QStringLiteral("/Secret")) == 0700, "P1: final mode is 0700");
+    }
+
+    // P2 — Read-only directory (0500) with readable file copies cleanly and ends 0500
+    {
+        const QString srcRoot = tmp.filePath(QStringLiteral("p2_ro/src"));
+        const QString dstRoot = tmp.filePath(QStringLiteral("p2_ro/dst"));
+        const QString srcDir = srcRoot + QStringLiteral("/ReadOnlyDir");
+        verify(QDir().mkpath(srcDir) && QDir().mkpath(dstRoot)
+            && writeFile(srcDir + QStringLiteral("/readme.txt"), "readonly-payload"), "p2 setup");
+        verify(::chmod(QFile::encodeName(srcDir).constData(), 0500) == 0, "p2 chmod src 0500");
+
+        LocalMergePlan plan = makePlan({QUrl::fromLocalFile(srcDir)}, QUrl::fromLocalFile(dstRoot));
+        approveAdditiveMergePlan(plan);
+
+        mode_t modeWhilePopulating = 0;
+        LocalMergeExecutionJob job(plan);
+        job.setAutoDelete(false);
+        job.setPrePublishHook([&](const QString &relPath, int) {
+            if (relPath == QStringLiteral("ReadOnlyDir/readme.txt")) {
+                modeWhilePopulating = statMode(dstRoot + QStringLiteral("/ReadOnlyDir"));
+            }
+        });
+        QSignalSpy spy(&job, &KJob::result);
+        job.start();
+        verify(waitUntil([&spy] { return spy.count() == 1; }, 5000), "p2 job finishes");
+        verify(job.error() == KJob::NoError, "P2: read-only 0500 dir copy succeeds");
+        verify(modeWhilePopulating == 0700, "P2: temp mode while populating is 0700");
+        verify(statMode(dstRoot + QStringLiteral("/ReadOnlyDir")) == 0500, "P2: final mode restored to 0500");
+        verify(QFileInfo::exists(dstRoot + QStringLiteral("/ReadOnlyDir/readme.txt")), "P2: child file copied");
+
+        // Restore writable mode so QTemporaryDir cleans up cleanly
+        ::chmod(QFile::encodeName(srcDir).constData(), 0700);
+        ::chmod(QFile::encodeName(dstRoot + QStringLiteral("/ReadOnlyDir")).constData(), 0700);
+    }
+
+    // P3 — Public directory (0755) created as 0700 and finalized to 0755
+    {
+        const QString srcRoot = tmp.filePath(QStringLiteral("p3_pub/src"));
+        const QString dstRoot = tmp.filePath(QStringLiteral("p3_pub/dst"));
+        const QString srcDir = srcRoot + QStringLiteral("/PublicDir");
+        verify(QDir().mkpath(srcDir) && QDir().mkpath(dstRoot)
+            && writeFile(srcDir + QStringLiteral("/info.txt"), "public"), "p3 setup");
+        verify(::chmod(QFile::encodeName(srcDir).constData(), 0755) == 0, "p3 chmod src 0755");
+
+        LocalMergePlan plan = makePlan({QUrl::fromLocalFile(srcDir)}, QUrl::fromLocalFile(dstRoot));
+        approveAdditiveMergePlan(plan);
+
+        mode_t modeWhilePopulating = 0;
+        LocalMergeExecutionJob job(plan);
+        job.setAutoDelete(false);
+        job.setPrePublishHook([&](const QString &relPath, int) {
+            if (relPath == QStringLiteral("PublicDir/info.txt")) {
+                modeWhilePopulating = statMode(dstRoot + QStringLiteral("/PublicDir"));
+            }
+        });
+        QSignalSpy spy(&job, &KJob::result);
+        job.start();
+        verify(waitUntil([&spy] { return spy.count() == 1; }, 5000), "p3 job finishes");
+        verify(job.error() == KJob::NoError, "P3: public 0755 dir copy succeeds");
+        verify(modeWhilePopulating == 0700, "P3: initial creation mode is restrictive 0700");
+        verify(statMode(dstRoot + QStringLiteral("/PublicDir")) == 0755, "P3: final mode finalized to 0755");
+    }
+
+    // P4 — Executable regular file (0755) retains ordinary executable bits
+    {
+        const QString srcRoot = tmp.filePath(QStringLiteral("p4_exec/src"));
+        const QString dstRoot = tmp.filePath(QStringLiteral("p4_exec/dst"));
+        const QString srcDir = srcRoot + QStringLiteral("/Bin");
+        const QString srcFile = srcDir + QStringLiteral("/tool.sh");
+        verify(QDir().mkpath(srcDir) && QDir().mkpath(dstRoot)
+            && writeFile(srcFile, "#!/bin/sh\necho ok\n"), "p4 setup");
+        verify(::chmod(QFile::encodeName(srcFile).constData(), 0755) == 0, "p4 chmod 0755");
+
+        LocalMergePlan plan = makePlan({QUrl::fromLocalFile(srcDir)}, QUrl::fromLocalFile(dstRoot));
+        approveAdditiveMergePlan(plan);
+        LocalMergeExecutionJob job(plan);
+        job.setAutoDelete(false);
+        QSignalSpy spy(&job, &KJob::result);
+        job.start();
+        verify(waitUntil([&spy] { return spy.count() == 1; }, 5000), "p4 job finishes");
+        verify(job.error() == KJob::NoError, "P4 succeeds");
+        verify(statMode(dstRoot + QStringLiteral("/Bin/tool.sh")) == 0755, "P4: executable file retains 0755");
+    }
+
+    // P5 — SUID source regular file (04755) does NOT retain SUID on copy
+    {
+        verify(LocalMergeExecDetail::sanitizeRegularFileMode(04755) == 0755, "P5 helper strips SUID");
+        const QString srcRoot = tmp.filePath(QStringLiteral("p5_suid/src"));
+        const QString dstRoot = tmp.filePath(QStringLiteral("p5_suid/dst"));
+        const QString srcDir = srcRoot + QStringLiteral("/Priv");
+        const QString srcFile = srcDir + QStringLiteral("/suid_bin");
+        verify(QDir().mkpath(srcDir) && QDir().mkpath(dstRoot)
+            && writeFile(srcFile, "binary-data"), "p5 setup");
+        verify(::chmod(QFile::encodeName(srcFile).constData(), 04755) == 0, "p5 chmod 04755");
+        const mode_t actualSrcMode = statMode(srcFile);
+        verify((actualSrcMode & S_ISUID) != 0, "P5: test filesystem supports S_ISUID on source");
+
+        LocalMergePlan plan = makePlan({QUrl::fromLocalFile(srcDir)}, QUrl::fromLocalFile(dstRoot));
+        approveAdditiveMergePlan(plan);
+        LocalMergeExecutionJob job(plan);
+        job.setAutoDelete(false);
+        QSignalSpy spy(&job, &KJob::result);
+        job.start();
+        verify(waitUntil([&spy] { return spy.count() == 1; }, 5000), "p5 job finishes");
+        verify(job.error() == KJob::NoError, "P5 succeeds");
+        const mode_t dstMode = statMode(dstRoot + QStringLiteral("/Priv/suid_bin"));
+        verify((dstMode & S_ISUID) == 0 && dstMode == 0755, "P5: copied file strips SUID and keeps 0755");
+    }
+
+    // P6 — SGID source regular file (02755) does NOT retain SGID on copy
+    {
+        verify(LocalMergeExecDetail::sanitizeRegularFileMode(02755) == 0755, "P6 helper strips SGID");
+        verify(LocalMergeExecDetail::sanitizeRegularFileMode(06755) == 0755, "P6 helper strips SUID+SGID");
+        verify(LocalMergeExecDetail::sanitizeDirectoryMode(02750) == 0750, "P6 dir helper strips SGID");
+        const QString srcRoot = tmp.filePath(QStringLiteral("p6_sgid/src"));
+        const QString dstRoot = tmp.filePath(QStringLiteral("p6_sgid/dst"));
+        const QString srcDir = srcRoot + QStringLiteral("/Grp");
+        const QString srcFile = srcDir + QStringLiteral("/sgid_bin");
+        verify(QDir().mkpath(srcDir) && QDir().mkpath(dstRoot)
+            && writeFile(srcFile, "binary-data"), "p6 setup");
+        verify(::chmod(QFile::encodeName(srcFile).constData(), 02755) == 0, "p6 chmod 02755");
+        const mode_t actualSrcMode = statMode(srcFile);
+        verify((actualSrcMode & S_ISGID) != 0, "P6: test filesystem supports S_ISGID on source");
+
+        LocalMergePlan plan = makePlan({QUrl::fromLocalFile(srcDir)}, QUrl::fromLocalFile(dstRoot));
+        approveAdditiveMergePlan(plan);
+        LocalMergeExecutionJob job(plan);
+        job.setAutoDelete(false);
+        QSignalSpy spy(&job, &KJob::result);
+        job.start();
+        verify(waitUntil([&spy] { return spy.count() == 1; }, 5000), "p6 job finishes");
+        verify(job.error() == KJob::NoError, "P6 succeeds");
+        const mode_t dstMode = statMode(dstRoot + QStringLiteral("/Grp/sgid_bin"));
+        verify((dstMode & S_ISGID) == 0 && dstMode == 0755, "P6: copied file strips SGID and keeps 0755");
+    }
+
+    // P7 — Existing destination directory & unrelated files keep original permissions
+    {
+        const QString srcRoot = tmp.filePath(QStringLiteral("p7_exist/src"));
+        const QString dstRoot = tmp.filePath(QStringLiteral("p7_exist/dst"));
+        const QString srcDir = srcRoot + QStringLiteral("/Shared");
+        const QString dstDir = dstRoot + QStringLiteral("/Shared");
+        const QString unrelated = dstDir + QStringLiteral("/unrelated.txt");
+        verify(QDir().mkpath(srcDir) && QDir().mkpath(dstDir)
+            && writeFile(srcDir + QStringLiteral("/added.txt"), "added")
+            && writeFile(unrelated, "keep"), "p7 setup");
+        verify(::chmod(QFile::encodeName(srcDir).constData(), 0700) == 0, "p7 src 0700");
+        verify(::chmod(QFile::encodeName(dstDir).constData(), 0755) == 0, "p7 dst 0755");
+        verify(::chmod(QFile::encodeName(unrelated).constData(), 0640) == 0, "p7 unrelated 0640");
+
+        LocalMergePlan plan = makePlan({QUrl::fromLocalFile(srcDir)}, QUrl::fromLocalFile(dstRoot));
+        approveAdditiveMergePlan(plan);
+        LocalMergeExecutionJob job(plan);
+        job.setAutoDelete(false);
+        QSignalSpy spy(&job, &KJob::result);
+        job.start();
+        verify(waitUntil([&spy] { return spy.count() == 1; }, 5000), "p7 job finishes");
+        verify(job.error() == KJob::NoError, "P7 succeeds");
+        verify(statMode(dstDir) == 0755, "P7: pre-existing destination dir permissions untouched (0755)");
+        verify(statMode(unrelated) == 0640, "P7: unrelated existing file permissions untouched (0640)");
+    }
+
+    // P8 — Cancellation during recursive copy leaves newly created dir restrictive (0700), never widened
+    {
+        const QString srcRoot = tmp.filePath(QStringLiteral("p8_cancel/src"));
+        const QString dstRoot = tmp.filePath(QStringLiteral("p8_cancel/dst"));
+        const QString srcDir = srcRoot + QStringLiteral("/CancelDir");
+        verify(QDir().mkpath(srcDir) && QDir().mkpath(dstRoot)
+            && writeFile(srcDir + QStringLiteral("/a.bin"), QByteArray(128 * 1024, 'x')), "p8 setup");
+        verify(::chmod(QFile::encodeName(srcDir).constData(), 0755) == 0, "p8 src 0755");
+
+        LocalMergePlan plan = makePlan({QUrl::fromLocalFile(srcDir)}, QUrl::fromLocalFile(dstRoot));
+        approveAdditiveMergePlan(plan);
+        LocalMergeExecutionJob job(plan, nullptr, 4096, 15);
+        job.setAutoDelete(false);
+        job.setPrePublishHook([&](const QString &relPath, int) {
+            if (relPath == QStringLiteral("CancelDir/a.bin")) {
+                QMetaObject::invokeMethod(&job, [&job] { job.requestSafeCancel(); }, Qt::QueuedConnection);
+                QThread::msleep(30);
+            }
+        });
+        QSignalSpy spy(&job, &KJob::result);
+        job.start();
+        verify(waitUntil([&spy] { return spy.count() == 1; }, 5000), "p8 job finishes");
+        verify(job.report().outcome == LocalMergeExecutionOutcome::CancelledPartialSuccess
+            || job.report().outcome == LocalMergeExecutionOutcome::CancelledNoChanges,
+               "P8: cancelled outcome reported");
+        verify(statMode(dstRoot + QStringLiteral("/CancelDir")) == 0700,
+               "P8: cancelled newly created dir remains restrictive 0700");
+    }
+
+    // P9 — Symlink replacement attack before directory permission finalization fails closed; external target untouched
+    {
+        const QString srcRoot = tmp.filePath(QStringLiteral("p9_symlink/src"));
+        const QString dstRoot = tmp.filePath(QStringLiteral("p9_symlink/dst"));
+        const QString victimDir = tmp.filePath(QStringLiteral("p9_symlink/external_victim"));
+        const QString srcDir = srcRoot + QStringLiteral("/TargetDir");
+        verify(QDir().mkpath(srcDir) && QDir().mkpath(dstRoot) && QDir().mkpath(victimDir)
+            && writeFile(srcDir + QStringLiteral("/f.txt"), "data"), "p9 setup");
+        verify(::chmod(QFile::encodeName(srcDir).constData(), 0755) == 0, "p9 src 0755");
+        verify(::chmod(QFile::encodeName(victimDir).constData(), 0700) == 0, "p9 victim 0700");
+
+        LocalMergePlan plan = makePlan({QUrl::fromLocalFile(srcDir)}, QUrl::fromLocalFile(dstRoot));
+        approveAdditiveMergePlan(plan);
+        LocalMergeExecutionJob job(plan);
+        job.setAutoDelete(false);
+        job.setPreDirPermFinalizeHook([&](const QString &relPath, const QString &destPath, int) {
+            if (relPath == QStringLiteral("TargetDir")) {
+                // Attacker moves TargetDir aside and plants a symlink to external victimDir
+                QDir(dstRoot).rename(QStringLiteral("TargetDir"), QStringLiteral("TargetDir_moved"));
+                QFile::link(victimDir, destPath);
+            }
+        });
+        QSignalSpy spy(&job, &KJob::result);
+        job.start();
+        verify(waitUntil([&spy] { return spy.count() == 1; }, 5000), "p9 job finishes");
+        verify(job.error() == KIO::ERR_CANNOT_CHMOD && !job.report().completedFully,
+               "P9: symlink replacement before permission finalization fails closed");
+        verify(statMode(victimDir) == 0700,
+               "P9: external symlink target permissions remain completely untouched (0700)");
+    }
+
+    // P10 — Simulated finalization failure reports truthful error and fails closed
+    {
+        const QString srcRoot = tmp.filePath(QStringLiteral("p10_fail/src"));
+        const QString dstRoot = tmp.filePath(QStringLiteral("p10_fail/dst"));
+        const QString srcDir = srcRoot + QStringLiteral("/FailChmodDir");
+        verify(QDir().mkpath(srcDir) && QDir().mkpath(dstRoot)
+            && writeFile(srcDir + QStringLiteral("/f.txt"), "data"), "p10 setup");
+        verify(::chmod(QFile::encodeName(srcDir).constData(), 0755) == 0, "p10 src 0755");
+
+        LocalMergePlan plan = makePlan({QUrl::fromLocalFile(srcDir)}, QUrl::fromLocalFile(dstRoot));
+        approveAdditiveMergePlan(plan);
+        LocalMergeExecutionJob job(plan);
+        job.setAutoDelete(false);
+        job.setSimulateDirChmodError(true);
+        QSignalSpy spy(&job, &KJob::result);
+        job.start();
+        verify(waitUntil([&spy] { return spy.count() == 1; }, 5000), "p10 job finishes");
+        verify(job.error() == KIO::ERR_CANNOT_CHMOD && !job.report().completedFully,
+               "P10: finalization failure reports KIO::ERR_CANNOT_CHMOD and does not claim success");
+        verify(job.report().failedOperations.contains(QStringLiteral("FailChmodDir")),
+               "P10: failed directory recorded in failedOperations");
+    }
+
+    // P11 — Nested tree with distinct modes (0500 parent -> 0700 mid -> 0550 leaf) finalized postorder
+    {
+        const QString srcRoot = tmp.filePath(QStringLiteral("p11_nested/src"));
+        const QString dstRoot = tmp.filePath(QStringLiteral("p11_nested/dst"));
+        const QString pDir = srcRoot + QStringLiteral("/Top");
+        const QString mDir = pDir + QStringLiteral("/Mid");
+        const QString lDir = mDir + QStringLiteral("/Leaf");
+        verify(QDir().mkpath(lDir) && QDir().mkpath(dstRoot)
+            && writeFile(lDir + QStringLiteral("/deep.txt"), "deep-data"), "p11 setup");
+        verify(::chmod(QFile::encodeName(lDir).constData(), 0550) == 0, "p11 leaf 0550");
+        verify(::chmod(QFile::encodeName(mDir).constData(), 0700) == 0, "p11 mid 0700");
+        verify(::chmod(QFile::encodeName(pDir).constData(), 0500) == 0, "p11 top 0500");
+
+        LocalMergePlan plan = makePlan({QUrl::fromLocalFile(pDir)}, QUrl::fromLocalFile(dstRoot));
+        approveAdditiveMergePlan(plan);
+        LocalMergeExecutionJob job(plan);
+        job.setAutoDelete(false);
+        QSignalSpy spy(&job, &KJob::result);
+        job.start();
+        verify(waitUntil([&spy] { return spy.count() == 1; }, 5000), "p11 job finishes");
+        verify(job.error() == KJob::NoError, "P11: nested read-only/private tree copy succeeds");
+        verify(statMode(dstRoot + QStringLiteral("/Top")) == 0500, "P11: Top finalized to 0500");
+        verify(statMode(dstRoot + QStringLiteral("/Top/Mid")) == 0700, "P11: Mid finalized to 0700");
+        verify(statMode(dstRoot + QStringLiteral("/Top/Mid/Leaf")) == 0550, "P11: Leaf finalized to 0550");
+        verify(QFileInfo::exists(dstRoot + QStringLiteral("/Top/Mid/Leaf/deep.txt")), "P11: deep file copied");
+
+        // Restore writable modes for clean QTemporaryDir teardown
+        ::chmod(QFile::encodeName(pDir).constData(), 0700);
+        ::chmod(QFile::encodeName(mDir).constData(), 0700);
+        ::chmod(QFile::encodeName(lDir).constData(), 0700);
+        ::chmod(QFile::encodeName(dstRoot + QStringLiteral("/Top")).constData(), 0700);
+        ::chmod(QFile::encodeName(dstRoot + QStringLiteral("/Top/Mid")).constData(), 0700);
+        ::chmod(QFile::encodeName(dstRoot + QStringLiteral("/Top/Mid/Leaf")).constData(), 0700);
+    }
+
+    // P12 — Regression: Overwrite of existing file with SUID source strips SUID + Rename dir keeps 0700
+    {
+        const QString srcRoot = tmp.filePath(QStringLiteral("p12_reg/src"));
+        const QString dstRoot = tmp.filePath(QStringLiteral("p12_reg/dst"));
+        const QString srcDir = srcRoot + QStringLiteral("/App");
+        const QString dstDir = dstRoot + QStringLiteral("/App");
+        verify(QDir().mkpath(srcDir) && QDir().mkpath(dstDir)
+            && writeFile(srcDir + QStringLiteral("/run.bin"), "new-suid")
+            && writeFile(dstDir + QStringLiteral("/run.bin"), "old-file"), "p12 setup");
+        verify(::chmod(QFile::encodeName(srcDir + QStringLiteral("/run.bin")).constData(), 04755) == 0, "p12 src 04755");
+        verify(::chmod(QFile::encodeName(dstDir).constData(), 0755) == 0, "p12 dstDir 0755");
+
+        LocalMergePlan plan = makePlan({QUrl::fromLocalFile(srcDir)}, QUrl::fromLocalFile(dstRoot));
+        approveAdditiveMergePlan(plan);
+        QString rejectReason;
+        verify(approveFileOverwrite(plan, QStringLiteral("App/run.bin"), QStringLiteral("p12 overwrite"), &rejectReason),
+               "p12 approveFileOverwrite");
+        LocalMergeExecutionJob job(plan);
+        job.setAutoDelete(false);
+        QSignalSpy spy(&job, &KJob::result);
+        job.start();
+        verify(waitUntil([&spy] { return spy.count() == 1; }, 5000), "p12 job finishes");
+        verify(job.error() == KJob::NoError, "P12: overwrite succeeds");
+        const mode_t overwrittenMode = statMode(dstDir + QStringLiteral("/run.bin"));
+        verify((overwrittenMode & S_ISUID) == 0 && overwrittenMode == 0755,
+               "P12: Overwrite strips SUID and preserves 0755");
+        verify(statMode(dstDir) == 0755, "P12: existing merged dir permissions preserved");
+    }
+
+    // Stage 1B.7A-R follow-up: LocalAnchoredFileCopyJob destroyed before start() is safe and leak-free
+    {
+        const int srcFd = ::open(QFile::encodeName(tmp.path()).constData(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        const int dstFd = ::open(QFile::encodeName(tmp.path()).constData(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        verify(srcFd >= 0 && dstFd >= 0, "unstarted worker test open fds");
+        struct stat emptySt {};
+        auto *unstarted = new LocalAnchoredFileCopyJob(
+            LocalAnchoredFileCopyWorker::Mode::CreateNoOverwrite,
+            srcFd, QStringLiteral("never_started.txt"), emptySt,
+            dstFd, QStringLiteral(".thispc-part.never"), QStringLiteral("never_started.txt"),
+            emptySt, QStringLiteral("never_started.txt"));
+        delete unstarted;
+        verify(true, "LocalAnchoredFileCopyJob destruction before start() succeeded cleanly");
+    }
+
+    // ==================== Stage 1B.9B-2A (SEC-046-09): SameObject Folder Rename Safety ====================
+    auto sha256File = [](const QString &path) -> QByteArray {
+        QFile f(path);
+        if (!f.open(QIODevice::ReadOnly)) return {};
+        return QCryptographicHash::hash(f.readAll(), QCryptographicHash::Sha256).toHex();
+    };
+
+    // S1 / S3 / S15 — Nonempty SameObject directory with nested files: Rename rejected fail-closed,
+    // no empty destination directory created, every original file byte-identical (SHA-256).
+    {
+        const QString base = tmp.filePath(QStringLiteral("sec046_09_s1"));
+        const QString dirA = base + QStringLiteral("/DirA");
+        const QString f1 = dirA + QStringLiteral("/a.txt");
+        const QString f2 = dirA + QStringLiteral("/sub/b.txt");
+        const QString f3 = dirA + QStringLiteral("/sub/deep/c.bin");
+        verify(QDir().mkpath(dirA + QStringLiteral("/sub/deep"))
+            && writeFile(f1, "alpha-payload-046-09")
+            && writeFile(f2, "beta-nested-payload-046-09")
+            && writeFile(f3, QByteArray("\x00\x01\x02\xffpayload", 11)), "S1 setup");
+        const QByteArray h1 = sha256File(f1);
+        const QByteArray h2 = sha256File(f2);
+        const QByteArray h3 = sha256File(f3);
+
+        LocalMergePlan plan = makePlan({QUrl::fromLocalFile(dirA)}, QUrl::fromLocalFile(base));
+        verify(plan.entries.size() == 1
+            && plan.entries[0].classification == LocalMergeEntryClassification::SameObject
+            && plan.entries[0].sourceKind == LocalMergeObjectKind::Directory,
+               "S1: planner classifies self-copy directory as SameObject with skipped descendants");
+
+        QString rejectReason;
+        verify(!approveDirectoryRenameAndRevalidate(plan, QStringLiteral("DirA"), QStringLiteral("DirA_renamed"), &rejectReason)
+            && !rejectReason.isEmpty(),
+               "S1: approveDirectoryRenameAndRevalidate rejects SameObject directory rename");
+
+        // Defense-in-depth: force approvedAction=Rename directly on the plan and run LocalMergeExecutionJob
+        plan.entries[0].approvedAction = LocalMergeApprovedAction::Rename;
+        plan.entries[0].decisionBinding.targetFileName = QStringLiteral("DirA_renamed");
+        LocalMergeExecutionJob job(plan);
+        job.setAutoDelete(false);
+        QSignalSpy spy(&job, &KJob::result);
+        job.start();
+        verify(waitUntil([&spy] { return spy.count() == 1; }, 5000), "S1: forced-rename job terminates");
+        verify(job.error() == KJob::UserDefinedError, "S1: LocalMergeExecutionJob fails closed on SameObject Rename");
+        verify(!QFileInfo::exists(base + QStringLiteral("/DirA_renamed")),
+               "S1/S3: no spurious empty renamed directory created");
+        verify(job.report().directoriesCreated.isEmpty()
+            && job.report().filesCreated.isEmpty()
+            && !job.report().undoContract.reversible,
+               "S1: no created paths or reversible undo entries recorded on rejected SameObject rename");
+        verify(sha256File(f1) == h1 && sha256File(f2) == h2 && sha256File(f3) == h3,
+               "S1/S15: all original files remain byte-identical (SHA-256)");
+    }
+
+    // S2 / S13 — SameObject through symlink alias: identity detected, Rename rejected, no mutation
+    {
+        const QString base = tmp.filePath(QStringLiteral("sec046_09_s2"));
+        const QString realParent = base + QStringLiteral("/real");
+        const QString aliasParent = base + QStringLiteral("/alias");
+        const QString realDir = realParent + QStringLiteral("/Shared");
+        const QString secretFile = realDir + QStringLiteral("/secret.txt");
+        verify(QDir().mkpath(realDir) && writeFile(secretFile, "symlink-alias-secret"), "S2 setup file");
+        verify(::symlink(QFile::encodeName(realParent).constData(),
+                         QFile::encodeName(aliasParent).constData()) == 0, "S2 setup symlink");
+        const QByteArray hSecret = sha256File(secretFile);
+
+        LocalMergePlan plan = makePlan({QUrl::fromLocalFile(aliasParent + QStringLiteral("/Shared"))},
+                                       QUrl::fromLocalFile(realParent));
+        verify(plan.entries.size() == 1
+            && plan.entries[0].classification == LocalMergeEntryClassification::SameObject,
+               "S2: symlink-aliased directory classified as SameObject");
+
+        QString rejectReason;
+        verify(!approveDirectoryRenameAndRevalidate(plan, QStringLiteral("Shared"), QStringLiteral("Shared_copy"), &rejectReason),
+               "S2: approveDirectoryRenameAndRevalidate rejects symlink-aliased SameObject rename");
+
+        plan.entries[0].approvedAction = LocalMergeApprovedAction::Rename;
+        plan.entries[0].decisionBinding.targetFileName = QStringLiteral("Shared_copy");
+        LocalMergeExecutionJob job(plan);
+        job.setAutoDelete(false);
+        QSignalSpy spy(&job, &KJob::result);
+        job.start();
+        verify(waitUntil([&spy] { return spy.count() == 1; }, 5000), "S2: job finishes");
+        verify(job.error() == KJob::UserDefinedError, "S2/S13: executor rejects symlink-aliased SameObject rename");
+        verify(!QFileInfo::exists(realParent + QStringLiteral("/Shared_copy")),
+               "S2: no spurious copy created in realParent");
+        verify(sha256File(secretFile) == hSecret, "S2/S13: real target file untouched (SHA-256)");
+    }
+
+    // S4 — Empty SameObject directory: consistently rejected
+    {
+        const QString base = tmp.filePath(QStringLiteral("sec046_09_s4"));
+        const QString emptyDir = base + QStringLiteral("/EmptySelf");
+        verify(QDir().mkpath(emptyDir), "S4 setup");
+
+        LocalMergePlan plan = makePlan({QUrl::fromLocalFile(emptyDir)}, QUrl::fromLocalFile(base));
+        verify(plan.entries.size() == 1
+            && plan.entries[0].classification == LocalMergeEntryClassification::SameObject,
+               "S4: empty self-copy directory classified as SameObject");
+
+        QString rejectReason;
+        verify(!approveDirectoryRenameAndRevalidate(plan, QStringLiteral("EmptySelf"), QStringLiteral("EmptySelf_2"), &rejectReason),
+               "S4: empty SameObject directory rename rejected consistently");
+        verify(!QFileInfo::exists(base + QStringLiteral("/EmptySelf_2")),
+               "S4: no renamed empty directory created");
+    }
+
+    // S5 — Legitimate distinct-folder Rename still copies complete contents with matching SHA-256
+    {
+        const QString base = tmp.filePath(QStringLiteral("sec046_09_s5"));
+        const QString srcDir = base + QStringLiteral("/src/Project");
+        const QString dstRoot = base + QStringLiteral("/dst");
+        const QString dstExisting = dstRoot + QStringLiteral("/Project");
+        const QString s1 = srcDir + QStringLiteral("/f1.txt");
+        const QString s2 = srcDir + QStringLiteral("/nested/f2.txt");
+        const QString d1 = dstExisting + QStringLiteral("/existing.txt");
+        verify(QDir().mkpath(srcDir + QStringLiteral("/nested"))
+            && QDir().mkpath(dstExisting)
+            && writeFile(s1, "distinct-f1-content")
+            && writeFile(s2, "distinct-f2-nested-content")
+            && writeFile(d1, "existing-dst-content"), "S5 setup");
+        const QByteArray hs1 = sha256File(s1);
+        const QByteArray hs2 = sha256File(s2);
+        const QByteArray hd1 = sha256File(d1);
+
+        LocalMergePlan plan = makePlan({QUrl::fromLocalFile(srcDir)}, QUrl::fromLocalFile(dstRoot));
+        QString rejectReason;
+        verify(approveDirectoryRenameAndRevalidate(plan, QStringLiteral("Project"), QStringLiteral("Project_v2"), &rejectReason),
+               "S5: legitimate distinct-folder Rename approved");
+        // Approve child entries under the renamed subtree
+        for (auto &e : plan.entries) {
+            if (e.relativePath.startsWith(QStringLiteral("Project/"))) {
+                e.approvedAction = LocalMergeApprovedAction::Create;
+            }
+        }
+        LocalMergeExecutionJob job(plan);
+        job.setAutoDelete(false);
+        QSignalSpy spy(&job, &KJob::result);
+        job.start();
+        verify(waitUntil([&spy] { return spy.count() == 1; }, 5000), "S5: distinct rename job finishes");
+        verify(job.error() == KJob::NoError, "S5: distinct-folder Rename completes cleanly");
+        verify(sha256File(dstRoot + QStringLiteral("/Project_v2/f1.txt")) == hs1
+            && sha256File(dstRoot + QStringLiteral("/Project_v2/nested/f2.txt")) == hs2,
+               "S5: renamed distinct folder contains complete contents with matching SHA-256");
+        verify(sha256File(d1) == hd1, "S5: original destination folder untouched (SHA-256)");
+    }
+
+    // ==================== Stage 1B.9B-2B (SEC-046-08): Destination Root Anchor & Identity Safety (DR1–DR15) ====================
+
+    // DR1 & DR9 & DR15 — Normal unchanged destination root + nested operations succeed with SHA-256 integrity
+    {
+        const QString base = tmp.filePath(QStringLiteral("sec046_08_dr1_dr9"));
+        const QString srcDir = base + QStringLiteral("/src/Outer");
+        const QString dstRoot = base + QStringLiteral("/dst");
+        const QString topSrc = base + QStringLiteral("/src/top.txt");
+        const QString nestedSrc = srcDir + QStringLiteral("/Inner/nested.txt");
+        verify(QDir().mkpath(srcDir + QStringLiteral("/Inner"))
+            && QDir().mkpath(dstRoot)
+            && writeFile(topSrc, "dr1-top-file-payload")
+            && writeFile(nestedSrc, "dr9-nested-file-payload"), "DR1/DR9 setup");
+        const QByteArray hTop = sha256File(topSrc);
+        const QByteArray hNested = sha256File(nestedSrc);
+
+        LocalMergePlan plan = makePlan({QUrl::fromLocalFile(topSrc), QUrl::fromLocalFile(srcDir)},
+                                       QUrl::fromLocalFile(dstRoot));
+        verify(plan.destinationRootStatValid, "DR1: plan captures destinationRootStat");
+        approveAdditiveMergePlan(plan);
+        LocalMergeExecutionJob job(plan);
+        job.setAutoDelete(false);
+        QSignalSpy spy(&job, &KJob::result);
+        job.start();
+        verify(waitUntil([&spy] { return spy.count() == 1; }, 5000), "DR1/DR9 job finishes");
+        verify(job.error() == KJob::NoError && job.report().completedFully, "DR1/DR9 normal copy succeeds");
+        verify(sha256File(dstRoot + QStringLiteral("/top.txt")) == hTop
+            && sha256File(dstRoot + QStringLiteral("/Outer/Inner/nested.txt")) == hNested,
+               "DR1/DR9/DR15: top-level and nested files match SHA-256");
+    }
+
+    // DR2 & DR6 & DR7 & DR13 & DR14 & DR15 — Root replacement (post-plan stale retry AND mid-exec hook)
+    {
+        // DR2a / DR13: Post-plan, pre-execution root replacement (stale plan / Retry)
+        const QString base = tmp.filePath(QStringLiteral("sec046_08_dr2_dr13"));
+        const QString srcFile = base + QStringLiteral("/src/payload.txt");
+        const QString dstRoot = base + QStringLiteral("/dst");
+        const QString dstAside = base + QStringLiteral("/dst_orig_aside");
+        const QString replDir = base + QStringLiteral("/replacement_dir");
+        const QString sentinel = replDir + QStringLiteral("/sentinel.txt");
+        verify(QDir().mkpath(base + QStringLiteral("/src"))
+            && QDir().mkpath(dstRoot)
+            && QDir().mkpath(replDir)
+            && writeFile(srcFile, "dr2-src-payload")
+            && writeFile(sentinel, "dr2-replacement-sentinel"), "DR2a setup");
+        const QByteArray hSrc = sha256File(srcFile);
+        const QByteArray hSentinel = sha256File(sentinel);
+
+        LocalMergePlan stalePlan = makePlan({QUrl::fromLocalFile(srcFile)}, QUrl::fromLocalFile(dstRoot));
+        approveAdditiveMergePlan(stalePlan);
+
+        // Replace dstRoot with replDir after planning, before execution
+        verify(::rename(QFile::encodeName(dstRoot).constData(), QFile::encodeName(dstAside).constData()) == 0
+            && ::rename(QFile::encodeName(replDir).constData(), QFile::encodeName(dstRoot).constData()) == 0,
+               "DR2a swap dstRoot");
+
+        LocalMergeExecutionJob job(stalePlan);
+        job.setAutoDelete(false);
+        QSignalSpy spy(&job, &KJob::result);
+        job.start();
+        verify(waitUntil([&spy] { return spy.count() == 1; }, 5000), "DR2a job terminates");
+        verify(job.error() == KJob::UserDefinedError && !job.report().completedFully
+            && !job.report().undoContract.reversible,
+               "DR2a/DR13: stale plan with replaced destination root rejected fail-closed");
+        verify(!QFileInfo::exists(dstRoot + QStringLiteral("/payload.txt")),
+               "DR2a/DR7: replacement root did not receive payload.txt");
+        verify(sha256File(dstRoot + QStringLiteral("/sentinel.txt")) == hSentinel
+            && sha256File(srcFile) == hSrc,
+               "DR2a/DR15: replacement sentinel and source remain byte-identical (SHA-256)");
+    }
+
+    // DR6 & DR7 & DR14 & DR15 — Mid-execution root rename + re-created same-name directory before top-level file publication
+    {
+        const QString base = tmp.filePath(QStringLiteral("sec046_08_dr6_dr7"));
+        const QString srcFile = base + QStringLiteral("/src/topfile.txt");
+        const QString dstRoot = base + QStringLiteral("/dst");
+        const QString dstAside = base + QStringLiteral("/dst_aside");
+        verify(QDir().mkpath(base + QStringLiteral("/src"))
+            && QDir().mkpath(dstRoot)
+            && writeFile(srcFile, "dr6-topfile-data"), "DR6 setup");
+        const QByteArray hSrc = sha256File(srcFile);
+
+        LocalMergePlan plan = makePlan({QUrl::fromLocalFile(srcFile)}, QUrl::fromLocalFile(dstRoot));
+        approveAdditiveMergePlan(plan);
+
+        bool hookFired = false;
+        LocalMergeExecutionJob job(plan);
+        job.setAutoDelete(false);
+        job.setPreTopLevelAnchorHook([&](const QString &rootPath, const QString &) {
+            if (hookFired) return;
+            hookFired = true;
+            // Rename original root aside and create a brand-new directory at the exact same pathname (new st_ino)
+            verify(::rename(QFile::encodeName(rootPath).constData(), QFile::encodeName(dstAside).constData()) == 0,
+                   "DR6 hook rename aside");
+            verify(::mkdir(QFile::encodeName(rootPath).constData(), 0700) == 0, "DR6 hook mkdir same-name root");
+            verify(writeFile(rootPath + QStringLiteral("/fresh_sentinel.txt"), "fresh-root-sentinel"),
+                   "DR6 hook write sentinel");
+        });
+        QSignalSpy spy(&job, &KJob::result);
+        job.start();
+        verify(waitUntil([&spy] { return spy.count() == 1; }, 5000), "DR6 job terminates");
+        verify(hookFired, "DR6/DR14 hook fired");
+        verify(job.error() != KJob::NoError && !job.report().completedFully,
+               "DR6/DR7: mid-exec re-created same-name root rejected fail-closed");
+        verify(!QFileInfo::exists(dstRoot + QStringLiteral("/topfile.txt"))
+            && !QFileInfo::exists(dstAside + QStringLiteral("/topfile.txt")),
+               "DR6/DR7: neither fresh root nor moved root received topfile.txt");
+        verify(sha256File(srcFile) == hSrc, "DR6/DR15: source untouched");
+    }
+
+    // DR3 & DR8 & DR14 & DR15 — Mid-execution root symlink swap before top-level directory creation
+    {
+        const QString base = tmp.filePath(QStringLiteral("sec046_08_dr3_dr8"));
+        const QString srcDir = base + QStringLiteral("/src/TopNewDir");
+        const QString dstRoot = base + QStringLiteral("/dst");
+        const QString dstAside = base + QStringLiteral("/dst_aside");
+        const QString extDir = base + QStringLiteral("/external_target");
+        const QString extSentinel = extDir + QStringLiteral("/ext_sentinel.txt");
+        verify(QDir().mkpath(srcDir)
+            && QDir().mkpath(dstRoot)
+            && QDir().mkpath(extDir)
+            && writeFile(srcDir + QStringLiteral("/inner.txt"), "dr8-inner")
+            && writeFile(extSentinel, "dr3-external-sentinel"), "DR3/DR8 setup");
+        const QByteArray hExt = sha256File(extSentinel);
+
+        LocalMergePlan plan = makePlan({QUrl::fromLocalFile(srcDir)}, QUrl::fromLocalFile(dstRoot));
+        approveAdditiveMergePlan(plan);
+
+        bool hookFired = false;
+        LocalMergeExecutionJob job(plan);
+        job.setAutoDelete(false);
+        job.setPreTopLevelAnchorHook([&](const QString &rootPath, const QString &) {
+            if (hookFired) return;
+            hookFired = true;
+            verify(::rename(QFile::encodeName(rootPath).constData(), QFile::encodeName(dstAside).constData()) == 0,
+                   "DR3 hook rename aside");
+            verify(::symlink(QFile::encodeName(extDir).constData(), QFile::encodeName(rootPath).constData()) == 0,
+                   "DR3 hook symlink swap");
+        });
+        QSignalSpy spy(&job, &KJob::result);
+        job.start();
+        verify(waitUntil([&spy] { return spy.count() == 1; }, 5000), "DR3/DR8 job terminates");
+        verify(hookFired, "DR3/DR8 hook fired");
+        verify(job.error() != KJob::NoError && !job.report().completedFully,
+               "DR3/DR8: symlink-swapped root rejected fail-closed");
+        verify(!QFileInfo::exists(extDir + QStringLiteral("/TopNewDir"))
+            && !QFileInfo::exists(dstAside + QStringLiteral("/TopNewDir")),
+               "DR3/DR8: no directory created in external symlink target or moved root");
+        verify(sha256File(extSentinel) == hExt, "DR3/DR15: external sentinel byte-identical (SHA-256)");
+    }
+
+    // DR4 — Mid-execution root rename (destination path disappears)
+    {
+        const QString base = tmp.filePath(QStringLiteral("sec046_08_dr4"));
+        const QString srcFile = base + QStringLiteral("/src/file4.txt");
+        const QString dstRoot = base + QStringLiteral("/dst");
+        const QString dstMoved = base + QStringLiteral("/dst_moved");
+        verify(QDir().mkpath(base + QStringLiteral("/src"))
+            && QDir().mkpath(dstRoot)
+            && writeFile(srcFile, "dr4-data"), "DR4 setup");
+
+        LocalMergePlan plan = makePlan({QUrl::fromLocalFile(srcFile)}, QUrl::fromLocalFile(dstRoot));
+        approveAdditiveMergePlan(plan);
+
+        LocalMergeExecutionJob job(plan);
+        job.setAutoDelete(false);
+        job.setPreTopLevelAnchorHook([&](const QString &rootPath, const QString &) {
+            ::rename(QFile::encodeName(rootPath).constData(), QFile::encodeName(dstMoved).constData());
+        });
+        QSignalSpy spy(&job, &KJob::result);
+        job.start();
+        verify(waitUntil([&spy] { return spy.count() == 1; }, 5000), "DR4 job terminates");
+        verify(job.error() != KJob::NoError && !job.report().completedFully,
+               "DR4: moved destination root fails closed");
+        verify(!QFileInfo::exists(dstRoot) && !QFileInfo::exists(dstMoved + QStringLiteral("/file4.txt")),
+               "DR4: no unintended write to original or moved path");
+    }
+
+    // DR5 — Mid-execution root removal (rmdir before top-level mutation)
+    {
+        const QString base = tmp.filePath(QStringLiteral("sec046_08_dr5"));
+        const QString srcFile = base + QStringLiteral("/src/file5.txt");
+        const QString dstRoot = base + QStringLiteral("/dst");
+        verify(QDir().mkpath(base + QStringLiteral("/src"))
+            && QDir().mkpath(dstRoot)
+            && writeFile(srcFile, "dr5-data"), "DR5 setup");
+
+        LocalMergePlan plan = makePlan({QUrl::fromLocalFile(srcFile)}, QUrl::fromLocalFile(dstRoot));
+        approveAdditiveMergePlan(plan);
+
+        LocalMergeExecutionJob job(plan);
+        job.setAutoDelete(false);
+        job.setPreTopLevelAnchorHook([&](const QString &rootPath, const QString &) {
+            ::rmdir(QFile::encodeName(rootPath).constData());
+        });
+        QSignalSpy spy(&job, &KJob::result);
+        job.start();
+        verify(waitUntil([&spy] { return spy.count() == 1; }, 5000), "DR5 job terminates");
+        verify(job.error() != KJob::NoError && !job.report().completedFully,
+               "DR5: removed destination root fails closed");
+        verify(!QFileInfo::exists(dstRoot), "DR5: removed root was not accidentally re-created");
+    }
+
+    // DR11 — Permission finalization detects destination root replacement and does NOT chmod unrelated replacement dir
+    {
+        const QString base = tmp.filePath(QStringLiteral("sec046_08_dr11"));
+        const QString srcDir = base + QStringLiteral("/src/PrivDir");
+        const QString dstRoot = base + QStringLiteral("/dst");
+        const QString dstAside = base + QStringLiteral("/dst_aside");
+        verify(QDir().mkpath(srcDir)
+            && QDir().mkpath(dstRoot)
+            && writeFile(srcDir + QStringLiteral("/k.txt"), "secret-key"), "DR11 setup");
+        verify(::chmod(QFile::encodeName(srcDir).constData(), 0700) == 0, "DR11 srcDir 0700");
+
+        LocalMergePlan plan = makePlan({QUrl::fromLocalFile(srcDir)}, QUrl::fromLocalFile(dstRoot));
+        approveAdditiveMergePlan(plan);
+
+        LocalMergeExecutionJob job(plan);
+        job.setAutoDelete(false);
+        job.setPreDirPermFinalizeHook([&](const QString &, const QString &, int) {
+            verify(::rename(QFile::encodeName(dstRoot).constData(), QFile::encodeName(dstAside).constData()) == 0,
+                   "DR11 hook rename dstRoot aside");
+            verify(::mkdir(QFile::encodeName(dstRoot).constData(), 0755) == 0, "DR11 hook mkdir replacement dstRoot");
+            verify(::mkdir(QFile::encodeName(dstRoot + QStringLiteral("/PrivDir")).constData(), 0755) == 0,
+                   "DR11 hook mkdir replacement PrivDir");
+            verify(::chmod(QFile::encodeName(dstRoot + QStringLiteral("/PrivDir")).constData(), 0755) == 0,
+                   "DR11 hook set replacement PrivDir 0755");
+        });
+        QSignalSpy spy(&job, &KJob::result);
+        job.start();
+        verify(waitUntil([&spy] { return spy.count() == 1; }, 5000), "DR11 job terminates");
+        verify(job.error() == KIO::ERR_CANNOT_CHMOD && !job.report().completedFully,
+               "DR11: permission finalization fails closed when destination root replaced");
+        verify(statMode(dstRoot + QStringLiteral("/PrivDir")) == 0755,
+               "DR11: unrelated replacement PrivDir permissions untouched (0755)");
+    }
+
+    // DR12 — Cancellation during root identity verification emits single terminal result and writes nothing
+    {
+        const QString base = tmp.filePath(QStringLiteral("sec046_08_dr12"));
+        const QString srcFile = base + QStringLiteral("/src/file12.txt");
+        const QString dstRoot = base + QStringLiteral("/dst");
+        verify(QDir().mkpath(base + QStringLiteral("/src"))
+            && QDir().mkpath(dstRoot)
+            && writeFile(srcFile, "dr12-data"), "DR12 setup");
+
+        LocalMergePlan plan = makePlan({QUrl::fromLocalFile(srcFile)}, QUrl::fromLocalFile(dstRoot));
+        approveAdditiveMergePlan(plan);
+
+        LocalMergeExecutionJob job(plan);
+        job.setAutoDelete(false);
+        job.setPreTopLevelAnchorHook([&](const QString &, const QString &) {
+            job.requestSafeCancel();
+        });
+        QSignalSpy spy(&job, &KJob::result);
+        job.start();
+        verify(waitUntil([&spy] { return spy.count() >= 1; }, 5000), "DR12 job finishes");
+        QTest::qWait(50);
+        verify(spy.count() == 1, "DR12: exactly one terminal result emitted on cancel");
+        verify(job.error() == KJob::KilledJobError && job.report().cancelled && !job.report().completedFully,
+               "DR12: cancelled terminal status accurate");
+        verify(!QFileInfo::exists(dstRoot + QStringLiteral("/file12.txt")),
+               "DR12: no file created after cancel during root verification");
+    }
+
     qInfo("PASS: %d LocalMergeExecutionJob Stage 2B.1+2B.2A+2B.2B+2B.2B-R assertions verified", checks);
     return 0;
 }

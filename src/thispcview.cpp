@@ -3,7 +3,7 @@
  * thispc-view - a lightweight KDE/Qt file browser with a Windows-like
  * "This PC" home page, backed by KIO.
  *
- * Version 0.45.1
+ * Version 0.45.2
  * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
@@ -800,6 +800,11 @@ protected:
         const auto childDialogs = findChildren<QDialog *>();
         for (QDialog *dialog : childDialogs) {
             dialog->close();
+        }
+        if (m_activeDriveContextMenus > 0) {
+            if (QWidget *popup = QApplication::activePopupWidget()) {
+                popup->close();
+            }
         }
 
         if (m_queueController) {
@@ -2494,14 +2499,14 @@ private:
         statusBar()->setSizeGripEnabled(true);
 
         m_versionLabel = new QLabel(
-            QStringLiteral("v0.45.1"),
+            QStringLiteral("v0.45.2"),
             this);
         m_versionLabel->setObjectName(
             QStringLiteral("versionLabel"));
         m_versionLabel->setToolTip(
             trLocal(
-                "Wersja thispc-view 0.45.1",
-                "thispc-view version 0.45.1"));
+                "Wersja thispc-view 0.45.2",
+                "thispc-view version 0.45.2"));
         statusBar()->addPermanentWidget(m_versionLabel);
     }
 
@@ -5953,205 +5958,250 @@ public:
                     const AdminRetryQualification retryQualification =
                         m_adminRetryController->inspectGuiFailedOperation(job, context, cancelled);
                     if (retryQualification.canAttemptElevation()) {
-                        QMessageBox offerBox(this);
-                        offerBox.setIcon(QMessageBox::Warning);
-                        offerBox.setWindowTitle(trLocal("Brak uprawnień", "Permission denied"));
+                        // SEC-046-22(b): Snapshot ALL data from `job` BEFORE opening any dialog!
+                        // KJob::emitResult() schedules `job->deleteLater()`, so dereferencing raw
+                        // `job` after a modal dialog or across async boundaries is a heap UAF.
                         QString errorDescription = job->errorString();
                         if (job->error() == KIO::ERR_CANNOT_TRUNCATE) {
                             errorDescription = trLocal(
                                 "Brak uprawnień do zapisu w katalogu docelowym (błąd tworzenia pliku).",
                                 "Permission denied writing to destination directory (file creation error).");
                         }
-                        offerBox.setText(trLocal(
+                        AdminRetryRequest prebuiltReq = m_adminRetryController->createGuiRequest(
+                            job, context, false, AdminPartialCompletionState::NotStarted);
+                        if (prebuiltReq.requestedName.isEmpty()) {
+                            if (!context.destinationUrls.isEmpty()) {
+                                prebuiltReq.requestedName = context.destinationUrls.first().fileName();
+                            } else if (!context.sources.isEmpty()) {
+                                prebuiltReq.requestedName = context.sources.first().fileName();
+                            }
+                        }
+
+                        auto *offerBox = new QMessageBox(this);
+                        offerBox->setObjectName(QStringLiteral("adminRetryOfferBox"));
+                        offerBox->setWindowModality(Qt::WindowModal);
+                        offerBox->setIcon(QMessageBox::Warning);
+                        offerBox->setWindowTitle(trLocal("Brak uprawnień", "Permission denied"));
+                        offerBox->setText(trLocal(
                             "Operacja nie powiodła się z powodu braku uprawnień:\n\n%1\n\nCzy chcesz spróbować wykonać tę operację z uprawnieniami administratora?",
                             "The operation failed due to insufficient permissions:\n\n%1\n\nWould you like to retry this operation with administrator privileges?"
                         ).arg(errorDescription));
 
-                        QPushButton *retryBtn = offerBox.addButton(
+                        QPushButton *retryBtn = offerBox->addButton(
                             trLocal("Ponów jako administrator", "Retry as administrator"),
                             QMessageBox::AcceptRole);
-                        offerBox.addButton(
+                        offerBox->addButton(
                             trLocal("Anuluj", "Cancel"),
                             QMessageBox::RejectRole);
-                        offerBox.setDefaultButton(retryBtn);
+                        offerBox->setDefaultButton(retryBtn);
 
                         QPointer<ThisPcWindow> self(this);
-                        offerBox.exec();
-                        if (!self) {
-                            return;
-                        }
-                        if (offerBox.clickedButton() == retryBtn) {
-                            AdminRetryRequest req = m_adminRetryController->createGuiRequest(
-                                job, context, false, AdminPartialCompletionState::NotStarted);
-                            if (req.requestedName.isEmpty()) {
-                                if (!context.destinationUrls.isEmpty()) {
-                                    req.requestedName = context.destinationUrls.first().fileName();
-                                } else if (!context.sources.isEmpty()) {
-                                    req.requestedName = context.sources.first().fileName();
-                                }
-                            }
+                        QPointer<QMessageBox> offerBoxPtr(offerBox);
+                        auto offerSettled = std::make_shared<bool>(false);
 
-                            AdminExecutionPlan plan = m_adminRetryController->createGuiExecutionPlan(req);
-                            if (plan.planType == AdminPlanType::Invalid) {
-                                QMessageBox::critical(this,
-                                    trLocal("Błąd planowania operacji", "Operation planning error"),
-                                    trLocal("Ta operacja nie może zostać bezpiecznie ponowiona z uprawnieniami administratora.",
-                                            "This operation cannot be safely retried with administrator privileges."));
-                                return;
-                            }
-
-                            QMessageBox confirmBox(this);
-                            confirmBox.setIcon(QMessageBox::Question);
-                            confirmBox.setWindowTitle(trLocal("Potwierdzenie operacji administratora", "Confirm administrator operation"));
-
-                            QString opTypeName;
-                            switch (plan.planType) {
-                            case AdminPlanType::CopyFileFromProtected:
-                                opTypeName = trLocal("Kopiowanie z lokalizacji chronionej", "Copy from protected location");
-                                break;
-                            case AdminPlanType::CopyFileToProtected:
-                                opTypeName = trLocal("Kopiowanie do lokalizacji chronionej", "Copy to protected location");
-                                break;
-                            case AdminPlanType::CreateFileProtected:
-                                opTypeName = trLocal("Tworzenie pliku w lokalizacji chronionej", "Create file in protected location");
-                                break;
-                            case AdminPlanType::CreateFolderProtected:
-                                opTypeName = trLocal("Tworzenie folderu w lokalizacji chronionej", "Create folder in protected location");
-                                break;
-                            default:
-                                opTypeName = trLocal("Operacja administratora", "Administrator operation");
-                                break;
-                            }
-
-                            QString details = trLocal("Typ operacji: %1\n", "Operation type: %1\n").arg(opTypeName);
-                            if (plan.sourceUrl.isValid()) {
-                                details += trLocal("Źródło: %1\n", "Source: %1\n").arg(plan.sourceUrl.toDisplayString());
-                            } else if (!context.sources.isEmpty()) {
-                                details += trLocal("Źródło: %1\n", "Source: %1\n").arg(context.sources.first().toDisplayString());
-                            }
-                            if (plan.destinationDirectory.isValid()) {
-                                details += trLocal("Katalog docelowy: %1\n", "Destination directory: %1\n").arg(plan.destinationDirectory.toDisplayString());
-                            }
-                            if (plan.destinationUrl.isValid()) {
-                                details += trLocal("Ścieżka docelowa: %1\n", "Destination path: %1\n").arg(plan.destinationUrl.toDisplayString());
-                            }
-                            details += QLatin1Char('\n');
-                            details += trLocal(
-                                "Uwaga: Zostanie wykonana dokładnie jedna operacja z podwyższonymi uprawnieniami administratora.",
-                                "Notice: Exactly one operation will be performed with elevated administrator privileges.");
-
-                            confirmBox.setText(details);
-                            QPushButton *executeBtn = confirmBox.addButton(
-                                trLocal("Wykonaj jako administrator", "Execute as administrator"),
-                                QMessageBox::AcceptRole);
-                            confirmBox.addButton(
-                                trLocal("Anuluj", "Cancel"),
-                                QMessageBox::RejectRole);
-                            confirmBox.setDefaultButton(executeBtn);
-
-                            confirmBox.exec();
-                            if (!self) {
-                                return;
-                            }
-                            if (confirmBox.clickedButton() == executeBtn) {
-                                AdminUserConsent consent = m_adminRetryController->createConsent(plan, 60000);
-
-                                statusBar()->showMessage(
-                                    trLocal("Wykonywanie operacji administratora…", "Executing administrator operation…"));
-
-                                auto *executor = m_adminRetryController->executor();
-                                auto trackedAdminJob = std::make_shared<QPointer<KJob>>();
-                                auto connection = std::make_shared<QMetaObject::Connection>();
-
-                                *connection = connect(executor, &AdminRetryExecutor::finished, this,
-                                    [this, trackedAdminJob, connection, successMessage, clearClipboardOnSuccess, refreshViews, context]
-                                    (bool success, const QString &errorMessage, AdminErrorCategory errorCategory) {
-                                        QObject::disconnect(*connection);
-
-                                        if (m_operationManager && *trackedAdminJob) {
-                                            m_operationManager->finish(
-                                                trackedAdminJob->data(),
-                                                success,
-                                                errorCategory == AdminErrorCategory::UserCancelled
-                                                    || errorCategory == AdminErrorCategory::AuthorizationCancelledOrDenied,
-                                                errorMessage);
-                                        }
-
-                                        if (success) {
-                                            if (clearClipboardOnSuccess) {
-                                                QApplication::clipboard()->clear();
-                                            }
-                                            statusBar()->showMessage(
-                                                !successMessage.isEmpty()
-                                                    ? successMessage
-                                                    : trLocal("Operacja administratora zakończona sukcesem.", "Administrator operation completed successfully."),
-                                                5000);
-                                            broadcastExternalDirNotify(context);
-                                        } else {
-                                            const bool hasPreservedArtifact = m_adminRetryController
-                                                && m_adminRetryController->executor()
-                                                && m_adminRetryController->executor()->lastArtifactAudit().artifactPreserved;
-                                            if ((errorCategory == AdminErrorCategory::UserCancelled
-                                                 || errorCategory == AdminErrorCategory::AuthorizationCancelledOrDenied)
-                                                && !hasPreservedArtifact) {
-                                                statusBar()->showMessage(
-                                                    trLocal("Operacja administratora anulowana.", "Administrator operation cancelled."),
-                                                    5000);
-                                            } else {
-                                                statusBar()->showMessage(
-                                                    errorMessage.isEmpty()
-                                                        ? trLocal("Błąd operacji administratora.", "Administrator operation failed.")
-                                                        : errorMessage,
-                                                    7000);
-                                                QMessageBox::warning(
-                                                    this,
-                                                    trLocal("Operacja administratora nie powiodła się", "Administrator operation failed"),
-                                                    errorMessage);
-                                            }
-                                        }
-
-                                        refreshAffectedDirectories(context);
-                                        if (refreshViews) {
-                                            refreshViews();
-                                        }
-                                        updateFileActionStates();
-                                    });
-
-                                const bool started = executor->execute(plan, consent);
-                                if (started) {
-                                    *trackedAdminJob = executor->currentJob();
-                                    if (m_operationManager && *trackedAdminJob) {
-                                        m_operationManager->track(
-                                            trackedAdminJob->data(),
-                                            trLocal("Operacja administratora", "Administrator operation"));
-                                    }
-                                    return;
-                                } else {
-                                    QObject::disconnect(*connection);
-                                    return;
-                                }
-                            } else {
-                                statusBar()->showMessage(
-                                    trLocal("Operacja anulowana przez użytkownika", "Operation cancelled by user"),
-                                    4000);
-                                refreshAffectedDirectories(context);
-                                if (refreshViews) {
-                                    refreshViews();
-                                }
-                                updateFileActionStates();
-                                return;
-                            }
-                        } else {
-                            statusBar()->showMessage(
-                                trLocal("Operacja anulowana", "Operation cancelled"),
-                                4000);
-                            refreshAffectedDirectories(context);
+                        auto finishCancelledOffer = [self, refreshViews, context](const QString &msg) {
+                            if (!self) return;
+                            self->statusBar()->showMessage(msg, 4000);
+                            self->refreshAffectedDirectories(context);
                             if (refreshViews) {
                                 refreshViews();
                             }
-                            updateFileActionStates();
-                            return;
-                        }
+                            self->updateFileActionStates();
+                        };
+
+                        connect(offerBox, &QDialog::finished, offerBox,
+                            [self, offerBoxPtr, retryBtn, offerSettled, prebuiltReq,
+                             successMessage, clearClipboardOnSuccess, refreshViews, context, finishCancelledOffer](int) {
+                                if (*offerSettled) return;
+                                *offerSettled = true;
+                                const bool acceptedOffer = (offerBoxPtr && offerBoxPtr->clickedButton() == retryBtn);
+                                if (offerBoxPtr) {
+                                    offerBoxPtr->deleteLater();
+                                }
+                                if (!self) return;
+                                if (!acceptedOffer) {
+                                    finishCancelledOffer(trLocal("Operacja anulowana", "Operation cancelled"));
+                                    return;
+                                }
+                                if (!self->m_adminRetryController) {
+                                    finishCancelledOffer(trLocal("Operacja anulowana", "Operation cancelled"));
+                                    return;
+                                }
+
+                                AdminExecutionPlan plan = self->m_adminRetryController->createGuiExecutionPlan(prebuiltReq);
+                                if (plan.planType == AdminPlanType::Invalid) {
+                                    auto *errBox = new QMessageBox(
+                                        QMessageBox::Critical,
+                                        trLocal("Błąd planowania operacji", "Operation planning error"),
+                                        trLocal("Ta operacja nie może zostać bezpiecznie ponowiona z uprawnieniami administratora.",
+                                                "This operation cannot be safely retried with administrator privileges."),
+                                        QMessageBox::Ok,
+                                        self.data());
+                                    errBox->setWindowModality(Qt::WindowModal);
+                                    connect(errBox, &QDialog::finished, errBox, &QObject::deleteLater);
+                                    errBox->show();
+                                    return;
+                                }
+
+                                auto *confirmBox = new QMessageBox(self.data());
+                                confirmBox->setObjectName(QStringLiteral("adminRetryConfirmBox"));
+                                confirmBox->setWindowModality(Qt::WindowModal);
+                                confirmBox->setIcon(QMessageBox::Question);
+                                confirmBox->setWindowTitle(trLocal("Potwierdzenie operacji administratora", "Confirm administrator operation"));
+
+                                QString opTypeName;
+                                switch (plan.planType) {
+                                case AdminPlanType::CopyFileFromProtected:
+                                    opTypeName = trLocal("Kopiowanie z lokalizacji chronionej", "Copy from protected location");
+                                    break;
+                                case AdminPlanType::CopyFileToProtected:
+                                    opTypeName = trLocal("Kopiowanie do lokalizacji chronionej", "Copy to protected location");
+                                    break;
+                                case AdminPlanType::CreateFileProtected:
+                                    opTypeName = trLocal("Tworzenie pliku w lokalizacji chronionej", "Create file in protected location");
+                                    break;
+                                case AdminPlanType::CreateFolderProtected:
+                                    opTypeName = trLocal("Tworzenie folderu w lokalizacji chronionej", "Create folder in protected location");
+                                    break;
+                                default:
+                                    opTypeName = trLocal("Operacja administratora", "Administrator operation");
+                                    break;
+                                }
+
+                                QString details = trLocal("Typ operacji: %1\n", "Operation type: %1\n").arg(opTypeName);
+                                if (plan.sourceUrl.isValid()) {
+                                    details += trLocal("Źródło: %1\n", "Source: %1\n").arg(plan.sourceUrl.toDisplayString());
+                                } else if (!context.sources.isEmpty()) {
+                                    details += trLocal("Źródło: %1\n", "Source: %1\n").arg(context.sources.first().toDisplayString());
+                                }
+                                if (plan.destinationDirectory.isValid()) {
+                                    details += trLocal("Katalog docelowy: %1\n", "Destination directory: %1\n").arg(plan.destinationDirectory.toDisplayString());
+                                }
+                                if (plan.destinationUrl.isValid()) {
+                                    details += trLocal("Ścieżka docelowa: %1\n", "Destination path: %1\n").arg(plan.destinationUrl.toDisplayString());
+                                }
+                                details += QLatin1Char('\n');
+                                details += trLocal(
+                                    "Uwaga: Zostanie wykonana dokładnie jedna operacja z podwyższonymi uprawnieniami administratora.",
+                                    "Notice: Exactly one operation will be performed with elevated administrator privileges.");
+
+                                confirmBox->setText(details);
+                                QPushButton *executeBtn = confirmBox->addButton(
+                                    trLocal("Wykonaj jako administrator", "Execute as administrator"),
+                                    QMessageBox::AcceptRole);
+                                confirmBox->addButton(
+                                    trLocal("Anuluj", "Cancel"),
+                                    QMessageBox::RejectRole);
+                                confirmBox->setDefaultButton(executeBtn);
+
+                                QPointer<QMessageBox> confirmBoxPtr(confirmBox);
+                                auto confirmSettled = std::make_shared<bool>(false);
+                                connect(confirmBox, &QDialog::finished, confirmBox,
+                                    [self, confirmBoxPtr, executeBtn, confirmSettled, plan,
+                                     successMessage, clearClipboardOnSuccess, refreshViews, context, finishCancelledOffer](int) {
+                                        if (*confirmSettled) return;
+                                        *confirmSettled = true;
+                                        const bool acceptedConfirm = (confirmBoxPtr && confirmBoxPtr->clickedButton() == executeBtn);
+                                        if (confirmBoxPtr) {
+                                            confirmBoxPtr->deleteLater();
+                                        }
+                                        if (!self) return;
+                                        if (!acceptedConfirm || !self->m_adminRetryController) {
+                                            finishCancelledOffer(trLocal("Operacja anulowana przez użytkownika", "Operation cancelled by user"));
+                                            return;
+                                        }
+
+                                        AdminUserConsent consent = self->m_adminRetryController->createConsent(plan, 60000);
+                                        self->statusBar()->showMessage(
+                                            trLocal("Wykonywanie operacji administratora…", "Executing administrator operation…"));
+
+                                        auto *executor = self->m_adminRetryController->executor();
+                                        auto trackedAdminJob = std::make_shared<QPointer<KJob>>();
+                                        auto connection = std::make_shared<QMetaObject::Connection>();
+
+                                        *connection = connect(executor, &AdminRetryExecutor::finished, self.data(),
+                                            [self, trackedAdminJob, connection, successMessage, clearClipboardOnSuccess, refreshViews, context]
+                                            (bool success, const QString &errorMessage, AdminErrorCategory errorCategory) {
+                                                QObject::disconnect(*connection);
+                                                if (!self) return;
+
+                                                if (self->m_operationManager && *trackedAdminJob) {
+                                                    self->m_operationManager->finish(
+                                                        trackedAdminJob->data(),
+                                                        success,
+                                                        errorCategory == AdminErrorCategory::UserCancelled
+                                                            || errorCategory == AdminErrorCategory::AuthorizationCancelledOrDenied,
+                                                        errorMessage);
+                                                }
+
+                                                if (success) {
+                                                    if (clearClipboardOnSuccess) {
+                                                        QApplication::clipboard()->clear();
+                                                    }
+                                                    self->statusBar()->showMessage(
+                                                        !successMessage.isEmpty()
+                                                            ? successMessage
+                                                            : trLocal("Operacja administratora zakończona sukcesem.", "Administrator operation completed successfully."),
+                                                        5000);
+                                                    self->broadcastExternalDirNotify(context);
+                                                } else {
+                                                    const bool hasPreservedArtifact = self->m_adminRetryController
+                                                        && self->m_adminRetryController->executor()
+                                                        && self->m_adminRetryController->executor()->lastArtifactAudit().artifactPreserved;
+                                                    if ((errorCategory == AdminErrorCategory::UserCancelled
+                                                         || errorCategory == AdminErrorCategory::AuthorizationCancelledOrDenied)
+                                                        && !hasPreservedArtifact) {
+                                                        self->statusBar()->showMessage(
+                                                            trLocal("Operacja administratora anulowana.", "Administrator operation cancelled."),
+                                                            5000);
+                                                    } else {
+                                                        self->statusBar()->showMessage(
+                                                            errorMessage.isEmpty()
+                                                                ? trLocal("Błąd operacji administratora.", "Administrator operation failed.")
+                                                                : errorMessage,
+                                                            7000);
+                                                        auto *warnBox = new QMessageBox(
+                                                            QMessageBox::Warning,
+                                                            trLocal("Operacja administratora nie powiodła się", "Administrator operation failed"),
+                                                            errorMessage,
+                                                            QMessageBox::Ok,
+                                                            self.data());
+                                                        warnBox->setWindowModality(Qt::WindowModal);
+                                                        connect(warnBox, &QDialog::finished, warnBox, &QObject::deleteLater);
+                                                        warnBox->show();
+                                                    }
+                                                }
+
+                                                self->refreshAffectedDirectories(context);
+                                                if (refreshViews) {
+                                                    refreshViews();
+                                                }
+                                                self->updateFileActionStates();
+                                            });
+
+                                        AdminExecutionPlan mutablePlan = plan;
+                                        const bool started = executor->execute(mutablePlan, consent);
+                                        if (started) {
+                                            *trackedAdminJob = executor->currentJob();
+                                            if (self->m_operationManager && *trackedAdminJob) {
+                                                self->m_operationManager->track(
+                                                    trackedAdminJob->data(),
+                                                    trLocal("Operacja administratora", "Administrator operation"));
+                                            }
+                                            return;
+                                        }
+                                        QObject::disconnect(*connection);
+                                    });
+                                connect(confirmBox, &QObject::destroyed, [confirmSettled]() {
+                                    *confirmSettled = true;
+                                });
+                                confirmBox->show();
+                            });
+                        connect(offerBox, &QObject::destroyed, [offerSettled]() {
+                            *offerSettled = true;
+                        });
+                        offerBox->show();
+                        return;
                     }
                 }
 
@@ -6953,8 +7003,27 @@ private:
         return false;
     }
 
+    bool isDriveStillPresent(const DriveInfo &drive) const
+    {
+        for (const DriveInfo &current : m_driveHomeCoordinator.drives()) {
+            if (!drive.udi.isEmpty() && !current.udi.isEmpty()) {
+                if (current.udi == drive.udi) return true;
+            } else if (!drive.id.isEmpty() && !current.id.isEmpty()) {
+                if (current.id == drive.id) return true;
+            } else if (sameLocation(current.targetUrl, drive.targetUrl)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     void rebuildDriveGrid()
     {
+        if (m_activeDriveContextMenus > 0) {
+            m_driveGridRebuildPending = true;
+            return;
+        }
+        m_driveGridRebuildPending = false;
         rebuildDriveGrid(PaneId::Primary, m_homePage, m_homeStatus, m_drivesGrid);
         rebuildDriveGrid(PaneId::Split, m_splitHomePage, m_splitHomeStatus, m_splitDrivesGrid);
         m_splitPane->setDrives(m_driveHomeCoordinator.drives());
@@ -7025,6 +7094,9 @@ private:
                 &DriveFrame::unmountRequested,
                 this,
                 [this, pane](const DriveInfo &drive) {
+                    if (m_driveGridRebuildPending && !isDriveStillPresent(drive)) {
+                        return;
+                    }
                     handleDeviceUnmount(pane, drive);
                 });
             connect(
@@ -7032,6 +7104,9 @@ private:
                 &DriveFrame::safelyRemoveRequested,
                 this,
                 [this, pane](const DriveInfo &drive) {
+                    if (m_driveGridRebuildPending && !isDriveStillPresent(drive)) {
+                        return;
+                    }
                     handleDeviceSafelyRemove(pane, drive);
                 });
             connect(
@@ -7039,13 +7114,36 @@ private:
                 &DriveFrame::ejectRequested,
                 this,
                 [this, pane](const DriveInfo &drive) {
+                    if (m_driveGridRebuildPending && !isDriveStillPresent(drive)) {
+                        return;
+                    }
                     handleDeviceEject(pane, drive);
                 });
             connect(
                 card,
                 &DriveFrame::propertiesRequested,
                 this,
-                &ThisPcWindow::showDrivePropertiesDialog);
+                [this](const DriveInfo &drive) {
+                    if (m_driveGridRebuildPending && !isDriveStillPresent(drive)) {
+                        return;
+                    }
+                    showDrivePropertiesDialog(drive);
+                });
+            connect(
+                card,
+                &DriveFrame::contextMenuActiveChanged,
+                this,
+                [this](bool active) {
+                    if (active) {
+                        ++m_activeDriveContextMenus;
+                        return;
+                    }
+                    m_activeDriveContextMenus = std::max(0, m_activeDriveContextMenus - 1);
+                    if (m_activeDriveContextMenus == 0 && m_driveGridRebuildPending) {
+                        m_driveGridRebuildPending = false;
+                        rebuildDriveGrid();
+                    }
+                });
             connectHomeCard(card, pane);
 
             drivesGrid->addWidget(
@@ -7476,6 +7574,8 @@ private:
     DriveHomeCoordinator m_driveHomeCoordinator{this};
     QList<DriveInfo> m_knownDrives;
     bool m_suppressDriveReload = false;
+    int m_activeDriveContextMenus = 0;
+    bool m_driveGridRebuildPending = false;
     SolidDeviceMonitor m_solidMonitor{this};
     DeviceMountController m_mountController{this};
     DeviceRemovalController m_removalController{this};

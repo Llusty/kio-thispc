@@ -358,6 +358,158 @@ int main(int argc, char **argv)
         verify(entries.isEmpty(), "Scenario L: zero staging files or leftover entries in destination");
     }
 
+    // =========================================================================
+    // STAGE 1B.7B (SEC-046-04): LOCALTRANSFERJOB POSIX PERMISSIONS TESTS L1–L10
+    // =========================================================================
+    auto statModeLT = [](const QString &path) -> mode_t {
+        struct stat st {};
+        if (::lstat(QFile::encodeName(path).constData(), &st) != 0) return 0;
+        return st.st_mode & 07777;
+    };
+
+    // L1, L2, L3, L4 — Private 0600, Executable 0755, SUID 04755, SGID 02755, plus Private 0700 dir
+    {
+        const QString srcRoot = root.filePath("lt_perm_src/Pkg");
+        const QString dstRoot = root.filePath("lt_perm_dst");
+        verify(QDir().mkpath(srcRoot) && QDir().mkpath(dstRoot)
+                   && writeFile(srcRoot + "/priv.txt", "secret")
+                   && writeFile(srcRoot + "/run.sh", "#!/bin/sh\n")
+                   && writeFile(srcRoot + "/suid.bin", "suid")
+                   && writeFile(srcRoot + "/sgid.bin", "sgid"),
+               "L1-L4 fixtures created");
+        verify(::chmod(QFile::encodeName(srcRoot + "/priv.txt").constData(), 0600) == 0, "L1 chmod 0600");
+        verify(::chmod(QFile::encodeName(srcRoot + "/run.sh").constData(), 0755) == 0, "L2 chmod 0755");
+        verify(::chmod(QFile::encodeName(srcRoot + "/suid.bin").constData(), 04755) == 0, "L3 chmod 04755");
+        verify(::chmod(QFile::encodeName(srcRoot + "/sgid.bin").constData(), 02755) == 0, "L4 chmod 02755");
+        verify(::chmod(QFile::encodeName(srcRoot).constData(), 0700) == 0, "L1 dir chmod 0700");
+
+        LocalTransferJob copyJob({QUrl::fromLocalFile(srcRoot)}, QUrl::fromLocalFile(dstRoot), false);
+        copyJob.setAutoDelete(false);
+        QSignalSpy spy(&copyJob, &KJob::result);
+        copyJob.start();
+        waitResult(spy);
+        verify(copyJob.error() == 0, "L1-L4 copy succeeds");
+        verify(statModeLT(dstRoot + "/Pkg") == 0700, "L1: private 0700 directory preserved");
+        verify(statModeLT(dstRoot + "/Pkg/priv.txt") == 0600, "L1: private 0600 file preserved");
+        verify(statModeLT(dstRoot + "/Pkg/run.sh") == 0755, "L2: executable 0755 file preserved");
+        const mode_t suidDst = statModeLT(dstRoot + "/Pkg/suid.bin");
+        const mode_t sgidDst = statModeLT(dstRoot + "/Pkg/sgid.bin");
+        verify((suidDst & S_ISUID) == 0 && suidDst == 0755, "L3: SUID stripped on copied file");
+        verify((sgidDst & S_ISGID) == 0 && sgidDst == 0755, "L4: SGID stripped on copied file");
+    }
+
+    // L5 — Symlink replacement attack before directory permission finalization leaves external sentinel untouched
+    {
+        const QString srcDir = root.filePath("lt_l5/src/VictimSrc");
+        const QString dstRoot = root.filePath("lt_l5/dst");
+        const QString sentinelDir = root.filePath("lt_l5/external_sentinel");
+        verify(QDir().mkpath(srcDir) && QDir().mkpath(dstRoot) && QDir().mkpath(sentinelDir)
+                   && writeFile(srcDir + "/data.txt", "d"),
+               "L5 fixtures created");
+        verify(::chmod(QFile::encodeName(srcDir).constData(), 0755) == 0, "L5 src 0755");
+        verify(::chmod(QFile::encodeName(sentinelDir).constData(), 0700) == 0, "L5 sentinel 0700");
+
+        LocalTransferJob copyJob({QUrl::fromLocalFile(srcDir)}, QUrl::fromLocalFile(dstRoot), false);
+        copyJob.setAutoDelete(false);
+        copyJob.setPreDirPermFinalizeHook([&](const QString &destPath, int) {
+            if (destPath.endsWith(QStringLiteral("/VictimSrc"))) {
+                QDir(dstRoot).rename(QStringLiteral("VictimSrc"), QStringLiteral("VictimSrc_moved"));
+                QFile::link(sentinelDir, destPath);
+            }
+        });
+        QSignalSpy spy(&copyJob, &KJob::result);
+        copyJob.start();
+        waitResult(spy);
+        verify(copyJob.error() != 0, "L5: symlink swap fails closed");
+        verify(statModeLT(sentinelDir) == 0700, "L5: external sentinel permissions remain untouched (0700)");
+    }
+
+    // L6 — Destination directory identity change (replaced with a fresh directory) fails closed
+    {
+        const QString srcDir = root.filePath("lt_l6/src/SwapDir");
+        const QString dstRoot = root.filePath("lt_l6/dst");
+        verify(QDir().mkpath(srcDir) && QDir().mkpath(dstRoot)
+                   && writeFile(srcDir + "/f.txt", "x"),
+               "L6 fixtures created");
+        verify(::chmod(QFile::encodeName(srcDir).constData(), 0755) == 0, "L6 src 0755");
+
+        LocalTransferJob copyJob({QUrl::fromLocalFile(srcDir)}, QUrl::fromLocalFile(dstRoot), false);
+        copyJob.setAutoDelete(false);
+        copyJob.setPreDirPermFinalizeHook([&](const QString &destPath, int) {
+            if (destPath.endsWith(QStringLiteral("/SwapDir"))) {
+                QDir(dstRoot).rename(QStringLiteral("SwapDir"), QStringLiteral("SwapDir_orig"));
+                QDir(dstRoot).mkdir(QStringLiteral("SwapDir"));
+                ::chmod(QFile::encodeName(destPath).constData(), 0700);
+            }
+        });
+        QSignalSpy spy(&copyJob, &KJob::result);
+        copyJob.start();
+        waitResult(spy);
+        verify(copyJob.error() != 0, "L6: destination identity change fails closed");
+        verify(statModeLT(dstRoot + "/SwapDir") == 0700, "L6: swapped directory not chmod'd");
+    }
+
+    // L7 — Simulated directory chmod failure produces truthful error
+    {
+        const QString srcDir = root.filePath("lt_l7/src/ChmodFail");
+        const QString dstRoot = root.filePath("lt_l7/dst");
+        verify(QDir().mkpath(srcDir) && QDir().mkpath(dstRoot)
+                   && writeFile(srcDir + "/f.txt", "x"),
+               "L7 fixtures created");
+
+        LocalTransferJob copyJob({QUrl::fromLocalFile(srcDir)}, QUrl::fromLocalFile(dstRoot), false);
+        copyJob.setAutoDelete(false);
+        copyJob.setSimulateDirChmodError(true);
+        QSignalSpy spy(&copyJob, &KJob::result);
+        copyJob.start();
+        waitResult(spy);
+        verify(copyJob.error() != 0, "L7: simulated chmod failure fails closed");
+    }
+
+    // L8 — Cancel before publication leaves newly created directory restrictive (0700) and no partial files
+    {
+        const QString srcDir = root.filePath("lt_l8/src/CancelTree");
+        const QString dstRoot = root.filePath("lt_l8/dst");
+        verify(QDir().mkpath(srcDir) && QDir().mkpath(dstRoot)
+                   && writeFile(srcDir + "/big.bin", QByteArray(128 * 1024, 'z')),
+               "L8 fixtures created");
+        verify(::chmod(QFile::encodeName(srcDir).constData(), 0755) == 0, "L8 src 0755");
+
+        LocalTransferJob copyJob({QUrl::fromLocalFile(srcDir)}, QUrl::fromLocalFile(dstRoot), false,
+                                 nullptr, 4096, 15);
+        copyJob.setAutoDelete(false);
+        QObject::connect(&copyJob, &LocalTransferJob::currentFileChanged, &copyJob, [&copyJob](const QUrl &, const QUrl &) {
+            QTimer::singleShot(10, &copyJob, [&copyJob] { copyJob.kill(KJob::EmitResult); });
+        });
+        QSignalSpy spy(&copyJob, &KJob::result);
+        copyJob.start();
+        waitResult(spy);
+        verify(copyJob.error() == KJob::KilledJobError, "L8: cancelled job reports KilledJobError");
+        verify(statModeLT(dstRoot + "/CancelTree") == 0700, "L8: cancelled newly created dir remains restrictive 0700");
+        verify(!QFileInfo::exists(dstRoot + "/CancelTree/big.bin"), "L8: cancelled file not published");
+    }
+
+    // L9, L10 — Collision does not silently overwrite existing file (and Copy/Move contracts verified above)
+    {
+        const QString srcFile = root.filePath("lt_l9/src/existing.txt");
+        const QString dstDir = root.filePath("lt_l9/dst");
+        verify(QDir().mkpath(root.filePath("lt_l9/src")) && QDir().mkpath(dstDir)
+                   && writeFile(srcFile, "new") && writeFile(dstDir + "/existing.txt", "original"),
+               "L9 fixtures created");
+        bool fallbackCalled = false;
+        LocalTransferJob copyJob({QUrl::fromLocalFile(srcFile)}, QUrl::fromLocalFile(dstDir), false);
+        copyJob.setAutoDelete(false);
+        copyJob.setFallbackFactory([&]() -> KIO::CopyJob * {
+            fallbackCalled = true;
+            return nullptr;
+        });
+        QSignalSpy spy(&copyJob, &KJob::result);
+        copyJob.start();
+        waitResult(spy);
+        verify(fallbackCalled && readFile(dstDir + "/existing.txt") == "original",
+               "L9/L10: collision preserves existing file and delegates cleanly via established contract");
+    }
+
     qInfo("PASS: %d LocalTransferJob assertions", checks);
     return 0;
 }

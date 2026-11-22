@@ -2,6 +2,22 @@
 
 # Changelog
 
+## 0.45.2 — Hotfix bezpieczeństwa i stabilności (`SEC-046`)
+
+### Poprawki i wzmocnienia bezpieczeństwa
+- **Kolejność anulowania i czyszczenia kopiowania z limitem prędkości (`SEC-046-05`):** Dodano asynchroniczne anulowanie (`LocalFileCopyJob::requestCancelAsync()`) podpięte w `TransferQueueController::cancelTaskImpl()` wraz z natychmiastowym wybudzaniem `TransferBandwidthLimiter::cancelTask()`. Sloty kolejki, rezerwacje celów oraz stan końcowy `Cancelled` są publikowane dopiero po zamknięciu deskryptorów i usunięciu własnego pliku tymczasowego `.thispc-part` przez `LocalFileCopyWorker`. Rozwiązano także blokadę (livelock) limitera poniżej 256 KiB/s.
+- **Kotwiczenie katalogu docelowego i weryfikacja tożsamości (`SEC-046-08`):** `LocalMergePlan` zapisuje tożsamość katalogu docelowego (`st_dev`, `st_ino`), a `LocalMergeExecutionJob` ponownie weryfikuje ścieżkę bez symlinków oraz łańcuchy katalogów na starcie wykonania, przed zapisami oraz przed finalizacją uprawnień (`DR1–DR15`).
+- **Ochrona przed zawieszaniem GUI na plikach FIFO i specjalnych (`SEC-046-11` i poprawki GUI):** Wyeliminowano blokady głównego wątku GUI (`wait_for_partner`) na niepodłączonych potokach FIFO, dowiązaniach symbolicznych do FIFO i uszkodzonych symlinkach w `AclController`/`AclProvider` (`O_NONBLOCK` + `fstat`), zapytaniach `QStorageInfo` (katalog nadrzędny dla obiektów niebędących katalogami), strażnikach `S_ISREG` przed `QMimeDatabase::MatchContent` i `PreviewController`, fladze `KFileItem::SkipMimeTypeFromContent` oraz `O_NONBLOCK` w `MetadataProvider`/`ChecksumWorker`.
+- **Ograniczenie do punktu montowania KIO `thispc:/` (`SEC-046-17`):** Dodano `ThisPcConfinement` (`src/thispcconfinement.h`) z odrzucaniem wyjścia poza katalog, uciekających symlinków oraz produkcyjną weryfikacją tożsamości punktu montowania `(st_dev, st_ino)` w `src/thispc.cpp`.
+- **Pozostałe poprawki `SEC-046`:** Wzmocniono czas życia workerów i przynależność wątkową (`SEC-046-12`), cykl życia asynchronicznych dialogów konfliktów (`SEC-046-22A/B`), bezpieczeństwo i anulowanie archiwów, obsługę SameObject Rename oraz walidację dzienników transakcji scalania.
+
+### Znane ograniczenia i zakres weryfikacji
+- **Pozostałe okno TOCTOU w `SEC-046-17`:** Ryzyko TOCTOU między walidacją w `thispc:/` a późniejszym dostępem w `kio_file` po przekierowaniu `file://` jest ograniczone (mitigated), ale nie całkowicie wyeliminowane.
+- **Limiter prędkości w Folder Merge:** `LocalMergeQueueBridge` ustawia obecnie `supportsThrottling = false`; współdzielony limiter przepustowości w oknie Operacji nie steruje wewnętrznym workerem scalania folderów (`LocalAnchoredFileCopyWorker`).
+- **Zakres testów ASan/UBSan / LeakSanitizer:** Pełna automatyczna regresja ASan/UBSan (89/89 zestawów) jest uruchamiana z `ASAN_OPTIONS=detect_leaks=0:halt_on_error=1`; wcześniej zidentyfikowany wyciek 1 552 bajtów w cyklu życia `ChecksumJob::start()` / `QThread` pozostaje nierozwiązany, więc pełna czystość LeakSanitizer nie jest deklarowana.
+- **Znane luki kontraktu Directory Refresh:** Wcześniejsze pozycje `DR-058` (opóźnienia inotify na NTFS/FUSE), `DR-059` (wykrywanie zmian na VFAT) oraz `DR-062` (odświeżanie wyników wyszukiwania) pozostają niezaimplementowane; `DR-009` i `DR-010` pozostają testami interaktywnymi pulpitu.
+- **Reguły fail-closed:** Dotychczasowe ograniczenia z `0.45.1` (atomowe `Overwrite` w Folder Merge tylko na Btrfs/ext4/XFS/tmpfs; blokada Undo dla Folder Merge) pozostają bez zmian.
+
 ## 0.45.1 — Bezpieczne rekurencyjne scalanie folderów (`FOLDER-MERGE-01`)
 
 ### Dodano

@@ -219,7 +219,10 @@ private:
         m_data.location = info.absolutePath();
         m_data.extension = info.suffix();
 
-        QStorageInfo storage(path);
+        struct stat storageProbe {};
+        const bool probeIsDir = (::lstat(pathBytes.constData(), &storageProbe) == 0
+                                 && S_ISDIR(storageProbe.st_mode));
+        QStorageInfo storage(probeIsDir ? path : info.absolutePath());
         if (storage.isValid()) {
             m_data.fileSystem = QString::fromLatin1(storage.fileSystemType()).toLower();
             m_data.isReadOnlyFileSystem = storage.isReadOnly();

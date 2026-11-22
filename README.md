@@ -1,6 +1,6 @@
 [English](README.md) | [Polski](README.pl.md)
 
-# kio-thispc (This PC) 0.45.1
+# kio-thispc (This PC) 0.45.2
 
 ThisPC is a native KDE/Qt file manager focused on a Windows Explorer-like workflow, dual-pane operation, KIO integration, safe local file operations, and native KDE/Linux device handling.
 
@@ -9,6 +9,18 @@ ThisPC is a native KDE/Qt file manager focused on a Windows Explorer-like workfl
 - **License:** MIT License
 
 ---
+
+## 0.45.2 — Security & Stability Hotfix (`SEC-046`)
+
+- **Throttled Copy Cancellation & Cleanup Ordering (`SEC-046-05`):** Asynchronous `LocalFileCopyJob::requestCancelAsync()` with immediate `TransferBandwidthLimiter` wake-up guarantees `.thispc-part` staging cleanup finishes before queue slots/reservations release or `Cancelled` is reported; fixes sub-256 KiB/s limiter livelock.
+- **Destination-Root Anchoring (`SEC-046-08`):** `LocalMergePlan` and `LocalMergeExecutionJob` anchor and re-verify destination-root `(st_dev, st_ino)` without symlinks across planning, execution, and permission finalization (`DR1–DR15`).
+- **FIFO & Special-File GUI Hang Protection (`SEC-046-11`):** Eliminates main-thread `wait_for_partner` hangs on unconnected FIFOs, symlinks to FIFOs, and broken symlinks across Properties (`QStorageInfo` parent-directory fallback), ACL (`O_NONBLOCK` + `fstat`), Metadata, Checksums, Preview, context menus, and archive detection.
+- **KIO `thispc:/` Confinement & Lifecycle Hardening (`SEC-046-17`, `SEC-046-12`, `SEC-046-22A/B`):** Adds `ThisPcConfinement` mount-root identity verification in `src/thispc.cpp`, worker-lifetime hardening, and async conflict-dialog lifecycle fixes.
+- **Known Limitations:**
+  - `SEC-046-17` post-redirection `kio_file` TOCTOU is mitigated rather than completely eliminated.
+  - Folder Merge (`LocalMergeQueueBridge`) does not yet integrate the shared Operations bandwidth limiter (`supportsThrottling = false`).
+  - Automated ASan/UBSan verification runs with `detect_leaks=0` (pre-existing 1,552-byte `ChecksumJob`/`QThread` LSan finding remains; full LeakSanitizer cleanliness is not claimed).
+  - Pre-existing Directory Refresh contract gaps (`DR-058`, `DR-059`, `DR-062`) and interactive checks (`DR-009`, `DR-010`) remain unchanged.
 
 ## 0.45.1 — Safe Recursive Folder Merge (`FOLDER-MERGE-01`)
 
@@ -476,8 +488,8 @@ Features from 0.15.4 — compact operations popup, dynamic height, task cancella
 
 ```bash
 cd ~/Downloads
-tar -xzf kio-thispc-0.45.1.tar.gz
-cd kio-thispc-0.45.1
+tar -xzf kio-thispc-0.45.2.tar.gz
+cd kio-thispc-0.45.2
 chmod +x install.sh
 ./install.sh
 ```

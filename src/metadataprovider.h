@@ -83,10 +83,13 @@ public:
         if (S_ISLNK(st.st_mode)) return MetadataCapability::SymlinkUnavailable;
         if (S_ISDIR(st.st_mode)) return MetadataCapability::DirectoryNotApplicable;
         if (!S_ISREG(st.st_mode)) return MetadataCapability::Unreadable;
-        const int fd = ::open(QFile::encodeName(url.toLocalFile()).constData(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+        const int fd = ::open(QFile::encodeName(url.toLocalFile()).constData(),
+                              O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
         if (fd < 0) return MetadataCapability::Unreadable;
+        struct stat fst {};
+        const bool isReg = (::fstat(fd, &fst) == 0 && S_ISREG(fst.st_mode));
         ::close(fd);
-        return MetadataCapability::SupportedLocalFile;
+        return isReg ? MetadataCapability::SupportedLocalFile : MetadataCapability::Unreadable;
     }
 
     bool start()

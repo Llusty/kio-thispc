@@ -13,6 +13,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QImageReader>
+#include <sys/stat.h>
 
 namespace {
 
@@ -165,6 +166,11 @@ void PreviewController::requestPreviews(const QList<QUrl> &urls, const QSize &lo
         // Fast-path: Check for local directory cover or local file format mismatch (e.g. BMP disguised as jpg)
         if (url.isLocalFile()) {
             const QString localPath = url.toLocalFile();
+            struct stat st {};
+            if (::stat(QFile::encodeName(localPath).constData(), &st) == 0
+                && !S_ISREG(st.st_mode) && !S_ISDIR(st.st_mode)) {
+                continue;
+            }
             const QFileInfo fi(localPath);
             if (fi.isDir()) {
                 const QString coverPath = findDirectoryCoverImage(localPath);

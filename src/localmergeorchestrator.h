@@ -19,6 +19,7 @@
 #include <QUrl>
 
 #include <functional>
+#include <memory>
 #include <optional>
 
 #include <sys/stat.h>
@@ -317,6 +318,18 @@ class LocalMergeOrchestrator : public QObject
 public:
     using FolderPromptFn = LocalMergeConflictResolver::FolderPromptFn;
     using FilePromptFn = LocalMergeConflictResolver::FilePromptFn;
+    using AsyncPromptCancelFn = std::function<void()>;
+    using AsyncFolderPromptFn = std::function<AsyncPromptCancelFn(
+        const LocalMergePlanEntry &entry,
+        qsizetype remainingFolderConflicts,
+        LocalMergeConflictProgress progress,
+        std::function<void(const LocalFolderConflictDecision &)> complete)>;
+    using AsyncFilePromptFn = std::function<AsyncPromptCancelFn(
+        const LocalMergePlanEntry &entry,
+        const LocalMergeBackendCapabilities &capabilities,
+        qsizetype remainingExactFileConflicts,
+        LocalMergeConflictProgress progress,
+        std::function<void(const LocalFileConflictDecision &)> complete)>;
 
     LocalMergeOrchestrator(const QList<QUrl> &sources,
                            const QUrl &destinationDir,
@@ -337,6 +350,7 @@ public:
 
     ~LocalMergeOrchestrator() override
     {
+        abortActiveConflictSession();
         releaseReservation();
     }
 
@@ -345,6 +359,8 @@ public:
 
     void setFolderPrompt(FolderPromptFn fn) { m_folderPrompt = std::move(fn); }
     void setFilePrompt(FilePromptFn fn) { m_filePrompt = std::move(fn); }
+    void setAsyncFolderPrompt(AsyncFolderPromptFn fn) { m_asyncFolderPrompt = std::move(fn); }
+    void setAsyncFilePrompt(AsyncFilePromptFn fn) { m_asyncFilePrompt = std::move(fn); }
     void setStateChangedCallback(std::function<void(LocalMergeOrchestratorState)> cb) { m_onStateChanged = std::move(cb); }
     void setProgressChangedCallback(std::function<void(const LocalMergeOrchestratorProgress &)> cb) { m_onProgressChanged = std::move(cb); }
     void setFinishedCallback(std::function<void(const LocalMergeOrchestratorResult &)> cb) { m_onFinished = std::move(cb); }
@@ -402,6 +418,20 @@ public:
         }
         if (m_activeExecJob) {
             m_activeExecJob->requestSafeCancel();
+            return;
+        }
+        if (m_awaitingAsyncPrompt || m_conflictSession) {
+            abortActiveConflictSession();
+            // Queue terminal finalization so closing/rejecting the active dialog never
+            // reentrantly destroys the orchestrator or KJob on the caller's stack, while
+            // ensuring the dialog is already closed/detached before reservations release.
+            QPointer<LocalMergeOrchestrator> self(this);
+            QTimer::singleShot(0, this, [self] {
+                if (!self || localMergeStateIsTerminal(self->m_state)) {
+                    return;
+                }
+                self->finishCancelled(QStringLiteral("Cancelled during conflict resolution"));
+            });
             return;
         }
         finishCancelled(QStringLiteral("Cancelled before execution"));
@@ -540,8 +570,27 @@ private:
         m_result.undoSummary = undo;
     }
 
+    void abortActiveConflictSession()
+    {
+        ++m_conflictPromptToken;
+        m_awaitingAsyncPrompt = false;
+        if (m_conflictSession) {
+            m_conflictSession->cancel();
+            m_conflictSession.reset();
+        }
+        AsyncPromptCancelFn promptCancel = std::move(m_activePromptCancel);
+        m_activePromptCancel = nullptr;
+        if (promptCancel) {
+            promptCancel();
+        }
+    }
+
     void finishTerminal(LocalMergeOrchestratorState terminalState, const QString &diagnostic = QString())
     {
+        if (localMergeStateIsTerminal(m_state)) {
+            return;
+        }
+        abortActiveConflictSession();
         releaseReservation();
         m_hasCompletedExecution = true;
         const bool wroteAnything = (m_progress.filesCreated > 0
@@ -953,53 +1002,191 @@ private:
 
     void resolveConflictsOnMainLoop()
     {
+        if (localMergeStateIsTerminal(m_state)) {
+            return;
+        }
         if (m_cancelRequested) {
             finishCancelled(QStringLiteral("Cancelled while awaiting decision"));
             return;
         }
 
-        FolderPromptFn safeFolderPrompt = m_folderPrompt;
-        if (!safeFolderPrompt) {
-            safeFolderPrompt = [](const LocalMergePlanEntry &entry, qsizetype, LocalMergeConflictProgress) {
-                LocalFolderConflictDecision d;
-                if (entry.classification == LocalMergeEntryClassification::MergeDirectoryCandidate) {
-                    d.accepted = true;
-                    d.action = LocalMergeApprovedAction::MergeDirectory;
-                } else {
-                    d.accepted = false;
-                    d.action = LocalMergeApprovedAction::Abort;
-                }
-                return d;
-            };
-        }
-        FilePromptFn safeFilePrompt = m_filePrompt;
-        if (!safeFilePrompt) {
-            safeFilePrompt = [](const LocalMergePlanEntry &, const LocalMergeBackendCapabilities &, qsizetype, LocalMergeConflictProgress) {
-                LocalFileConflictDecision d;
-                d.accepted = false;
-                d.action = LocalMergeApprovedAction::Abort;
-                return d;
-            };
-        }
-
-        LocalMergePlan originalPlan = m_pendingPlan;
+        abortActiveConflictSession();
+        m_originalPlanForRound = m_pendingPlan;
         m_roundOriginalRelBySourcePath.clear();
-        for (const auto &e : std::as_const(originalPlan.entries)) {
+        for (const auto &e : std::as_const(m_originalPlanForRound.entries)) {
             if (e.sourceKind == LocalMergeObjectKind::Directory) {
                 m_roundOriginalRelBySourcePath.insert(QDir::cleanPath(e.sourcePath), e.relativePath);
             }
         }
-        const auto res = LocalMergeConflictResolver::resolve(
-            m_pendingPlan,
-            m_capabilities,
-            safeFolderPrompt,
-            safeFilePrompt);
+        m_conflictSession = std::make_unique<LocalMergeConflictSession>(&m_pendingPlan, m_capabilities);
+        pumpConflictSession();
+    }
 
+    void pumpConflictSession()
+    {
+        while (m_conflictSession && !m_cancelRequested && !localMergeStateIsTerminal(m_state)) {
+            const LocalMergeConflictSession::Step step = m_conflictSession->advance();
+            if (step.kind == LocalMergeConflictSession::StepKind::NeedFolderDecision) {
+                if (m_asyncFolderPrompt) {
+                    const quint64 token = ++m_conflictPromptToken;
+                    m_awaitingAsyncPrompt = true;
+                    QPointer<LocalMergeOrchestrator> self(this);
+                    auto settled = std::make_shared<bool>(false);
+                    auto complete = [self, token, settled](const LocalFolderConflictDecision &dec) {
+                        if (*settled || !self) {
+                            return;
+                        }
+                        *settled = true;
+                        if (token != self->m_conflictPromptToken
+                            || self->m_cancelRequested
+                            || localMergeStateIsTerminal(self->m_state)) {
+                            return;
+                        }
+                        QTimer::singleShot(0, self.data(), [self, token, dec] {
+                            if (!self) {
+                                return;
+                            }
+                            self->onAsyncFolderDecision(token, dec);
+                        });
+                    };
+                    AsyncPromptCancelFn cancelFn = m_asyncFolderPrompt(
+                        step.entry, step.remainingConflicts, step.progress, std::move(complete));
+                    if (!(*settled) && token == m_conflictPromptToken
+                        && !m_cancelRequested && !localMergeStateIsTerminal(m_state)) {
+                        m_activePromptCancel = std::move(cancelFn);
+                    }
+                    return;
+                }
+
+                LocalFolderConflictDecision dec;
+                if (m_folderPrompt) {
+                    dec = m_folderPrompt(step.entry, step.remainingConflicts, step.progress);
+                } else if (step.entry.classification == LocalMergeEntryClassification::MergeDirectoryCandidate) {
+                    dec.accepted = true;
+                    dec.action = LocalMergeApprovedAction::MergeDirectory;
+                } else {
+                    dec.accepted = false;
+                    dec.action = LocalMergeApprovedAction::Abort;
+                }
+                if (m_cancelRequested || localMergeStateIsTerminal(m_state) || !m_conflictSession) {
+                    break;
+                }
+                if (!m_conflictSession->submitFolderDecision(dec)) {
+                    m_conflictSession->cancel();
+                }
+                continue;
+            }
+
+            if (step.kind == LocalMergeConflictSession::StepKind::NeedFileDecision) {
+                if (m_asyncFilePrompt) {
+                    const quint64 token = ++m_conflictPromptToken;
+                    m_awaitingAsyncPrompt = true;
+                    QPointer<LocalMergeOrchestrator> self(this);
+                    auto settled = std::make_shared<bool>(false);
+                    auto complete = [self, token, settled](const LocalFileConflictDecision &dec) {
+                        if (*settled || !self) {
+                            return;
+                        }
+                        *settled = true;
+                        if (token != self->m_conflictPromptToken
+                            || self->m_cancelRequested
+                            || localMergeStateIsTerminal(self->m_state)) {
+                            return;
+                        }
+                        QTimer::singleShot(0, self.data(), [self, token, dec] {
+                            if (!self) {
+                                return;
+                            }
+                            self->onAsyncFileDecision(token, dec);
+                        });
+                    };
+                    AsyncPromptCancelFn cancelFn = m_asyncFilePrompt(
+                        step.entry, m_capabilities, step.remainingConflicts, step.progress, std::move(complete));
+                    if (!(*settled) && token == m_conflictPromptToken
+                        && !m_cancelRequested && !localMergeStateIsTerminal(m_state)) {
+                        m_activePromptCancel = std::move(cancelFn);
+                    }
+                    return;
+                }
+
+                LocalFileConflictDecision dec;
+                if (m_filePrompt) {
+                    dec = m_filePrompt(step.entry, m_capabilities, step.remainingConflicts, step.progress);
+                } else {
+                    dec.accepted = false;
+                    dec.action = LocalMergeApprovedAction::Abort;
+                }
+                if (m_cancelRequested || localMergeStateIsTerminal(m_state) || !m_conflictSession) {
+                    break;
+                }
+                if (!m_conflictSession->submitFileDecision(dec)) {
+                    m_conflictSession->cancel();
+                }
+                continue;
+            }
+
+            if (step.kind == LocalMergeConflictSession::StepKind::Completed) {
+                const LocalMergeResolutionResult res = m_conflictSession->result();
+                m_conflictSession.reset();
+                m_activePromptCancel = nullptr;
+                m_awaitingAsyncPrompt = false;
+                continueAfterConflictResolution(res);
+                return;
+            }
+
+            // Cancelled
+            m_conflictSession.reset();
+            m_activePromptCancel = nullptr;
+            m_awaitingAsyncPrompt = false;
+            finishCancelled(QStringLiteral("Cancelled by user during conflict resolution"));
+            return;
+        }
+
+        if (m_cancelRequested && !localMergeStateIsTerminal(m_state)) {
+            abortActiveConflictSession();
+            finishCancelled(QStringLiteral("Cancelled by user during conflict resolution"));
+        }
+    }
+
+    void onAsyncFolderDecision(quint64 token, const LocalFolderConflictDecision &dec)
+    {
+        if (token != m_conflictPromptToken || !m_awaitingAsyncPrompt || !m_conflictSession
+            || m_cancelRequested || localMergeStateIsTerminal(m_state)) {
+            return;
+        }
+        m_awaitingAsyncPrompt = false;
+        m_activePromptCancel = nullptr;
+        if (!m_conflictSession->submitFolderDecision(dec)) {
+            m_conflictSession->cancel();
+        }
+        pumpConflictSession();
+    }
+
+    void onAsyncFileDecision(quint64 token, const LocalFileConflictDecision &dec)
+    {
+        if (token != m_conflictPromptToken || !m_awaitingAsyncPrompt || !m_conflictSession
+            || m_cancelRequested || localMergeStateIsTerminal(m_state)) {
+            return;
+        }
+        m_awaitingAsyncPrompt = false;
+        m_activePromptCancel = nullptr;
+        if (!m_conflictSession->submitFileDecision(dec)) {
+            m_conflictSession->cancel();
+        }
+        pumpConflictSession();
+    }
+
+    void continueAfterConflictResolution(const LocalMergeResolutionResult &res)
+    {
+        if (localMergeStateIsTerminal(m_state)) {
+            return;
+        }
         if (m_cancelRequested || res.cancelled) {
             finishCancelled(QStringLiteral("Cancelled by user during conflict resolution"));
             return;
         }
 
+        LocalMergePlan originalPlan = std::move(m_originalPlanForRound);
         setState(LocalMergeOrchestratorState::Revalidating, QStringLiteral("revalidating"));
 
         // Bind and revalidate all approved decisions onto originalPlan using Stage 2B/3B.2 helpers
@@ -1422,6 +1609,8 @@ private:
 
     FolderPromptFn m_folderPrompt;
     FilePromptFn m_filePrompt;
+    AsyncFolderPromptFn m_asyncFolderPrompt;
+    AsyncFilePromptFn m_asyncFilePrompt;
     std::function<void(LocalMergeOrchestratorState)> m_onStateChanged;
     std::function<void(const LocalMergeOrchestratorProgress &)> m_onProgressChanged;
     std::function<void(const LocalMergeOrchestratorResult &)> m_onFinished;
@@ -1442,7 +1631,14 @@ private:
 
     QPointer<LocalMergePlanJob> m_activePlanJob;
     QPointer<LocalMergeExecutionJob> m_activeExecJob;
+    // Ownership invariant: m_pendingPlan is declared before m_conflictSession so
+    // C++ reverse-order destruction always destroys m_conflictSession first.
     LocalMergePlan m_pendingPlan;
+    LocalMergePlan m_originalPlanForRound;
+    std::unique_ptr<LocalMergeConflictSession> m_conflictSession;
+    AsyncPromptCancelFn m_activePromptCancel;
+    quint64 m_conflictPromptToken = 0;
+    bool m_awaitingAsyncPrompt = false;
 
     struct CompletedEntryRecord {
         quint64 sourceDev = 0;

@@ -9810,6 +9810,184 @@ int main(int argc, char **argv)
         QCoreApplication::processEvents();
     }
 
+    // =========================================================================
+    // STAGE 1B.9B-1B (SEC-046-22(a,b)): ASYNC MODAL DIALOG LIFETIME TESTS M1–M12
+    // =========================================================================
+    {
+        auto flushDeferred = []() {
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        };
+
+        // M1, M7: Normal confirmation of promptCancelAll() + repeated activation deduplication
+        {
+            QueueHarness h(nextRoot());
+            h.add(TQ_S("m1_task"), {h.src(TQ_S("m1.bin"))}, h.dst(TQ_S("m1_dst.bin")));
+            TransferQueueViewWidget view;
+            view.setController(&h.ctl);
+            view.setConfirmCancelAll(true);
+
+            view.promptCancelAll();
+            view.promptCancelAll(); // M7: repeated call must not create a second dialog
+            const auto boxes = view.findChildren<QMessageBox *>(QStringLiteral("cancelAllConfirmationBox"));
+            verify(boxes.size() == 1, "M1/M7: exactly one non-blocking cancelAllConfirmationBox opened");
+            QPointer<QMessageBox> boxPtr = boxes.first();
+            auto *yesBtn = boxPtr->findChild<QPushButton *>(QStringLiteral("confirmCancelAllButton"));
+            verify(yesBtn != nullptr, "M1: confirmCancelAllButton found");
+            yesBtn->click();
+            flushDeferred();
+            verify(boxPtr.isNull(), "M1: cancelAllConfirmationBox deleted after confirmation");
+            verify(h.ctl.activeCount() == 0, "M1: cancelAll executed once after confirmation");
+        }
+
+        // M2, M9: Normal rejection / Escape / WM close does NOT cancel active task
+        {
+            QueueHarness h(nextRoot());
+            h.add(TQ_S("m2_task"), {h.src(TQ_S("m2.bin"))}, h.dst(TQ_S("m2_dst.bin")));
+            TransferQueueViewWidget view;
+            view.setController(&h.ctl);
+            view.setConfirmCancelAll(true);
+
+            view.promptCancelAll();
+            QPointer<QMessageBox> boxPtr = view.findChild<QMessageBox *>(QStringLiteral("cancelAllConfirmationBox"));
+            verify(boxPtr != nullptr, "M2: cancelAllConfirmationBox opened");
+            boxPtr->reject(); // M2/M9: Escape / WM close
+            flushDeferred();
+            verify(boxPtr.isNull(), "M2/M9: dialog deleted after reject");
+            verify(h.ctl.activeCount() == 1, "M2/M9: active task untouched after rejection");
+            h.ctl.cancelAll();
+            flushDeferred();
+        }
+
+        // M3: Controller destroyed while cancelAllConfirmationBox is open -> confirming is safe (no UAF)
+        {
+            auto *h = new QueueHarness(nextRoot());
+            h->add(TQ_S("m3_task"), {h->src(TQ_S("m3.bin"))}, h->dst(TQ_S("m3_dst.bin")));
+
+            TransferQueueViewWidget view;
+            view.setController(&h->ctl);
+            view.setConfirmCancelAll(true);
+            view.promptCancelAll();
+
+            QPointer<QMessageBox> boxPtr = view.findChild<QMessageBox *>(QStringLiteral("cancelAllConfirmationBox"));
+            verify(boxPtr != nullptr, "M3: dialog opened");
+            auto *yesBtn = boxPtr->findChild<QPushButton *>(QStringLiteral("confirmCancelAllButton"));
+            verify(yesBtn != nullptr, "M3: yesBtn exists");
+
+            // Destroy controller while dialog is visible!
+            delete h;
+            yesBtn->click();
+            flushDeferred();
+            verify(boxPtr.isNull(), "M3: confirming after controller destruction causes zero UAF and deletes dialog");
+        }
+
+        // M4 & M5: Job completes while cancelAllConfirmationBox is open -> confirming afterward is harmless
+        {
+            QueueHarness h(nextRoot());
+            h.add(TQ_S("m4_task"), {h.src(TQ_S("m4.bin"))}, h.dst(TQ_S("m4_dst.bin")));
+            TransferQueueViewWidget view;
+            view.setController(&h.ctl);
+            view.setConfirmCancelAll(true);
+            view.promptCancelAll();
+
+            QPointer<QMessageBox> boxPtr = view.findChild<QMessageBox *>(QStringLiteral("cancelAllConfirmationBox"));
+            verify(boxPtr != nullptr, "M4: dialog opened");
+            auto *yesBtn = boxPtr->findChild<QPushButton *>(QStringLiteral("confirmCancelAllButton"));
+
+            // Job completes before user responds
+            h.job(TQ_S("m4_task"))->finishOk();
+            flushDeferred();
+            verify(h.ctl.isQueueIdle(), "M4: queue became idle while dialog open");
+
+            yesBtn->click();
+            flushDeferred();
+            verify(boxPtr.isNull() && h.ctl.isQueueIdle(), "M4/M5: confirming after job completion is harmless");
+        }
+
+        // M6 & M8: Owning view widget destroyed while dialog is active -> no crash or orphaned dialog
+        {
+            QueueHarness h(nextRoot());
+            h.add(TQ_S("m6_task"), {h.src(TQ_S("m6.bin"))}, h.dst(TQ_S("m6_dst.bin")));
+            auto *view = new TransferQueueViewWidget();
+            view->setController(&h.ctl);
+            view->setConfirmCancelAll(true);
+            view->promptCancelAll();
+
+            QPointer<QMessageBox> boxPtr = view->findChild<QMessageBox *>(QStringLiteral("cancelAllConfirmationBox"));
+            verify(boxPtr != nullptr, "M6: dialog opened");
+            delete view;
+            flushDeferred();
+            verify(boxPtr.isNull(), "M6/M8: dialog destroyed with parent view; zero UAF or orphan");
+            verify(h.ctl.activeCount() == 1, "M6/M8: closing view did not trigger unintended cancelAll");
+            h.ctl.cancelAll();
+            flushDeferred();
+        }
+
+        // M10 & M12: Async Clear History confirmation (controller destroyed mid-dialog + normal accept/reject)
+        {
+            clearHistoryForceAsyncDialogForTest() = true;
+            const auto restoreFlag = qScopeGuard([] { clearHistoryForceAsyncDialogForTest() = false; });
+
+            QueueHarness h(nextRoot());
+            h.add(TQ_S("m10_task"), {h.src(TQ_S("m10.bin"))}, h.dst(TQ_S("m10_dst.bin")));
+            h.job(TQ_S("m10_task"))->finishOk();
+            flushDeferred();
+
+            TransferQueueViewWidget view;
+            view.setController(&h.ctl);
+            view.clearHistoryButton()->click();
+            view.clearHistoryButton()->click(); // M7: deduplicated
+            const auto chBoxes = view.findChildren<QMessageBox *>(QStringLiteral("clearHistoryConfirmationBox"));
+            verify(chBoxes.size() == 1, "M10/M7: exactly one clearHistoryConfirmationBox opened");
+            QPointer<QMessageBox> chBox = chBoxes.first();
+            auto *cancelBtn = chBox->findChild<QPushButton *>(QStringLiteral("cancelClearHistoryButton"));
+            verify(cancelBtn != nullptr, "M10: cancelClearHistoryButton exists");
+            cancelBtn->click();
+            flushDeferred();
+            verify(chBox.isNull() && !h.ctl.snapshot().tasks.isEmpty(),
+                   "M10/M12: rejecting clear history preserves completed task");
+
+            // Now confirm clear history
+            view.clearHistoryButton()->click();
+            chBox = view.findChild<QMessageBox *>(QStringLiteral("clearHistoryConfirmationBox"));
+            verify(chBox != nullptr, "M10: clearHistoryConfirmationBox reopened");
+            auto *confirmBtn = chBox->findChild<QPushButton *>(QStringLiteral("confirmClearHistoryButton"));
+            verify(confirmBtn != nullptr, "M10: confirmClearHistoryButton exists");
+            confirmBtn->click();
+            flushDeferred();
+            verify(chBox.isNull() && h.ctl.snapshot().tasks.isEmpty(),
+                   "M10/M12: confirming clear history removes completed task cleanly");
+
+            // Controller destroyed while TransferQueueSettingsWidget clear history dialog is open
+            auto *tempCtl = new TransferQueueController();
+            TransferQueueSettingsWidget settingsWidget;
+            settingsWidget.setController(tempCtl);
+            auto *settingsClearBtn = settingsWidget.findChild<QPushButton *>();
+            for (QPushButton *b : settingsWidget.findChildren<QPushButton *>()) {
+                if (b->objectName() == QStringLiteral("transferQueueSettingsClearHistoryButton")
+                    || b->text().contains(QStringLiteral("Wyczyść"))
+                    || b->text().contains(QStringLiteral("Clear"))) {
+                    settingsClearBtn = b;
+                    break;
+                }
+            }
+            if (settingsClearBtn) {
+                settingsClearBtn->click();
+                QPointer<QMessageBox> sBox = settingsWidget.findChild<QMessageBox *>(QStringLiteral("clearHistoryConfirmationBox"));
+                if (sBox) {
+                    auto *sConfirm = sBox->findChild<QPushButton *>(QStringLiteral("confirmClearHistoryButton"));
+                    delete tempCtl;
+                    tempCtl = nullptr;
+                    if (sConfirm) sConfirm->click();
+                    flushDeferred();
+                    verify(sBox.isNull(), "M3: settings clear history safe after controller destruction");
+                }
+            }
+            delete tempCtl;
+        }
+    }
+
     // S7-15: Final Stage 7 check counter
     {
         verify(checks > 2180, "S7-15: Stage 7 verification checks augmented");

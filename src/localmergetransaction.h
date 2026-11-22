@@ -23,14 +23,18 @@
 #include <QFileInfo>
 #include <QHash>
 #include <QList>
+#include <QScopeGuard>
 #include <QString>
+#include <QStringDecoder>
 #include <QStringList>
 
 #include <atomic>
 #include <cerrno>
 #include <dirent.h>
 #include <fcntl.h>
+#include <functional>
 #include <linux/fs.h>
+#include <sys/random.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -164,6 +168,103 @@ struct LocalMergeTxStatSnapshot
     }
 };
 
+namespace LocalMergeTxValidation {
+
+inline bool decodeStrictBase64Utf8(const QByteArray &b64Input, QString *out, qsizetype maxDecodedBytes = 4096)
+{
+    if (!out) return false;
+    if (b64Input.contains('\0')) return false;
+    // Reject whitespace or non-Base64 characters strictly
+    const auto decodedResult = QByteArray::fromBase64Encoding(
+        b64Input, QByteArray::Base64Encoding | QByteArray::AbortOnBase64DecodingErrors);
+    if (decodedResult.decodingStatus != QByteArray::Base64DecodingStatus::Ok) {
+        return false;
+    }
+    const QByteArray &dec = decodedResult.decoded;
+    if (dec.size() > maxDecodedBytes || dec.contains('\0')) {
+        return false;
+    }
+    QStringDecoder utf8Decoder(QStringDecoder::Utf8, QStringDecoder::Flag::Stateless);
+    const QString text = utf8Decoder.decode(dec);
+    if (utf8Decoder.hasError()) {
+        return false;
+    }
+    *out = text;
+    return true;
+}
+
+inline bool isValidSinglePathComponent(const QString &name)
+{
+    if (name.isEmpty() || name == QLatin1String(".") || name == QLatin1String("..")) {
+        return false;
+    }
+    if (name.contains(QLatin1Char('/')) || name.contains(QLatin1Char('\0'))) {
+        return false;
+    }
+    const QByteArray utf8 = name.toUtf8();
+    if (utf8.isEmpty() || utf8.size() > 255 || utf8.contains('\0')) {
+        return false;
+    }
+    return true;
+}
+
+// Accepts both:
+// 1. Legacy 0.45.1 PID.counter transaction IDs ("<digits>.<digits>"), and
+// 2. New 128-bit cryptographic hex transaction IDs (32 lowercase hex chars).
+inline bool isValidTxId(const QString &txId)
+{
+    if (txId.isEmpty() || txId.size() > 64) return false;
+    if (txId.size() == 32) {
+        bool allHex = true;
+        for (const QChar c : txId) {
+            const ushort u = c.unicode();
+            if (!((u >= '0' && u <= '9') || (u >= 'a' && u <= 'f'))) {
+                allHex = false;
+                break;
+            }
+        }
+        if (allHex) return true;
+    }
+    const qsizetype dot = txId.indexOf(QLatin1Char('.'));
+    if (dot <= 0 || dot == txId.size() - 1 || txId.indexOf(QLatin1Char('.'), dot + 1) != -1) {
+        return false;
+    }
+    if (dot > 20 || (txId.size() - dot - 1) > 20) return false;
+    for (qsizetype i = 0; i < txId.size(); ++i) {
+        if (i == dot) continue;
+        const ushort u = txId.at(i).unicode();
+        if (u < '0' || u > '9') return false;
+    }
+    return true;
+}
+
+inline bool isValidStageFileName(const QString &name)
+{
+    if (!isValidSinglePathComponent(name)) return false;
+    return name == QLatin1String("stage") || name.startsWith(QStringLiteral(".thispc-part."));
+}
+
+inline bool isValidBackupFileName(const QString &name)
+{
+    if (name.isEmpty()) return true;
+    return isValidSinglePathComponent(name) && name.startsWith(QStringLiteral(".thispc-replaced."));
+}
+
+inline bool isValidSha256HexOrEmpty(const QString &hex)
+{
+    if (hex.isEmpty()) return true;
+    if (hex.size() != 64) return false;
+    for (const QChar c : hex) {
+        const ushort u = c.unicode();
+        if (!((u >= '0' && u <= '9') || (u >= 'a' && u <= 'f') || (u >= 'A' && u <= 'F'))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+}  // namespace LocalMergeTxValidation
+
 struct LocalMergeTxJournalRecord
 {
     QString txId;
@@ -206,14 +307,14 @@ struct LocalMergeTxJournalRecord
 
     static bool deserializeSigned(const QByteArray &raw, LocalMergeTxJournalRecord *out)
     {
-        if (!out) return false;
+        if (!out || raw.isEmpty() || raw.size() > 256 * 1024 || raw.contains('\0')) return false;
         const QList<QByteArray> lines = raw.split('\n');
         if (lines.size() < 17 || lines.first() != "THISPC_MERGE_TX_V1") return false;
 
         QByteArray bodyBytes;
         QByteArray expectedDigest;
         bool sawEnd = false;
-        QHash<QString, QString> kv;
+        QHash<QString, QByteArray> kv;
 
         for (qsizetype i = 1; i < lines.size(); ++i) {
             const QByteArray &line = lines.at(i);
@@ -223,45 +324,63 @@ struct LocalMergeTxJournalRecord
                 break;
             }
             if (line.startsWith("CHECKSUM=")) {
+                if (!expectedDigest.isEmpty()) return false;
                 expectedDigest = line.mid(9);
                 continue;
             }
             bodyBytes += line + '\n';
             const qsizetype eq = line.indexOf('=');
             if (eq <= 0) return false;
-            kv.insert(QString::fromUtf8(line.left(eq)), QString::fromUtf8(line.mid(eq + 1)));
+            const QString key = QString::fromLatin1(line.left(eq));
+            if (kv.contains(key)) return false;
+            kv.insert(key, line.mid(eq + 1));
         }
 
         if (!sawEnd || expectedDigest.isEmpty()) return false;
         const QByteArray actualDigest = QCryptographicHash::hash(bodyBytes, QCryptographicHash::Sha256).toHex();
         if (actualDigest != expectedDigest) return false;
 
-        auto b64 = [&](const QString &key, QString *dst) {
+        auto b64 = [&](const QString &key, QString *dst, qsizetype maxBytes = 4096) {
             if (!kv.contains(key)) return false;
-            const QByteArray dec = QByteArray::fromBase64(kv.value(key).toLatin1());
-            *dst = QString::fromUtf8(dec);
-            return true;
+            return LocalMergeTxValidation::decodeStrictBase64Utf8(kv.value(key), dst, maxBytes);
         };
 
         LocalMergeTxJournalRecord rec;
-        rec.txId = kv.value(QStringLiteral("TXID"));
-        if (rec.txId.isEmpty() || !localMergeTxPhaseFromName(kv.value(QStringLiteral("PHASE")), &rec.phase)) return false;
-        rec.approvedAction = kv.value(QStringLiteral("ACTION"));
+        rec.txId = QString::fromLatin1(kv.value(QStringLiteral("TXID")));
+        if (!LocalMergeTxValidation::isValidTxId(rec.txId)
+            || !localMergeTxPhaseFromName(QString::fromLatin1(kv.value(QStringLiteral("PHASE"))), &rec.phase)) {
+            return false;
+        }
+        rec.approvedAction = QString::fromLatin1(kv.value(QStringLiteral("ACTION")));
+        if (rec.approvedAction.isEmpty() || rec.approvedAction.size() > 64) return false;
+
         if (!b64(QStringLiteral("SRC"), &rec.sourcePath)
             || !b64(QStringLiteral("DST"), &rec.destinationPath)
-            || !b64(QStringLiteral("DSTNAME"), &rec.destFileName)
-            || !b64(QStringLiteral("STAGENAME"), &rec.stageFileName)
-            || !b64(QStringLiteral("BACKUPNAME"), &rec.replacedBackupName)) {
+            || !b64(QStringLiteral("DSTNAME"), &rec.destFileName, 255)
+            || !b64(QStringLiteral("STAGENAME"), &rec.stageFileName, 255)
+            || !b64(QStringLiteral("BACKUPNAME"), &rec.replacedBackupName, 255)) {
             return false;
         }
-        rec.newSha256Hex = kv.value(QStringLiteral("NEWSHA256"));
-        if (!LocalMergeTxStatSnapshot::decode(kv.value(QStringLiteral("PARENTSTAT")), &rec.parentStat)
-            || !LocalMergeTxStatSnapshot::decode(kv.value(QStringLiteral("SRCSTAT")), &rec.sourceStat)
-            || !LocalMergeTxStatSnapshot::decode(kv.value(QStringLiteral("OLDSTAT")), &rec.expectedDestStat)
-            || !LocalMergeTxStatSnapshot::decode(kv.value(QStringLiteral("NEWSTAT")), &rec.stageStat)) {
+
+        // Strict single-component path validation for all fields used in filesystem syscalls
+        if (!LocalMergeTxValidation::isValidSinglePathComponent(rec.destFileName)
+            || !LocalMergeTxValidation::isValidStageFileName(rec.stageFileName)
+            || !LocalMergeTxValidation::isValidBackupFileName(rec.replacedBackupName)) {
             return false;
         }
-        rec.durabilityConfirmed = (kv.value(QStringLiteral("DURABLE")) == QLatin1String("1"));
+
+        rec.newSha256Hex = QString::fromLatin1(kv.value(QStringLiteral("NEWSHA256")));
+        if (!LocalMergeTxValidation::isValidSha256HexOrEmpty(rec.newSha256Hex)) return false;
+
+        if (!LocalMergeTxStatSnapshot::decode(QString::fromLatin1(kv.value(QStringLiteral("PARENTSTAT"))), &rec.parentStat)
+            || !LocalMergeTxStatSnapshot::decode(QString::fromLatin1(kv.value(QStringLiteral("SRCSTAT"))), &rec.sourceStat)
+            || !LocalMergeTxStatSnapshot::decode(QString::fromLatin1(kv.value(QStringLiteral("OLDSTAT"))), &rec.expectedDestStat)
+            || !LocalMergeTxStatSnapshot::decode(QString::fromLatin1(kv.value(QStringLiteral("NEWSTAT"))), &rec.stageStat)) {
+            return false;
+        }
+        const QByteArray durableVal = kv.value(QStringLiteral("DURABLE"));
+        if (durableVal != "0" && durableVal != "1") return false;
+        rec.durabilityConfirmed = (durableVal == "1");
         *out = std::move(rec);
         return true;
     }
@@ -299,10 +418,24 @@ struct LocalMergeRecoveryReport
 
 namespace LocalMergeTxDetail {
 
+// SEC-046-07: Generate 128-bit cryptographically unpredictable transaction ID via OS getrandom().
+// Fails closed (returns empty QString) if secure OS randomness is unavailable; never falls back to PID.
 inline QString generateTxId()
 {
-    static std::atomic<qulonglong> counter{1};
-    return QStringLiteral("%1.%2").arg(static_cast<qulonglong>(::getpid())).arg(counter.fetch_add(1, std::memory_order_relaxed));
+    unsigned char buf[16] = {};
+    size_t filled = 0;
+    while (filled < sizeof(buf)) {
+        const ssize_t n = ::getrandom(buf + filled, sizeof(buf) - filled, 0);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return {};
+        }
+        if (n == 0) {
+            return {};
+        }
+        filled += static_cast<size_t>(n);
+    }
+    return QString::fromLatin1(QByteArray(reinterpret_cast<const char *>(buf), sizeof(buf)).toHex());
 }
 
 inline bool writeJournalAtomically(int txDirFd, const QString &journalName, const LocalMergeTxJournalRecord &rec)
@@ -344,25 +477,28 @@ inline bool writeJournalAtomically(int txDirFd, const QString &journalName, cons
 
 inline bool readJournalFile(int txDirFd, const QString &journalName, LocalMergeTxJournalRecord *out)
 {
+    if (!LocalMergeTxValidation::isValidSinglePathComponent(journalName)) return false;
     const int fd = ::openat(txDirFd, QFile::encodeName(journalName).constData(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
     if (fd < 0) return false;
+    const auto closeFd = qScopeGuard([&] { ::close(fd); });
+    struct stat jSt {};
+    if (::fstat(fd, &jSt) != 0 || !S_ISREG(jSt.st_mode) || jSt.st_uid != ::geteuid()) {
+        return false;
+    }
     QByteArray raw;
     char buf[4096];
     while (true) {
         const ssize_t n = ::read(fd, buf, sizeof(buf));
         if (n < 0) {
             if (errno == EINTR) continue;
-            ::close(fd);
             return false;
         }
         if (n == 0) break;
         raw.append(buf, static_cast<qsizetype>(n));
         if (raw.size() > 256 * 1024) {
-            ::close(fd);
             return false;
         }
     }
-    ::close(fd);
     return LocalMergeTxJournalRecord::deserializeSigned(raw, out);
 }
 
@@ -393,7 +529,12 @@ inline QStringList listDirEntries(int dirFd)
 class LocalMergeRecoveryInspector
 {
 public:
-    static LocalMergeRecoveryReport inspectDirectory(const QString &destDirPath, bool resolveUnambiguous = false)
+    using PreMutateTestHook = std::function<void(const QString &txDirName)>;
+
+    static LocalMergeRecoveryReport inspectDirectory(
+        const QString &destDirPath,
+        bool resolveUnambiguous = false,
+        const PreMutateTestHook &preMutateHook = {})
     {
         LocalMergeRecoveryReport report;
         const int dirFd = ::open(QFile::encodeName(QDir::cleanPath(destDirPath)).constData(),
@@ -406,6 +547,7 @@ public:
             report.anyManualInterventionRequired = true;
             return report;
         }
+        const auto closeDirFd = qScopeGuard([&] { ::close(dirFd); });
 
         const QStringList entries = LocalMergeTxDetail::listDirEntries(dirFd);
         for (const QString &name : entries) {
@@ -418,35 +560,64 @@ public:
             }
 
             report.anyIncompleteFound = true;
-            LocalMergeRecoveryFinding finding = inspectTxDir(dirFd, destDirPath, name, resolveUnambiguous);
+            LocalMergeRecoveryFinding finding = inspectTxDir(dirFd, destDirPath, name, resolveUnambiguous, preMutateHook);
             if (finding.manualInterventionRequired) {
                 report.anyManualInterventionRequired = true;
             }
             report.findings.append(finding);
         }
 
-        ::close(dirFd);
         return report;
     }
 
 private:
+    static bool verifyTxDirStillAnchored(
+        int destParentFd,
+        const QByteArray &txDirEnc,
+        int txFd,
+        const struct stat &expectedDirSt)
+    {
+        struct stat curFdSt {};
+        struct stat pathSt {};
+        return ::fstat(txFd, &curFdSt) == 0
+            && S_ISDIR(curFdSt.st_mode)
+            && curFdSt.st_uid == ::geteuid()
+            && (curFdSt.st_mode & 0777) == 0700
+            && curFdSt.st_dev == expectedDirSt.st_dev
+            && curFdSt.st_ino == expectedDirSt.st_ino
+            && curFdSt.st_nlink > 0
+            && ::fstatat(destParentFd, txDirEnc.constData(), &pathSt, AT_SYMLINK_NOFOLLOW) == 0
+            && S_ISDIR(pathSt.st_mode)
+            && pathSt.st_dev == expectedDirSt.st_dev
+            && pathSt.st_ino == expectedDirSt.st_ino;
+    }
+
     static LocalMergeRecoveryFinding inspectTxDir(
         int destParentFd,
         const QString &destDirPath,
         const QString &txDirName,
-        bool resolveUnambiguous)
+        bool resolveUnambiguous,
+        const PreMutateTestHook &preMutateHook)
     {
         LocalMergeRecoveryFinding f;
         f.txDirName = txDirName;
         const QString txDirPath = QDir(destDirPath).filePath(txDirName);
+        const QString expectedTxId = txDirName.mid(QStringLiteral(".thispc-tx.").size());
+        if (!LocalMergeTxValidation::isValidSinglePathComponent(txDirName)
+            || !LocalMergeTxValidation::isValidTxId(expectedTxId)) {
+            f.status = LocalMergeRecoveryStatus::ManualInterventionRequired;
+            f.diagnostic = QStringLiteral("Transaction directory name has an invalid transaction ID; preserving contents.");
+            return f;
+        }
 
         struct stat dirSt {};
         const QByteArray txDirEnc = QFile::encodeName(txDirName);
         if (::fstatat(destParentFd, txDirEnc.constData(), &dirSt, AT_SYMLINK_NOFOLLOW) != 0
             || !S_ISDIR(dirSt.st_mode)
-            || dirSt.st_uid != ::geteuid()) {
+            || dirSt.st_uid != ::geteuid()
+            || (dirSt.st_mode & 0777) != 0700) {
             f.status = LocalMergeRecoveryStatus::ManualInterventionRequired;
-            f.diagnostic = QStringLiteral("Transaction directory is missing, symlinked, or owned by another user.");
+            f.diagnostic = QStringLiteral("Transaction directory is missing, symlinked, has unsafe permissions, or is owned by another user.");
             return f;
         }
 
@@ -456,15 +627,40 @@ private:
             f.diagnostic = QStringLiteral("Could not open transaction directory.");
             return f;
         }
+        const auto closeTxFd = qScopeGuard([&] { ::close(txFd); });
 
+        struct stat openedDirSt {};
+        if (::fstat(txFd, &openedDirSt) != 0
+            || !S_ISDIR(openedDirSt.st_mode)
+            || openedDirSt.st_uid != ::geteuid()
+            || (openedDirSt.st_mode & 0777) != 0700
+            || openedDirSt.st_dev != dirSt.st_dev
+            || openedDirSt.st_ino != dirSt.st_ino
+            || openedDirSt.st_nlink == 0) {
+            f.status = LocalMergeRecoveryStatus::ManualInterventionRequired;
+            f.diagnostic = QStringLiteral("Transaction directory identity or permissions changed while opening.");
+            return f;
+        }
+
+        const QString expectedJournalName = QStringLiteral(".thispc-merge-tx.%1").arg(expectedTxId);
+        const QString expectedTmpName = expectedJournalName + QStringLiteral(".tmp");
         const QStringList txEntries = LocalMergeTxDetail::listDirEntries(txFd);
         QString journalName;
+        bool hasSafeExpectedTmp = false;
         QStringList unexpected;
         for (const QString &e : txEntries) {
-            if (e.startsWith(QStringLiteral(".thispc-merge-tx."))) {
-                if (e.endsWith(QStringLiteral(".tmp"))) continue;
+            if (e == expectedJournalName) {
                 if (journalName.isEmpty()) journalName = e;
                 else unexpected.append(e);
+            } else if (e == expectedTmpName) {
+                struct stat tmpSt {};
+                if (::fstatat(txFd, QFile::encodeName(e).constData(), &tmpSt, AT_SYMLINK_NOFOLLOW) == 0
+                    && S_ISREG(tmpSt.st_mode)
+                    && tmpSt.st_uid == ::geteuid()) {
+                    hasSafeExpectedTmp = true;
+                } else {
+                    unexpected.append(e);
+                }
             } else if (e == QLatin1String("stage") || e.startsWith(QStringLiteral(".thispc-replaced."))) {
                 continue;
             } else {
@@ -473,24 +669,23 @@ private:
         }
 
         if (!unexpected.isEmpty()) {
-            ::close(txFd);
             f.status = LocalMergeRecoveryStatus::ManualInterventionRequired;
             f.diagnostic = QStringLiteral("Foreign object(s) detected in transaction directory: %1").arg(unexpected.join(QStringLiteral(", ")));
             return f;
         }
 
         if (journalName.isEmpty()) {
-            ::close(txFd);
             f.status = LocalMergeRecoveryStatus::ManualInterventionRequired;
-            f.diagnostic = QStringLiteral("Transaction directory lacks a valid journal; preserving contents.");
+            f.diagnostic = hasSafeExpectedTmp
+                ? QStringLiteral("Transaction directory contains only an interrupted temporary journal; preserving contents.")
+                : QStringLiteral("Transaction directory lacks a valid journal; preserving contents.");
             return f;
         }
 
         LocalMergeTxJournalRecord rec;
-        if (!LocalMergeTxDetail::readJournalFile(txFd, journalName, &rec)) {
-            ::close(txFd);
+        if (!LocalMergeTxDetail::readJournalFile(txFd, journalName, &rec) || rec.txId != expectedTxId) {
             f.status = LocalMergeRecoveryStatus::ManualInterventionRequired;
-            f.diagnostic = QStringLiteral("Transaction journal is corrupted or truncated; preserving all objects.");
+            f.diagnostic = QStringLiteral("Transaction journal is corrupted, symlinked, mismatched, or invalid; preserving all objects.");
             return f;
         }
 
@@ -500,7 +695,6 @@ private:
 
         struct stat parentSt {};
         if (::fstat(destParentFd, &parentSt) != 0 || !rec.parentStat.matchesDirectoryIdentity(parentSt)) {
-            ::close(txFd);
             f.status = LocalMergeRecoveryStatus::ManualInterventionRequired;
             f.diagnostic = QStringLiteral("Destination parent directory identity does not match journal.");
             return f;
@@ -534,16 +728,47 @@ private:
             f.manualInterventionRequired = false;
             f.diagnostic = QStringLiteral("Exchange did not occur; original destination OLD is intact.");
             if (resolveUnambiguous) {
+                if (preMutateHook) {
+                    preMutateHook(txDirName);
+                }
+                if (!verifyTxDirStillAnchored(destParentFd, txDirEnc, txFd, openedDirSt)) {
+                    f.status = LocalMergeRecoveryStatus::ManualInterventionRequired;
+                    f.manualInterventionRequired = true;
+                    f.diagnostic = QStringLiteral("Transaction directory identity changed before cleanup; aborting mutation.");
+                    return f;
+                }
                 if (stageIsNew) {
-                    ::unlinkat(txFd, QFile::encodeName(rec.stageFileName).constData(), 0);
+                    const QByteArray stageEnc = QFile::encodeName(rec.stageFileName);
+                    const int sfd = ::openat(txFd, stageEnc.constData(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+                    struct stat verifyStageSt {};
+                    if (sfd < 0 || ::fstat(sfd, &verifyStageSt) != 0
+                        || !S_ISREG(verifyStageSt.st_mode) || !rec.stageStat.matchesStat(verifyStageSt)) {
+                        if (sfd >= 0) ::close(sfd);
+                        f.status = LocalMergeRecoveryStatus::ManualInterventionRequired;
+                        f.manualInterventionRequired = true;
+                        f.diagnostic = QStringLiteral("Staging object identity changed before cleanup; aborting mutation.");
+                        return f;
+                    }
+                    ::close(sfd);
+                    ::unlinkat(txFd, stageEnc.constData(), 0);
+                }
+                if (hasSafeExpectedTmp) {
+                    const QByteArray tmpEnc = QFile::encodeName(expectedTmpName);
+                    const int tfd = ::openat(txFd, tmpEnc.constData(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+                    struct stat verifyTmpSt {};
+                    if (tfd >= 0 && ::fstat(tfd, &verifyTmpSt) == 0
+                        && S_ISREG(verifyTmpSt.st_mode) && verifyTmpSt.st_uid == ::geteuid()) {
+                        ::close(tfd);
+                        ::unlinkat(txFd, tmpEnc.constData(), 0);
+                    } else if (tfd >= 0) {
+                        ::close(tfd);
+                    }
                 }
                 ::unlinkat(txFd, QFile::encodeName(journalName).constData(), 0);
-                ::close(txFd);
                 ::unlinkat(destParentFd, txDirEnc.constData(), AT_REMOVEDIR);
                 ::fsync(destParentFd);
                 return f;
             }
-            ::close(txFd);
             return f;
         }
 
@@ -556,14 +781,26 @@ private:
                 f.recoveryOldPath = QDir(txDirPath).filePath(rec.replacedBackupName);
             } else if (stageIsOld) {
                 // CRASH-RECOVERY-01: Crash right after RENAME_EXCHANGE! Promote stage -> replacedBackupName
-                if (resolveUnambiguous && !rec.replacedBackupName.isEmpty()
-                    && ::syscall(SYS_renameat2, txFd, QFile::encodeName(rec.stageFileName).constData(),
-                                 txFd, QFile::encodeName(rec.replacedBackupName).constData(), RENAME_NOREPLACE) == 0) {
-                    ::fsync(txFd);
-                    f.recoveryOldPath = QDir(txDirPath).filePath(rec.replacedBackupName);
-                } else {
-                    f.recoveryOldPath = QDir(txDirPath).filePath(rec.stageFileName);
+                bool promoted = false;
+                if (resolveUnambiguous && !rec.replacedBackupName.isEmpty()) {
+                    if (preMutateHook) {
+                        preMutateHook(txDirName);
+                    }
+                    if (!verifyTxDirStillAnchored(destParentFd, txDirEnc, txFd, openedDirSt)) {
+                        f.status = LocalMergeRecoveryStatus::ManualInterventionRequired;
+                        f.manualInterventionRequired = true;
+                        f.diagnostic = QStringLiteral("Transaction directory identity changed before backup promotion; aborting mutation.");
+                        return f;
+                    }
+                    promoted = (::syscall(SYS_renameat2, txFd, QFile::encodeName(rec.stageFileName).constData(),
+                                          txFd, QFile::encodeName(rec.replacedBackupName).constData(), RENAME_NOREPLACE) == 0);
+                    if (promoted) {
+                        ::fsync(txFd);
+                    }
                 }
+                f.recoveryOldPath = promoted
+                    ? QDir(txDirPath).filePath(rec.replacedBackupName)
+                    : QDir(txDirPath).filePath(rec.stageFileName);
             }
 
             if (rec.phase == LocalMergeTxPhase::DirectoryDurable || rec.durabilityConfirmed) {
@@ -575,7 +812,6 @@ private:
                 f.manualInterventionRequired = true;
                 f.diagnostic = QStringLiteral("Exchange occurred before crash/sync; NEW is at destination and OLD is preserved at %1.").arg(f.recoveryOldPath);
             }
-            ::close(txFd);
             return f;
         }
 
@@ -586,11 +822,9 @@ private:
             f.status = LocalMergeRecoveryStatus::DurableCommitPendingCleanup;
             f.manualInterventionRequired = false;
             f.diagnostic = QStringLiteral("Durable commit completed; only transaction journal remained.");
-            ::close(txFd);
             return f;
         }
 
-        ::close(txFd);
         f.oldAvailable = dstIsOld || stageIsOld || backupInTx || backupInParent;
         f.newAvailable = dstIsNew || stageIsNew;
         f.status = LocalMergeRecoveryStatus::ManualInterventionRequired;

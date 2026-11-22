@@ -155,7 +155,8 @@ int main(int argc, char *argv[])
             && !dlgSelf.mergeButton()->isHidden()
             && !dlgSelf.mergeButton()->isEnabled(),
                "Self-copy shows Merge button as disabled with explanation");
-        verify(dlgSelf.renameButton()->isDefault(), "Self-copy defaults to Rename");
+        verify(!dlgSelf.renameButton()->isEnabled() && dlgSelf.skipButton()->isDefault(),
+               "Self-copy disables Rename (SEC-046-09) and defaults to Skip");
         verify(dlgSelf.titleLabel()->text().contains(QStringLiteral("Katalog_Żółć")), "Unicode folder name preserved");
     }
 
@@ -646,6 +647,342 @@ int main(int argc, char *argv[])
     // 20: Confirm guard directory is completely untouched
     verify(QDir(guardTmp.path()).entryList(QDir::AllEntries | QDir::NoDotAndDotDot) == QStringList({QStringLiteral("untouched.txt")}),
            "Dialogs performed zero filesystem operations");
+
+    // 21: LocalMergeConflictSession — null plan fails closed
+    LocalMergeBackendCapabilities sessionCaps;
+    sessionCaps.canSafeOverwrite = true;
+    {
+        LocalMergeConflictSession nullSession(nullptr);
+        verify(nullSession.state() == LocalMergeConflictSession::State::Cancelled,
+               "Null plan session starts Cancelled");
+        verify(nullSession.isTerminal(), "Null plan session is terminal");
+        verify(nullSession.advance().kind == LocalMergeConflictSession::StepKind::Cancelled,
+               "Null plan session advance() returns Cancelled");
+        verify(!nullSession.submitFolderDecision(LocalFolderConflictDecision{}),
+               "Null plan session rejects folder decision");
+        verify(!nullSession.submitFileDecision(LocalFileConflictDecision{}),
+               "Null plan session rejects file decision");
+    }
+
+    // 22: LocalMergeConflictSession — no conflicts auto-approves immediately
+    {
+        LocalMergePlan plan;
+        LocalMergePlanEntry createDir;
+        createDir.relativePath = QStringLiteral("freshDir");
+        createDir.sourceKind = LocalMergeObjectKind::Directory;
+        createDir.classification = LocalMergeEntryClassification::CreateNew;
+        LocalMergePlanEntry createFile;
+        createFile.relativePath = QStringLiteral("freshDir/file.txt");
+        createFile.sourceKind = LocalMergeObjectKind::RegularFile;
+        createFile.classification = LocalMergeEntryClassification::CreateNew;
+        plan.entries = {createDir, createFile};
+
+        LocalMergeConflictSession session(&plan, sessionCaps);
+        verify(session.state() == LocalMergeConflictSession::State::Ready,
+               "Session starts in Ready state");
+        verify(!session.submitFolderDecision(LocalFolderConflictDecision{}),
+               "Ready session rejects submitFolderDecision");
+        verify(!session.submitFileDecision(LocalFileConflictDecision{}),
+               "Ready session rejects submitFileDecision");
+
+        const auto step = session.advance();
+        verify(step.kind == LocalMergeConflictSession::StepKind::Completed,
+               "No-conflict session completes on first advance()");
+        verify(session.state() == LocalMergeConflictSession::State::Completed,
+               "Session transitions to Completed");
+        verify(session.isTerminal(), "Completed session is terminal");
+        verify(session.result().completed && !session.result().cancelled,
+               "No-conflict result marks completed=true, cancelled=false");
+        verify(session.result().nonConflictingAutoApproved == 2,
+               "No-conflict session auto-approves both CreateNew entries");
+        verify(plan.entries[0].approvedAction == LocalMergeApprovedAction::Create
+                   && plan.entries[1].approvedAction == LocalMergeApprovedAction::Create,
+               "No-conflict entries approved as Create");
+        verify(session.advance().kind == LocalMergeConflictSession::StepKind::Completed,
+               "advance() after Completed remains Completed");
+        verify(!session.submitFolderDecision(LocalFolderConflictDecision{}),
+               "Completed session rejects folder decision");
+        verify(!session.submitFileDecision(LocalFileConflictDecision{}),
+               "Completed session rejects file decision");
+    }
+
+    // 23: LocalMergeConflictSession — state guards, idempotent advance(), and wrong-state rejections
+    {
+        LocalMergePlan plan;
+        plan.entries = {
+            makeFolderConflictEntry(QStringLiteral("DirA"), QStringLiteral("/src/DirA"), QStringLiteral("/dst/DirA")),
+            makeFileEntry(QStringLiteral("fileB.txt"), QStringLiteral("/src/fileB.txt"), QStringLiteral("/dst/fileB.txt"), LocalMergeEntryClassification::FileConflict)
+        };
+
+        LocalMergeConflictSession session(&plan, sessionCaps);
+        const auto s1 = session.advance();
+        verify(s1.kind == LocalMergeConflictSession::StepKind::NeedFolderDecision,
+               "First conflict yields NeedFolderDecision");
+        verify(session.state() == LocalMergeConflictSession::State::WaitingFolderDecision,
+               "Session enters WaitingFolderDecision");
+        verify(s1.entry.relativePath == QStringLiteral("DirA"),
+               "Pending folder step carries DirA");
+        verify(s1.remainingConflicts == 0 && s1.progress.currentIndex == 1 && s1.progress.totalConflicts == 2,
+               "Folder step reports exact remainingConflicts and progress");
+
+        // Idempotent advance() while waiting
+        const auto s1Again = session.advance();
+        verify(s1Again.kind == LocalMergeConflictSession::StepKind::NeedFolderDecision
+                   && s1Again.entry.relativePath == QStringLiteral("DirA")
+                   && session.result().folderPromptsShown == 1,
+               "Repeated advance() while waiting is idempotent and does not double-count prompt");
+
+        // Wrong-type submission rejected without advancing state
+        verify(!session.submitFileDecision(LocalFileConflictDecision{}),
+               "WaitingFolderDecision rejects submitFileDecision");
+        verify(session.state() == LocalMergeConflictSession::State::WaitingFolderDecision,
+               "Rejected submitFileDecision preserves WaitingFolderDecision");
+
+        LocalFolderConflictDecision mergeDec;
+        mergeDec.accepted = true;
+        mergeDec.action = LocalMergeApprovedAction::MergeDirectory;
+        verify(session.submitFolderDecision(mergeDec),
+               "WaitingFolderDecision accepts valid folder decision");
+        verify(session.state() == LocalMergeConflictSession::State::Ready,
+               "Session returns to Ready after folder decision");
+
+        const auto s2 = session.advance();
+        verify(s2.kind == LocalMergeConflictSession::StepKind::NeedFileDecision,
+               "Second conflict yields NeedFileDecision");
+        verify(session.state() == LocalMergeConflictSession::State::WaitingFileDecision,
+               "Session enters WaitingFileDecision");
+        verify(!session.submitFolderDecision(LocalFolderConflictDecision{}),
+               "WaitingFileDecision rejects submitFolderDecision");
+
+        LocalFileConflictDecision overwriteDec;
+        overwriteDec.accepted = true;
+        overwriteDec.action = LocalMergeApprovedAction::Overwrite;
+        verify(session.submitFileDecision(overwriteDec),
+               "WaitingFileDecision accepts valid file decision");
+
+        const auto s3 = session.advance();
+        verify(s3.kind == LocalMergeConflictSession::StepKind::Completed,
+               "Session completes after all conflicts resolved");
+        verify(plan.entries[0].approvedAction == LocalMergeApprovedAction::MergeDirectory
+                   && plan.entries[1].approvedAction == LocalMergeApprovedAction::Overwrite,
+               "Mixed folder Merge + file Overwrite recorded on plan");
+    }
+
+    // 24: LocalMergeConflictSession — Rename subtree remapping + Skip subtree + Apply-to-All
+    {
+        LocalMergePlan plan;
+        auto renamedFolder = makeFolderConflictEntry(QStringLiteral("RenameMe"), QStringLiteral("/src/RenameMe"), QStringLiteral("/dst/RenameMe"));
+        LocalMergePlanEntry childOfRenamed;
+        childOfRenamed.relativePath = QStringLiteral("RenameMe/sub.txt");
+        childOfRenamed.sourcePath = QStringLiteral("/src/RenameMe/sub.txt");
+        childOfRenamed.destinationPath = QStringLiteral("/dst/RenameMe/sub.txt");
+        childOfRenamed.sourceKind = LocalMergeObjectKind::RegularFile;
+        childOfRenamed.classification = LocalMergeEntryClassification::FileConflict;
+
+        auto skippedFolder = makeFolderConflictEntry(QStringLiteral("SkipMe"), QStringLiteral("/src/SkipMe"), QStringLiteral("/dst/SkipMe"));
+        LocalMergePlanEntry childOfSkipped;
+        childOfSkipped.relativePath = QStringLiteral("SkipMe/nested.txt");
+        childOfSkipped.sourcePath = QStringLiteral("/src/SkipMe/nested.txt");
+        childOfSkipped.destinationPath = QStringLiteral("/dst/SkipMe/nested.txt");
+        childOfSkipped.sourceKind = LocalMergeObjectKind::RegularFile;
+        childOfSkipped.classification = LocalMergeEntryClassification::FileConflict;
+
+        auto mergeAllA = makeFolderConflictEntry(QStringLiteral("MergeA"), QStringLiteral("/src/MergeA"), QStringLiteral("/dst/MergeA"));
+        auto mergeAllB = makeFolderConflictEntry(QStringLiteral("MergeB"), QStringLiteral("/src/MergeB"), QStringLiteral("/dst/MergeB"));
+
+        auto fileAllA = makeFileEntry(QStringLiteral("f1.txt"), QStringLiteral("/src/f1.txt"), QStringLiteral("/dst/f1.txt"), LocalMergeEntryClassification::FileConflict);
+        auto fileAllB = makeFileEntry(QStringLiteral("f2.txt"), QStringLiteral("/src/f2.txt"), QStringLiteral("/dst/f2.txt"), LocalMergeEntryClassification::FileConflict);
+
+        plan.entries = {renamedFolder, childOfRenamed, skippedFolder, childOfSkipped, mergeAllA, mergeAllB, fileAllA, fileAllB};
+
+        LocalMergeConflictSession session(&plan, sessionCaps);
+
+        // Step 1: RenameMe -> RenameMe (2)
+        verify(session.advance().entry.relativePath == QStringLiteral("RenameMe"),
+               "RenameMe prompted first");
+        LocalFolderConflictDecision renDec;
+        renDec.accepted = true;
+        renDec.action = LocalMergeApprovedAction::Rename;
+        renDec.targetFolderName = QStringLiteral("RenameMe (2)");
+        verify(session.submitFolderDecision(renDec), "Rename decision submitted");
+
+        // Step 2: SkipMe -> Skip (childOfRenamed remapped automatically, childOfSkipped skipped automatically)
+        const auto skipStep = session.advance();
+        verify(skipStep.kind == LocalMergeConflictSession::StepKind::NeedFolderDecision
+                   && skipStep.entry.relativePath == QStringLiteral("SkipMe"),
+               "SkipMe prompted after auto-remapping RenameMe/sub.txt");
+        LocalFolderConflictDecision skipDec;
+        skipDec.accepted = true;
+        skipDec.action = LocalMergeApprovedAction::Skip;
+        verify(session.submitFolderDecision(skipDec), "Skip decision submitted");
+
+        // Step 3: MergeA with MergeAllFolders -> MergeB auto-merged
+        const auto mergeStep = session.advance();
+        verify(mergeStep.entry.relativePath == QStringLiteral("MergeA"),
+               "MergeA prompted after SkipMe/nested.txt auto-skipped");
+        LocalFolderConflictDecision mergeAllDec;
+        mergeAllDec.accepted = true;
+        mergeAllDec.action = LocalMergeApprovedAction::MergeDirectory;
+        mergeAllDec.applyPolicy = LocalMergeApplyPolicy::MergeAllFolders;
+        verify(session.submitFolderDecision(mergeAllDec), "MergeAllFolders decision submitted");
+
+        // Step 4: f1.txt with OverwriteAllFileConflicts -> f2.txt auto-overwritten
+        const auto fileStep = session.advance();
+        verify(fileStep.kind == LocalMergeConflictSession::StepKind::NeedFileDecision
+                   && fileStep.entry.relativePath == QStringLiteral("f1.txt"),
+               "f1.txt prompted after MergeB auto-merged");
+        LocalFileConflictDecision ovAllDec;
+        ovAllDec.accepted = true;
+        ovAllDec.action = LocalMergeApprovedAction::Overwrite;
+        ovAllDec.applyPolicy = LocalMergeApplyPolicy::OverwriteAllFileConflicts;
+        verify(session.submitFileDecision(ovAllDec), "OverwriteAllFileConflicts decision submitted");
+
+        verify(session.advance().kind == LocalMergeConflictSession::StepKind::Completed,
+               "Session completes after f2.txt auto-overwritten");
+        verify(plan.entries[0].relativePath == QStringLiteral("RenameMe (2)")
+                   && plan.entries[1].relativePath == QStringLiteral("RenameMe (2)/sub.txt")
+                   && plan.entries[1].classification == LocalMergeEntryClassification::CreateNew
+                   && plan.entries[1].approvedAction == LocalMergeApprovedAction::Create,
+               "Renamed folder and child remapped and marked CreateNew/Create");
+        verify(session.result().renamedSubtreeEntriesRemapped == 1
+                   && session.result().entriesRequiringStage3BRevalidation.contains(QStringLiteral("RenameMe (2)"))
+                   && session.result().entriesRequiringStage3BRevalidation.contains(QStringLiteral("RenameMe (2)/sub.txt")),
+               "Renamed subtree tracked in entriesRequiringStage3BRevalidation");
+        verify(plan.entries[3].approvedAction == LocalMergeApprovedAction::Skip,
+               "Child of skipped folder auto-skipped");
+        verify(plan.entries[5].approvedAction == LocalMergeApprovedAction::MergeDirectory
+                   && plan.entries[5].decisionBinding.policyScope == LocalMergeApplyPolicy::MergeAllFolders,
+               "MergeB auto-merged by MergeAllFolders policy");
+        verify(plan.entries[7].approvedAction == LocalMergeApprovedAction::Overwrite
+                   && plan.entries[7].decisionBinding.policyScope == LocalMergeApplyPolicy::OverwriteAllFileConflicts,
+               "f2.txt auto-overwritten by OverwriteAllFileConflicts policy");
+    }
+
+    // 25: LocalMergeConflictSession — cancel() and Abort transition
+    {
+        LocalMergePlan plan;
+        plan.entries = {
+            makeFolderConflictEntry(QStringLiteral("DirA"), QStringLiteral("/src/DirA"), QStringLiteral("/dst/DirA")),
+            makeFileEntry(QStringLiteral("f1.txt"), QStringLiteral("/src/f1.txt"), QStringLiteral("/dst/f1.txt"), LocalMergeEntryClassification::FileConflict)
+        };
+        LocalMergeConflictSession session(&plan, sessionCaps);
+        verify(session.advance().kind == LocalMergeConflictSession::StepKind::NeedFolderDecision,
+               "Abort test reaches folder prompt");
+        session.cancel();
+        session.cancel(); // idempotent
+        verify(session.state() == LocalMergeConflictSession::State::Cancelled
+                   && session.isTerminal()
+                   && session.result().cancelled
+                   && !session.result().completed,
+               "cancel() puts session in Cancelled terminal state");
+        verify(plan.entries[0].approvedAction == LocalMergeApprovedAction::Abort,
+               "Pending entry marked Abort on cancel()");
+        verify(session.advance().kind == LocalMergeConflictSession::StepKind::Cancelled,
+               "advance() after cancel() returns Cancelled");
+        verify(!session.submitFolderDecision(LocalFolderConflictDecision{}),
+               "Cancelled session rejects folder decision");
+        verify(!session.submitFileDecision(LocalFileConflictDecision{}),
+               "Cancelled session rejects file decision");
+    }
+
+    // 26: LocalMergeConflictSession equivalence with LocalMergeConflictResolver::resolve()
+    {
+        LocalMergePlan planSync = makeDeepPlan();
+        LocalMergePlan planAsync = planSync;
+
+        int syncFolderCalls = 0;
+        int syncFileCalls = 0;
+        const LocalMergeResolutionResult resSync = LocalMergeConflictResolver::resolve(
+            planSync,
+            sessionCaps,
+            [&](const LocalMergePlanEntry &entry, qsizetype, LocalMergeConflictProgress) {
+                ++syncFolderCalls;
+                LocalFolderConflictDecision dec;
+                dec.accepted = true;
+                if (entry.relativePath == QStringLiteral("DemoRoot/Account")) {
+                    dec.action = LocalMergeApprovedAction::Rename;
+                    dec.targetFolderName = QStringLiteral("Account_renamed");
+                } else {
+                    dec.action = LocalMergeApprovedAction::MergeDirectory;
+                }
+                return dec;
+            },
+            [&](const LocalMergePlanEntry &, const LocalMergeBackendCapabilities &, qsizetype, LocalMergeConflictProgress) {
+                ++syncFileCalls;
+                LocalFileConflictDecision dec;
+                dec.accepted = true;
+                dec.action = (syncFileCalls == 1)
+                    ? LocalMergeApprovedAction::Rename
+                    : LocalMergeApprovedAction::Skip;
+                if (dec.action == LocalMergeApprovedAction::Rename) {
+                    dec.targetFileName = QStringLiteral("renamed.txt");
+                } else {
+                    dec.applyPolicy = LocalMergeApplyPolicy::SkipAllFileConflicts;
+                }
+                return dec;
+            });
+
+        int asyncFolderCalls = 0;
+        int asyncFileCalls = 0;
+        LocalMergeConflictSession session(&planAsync, sessionCaps);
+        while (!session.isTerminal()) {
+            const auto step = session.advance();
+            if (step.kind == LocalMergeConflictSession::StepKind::NeedFolderDecision) {
+                ++asyncFolderCalls;
+                LocalFolderConflictDecision dec;
+                dec.accepted = true;
+                if (step.entry.relativePath == QStringLiteral("DemoRoot/Account")) {
+                    dec.action = LocalMergeApprovedAction::Rename;
+                    dec.targetFolderName = QStringLiteral("Account_renamed");
+                } else {
+                    dec.action = LocalMergeApprovedAction::MergeDirectory;
+                }
+                verify(session.submitFolderDecision(dec), "Equivalence folder submit succeeds");
+            } else if (step.kind == LocalMergeConflictSession::StepKind::NeedFileDecision) {
+                ++asyncFileCalls;
+                LocalFileConflictDecision dec;
+                dec.accepted = true;
+                dec.action = (asyncFileCalls == 1)
+                    ? LocalMergeApprovedAction::Rename
+                    : LocalMergeApprovedAction::Skip;
+                if (dec.action == LocalMergeApprovedAction::Rename) {
+                    dec.targetFileName = QStringLiteral("renamed.txt");
+                } else {
+                    dec.applyPolicy = LocalMergeApplyPolicy::SkipAllFileConflicts;
+                }
+                verify(session.submitFileDecision(dec), "Equivalence file submit succeeds");
+            } else {
+                break;
+            }
+        }
+        const LocalMergeResolutionResult resAsync = session.result();
+
+        verify(syncFolderCalls == asyncFolderCalls && syncFileCalls == asyncFileCalls,
+               "Session and Resolver invoke identical prompt counts");
+        verify(resSync.completed == resAsync.completed
+                   && resSync.cancelled == resAsync.cancelled
+                   && resSync.folderPromptsShown == resAsync.folderPromptsShown
+                   && resSync.filePromptsShown == resAsync.filePromptsShown
+                   && resSync.nonConflictingAutoApproved == resAsync.nonConflictingAutoApproved
+                   && resSync.subtreesSkipped == resAsync.subtreesSkipped
+                   && resSync.renamedSubtreeEntriesRemapped == resAsync.renamedSubtreeEntriesRemapped
+                   && resSync.entriesRequiringStage3BRevalidation == resAsync.entriesRequiringStage3BRevalidation,
+               "Session and Resolver produce identical LocalMergeResolutionResult");
+        verify(planSync.entries.size() == planAsync.entries.size(),
+               "Session and Resolver produce identical entry count");
+        for (qsizetype idx = 0; idx < planSync.entries.size(); ++idx) {
+            const auto &a = planSync.entries.at(idx);
+            const auto &b = planAsync.entries.at(idx);
+            verify(a.relativePath == b.relativePath
+                       && a.destinationPath == b.destinationPath
+                       && a.classification == b.classification
+                       && a.approvedAction == b.approvedAction
+                       && a.decisionBinding.targetFileName == b.decisionBinding.targetFileName
+                       && a.decisionBinding.policyScope == b.decisionBinding.policyScope
+                       && a.decisionBinding.reason == b.decisionBinding.reason,
+                   "Session and Resolver produce identical per-entry mutations");
+        }
+    }
 
     qInfo("PASS: %d Stage 3A+FinalUXFixes LocalMergeDialogs GUI assertions verified", checks);
     return 0;

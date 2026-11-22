@@ -1135,7 +1135,7 @@ public:
 
                     const QFileInfo targetInfo(targetPath);
                     if (targetInfo.exists() || targetInfo.isSymLink()) {
-                        if (targetInfo.isDir()) {
+                        if (targetInfo.isDir() && !task->desc.isFolderMerge) {
                             return reject(trLocal("W miejscu docelowym istnieje katalog o tej samej nazwie",
                                                   "A directory with the same name exists at destination"));
                         }
@@ -2063,9 +2063,14 @@ private:
         task->stateBeforeCancel = task->state;
         task->cancelRequested = true;
         setState(task, TransferTaskState::Cancelling);
-        const bool accepted = task->desc.cancelHandler
-            ? task->desc.cancelHandler(job)
-            : job->kill(KJob::EmitResult);
+        bool accepted = false;
+        if (task->desc.cancelHandler) {
+            accepted = task->desc.cancelHandler(job);
+        } else if (auto *copyJob = qobject_cast<LocalFileCopyJob *>(job)) {
+            accepted = copyJob->requestCancelAsync();
+        } else {
+            accepted = job->kill(KJob::EmitResult);
+        }
         task = find(id);  // kill() may complete the job synchronously
         if (!task || isTerminalTransferState(task->state)) return true;
         if (!accepted) {
@@ -2280,6 +2285,9 @@ private:
         }
 
         task->job = job;
+        if (task->desc.configureJob) {
+            task->desc.configureJob(job, id);
+        }
 
         THISPC_TRACE("TransferQueueController: starting task #%llu (%s), type=%d, backend=%d, limit=%llu B/s",
                      static_cast<unsigned long long>(task->desc.id),

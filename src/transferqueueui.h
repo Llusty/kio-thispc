@@ -537,6 +537,87 @@ inline std::optional<bool> &clearHistoryPromptOverrideForTest()
 }
 #endif
 
+#ifdef THISPC_TEST_HARNESS
+inline bool &clearHistoryForceAsyncDialogForTest()
+{
+    static bool forceDialog = false;
+    return forceDialog;
+}
+#endif
+
+// SEC-046-22(a): Non-blocking, heap-allocated Clear History confirmation dialog.
+// Avoids nested QMessageBox::exec() loops and guards all continuations with
+// single-use finished()/destroyed() handlers + QPointer lifetime checks.
+inline QPointer<QMessageBox> promptClearHistoryConfirmationAsync(
+    QWidget *parent,
+    std::function<void(bool)> onDecision)
+{
+#ifdef THISPC_TEST_HARNESS
+    if (!clearHistoryForceAsyncDialogForTest()) {
+        if (clearHistoryPromptOverrideForTest().has_value()) {
+            const bool val = *clearHistoryPromptOverrideForTest();
+            if (onDecision) onDecision(val);
+            return {};
+        }
+        if (qEnvironmentVariableIsSet("THISPC_TEST_HARNESS")
+            || QGuiApplication::platformName() == QStringLiteral("offscreen")) {
+            if (onDecision) onDecision(true);
+            return {};
+        }
+    }
+#endif
+    auto *msgBox = new QMessageBox(parent);
+    msgBox->setObjectName(QStringLiteral("clearHistoryConfirmationBox"));
+    msgBox->setWindowModality(parent ? Qt::WindowModal : Qt::ApplicationModal);
+    msgBox->setIcon(QMessageBox::Question);
+    msgBox->setWindowTitle(isPolish() ? QStringLiteral("Wyczyść historię operacji")
+                                      : QStringLiteral("Clear Operation History"));
+    msgBox->setText(isPolish()
+        ? QStringLiteral("Czy na pewno chcesz wyczyścić zapisaną historię operacji?")
+        : QStringLiteral("Are you sure you want to clear the saved operation history?"));
+    msgBox->setInformativeText(isPolish()
+        ? QStringLiteral("Usunięte zostaną wyłącznie wpisy z dziennika historii transferów.\nŻadne pliki na dysku (ani źródłowe, ani docelowe) nie zostaną usunięte ani zmodyfikowane.")
+        : QStringLiteral("Only history log entries will be removed.\nNo actual files on disk (neither source nor destination) will be deleted or modified."));
+
+    auto *confirmBtn = msgBox->addButton(
+        isPolish() ? QStringLiteral("Wyczyść historię") : QStringLiteral("Clear History"),
+        QMessageBox::AcceptRole);
+    confirmBtn->setObjectName(QStringLiteral("confirmClearHistoryButton"));
+
+    auto *cancelBtn = msgBox->addButton(
+        isPolish() ? QStringLiteral("Anuluj") : QStringLiteral("Cancel"),
+        QMessageBox::RejectRole);
+    cancelBtn->setObjectName(QStringLiteral("cancelClearHistoryButton"));
+
+    msgBox->setDefaultButton(cancelBtn);
+
+    QPointer<QMessageBox> boxPtr(msgBox);
+    auto settled = std::make_shared<bool>(false);
+    auto sharedCb = std::make_shared<std::function<void(bool)>>(std::move(onDecision));
+
+    QObject::connect(msgBox, &QDialog::finished, msgBox, [boxPtr, confirmBtn, settled, sharedCb](int) {
+        if (*settled) return;
+        *settled = true;
+        const bool confirmed = (boxPtr && boxPtr->clickedButton() == static_cast<QAbstractButton *>(confirmBtn));
+        if (boxPtr) {
+            boxPtr->deleteLater();
+        }
+        if (sharedCb && *sharedCb) {
+            (*sharedCb)(confirmed);
+        }
+    });
+    QObject::connect(msgBox, &QObject::destroyed, [settled, sharedCb]() {
+        if (*settled) return;
+        *settled = true;
+        if (sharedCb && *sharedCb) {
+            (*sharedCb)(false);
+        }
+    });
+
+    msgBox->show();
+    return boxPtr;
+}
+
 inline bool promptClearHistoryConfirmation(QWidget *parent = nullptr)
 {
 #ifdef THISPC_TEST_HARNESS
@@ -845,11 +926,16 @@ public:
         });
 
         connect(m_clearHistoryButton, &QPushButton::clicked, this, [this] {
-            if (m_controller) {
-                if (promptClearHistoryConfirmation(this)) {
-                    m_controller->clearHistory(true);
-                }
+            if (!m_controller || m_activeClearHistoryBox) {
+                return;
             }
+            QPointer<TransferQueueSettingsWidget> self(this);
+            QPointer<TransferQueueController> ctrl(m_controller);
+            m_activeClearHistoryBox = promptClearHistoryConfirmationAsync(this, [self, ctrl](bool confirmed) {
+                if (confirmed && self && ctrl && self->m_controller == ctrl) {
+                    ctrl->clearHistory(true);
+                }
+            });
         });
 
         m_parallelRadio->setChecked(true);
@@ -1103,6 +1189,7 @@ private:
     QLabel *m_historyRetentionLabel = nullptr;
     QComboBox *m_historyRetentionCombo = nullptr;
     QPushButton *m_clearHistoryButton = nullptr;
+    QPointer<QMessageBox> m_activeClearHistoryBox;
     QLabel *m_drainingLabel = nullptr;
     bool m_updating = false;
 };
@@ -1761,11 +1848,16 @@ public:
             "Usuwa zakończone i anulowane zadania z widoku historii",
             "Removes completed and cancelled tasks from the history view"));
         connect(m_clearHistoryButton, &QToolButton::clicked, this, [this] {
-            if (m_controller) {
-                if (promptClearHistoryConfirmation(this)) {
-                    m_controller->clearHistory(true);
-                }
+            if (!m_controller || m_activeClearHistoryBox) {
+                return;
             }
+            QPointer<TransferQueueViewWidget> self(this);
+            QPointer<TransferQueueController> ctrl(m_controller);
+            m_activeClearHistoryBox = promptClearHistoryConfirmationAsync(this, [self, ctrl](bool confirmed) {
+                if (confirmed && self && ctrl && self->m_controller == ctrl) {
+                    ctrl->clearHistory(true);
+                }
+            });
         });
         globalControlsRow->addWidget(m_clearHistoryButton);
 
@@ -2001,7 +2093,7 @@ public:
 
     void promptCancelAll()
     {
-        if (!m_controller) return;
+        if (!m_controller || m_activeCancelAllBox) return;
         const TransferQueueSnapshot snap = m_controller->snapshot();
         const TransferQueueCounts counts = transferQueueCounts(snap);
         if (counts.active == 0 && counts.queued == 0) return;
@@ -2022,14 +2114,38 @@ public:
                                  "Already completed tasks (%3) will not be removed.")
                       .arg(counts.active).arg(counts.queued).arg(counts.completed);
 
-            QMessageBox box(QMessageBox::Question, title, text, QMessageBox::NoButton, this);
-            auto *yesBtn = box.addButton(trLocal("Anuluj zadania", "Cancel tasks"), QMessageBox::AcceptRole);
-            box.addButton(trLocal("Nie anuluj", "Do not cancel"), QMessageBox::RejectRole);
-            box.setDefaultButton(QMessageBox::Cancel);
-            box.exec();
-            if (box.clickedButton() == static_cast<QAbstractButton *>(yesBtn)) {
-                m_controller->cancelAll();
-            }
+            // SEC-046-22(a): Non-blocking heap QMessageBox guarded by QPointer<TransferQueueController>
+            // and QPointer<TransferQueueViewWidget> so controller/window destruction cannot UAF.
+            auto *box = new QMessageBox(QMessageBox::Question, title, text, QMessageBox::NoButton, this);
+            box->setObjectName(QStringLiteral("cancelAllConfirmationBox"));
+            box->setWindowModality(Qt::WindowModal);
+            auto *yesBtn = box->addButton(trLocal("Anuluj zadania", "Cancel tasks"), QMessageBox::AcceptRole);
+            yesBtn->setObjectName(QStringLiteral("confirmCancelAllButton"));
+            auto *noBtn = box->addButton(trLocal("Nie anuluj", "Do not cancel"), QMessageBox::RejectRole);
+            noBtn->setObjectName(QStringLiteral("rejectCancelAllButton"));
+            box->setDefaultButton(noBtn);
+
+            m_activeCancelAllBox = box;
+            QPointer<QMessageBox> boxPtr(box);
+            QPointer<TransferQueueViewWidget> self(this);
+            QPointer<TransferQueueController> ctrl(m_controller);
+            auto settled = std::make_shared<bool>(false);
+
+            connect(box, &QDialog::finished, box, [boxPtr, yesBtn, self, ctrl, settled](int) {
+                if (*settled) return;
+                *settled = true;
+                const bool confirmed = (boxPtr && boxPtr->clickedButton() == static_cast<QAbstractButton *>(yesBtn));
+                if (boxPtr) {
+                    boxPtr->deleteLater();
+                }
+                if (confirmed && self && ctrl && self->m_controller == ctrl) {
+                    ctrl->cancelAll();
+                }
+            });
+            connect(box, &QObject::destroyed, [settled]() {
+                *settled = true;
+            });
+            box->show();
         } else {
             m_controller->cancelAll();
         }
@@ -2176,6 +2292,8 @@ private:
     QToolButton *m_resumeAllButton = nullptr;
     QToolButton *m_cancelAllButton = nullptr;
     QToolButton *m_clearHistoryButton = nullptr;
+    QPointer<QMessageBox> m_activeClearHistoryBox;
+    QPointer<QMessageBox> m_activeCancelAllBox;
     QFrame *m_globalStatusBanner = nullptr;
     QLabel *m_globalStatusLabel = nullptr;
     bool m_confirmCancelAll = true;

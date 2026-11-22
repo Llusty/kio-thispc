@@ -366,6 +366,276 @@ int main(int argc, char *argv[])
                "R: second transaction targeting same already-replaced file fails closed on inode mismatch");
     }
 
+    // =========================================================================
+    // STAGE 1B.8 (SEC-046-07): CRASH RECOVERY JOURNAL HARDENING TESTS J1–J22
+    // =========================================================================
+    auto readFileRec = [](const QString &path) -> QByteArray {
+        QFile f(path);
+        return f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray{};
+    };
+    auto makeSignedRaw = [](const QMap<QString, QByteArray> &fields) -> QByteArray {
+        QByteArray body;
+        for (auto it = fields.cbegin(); it != fields.cend(); ++it) {
+            body += it.key().toLatin1() + '=' + it.value() + '\n';
+        }
+        const QByteArray digest = QCryptographicHash::hash(body, QCryptographicHash::Sha256).toHex();
+        return QByteArray("THISPC_MERGE_TX_V1\n") + body + QByteArray("CHECKSUM=") + digest + QByteArray("\nEND\n");
+    };
+    auto baseValidFields = [](const QString &txId, const QString &dstName = QStringLiteral("file.txt"),
+                              const QString &stageName = QStringLiteral("stage"),
+                              const QString &backupName = QStringLiteral(".thispc-replaced.file.txt")) -> QMap<QString, QByteArray> {
+        QMap<QString, QByteArray> m;
+        m.insert(QStringLiteral("TXID"), txId.toLatin1());
+        m.insert(QStringLiteral("PHASE"), "StagingDurable");
+        m.insert(QStringLiteral("ACTION"), "Overwrite");
+        m.insert(QStringLiteral("SRC"), QByteArray("/src/file.txt").toBase64());
+        m.insert(QStringLiteral("DST"), QByteArray("/dst/file.txt").toBase64());
+        m.insert(QStringLiteral("DSTNAME"), dstName.toUtf8().toBase64());
+        m.insert(QStringLiteral("STAGENAME"), stageName.toUtf8().toBase64());
+        m.insert(QStringLiteral("BACKUPNAME"), backupName.toUtf8().toBase64());
+        m.insert(QStringLiteral("NEWSHA256"), QByteArray(64, 'a'));
+        m.insert(QStringLiteral("PARENTSTAT"), "1,1,2,16877,0,0,0");
+        m.insert(QStringLiteral("SRCSTAT"), "1,1,3,33188,10,0,0");
+        m.insert(QStringLiteral("OLDSTAT"), "1,1,4,33188,10,0,0");
+        m.insert(QStringLiteral("NEWSTAT"), "1,1,5,33188,10,0,0");
+        m.insert(QStringLiteral("DURABLE"), "0");
+        return m;
+    };
+
+    // J1 — Valid legacy 0.45.1 PID.counter journal deserializes cleanly
+    {
+        LocalMergeTxJournalRecord rec;
+        const QByteArray raw = makeSignedRaw(baseValidFields(QStringLiteral("12345.1")));
+        verify(LocalMergeTxJournalRecord::deserializeSigned(raw, &rec)
+                   && rec.txId == QStringLiteral("12345.1")
+                   && rec.destFileName == QStringLiteral("file.txt"),
+               "J1: valid legacy 0.45.1 PID.counter journal accepted");
+    }
+
+    // J2 & J16 — Valid new cryptographic transaction ID + write/read roundtrip + uniqueness
+    {
+        QSet<QString> ids;
+        for (int i = 0; i < 32; ++i) {
+            const QString id = LocalMergeTxDetail::generateTxId();
+            verify(id.size() == 32 && LocalMergeTxValidation::isValidTxId(id),
+                   "J16: generateTxId produces valid 32-char hex ID");
+            ids.insert(id);
+        }
+        verify(ids.size() == 32, "J16: 32 consecutive transaction IDs are unique");
+
+        const QString j2Dir = tmp.filePath(QStringLiteral("j2_roundtrip"));
+        verify(QDir().mkpath(j2Dir), "j2 mkpath");
+        const int fd = ::open(QFile::encodeName(j2Dir).constData(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        verify(fd >= 0, "j2 open dir");
+        LocalMergeTxJournalRecord wrec;
+        wrec.txId = LocalMergeTxDetail::generateTxId();
+        wrec.destFileName = QStringLiteral("zażółć gęślą jaźń.txt");
+        wrec.stageFileName = QStringLiteral("stage");
+        wrec.replacedBackupName = QStringLiteral(".thispc-replaced.zażółć");
+        wrec.sourcePath = QStringLiteral("/src/zażółć gęślą jaźń.txt");
+        wrec.destinationPath = QStringLiteral("/dst/zażółć gęślą jaźń.txt");
+        const QString jName = QStringLiteral(".thispc-merge-tx.%1").arg(wrec.txId);
+        verify(LocalMergeTxDetail::writeJournalAtomically(fd, jName, wrec), "J2: writeJournalAtomically succeeds");
+        LocalMergeTxJournalRecord rrec;
+        verify(LocalMergeTxDetail::readJournalFile(fd, jName, &rrec)
+                   && rrec.txId == wrec.txId
+                   && rrec.destFileName == wrec.destFileName,
+               "J2 & J9: new journal roundtrip preserves valid Unicode filename");
+        ::close(fd);
+    }
+
+    // J3, J4, J5, J6, J7, J8, J19 — Strict deserialization rejections
+    {
+        LocalMergeTxJournalRecord rec;
+        const QString txId = LocalMergeTxDetail::generateTxId();
+
+        // J3: Parent traversal
+        verify(!LocalMergeTxJournalRecord::deserializeSigned(
+                   makeSignedRaw(baseValidFields(txId, QStringLiteral("../outside"))), &rec),
+               "J3: DSTNAME traversal ../outside rejected");
+        verify(!LocalMergeTxJournalRecord::deserializeSigned(
+                   makeSignedRaw(baseValidFields(txId, QStringLiteral("ok.txt"), QStringLiteral("../outside"))), &rec),
+               "J3: STAGENAME traversal ../outside rejected");
+        verify(!LocalMergeTxJournalRecord::deserializeSigned(
+                   makeSignedRaw(baseValidFields(txId, QStringLiteral("ok.txt"), QStringLiteral("stage"), QStringLiteral("../outside"))), &rec),
+               "J3: BACKUPNAME traversal ../outside rejected");
+
+        // J4: Absolute path
+        verify(!LocalMergeTxJournalRecord::deserializeSigned(
+                   makeSignedRaw(baseValidFields(txId, QStringLiteral("/tmp/evil"))), &rec),
+               "J4: absolute path in DSTNAME rejected");
+
+        // J5: Embedded path separators
+        verify(!LocalMergeTxJournalRecord::deserializeSigned(
+                   makeSignedRaw(baseValidFields(txId, QStringLiteral("sub/nested.txt"))), &rec),
+               "J5: path separator in DSTNAME rejected");
+
+        // J6: Embedded NUL byte
+        {
+            auto fields = baseValidFields(txId);
+            QByteArray nulName("stage");
+            nulName.append('\0');
+            nulName.append("evil");
+            fields[QStringLiteral("STAGENAME")] = nulName.toBase64();
+            verify(!LocalMergeTxJournalRecord::deserializeSigned(makeSignedRaw(fields), &rec),
+                   "J6: embedded NUL in Base64 field rejected");
+        }
+
+        // J7: Invalid UTF-8 sequence
+        {
+            auto fields = baseValidFields(txId);
+            fields[QStringLiteral("DSTNAME")] = QByteArray("\xff\xfe\x80").toBase64();
+            verify(!LocalMergeTxJournalRecord::deserializeSigned(makeSignedRaw(fields), &rec),
+                   "J7: invalid UTF-8 sequence rejected");
+        }
+
+        // J8: Invalid Base64
+        {
+            auto fields = baseValidFields(txId);
+            fields[QStringLiteral("DSTNAME")] = QByteArray("!!!not-valid-base64!!!");
+            verify(!LocalMergeTxJournalRecord::deserializeSigned(makeSignedRaw(fields), &rec),
+                   "J8: invalid Base64 rejected");
+        }
+
+        // J19: Corrupt checksum
+        {
+            QByteArray raw = makeSignedRaw(baseValidFields(txId));
+            raw.replace("DURABLE=0", "DURABLE=1");
+            verify(!LocalMergeTxJournalRecord::deserializeSigned(raw, &rec),
+                   "J19: corrupt checksum rejected");
+        }
+    }
+
+    // J10 & J11 & J20 — Symlinked txDir, symlinked journal, and non-0700 txDir permissions
+    {
+        const QString base = tmp.filePath(QStringLiteral("j10_11_20"));
+        const QString dst = base + QStringLiteral("/dst");
+        const QString extDir = base + QStringLiteral("/external_dir");
+        const QString extFile = base + QStringLiteral("/external_secret.txt");
+        verify(QDir().mkpath(dst) && QDir().mkpath(extDir) && writeFile(extFile, "EXTERNAL"), "j10 setup");
+
+        // J10: txDir is a symlink
+        const QString txId10 = LocalMergeTxDetail::generateTxId();
+        verify(QFile::link(extDir, dst + QStringLiteral("/.thispc-tx.") + txId10), "j10 link txDir");
+        const auto rep10 = LocalMergeRecoveryInspector::inspectDirectory(dst, true);
+        verify(rep10.anyManualInterventionRequired && QFileInfo::exists(extDir),
+               "J10: symlinked txDir rejected without following");
+        QFile::remove(dst + QStringLiteral("/.thispc-tx.") + txId10);
+
+        // J11: journal inside txDir is a symlink
+        const QString txId11 = LocalMergeTxDetail::generateTxId();
+        const QString txDir11 = dst + QStringLiteral("/.thispc-tx.") + txId11;
+        verify(QDir().mkpath(txDir11) && ::chmod(QFile::encodeName(txDir11).constData(), 0700) == 0, "j11 mk txDir");
+        verify(QFile::link(extFile, txDir11 + QStringLiteral("/.thispc-merge-tx.") + txId11), "j11 link journal");
+        const auto rep11 = LocalMergeRecoveryInspector::inspectDirectory(dst, true);
+        verify(rep11.anyManualInterventionRequired && QFileInfo::exists(extFile) && readFileRec(extFile) == "EXTERNAL",
+               "J11: symlinked journal rejected without reading or mutating external file");
+        QFile::remove(txDir11 + QStringLiteral("/.thispc-merge-tx.") + txId11);
+        QDir().rmdir(txDir11);
+
+        // J20: txDir has overly permissive mode 0755 instead of 0700
+        const QString txId20 = LocalMergeTxDetail::generateTxId();
+        const QString txDir20 = dst + QStringLiteral("/.thispc-tx.") + txId20;
+        verify(QDir().mkpath(txDir20) && ::chmod(QFile::encodeName(txDir20).constData(), 0755) == 0, "j20 mk 0755 txDir");
+        const auto rep20 = LocalMergeRecoveryInspector::inspectDirectory(dst, true);
+        verify(rep20.anyManualInterventionRequired && QFileInfo::exists(txDir20),
+               "J20: permissive 0755 txDir flagged ManualInterventionRequired without mutation");
+    }
+
+    // J12, J13, J14, J17, J18 — Directory swap, foreign file, .tmp handling, forged malicious journal, default non-destructive
+    {
+        const QString base = tmp.filePath(QStringLiteral("j12_13_14_17"));
+        const QString dst = base + QStringLiteral("/dst");
+        const QString outsideSentinel = base + QStringLiteral("/outside_sentinel.txt");
+        verify(QDir().mkpath(dst) && writeFile(outsideSentinel, "UNTOUCHED"), "j17 setup");
+        const QString targetFile = dst + QStringLiteral("/real.txt");
+        verify(writeFile(targetFile, "OLD-DATA"), "j17 write real.txt");
+
+        struct stat parentSt {};
+        struct stat oldSt {};
+        verify(::lstat(QFile::encodeName(dst).constData(), &parentSt) == 0
+                   && ::lstat(QFile::encodeName(targetFile).constData(), &oldSt) == 0, "j17 stats");
+
+        // J17: Malicious journal with valid recomputed SHA-256 pointing STAGENAME at ../../outside_sentinel.txt
+        const QString txId17 = LocalMergeTxDetail::generateTxId();
+        const QString txDir17 = dst + QStringLiteral("/.thispc-tx.") + txId17;
+        verify(QDir().mkpath(txDir17) && ::chmod(QFile::encodeName(txDir17).constData(), 0700) == 0, "j17 txDir");
+        auto maliciousFields = baseValidFields(txId17, QStringLiteral("real.txt"), QStringLiteral("../../outside_sentinel.txt"));
+        maliciousFields[QStringLiteral("PARENTSTAT")] = LocalMergeTxStatSnapshot::fromStat(parentSt).encode().toLatin1();
+        maliciousFields[QStringLiteral("OLDSTAT")] = LocalMergeTxStatSnapshot::fromStat(oldSt).encode().toLatin1();
+        verify(writeFile(txDir17 + QStringLiteral("/.thispc-merge-tx.") + txId17, makeSignedRaw(maliciousFields)), "j17 write forged journal");
+        const auto rep17 = LocalMergeRecoveryInspector::inspectDirectory(dst, true);
+        verify(rep17.anyManualInterventionRequired && readFileRec(outsideSentinel) == "UNTOUCHED",
+               "J17: forged journal traversal rejected even under resolveUnambiguous=true; outside sentinel untouched");
+        QFile::remove(txDir17 + QStringLiteral("/.thispc-merge-tx.") + txId17);
+        QDir().rmdir(txDir17);
+
+        // J13: Foreign file inside valid txDir preserved
+        const QString txId13 = LocalMergeTxDetail::generateTxId();
+        const QString txDir13 = dst + QStringLiteral("/.thispc-tx.") + txId13;
+        verify(QDir().mkpath(txDir13) && ::chmod(QFile::encodeName(txDir13).constData(), 0700) == 0
+                   && writeFile(txDir13 + QStringLiteral("/foreign_user_note.txt"), "KEEP-ME"), "j13 setup");
+        const auto rep13 = LocalMergeRecoveryInspector::inspectDirectory(dst, true);
+        verify(rep13.anyManualInterventionRequired
+                   && readFileRec(txDir13 + QStringLiteral("/foreign_user_note.txt")) == "KEEP-ME",
+               "J13: foreign file inside txDir preserved untouched");
+        QFile::remove(txDir13 + QStringLiteral("/foreign_user_note.txt"));
+        QDir().rmdir(txDir13);
+
+        // J14 + J18 + J12: Valid StagedOnlyAborted with orphaned .tmp, default non-destructive, then swap attack, then clean resolve
+        const QString txId14 = LocalMergeTxDetail::generateTxId();
+        const QString txDir14 = dst + QStringLiteral("/.thispc-tx.") + txId14;
+        verify(QDir().mkpath(txDir14) && ::chmod(QFile::encodeName(txDir14).constData(), 0700) == 0, "j14 txDir");
+        const QString stagePath = txDir14 + QStringLiteral("/stage");
+        verify(writeFile(stagePath, "STAGED-NEW"), "j14 stage");
+        struct stat stageSt {};
+        verify(::lstat(QFile::encodeName(stagePath).constData(), &stageSt) == 0, "j14 stageStat");
+        const int txFd14 = ::open(QFile::encodeName(txDir14).constData(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        verify(txFd14 >= 0, "j14 open");
+        LocalMergeTxJournalRecord rec14;
+        rec14.txId = txId14;
+        rec14.phase = LocalMergeTxPhase::StagingDurable;
+        rec14.sourcePath = QStringLiteral("/src/real.txt");
+        rec14.destinationPath = targetFile;
+        rec14.destFileName = QStringLiteral("real.txt");
+        rec14.stageFileName = QStringLiteral("stage");
+        rec14.replacedBackupName = QStringLiteral(".thispc-replaced.real.txt");
+        rec14.parentStat = LocalMergeTxStatSnapshot::fromStat(parentSt);
+        rec14.expectedDestStat = LocalMergeTxStatSnapshot::fromStat(oldSt);
+        rec14.stageStat = LocalMergeTxStatSnapshot::fromStat(stageSt);
+        verify(LocalMergeTxDetail::writeJournalAtomically(txFd14, QStringLiteral(".thispc-merge-tx.") + txId14, rec14), "j14 write journal");
+        ::close(txFd14);
+        const QString tmpPath = txDir14 + QStringLiteral("/.thispc-merge-tx.") + txId14 + QStringLiteral(".tmp");
+        verify(writeFile(tmpPath, "PARTIAL-TMP"), "j14 write .tmp");
+
+        // J18: Default resolveUnambiguous=false does NOT delete anything
+        const auto repDefault = LocalMergeRecoveryInspector::inspectDirectory(dst);
+        verify(repDefault.anyIncompleteFound && !repDefault.anyManualInterventionRequired
+                   && QFileInfo::exists(stagePath) && QFileInfo::exists(tmpPath),
+               "J18: default inspectDirectory(dst) is non-destructive");
+
+        // J12: Replace txDir between inspection and cleanup -> aborts mutation!
+        const auto repSwap = LocalMergeRecoveryInspector::inspectDirectory(dst, true, [&](const QString &name) {
+            QDir(dst).rename(name, name + QStringLiteral("_moved"));
+            QDir(dst).mkdir(name);
+            ::chmod(QFile::encodeName(dst + QLatin1Char('/') + name).constData(), 0700);
+        });
+        verify(repSwap.anyManualInterventionRequired
+                   && QFileInfo::exists(dst + QStringLiteral("/.thispc-tx.") + txId14 + QStringLiteral("_moved/stage")),
+               "J12: txDir replacement before cleanup aborts mutation safely");
+        QDir().rmdir(txDir14);
+        QDir(dst).rename(QStringLiteral(".thispc-tx.") + txId14 + QStringLiteral("_moved"),
+                         QStringLiteral(".thispc-tx.") + txId14);
+
+        // J14 clean resolve: unambiguous StagedOnlyAborted with valid regular .tmp cleans up completely
+        const auto repClean = LocalMergeRecoveryInspector::inspectDirectory(dst, true);
+        verify(repClean.findings.size() == 1
+                   && repClean.findings.first().status == LocalMergeRecoveryStatus::StagedOnlyAborted
+                   && !QFileInfo::exists(txDir14)
+                   && readFileRec(targetFile) == "OLD-DATA",
+               "J14: unambiguous StagedOnlyAborted with safe .tmp cleans up cleanly while preserving OLD");
+    }
+
     qInfo("PASS: %d Stage 3B.1 LocalMergeRecovery & Transaction Journal assertions verified", checks);
     return 0;
 }

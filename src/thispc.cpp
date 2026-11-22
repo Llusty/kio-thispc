@@ -1,10 +1,12 @@
 /*
  * kio-thispc - KF6 KIO worker providing thispc:/
  *
- * Version 0.45.1
+ * Version 0.45.2
  * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
  */
+
+#include "thispcconfinement.h"
 
 #include <KIO/UDSEntry>
 #include <KIO/WorkerBase>
@@ -57,6 +59,8 @@ struct VolumeInfo
     bool removable = false;
     bool isMounted = true;
     bool isMtp = false;
+    struct stat mountStat {};
+    bool mountStatValid = false;
     QString targetUrl;
     QString iconName;
 };
@@ -373,6 +377,7 @@ std::optional<VolumeInfo> volumeFromSolid(const Solid::Device &device)
     info.id = stableId(key);
     info.udi = device.udi();
     info.mountPoint = mountPoint;
+    info.mountStatValid = ThisPcConfinement::captureMountIdentity(mountPoint, &info.mountStat);
     info.fileSystem =
         !volume->fsType().isEmpty()
             ? volume->fsType()
@@ -408,6 +413,7 @@ VolumeInfo rootFallback()
     info.id = stableId(QStringLiteral("root:/"));
     info.name = QStringLiteral("System");
     info.mountPoint = QStringLiteral("/");
+    info.mountStatValid = ThisPcConfinement::captureMountIdentity(info.mountPoint, &info.mountStat);
     info.fileSystem = QString::fromUtf8(storage.fileSystemType());
     info.totalBytes = storage.bytesTotal();
     info.availableBytes = storage.bytesAvailable();
@@ -913,34 +919,19 @@ KIO::UDSEntry volumeEntry(const VolumeInfo &volume)
     return entry;
 }
 
-QStringList pathParts(const QUrl &url)
-{
-    return url.path().split(
-        QLatin1Char('/'),
-        Qt::SkipEmptyParts);
-}
-
-QUrl redirectedLocalUrl(
+ThisPcConfinement::ConfinementResult redirectedLocalUrl(
     const VolumeInfo &volume,
-    const QStringList &parts)
+    const QUrl &url)
 {
-    if (volume.isMtp) {
-        return QUrl(volume.targetUrl);
-    }
-
-    QString localPath = volume.mountPoint;
-
-    if (parts.size() > 1) {
-        QStringList rest = parts;
-        rest.removeFirst();
-
-        localPath =
-            QDir(volume.mountPoint)
-                .filePath(rest.join(QLatin1Char('/')));
-    }
-
-    return QUrl::fromLocalFile(
-        QDir::cleanPath(localPath));
+    // SEC-046-17: Enforce strict mount-point confinement with production
+    // mount-root identity verification (st_dev, st_ino).
+    return ThisPcConfinement::redirectVolumeUrl(
+        url,
+        volume.mountPoint,
+        volume.mountStat,
+        volume.mountStatValid,
+        volume.isMtp,
+        volume.targetUrl);
 }
 
 } // namespace
@@ -960,7 +951,12 @@ public:
     KIO::WorkerResult listDir(
         const QUrl &url) override
     {
-        const QStringList parts = pathParts(url);
+        QStringList parts;
+        int parseErr = 0;
+        QString parseDetail;
+        if (!ThisPcConfinement::parseThisPcUrl(url, &parts, &parseErr, &parseDetail)) {
+            return KIO::WorkerResult::fail(parseErr, parseDetail);
+        }
 
         if (parts.isEmpty()) {
             KIO::UDSEntryList entries;
@@ -990,8 +986,14 @@ public:
                 url.toDisplayString());
         }
 
-        redirection(
-            redirectedLocalUrl(*volume, parts));
+        const auto resolved = redirectedLocalUrl(*volume, url);
+        if (!resolved.ok) {
+            return KIO::WorkerResult::fail(
+                resolved.kioError,
+                resolved.errorDetail);
+        }
+
+        redirection(resolved.redirectedUrl);
 
         return KIO::WorkerResult::pass();
     }
@@ -999,7 +1001,12 @@ public:
     KIO::WorkerResult stat(
         const QUrl &url) override
     {
-        const QStringList parts = pathParts(url);
+        QStringList parts;
+        int parseErr = 0;
+        QString parseDetail;
+        if (!ThisPcConfinement::parseThisPcUrl(url, &parts, &parseErr, &parseDetail)) {
+            return KIO::WorkerResult::fail(parseErr, parseDetail);
+        }
 
         if (parts.isEmpty()) {
             statEntry(rootEntry());
@@ -1025,8 +1032,14 @@ public:
                 url.toDisplayString());
         }
 
-        redirection(
-            redirectedLocalUrl(*volume, parts));
+        const auto resolved = redirectedLocalUrl(*volume, url);
+        if (!resolved.ok) {
+            return KIO::WorkerResult::fail(
+                resolved.kioError,
+                resolved.errorDetail);
+        }
+
+        redirection(resolved.redirectedUrl);
 
         return KIO::WorkerResult::pass();
     }
@@ -1034,7 +1047,12 @@ public:
     KIO::WorkerResult mimetype(
         const QUrl &url) override
     {
-        const QStringList parts = pathParts(url);
+        QStringList parts;
+        int parseErr = 0;
+        QString parseDetail;
+        if (!ThisPcConfinement::parseThisPcUrl(url, &parts, &parseErr, &parseDetail)) {
+            return KIO::WorkerResult::fail(parseErr, parseDetail);
+        }
 
         if (parts.isEmpty()) {
             mimeType(QStringLiteral("inode/directory"));
@@ -1060,8 +1078,14 @@ public:
                 url.toDisplayString());
         }
 
-        redirection(
-            redirectedLocalUrl(*volume, parts));
+        const auto resolved = redirectedLocalUrl(*volume, url);
+        if (!resolved.ok) {
+            return KIO::WorkerResult::fail(
+                resolved.kioError,
+                resolved.errorDetail);
+        }
+
+        redirection(resolved.redirectedUrl);
 
         return KIO::WorkerResult::pass();
     }

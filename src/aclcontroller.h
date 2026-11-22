@@ -3,6 +3,7 @@
 
 #include "aclprovider.h"
 #include <fcntl.h>
+#include <functional>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -10,6 +11,11 @@ class AclController
 {
 public:
     struct Result { bool success = false; AclData data; QString errorMessage; };
+    using PreWriteHook = std::function<void(const QString &path)>;
+
+    // Narrowly scoped deterministic test hook invoked after initial target pinning
+    // and before final identity revalidation / ACL mutation (no-op in production).
+    static void setPreWriteHook(PreWriteHook hook) { preWriteHookStorage() = std::move(hook); }
 
     static bool validateEntries(const QList<AclEntryData> &entries, bool allowEmpty, QString *error = nullptr)
     {
@@ -41,81 +47,120 @@ public:
         if (!validateEntries(requested.accessEntries, false, &error)) { out.errorMessage = error; return out; }
         if (requested.isDirectory && !validateEntries(requested.defaultEntries, true, &error)) { out.errorMessage = error; return out; }
         if (!requested.isDirectory && !requested.defaultEntries.isEmpty()) { out.errorMessage = QStringLiteral("Default ACL is only valid for directories."); return out; }
-        const QByteArray path = QFile::encodeName(requested.path);
-        struct stat st {};
-        if (::lstat(path.constData(), &st) != 0) {
-            out.errorMessage = qt_error_string(errno);
-            return out;
+
+        struct AclGuard {
+            acl_t handle = nullptr;
+            explicit AclGuard(acl_t h = nullptr) : handle(h) {}
+            ~AclGuard() { if (handle) acl_free(handle); }
+            AclGuard(const AclGuard &) = delete;
+            AclGuard &operator=(const AclGuard &) = delete;
+        };
+
+        AclGuard access(build(requested.accessEntries, &error));
+        if (!access.handle) { out.errorMessage = error; return out; }
+        AclGuard def;
+        if (requested.isDirectory && !requested.defaultEntries.isEmpty()) {
+            def.handle = build(requested.defaultEntries, &error);
+            if (!def.handle) { out.errorMessage = error; return out; }
         }
-        if (S_ISLNK(st.st_mode)) {
-            out.errorMessage = QStringLiteral("Refusing to write ACL to a symbolic link.");
+
+        // SEC-046-11: Open target anchored from "/" with O_PATH | O_NOFOLLOW | O_CLOEXEC.
+        // Never follows ancestor or leaf symlinks, never blocks on FIFOs/devices, and handles
+        // owned unreadable (mode 0000) regular files and directories without pathname fallbacks.
+        struct stat st {};
+        int openErr = 0;
+        AclFsDetail::UniqueFd targetFd = AclFsDetail::openAnchoredNoSymlinks(requested.path, &st, &openErr);
+        if (!targetFd.valid()) {
+            if (openErr == ELOOP) {
+                out.errorMessage = QStringLiteral("Refusing to write ACL to a symbolic link.");
+            } else if (openErr == ENOTSUP) {
+                out.errorMessage = QStringLiteral("POSIX ACL is not supported for this special file type.");
+            } else {
+                out.errorMessage = qt_error_string(openErr ? openErr : EINVAL);
+            }
             return out;
         }
         if (bool(S_ISDIR(st.st_mode)) != requested.isDirectory) {
             out.errorMessage = QStringLiteral("Target file type changed before ACL write.");
             return out;
         }
-        acl_t access = build(requested.accessEntries, &error);
-        if (!access) { out.errorMessage = error; return out; }
-        if (!requested.isDirectory) {
-            const int fd = ::open(path.constData(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
-            if (fd >= 0) {
-                struct stat fst {};
-                if (::fstat(fd, &fst) != 0 || fst.st_dev != st.st_dev || fst.st_ino != st.st_ino || S_ISLNK(fst.st_mode)) {
-                    ::close(fd);
-                    acl_free(access);
-                    out.errorMessage = QStringLiteral("Target identity changed before ACL write.");
-                    return out;
-                }
-                if (acl_set_fd(fd, access) != 0) {
-                    out.errorMessage = qt_error_string(errno);
-                    ::close(fd);
-                    acl_free(access);
-                    return out;
-                }
-                ::close(fd);
-            } else if (errno == ELOOP) {
-                acl_free(access);
-                out.errorMessage = QStringLiteral("Refusing to write ACL to a symbolic link.");
-                return out;
-            } else {
-                struct stat recheck {};
-                if (::lstat(path.constData(), &recheck) != 0 || S_ISLNK(recheck.st_mode)
-                    || recheck.st_dev != st.st_dev || recheck.st_ino != st.st_ino) {
-                    acl_free(access);
-                    out.errorMessage = QStringLiteral("Target identity changed before ACL write.");
-                    return out;
-                }
-                if (acl_set_file(path.constData(), ACL_TYPE_ACCESS, access) != 0) {
-                    out.errorMessage = qt_error_string(errno);
-                    acl_free(access);
-                    return out;
-                }
-            }
-        } else {
-            if (acl_set_file(path.constData(), ACL_TYPE_ACCESS, access) != 0) { out.errorMessage = qt_error_string(errno); acl_free(access); return out; }
+        if (st.st_nlink == 0) {
+            out.errorMessage = QStringLiteral("Target disappeared before ACL write.");
+            return out;
         }
-        acl_free(access);
+        if (requested.statIdentityValid
+            && (quint64(st.st_dev) != requested.statDev || quint64(st.st_ino) != requested.statIno)) {
+            out.errorMessage = QStringLiteral("Target identity changed before ACL write.");
+            return out;
+        }
+
+        if (preWriteHookStorage()) {
+            preWriteHookStorage()(requested.path);
+            // Revalidate both the pinned FD and the pathname after the hook (detects
+            // mid-operation replacement, unlink, leaf symlink swap, or ancestor symlink swap).
+            struct stat curFdSt {};
+            if (::fstat(targetFd.fd, &curFdSt) != 0
+                || curFdSt.st_nlink == 0
+                || curFdSt.st_dev != st.st_dev
+                || curFdSt.st_ino != st.st_ino) {
+                out.errorMessage = QStringLiteral("Target identity changed before ACL write.");
+                return out;
+            }
+            struct stat recheckSt {};
+            int recheckErr = 0;
+            AclFsDetail::UniqueFd recheckFd =
+                AclFsDetail::openAnchoredNoSymlinks(requested.path, &recheckSt, &recheckErr);
+            if (!recheckFd.valid()
+                || recheckSt.st_dev != st.st_dev
+                || recheckSt.st_ino != st.st_ino
+                || bool(S_ISDIR(recheckSt.st_mode)) != requested.isDirectory) {
+                out.errorMessage = (recheckErr == ELOOP)
+                    ? QStringLiteral("Refusing to write ACL to a symbolic link.")
+                    : QStringLiteral("Target identity changed before ACL write.");
+                return out;
+            }
+        }
+
+        // Write ACCESS ACL strictly through the pinned descriptor (/proc/self/fd/<fd>).
+        // Never falls back to raw pathname-based acl_set_file(requested.path, ...).
+        const QByteArray procPath = AclFsDetail::procFdPath(targetFd.fd);
+        if (acl_set_file(procPath.constData(), ACL_TYPE_ACCESS, access.handle) != 0) {
+            out.errorMessage = qt_error_string(errno);
+            return out;
+        }
+
         if (requested.isDirectory) {
             struct stat dirCheck {};
-            if (::lstat(path.constData(), &dirCheck) != 0 || S_ISLNK(dirCheck.st_mode)
-                || !S_ISDIR(dirCheck.st_mode) || dirCheck.st_dev != st.st_dev || dirCheck.st_ino != st.st_ino) {
+            if (::fstat(targetFd.fd, &dirCheck) != 0
+                || !S_ISDIR(dirCheck.st_mode)
+                || dirCheck.st_nlink == 0
+                || dirCheck.st_dev != st.st_dev
+                || dirCheck.st_ino != st.st_ino) {
                 out.errorMessage = QStringLiteral("Directory identity changed before default ACL write.");
                 return out;
             }
             if (requested.defaultEntries.isEmpty()) {
-                if (acl_delete_def_file(path.constData()) != 0 && errno != ENODATA) { out.errorMessage = qt_error_string(errno); return out; }
+                if (acl_delete_def_file(procPath.constData()) != 0 && errno != ENODATA) {
+                    out.errorMessage = qt_error_string(errno);
+                    return out;
+                }
             } else {
-                acl_t def = build(requested.defaultEntries, &error); if (!def) { out.errorMessage = error; return out; }
-                if (acl_set_file(path.constData(), ACL_TYPE_DEFAULT, def) != 0) { out.errorMessage = qt_error_string(errno); acl_free(def); return out; } acl_free(def);
+                if (acl_set_file(procPath.constData(), ACL_TYPE_DEFAULT, def.handle) != 0) {
+                    out.errorMessage = qt_error_string(errno);
+                    return out;
+                }
             }
         }
-        out.data = AclProvider::load(requested.path, true, false, requested.isDirectory, false);
+
+        // Read-back verification strictly through the same pinned descriptor.
+        out.data = AclProvider::loadFromFd(targetFd.fd, requested.path, st, requested.isDirectory, false);
         if (!out.data.canRead()) { out.errorMessage = out.data.errorMessage; return out; }
-        if (!equivalent(requested.accessEntries, out.data.accessEntries) || (requested.isDirectory && !equivalent(requested.defaultEntries, out.data.defaultEntries))) {
+        if (!equivalent(requested.accessEntries, out.data.accessEntries)
+            || (requested.isDirectory && !equivalent(requested.defaultEntries, out.data.defaultEntries))) {
             out.errorMessage = QStringLiteral("ACL read-back did not match the requested entries."); return out;
         }
-        out.success = true; return out;
+        out.success = true;
+        return out;
     }
 
     static QList<AclEntryData> minimalFromMode(int mode)
@@ -133,6 +178,11 @@ public:
     }
 
 private:
+    static PreWriteHook &preWriteHookStorage()
+    {
+        static PreWriteHook hook;
+        return hook;
+    }
     static bool fail(QString *error, const QString &message) { if (error) *error = message; return false; }
     static acl_t build(const QList<AclEntryData> &entries, QString *error)
     {

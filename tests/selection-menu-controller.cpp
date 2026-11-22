@@ -102,6 +102,37 @@ int main(int argc, char **argv)
     verify(!controller.canPrintUrl(remote, false), "KIO URL is not printable");
     verify(!controller.canPrintUrl(localFolder, true), "folder is not printable");
 
+    // P1 FIFO GUI-hang regression: unconnected FIFO, symlink-to-FIFO, and broken symlink
+    // must never block in open(O_RDONLY) / wait_for_partner on the GUI thread.
+    {
+        const QString fifoPath = temporary.filePath(QStringLiteral("test_unconnected.fifo"));
+        verify(::mkfifo(QFile::encodeName(fifoPath).constData(), 0600) == 0, "FIFO fixture created");
+        const QString symToFifo = temporary.filePath(QStringLiteral("sym_to_fifo"));
+        verify(::symlink(QFile::encodeName(fifoPath).constData(), QFile::encodeName(symToFifo).constData()) == 0,
+               "symlink-to-FIFO fixture created");
+        const QString brokenSym = temporary.filePath(QStringLiteral("broken_sym"));
+        verify(::symlink("/nonexistent/thispc/fifo/target", QFile::encodeName(brokenSym).constData()) == 0,
+               "broken symlink fixture created");
+
+        const QUrl fifoUrl = QUrl::fromLocalFile(fifoPath);
+        const QUrl symFifoUrl = QUrl::fromLocalFile(symToFifo);
+        const QUrl brokenUrl = QUrl::fromLocalFile(brokenSym);
+
+        QElapsedTimer timer;
+        timer.start();
+        verify(!controller.canPrintUrl(fifoUrl, false), "unconnected FIFO is not printable and does not hang");
+        verify(!controller.isLocalImageUrl(fifoUrl, false), "unconnected FIFO is not image and does not hang");
+        verify(!controller.canSetWallpaper(fifoUrl, false), "unconnected FIFO cannot be wallpaper");
+        verify(!controller.canPrintUrl(symFifoUrl, false), "symlink-to-FIFO does not hang");
+        verify(!controller.isLocalImageUrl(symFifoUrl, false), "symlink-to-FIFO is not image");
+        verify(!controller.canPrintUrl(brokenUrl, false), "broken symlink is not printable");
+        verify(!thispcIsArchiveCandidate(fifoUrl, false), "unconnected FIFO is not archive candidate");
+        verify(!thispcIsArchiveCandidate(symFifoUrl, false), "symlink-to-FIFO is not archive candidate");
+        QMenu fifoMenu(&parent);
+        controller.addOpenWithSubmenu(fifoMenu, {fifoUrl});
+        verify(timer.elapsed() < 1000, "FIFO context-menu inspection completed promptly (<1000ms) without blocking");
+    }
+
     QMenu empty(&parent);
     controller.addOpenWithSubmenu(empty, {});
     controller.addSendToSubmenu(empty, {}, {});

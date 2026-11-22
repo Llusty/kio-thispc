@@ -81,7 +81,10 @@ public:
             else if (!S_ISREG(root.identity.st_mode) && !S_ISDIR(root.identity.st_mode))
                 item.reason = QStringLiteral("Symlink or unsupported entry (no target access)");
             else {
-                QStorageInfo storage(root.url.toLocalFile());
+                const QString storagePath = S_ISDIR(root.identity.st_mode)
+                    ? root.url.toLocalFile()
+                    : QFileInfo(root.url.toLocalFile()).absolutePath();
+                QStorageInfo storage(storagePath);
                 const auto fs = storage.fileSystemType();
                 if (!storage.isValid() || !storage.isReady()) item.reason = QStringLiteral("Mount unavailable");
                 else if (storage.isReadOnly()) item.reason = QStringLiteral("Read-only mount");

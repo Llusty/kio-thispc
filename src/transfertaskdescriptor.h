@@ -175,6 +175,9 @@ struct TransferTaskDescriptor {
     // reservations were granted and the preflight succeeded. Never called for
     // tasks cancelled while queued.
     std::function<KJob *()> jobFactory;
+    // Optional post-creation initialization invoked by TransferQueueController::tryLaunch()
+    // with the live assigned task ID before job->start() (and with the new ID on retryTask()).
+    std::function<void(KJob *, quint64)> configureJob;
     // Optional async cancel handler for jobs that finalize & emit result() only after
     // worker threads unwind cleanly instead of synchronous KJob::kill(EmitResult).
     std::function<bool(KJob *)> cancelHandler;

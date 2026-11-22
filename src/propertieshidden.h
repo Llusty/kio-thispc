@@ -45,7 +45,9 @@ public:
             && QFileInfo(url.toLocalFile()).absoluteDir().isReadable()
             && QFileInfo(QFileInfo(url.toLocalFile()).absolutePath()).isWritable()
             && QFileInfo(QFileInfo(url.toLocalFile()).absolutePath()).isExecutable()
-            && !QStorageInfo(url.toLocalFile()).isReadOnly();
+            && !QStorageInfo(caps.entryKind == PropertiesEntryKind::Directory
+                                 ? url.toLocalFile()
+                                 : QFileInfo(url.toLocalFile()).absolutePath()).isReadOnly();
     }
     static QString toggledName(const QString &name, bool hidden) {
         if (hidden == dotHidden(name)) return name;

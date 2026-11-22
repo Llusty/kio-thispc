@@ -49,6 +49,9 @@ struct AclData
     bool isDirectory = false;
     bool hasExtendedAccess = false;
     bool hasDefaultAcl = false;
+    quint64 statDev = 0;
+    quint64 statIno = 0;
+    bool statIdentityValid = false;
     QString errorMessage;
 
     bool canRead() const { return capability == AclCapability::AvailableReadWrite || capability == AclCapability::AvailableReadOnly; }

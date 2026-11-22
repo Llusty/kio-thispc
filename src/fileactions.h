@@ -2801,13 +2801,24 @@ private:
             if (srcInfo.isDir() && !srcInfo.isSymLink()) {
                 hasLocalDir = true;
                 const QString canonSrc = srcInfo.canonicalFilePath();
-                const QFileInfo targetChild(QDir(destDirInfo.absoluteFilePath()).filePath(srcInfo.fileName()));
-                const bool isSelfCopy = !canonSrc.isEmpty()
-                    && targetChild.exists()
-                    && targetChild.canonicalFilePath() == canonSrc;
-                const bool isIntoSelf = !canonSrc.isEmpty() && !canonDestDir.isEmpty()
-                    && (canonDestDir == canonSrc
-                        || canonDestDir.startsWith(canonSrc + QLatin1Char('/')));
+                const QString targetChildPath = QDir(destDirInfo.absoluteFilePath()).filePath(srcInfo.fileName());
+                const QFileInfo targetChild(targetChildPath);
+                struct stat srcStat {};
+                struct stat dstChildStat {};
+                struct stat dstDirStat {};
+                const bool hasSrcStat = (::lstat(QFile::encodeName(cleanSrc).constData(), &srcStat) == 0);
+                const bool samePhysicalTarget = hasSrcStat
+                    && (::lstat(QFile::encodeName(targetChildPath).constData(), &dstChildStat) == 0)
+                    && dstChildStat.st_dev == srcStat.st_dev && dstChildStat.st_ino == srcStat.st_ino;
+                const bool samePhysicalDestDir = hasSrcStat
+                    && (::lstat(QFile::encodeName(destDirInfo.absoluteFilePath()).constData(), &dstDirStat) == 0)
+                    && dstDirStat.st_dev == srcStat.st_dev && dstDirStat.st_ino == srcStat.st_ino;
+                const bool isSelfCopy = samePhysicalTarget
+                    || (!canonSrc.isEmpty() && targetChild.exists() && targetChild.canonicalFilePath() == canonSrc);
+                const bool isIntoSelf = samePhysicalDestDir
+                    || (!canonSrc.isEmpty() && !canonDestDir.isEmpty()
+                        && (canonDestDir == canonSrc
+                            || canonDestDir.startsWith(canonSrc + QLatin1Char('/'))));
                 if (isSelfCopy || isIntoSelf) {
                     const QString collisionMsg = trLocal(
                         "Nie można skopiować folderu „%1” do niego samego ani do jego własnego podkatalogu.",
@@ -2840,8 +2851,8 @@ private:
         req.context = context;
         req.capabilities = detectLocalMergeCapabilities(destination.toLocalFile());
         req.undoController = m_undoController;
-        req.folderPrompt = LocalMergeQueueBridge::createGuiFolderPrompt(m_parentWidget);
-        req.filePrompt = LocalMergeQueueBridge::createGuiFilePrompt(m_parentWidget);
+        req.asyncFolderPrompt = LocalMergeQueueBridge::createAsyncGuiFolderPrompt(m_parentWidget);
+        req.asyncFilePrompt = LocalMergeQueueBridge::createAsyncGuiFilePrompt(m_parentWidget);
 
         const TransferEnqueueResult enq = LocalMergeQueueBridge::enqueueDevSandboxedMerge(
             m_queueController.data(), devRoot, std::move(req));
@@ -2907,12 +2918,21 @@ private:
                 hasLocalDir = true;
                 const QString canonSrc = srcInfo.canonicalFilePath();
                 const QFileInfo targetChild(childDestPath);
-                const bool isSelfCopy = !canonSrc.isEmpty()
-                    && targetChild.exists()
-                    && targetChild.canonicalFilePath() == canonSrc;
-                const bool isIntoSelf = !canonSrc.isEmpty() && !canonDestDir.isEmpty()
-                    && (canonDestDir == canonSrc
-                        || canonDestDir.startsWith(canonSrc + QLatin1Char('/')));
+                struct stat srcStat {};
+                struct stat dstDirStat {};
+                const bool hasSrcStat = (::lstat(QFile::encodeName(cleanSrc).constData(), &srcStat) == 0);
+                const bool samePhysicalTarget = hasSrcStat
+                    && (::lstat(QFile::encodeName(childDestPath).constData(), &childDstSt) == 0)
+                    && childDstSt.st_dev == srcStat.st_dev && childDstSt.st_ino == srcStat.st_ino;
+                const bool samePhysicalDestDir = hasSrcStat
+                    && (::lstat(QFile::encodeName(destDirInfo.absoluteFilePath()).constData(), &dstDirStat) == 0)
+                    && dstDirStat.st_dev == srcStat.st_dev && dstDirStat.st_ino == srcStat.st_ino;
+                const bool isSelfCopy = samePhysicalTarget
+                    || (!canonSrc.isEmpty() && targetChild.exists() && targetChild.canonicalFilePath() == canonSrc);
+                const bool isIntoSelf = samePhysicalDestDir
+                    || (!canonSrc.isEmpty() && !canonDestDir.isEmpty()
+                        && (canonDestDir == canonSrc
+                            || canonDestDir.startsWith(canonSrc + QLatin1Char('/'))));
                 if (isSelfCopy || isIntoSelf) {
                     const QString collisionMsg = trLocal(
                         "Nie można skopiować folderu „%1” do niego samego ani do jego własnego podkatalogu.",
@@ -2944,8 +2964,8 @@ private:
         req.context = context;
         req.capabilities = detectLocalMergeCapabilities(cleanDestDirPath);
         req.undoController = m_undoController;
-        req.folderPrompt = LocalMergeQueueBridge::createGuiFolderPrompt(m_parentWidget);
-        req.filePrompt = LocalMergeQueueBridge::createGuiFilePrompt(m_parentWidget);
+        req.asyncFolderPrompt = LocalMergeQueueBridge::createAsyncGuiFolderPrompt(m_parentWidget);
+        req.asyncFilePrompt = LocalMergeQueueBridge::createAsyncGuiFilePrompt(m_parentWidget);
 
         const TransferEnqueueResult enq = LocalMergeQueueBridge::enqueueMerge(
             m_queueController.data(), std::move(req),

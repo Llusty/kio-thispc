@@ -562,6 +562,283 @@ int main(int argc, char **argv)
         QB_ASSERT(!histRecs.first().errorText.isEmpty());
     }
 
+    // 35. SEC-046-03 (1/3): Immediate dispatch into empty Parallel queue assigns live taskId != 0
+    // before start() and enforces dynamic Rename reservation against concurrent conflicting task.
+    {
+        QTemporaryDir root;
+        const QString src1 = root.filePath(QStringLiteral("ImmSrc/Addon"));
+        const QString src2 = root.filePath(QStringLiteral("ImmOther/Addon (2)"));
+        const QString dst = root.filePath(QStringLiteral("ImmDst"));
+        writeFileQB(src1 + QStringLiteral("/file.txt"), "MERGE-RENAMED");
+        writeFileQB(src2 + QStringLiteral("/other.txt"), "COMPETING-COPY");
+        writeFileQB(dst + QStringLiteral("/Addon/file.txt"), "EXISTING");
+
+        TransferQueueController qc;
+        qc.setExecutionMode(TransferQueueMode::Parallel);
+        qc.setParallelConcurrencyLimit(2);
+
+        quint64 capturedJobTaskId = 0;
+        quint64 competingId = 0;
+        bool competingEnqueued = false;
+        std::atomic<bool> competingQueuedWhileMergeRunning{false};
+        std::atomic<bool> releaseMerge{false};
+
+        LocalMergeQueueRequest req;
+        req.sources = {QUrl::fromLocalFile(src1)};
+        req.destinationDir = QUrl::fromLocalFile(dst);
+        req.folderPrompt = [](const LocalMergePlanEntry &, qsizetype, LocalMergeConflictProgress) {
+            LocalFolderConflictDecision d;
+            d.accepted = true;
+            d.action = LocalMergeApprovedAction::Rename;
+            d.targetFolderName = QStringLiteral("Addon (2)");
+            return d;
+        };
+        req.executionJobConfigurator = [&](LocalMergeExecutionJob *execJob) {
+            execJob->setPrePublishHook([&](const QString &, int) {
+                QMetaObject::invokeMethod(&qc, [&] {
+                    if (!competingEnqueued) {
+                        competingEnqueued = true;
+                        TransferTaskDescriptor cdesc;
+                        cdesc.title = QStringLiteral("Competing Copy");
+                        cdesc.type = TransferOperationType::Copy;
+                        cdesc.backend = TransferBackendKind::LocalNative;
+                        cdesc.sources = {QUrl::fromLocalFile(src2)};
+                        cdesc.destination = QUrl::fromLocalFile(dst);
+                        cdesc.jobFactory = [&]() -> KJob * {
+                            return new LocalTransferJob({QUrl::fromLocalFile(src2)}, QUrl::fromLocalFile(dst), false);
+                        };
+                        const auto cenq = qc.enqueue(std::move(cdesc));
+                        QB_ASSERT(cenq.accepted());
+                        competingId = cenq.id;
+                        const auto csnap = qc.taskSnapshot(competingId);
+                        QB_ASSERT(csnap.has_value());
+                        competingQueuedWhileMergeRunning.store(
+                            csnap->state == TransferTaskState::Queued
+                            && csnap->waitReason == TransferWaitReason::BlockedByReservation);
+                        releaseMerge.store(true);
+                    }
+                }, Qt::QueuedConnection);
+                for (int i = 0; i < 400 && !releaseMerge.load(); ++i) {
+                    QThread::msleep(5);
+                }
+            });
+        };
+
+        // Empty queue, dispatch NOT paused -> synchronous tryLaunch() inside enqueue()!
+        QPointer<LocalMergeQueueJob> launchedJob;
+        const auto enq = LocalMergeQueueBridge::enqueueMerge(&qc, std::move(req), [&](LocalMergeQueueJob *job) {
+            launchedJob = job;
+            job->setStateCallback([&capturedJobTaskId, job](LocalMergeOrchestratorState) {
+                if (capturedJobTaskId == 0) {
+                    capturedJobTaskId = job->queueTaskId();
+                }
+            });
+        });
+        QB_ASSERT(enq.accepted());
+        QB_ASSERT(launchedJob && launchedJob->queueTaskId() == enq.id && launchedJob->queueTaskId() != 0);
+
+        QB_ASSERT(waitForTaskTerminal(qc, enq.id) == TransferTaskState::Completed);
+        QB_ASSERT(capturedJobTaskId == enq.id && capturedJobTaskId != 0);
+        QB_ASSERT(competingQueuedWhileMergeRunning.load());
+        QB_ASSERT(competingId != 0);
+        // Competing task now unblocks cleanly once merge reservation releases
+        const auto term2 = waitForTaskTerminal(qc, competingId);
+        QB_ASSERT(term2 == TransferTaskState::Completed || term2 == TransferTaskState::Failed);
+        QB_ASSERT(readFileQB(dst + QStringLiteral("/Addon (2)/file.txt")) == "MERGE-RENAMED");
+        QB_ASSERT(qc.snapshot().activeCount == 0);
+    }
+
+    // 36. SEC-046-03 (2/3): Dynamic Rename refuses target already reserved by a parallel task (fail-closed)
+    // and direct LocalMergeQueueJob with taskId == 0 fails closed before touching disk.
+    {
+        QTemporaryDir root;
+        const QString src1 = root.filePath(QStringLiteral("RefuseSrc/Addon"));
+        const QString src2File = root.filePath(QStringLiteral("RefuseHolder/Addon (2)"));
+        const QString dst = root.filePath(QStringLiteral("RefuseDst"));
+        writeFileQB(src1 + QStringLiteral("/a.txt"), "MERGE-DATA");
+        writeFileQB(src2File, QByteArray(16 * 1024, 'H'));
+        writeFileQB(dst + QStringLiteral("/Addon/a.txt"), "EXISTING");
+
+        TransferQueueController qc;
+        qc.setExecutionMode(TransferQueueMode::Parallel);
+        qc.setParallelConcurrencyLimit(2);
+
+        // Task 1 holds exclusive reservation on RefuseDst/Addon (2) via staging .thispc-part
+        TransferTaskDescriptor holdDesc;
+        holdDesc.title = QStringLiteral("Holder");
+        holdDesc.type = TransferOperationType::Copy;
+        holdDesc.backend = TransferBackendKind::LocalNative;
+        holdDesc.sources = {QUrl::fromLocalFile(src2File)};
+        holdDesc.destination = QUrl::fromLocalFile(dst);
+        holdDesc.jobFactory = [&]() -> KJob * {
+            return new LocalFileCopyJob(
+                QUrl::fromLocalFile(src2File),
+                QUrl::fromLocalFile(dst + QStringLiteral("/Addon (2)")),
+                nullptr, 4096, 250);
+        };
+        const auto holdEnq = qc.enqueue(std::move(holdDesc));
+        QB_ASSERT(holdEnq.accepted());
+
+        // Task 2 attempts immediate-launch Folder Merge with dynamic Rename -> Addon (2)
+        LocalMergeOrchestratorResult mergeRes;
+        LocalMergeQueueRequest req;
+        req.sources = {QUrl::fromLocalFile(src1)};
+        req.destinationDir = QUrl::fromLocalFile(dst);
+        req.folderPrompt = [](const LocalMergePlanEntry &, qsizetype, LocalMergeConflictProgress) {
+            LocalFolderConflictDecision d;
+            d.accepted = true;
+            d.action = LocalMergeApprovedAction::Rename;
+            d.targetFolderName = QStringLiteral("Addon (2)");
+            return d;
+        };
+        const auto mergeEnq = LocalMergeQueueBridge::enqueueMerge(&qc, std::move(req), [&](LocalMergeQueueJob *job) {
+            job->setResultCallback([&](const LocalMergeOrchestratorResult &r) { mergeRes = r; });
+        });
+        QB_ASSERT(mergeEnq.accepted());
+        QB_ASSERT(waitForTaskTerminal(qc, holdEnq.id) == TransferTaskState::Completed);
+        const auto mergeTerm = waitForTaskTerminal(qc, mergeEnq.id);
+        QB_ASSERT(mergeTerm == TransferTaskState::Failed);
+        QB_ASSERT(mergeRes.diagnostic.contains(QStringLiteral("conflicts with active queue reservation")));
+        QB_ASSERT(readFileQB(dst + QStringLiteral("/Addon (2)")) == QByteArray(16 * 1024, 'H'));
+        QB_ASSERT(!QFileInfo::exists(dst + QStringLiteral("/Addon (2)/a.txt")));
+
+        // Fail-closed test for taskId == 0
+        LocalMergeQueueRequest zeroReq;
+        zeroReq.sources = {QUrl::fromLocalFile(src1)};
+        zeroReq.destinationDir = QUrl::fromLocalFile(dst);
+        auto *zeroJob = new LocalMergeQueueJob(std::move(zeroReq), &qc, 0);
+        zeroJob->setAutoDelete(false);
+        LocalMergeOrchestratorResult zeroRes;
+        zeroJob->setResultCallback([&](const LocalMergeOrchestratorResult &r) { zeroRes = r; });
+        zeroJob->start();
+        QB_ASSERT(zeroJob->error() != 0);
+        QB_ASSERT(zeroRes.finalState == LocalMergeOrchestratorState::FailedNoChanges);
+        delete zeroJob;
+    }
+
+    // 37. SEC-046-03 (3/3): Retry of failed Folder Merge rebinds NEW live taskId and enforces reservation.
+    {
+        QTemporaryDir root;
+        const QString src = root.filePath(QStringLiteral("RetrySrc/Addon"));
+        const QString dst = root.filePath(QStringLiteral("RetryDst"));
+        const QString holdFile = root.filePath(QStringLiteral("RetryHold/Addon (2)"));
+        const QString compSrc = root.filePath(QStringLiteral("RetryComp/Addon (2)"));
+        writeFileQB(src + QStringLiteral("/x.txt"), "RETRY-NEW");
+        writeFileQB(holdFile, QByteArray(16 * 1024, 'H'));
+        writeFileQB(compSrc + QStringLiteral("/y.txt"), "COMPETING");
+        writeFileQB(dst + QStringLiteral("/Addon/x.txt"), "EXISTING");
+
+        TransferQueueController qc;
+        qc.setExecutionMode(TransferQueueMode::Parallel);
+        qc.setParallelConcurrencyLimit(2);
+
+        int attempt = 0;
+        QList<quint64> observedJobTaskIds;
+        std::atomic<bool> releaseRetry{false};
+        bool competingEnqueued = false;
+        quint64 competingId = 0;
+        std::atomic<bool> competingBlockedByRetry{false};
+
+        LocalMergeQueueRequest req;
+        req.sources = {QUrl::fromLocalFile(src)};
+        req.destinationDir = QUrl::fromLocalFile(dst);
+        req.folderPrompt = [&](const LocalMergePlanEntry &, qsizetype, LocalMergeConflictProgress) {
+            ++attempt;
+            LocalFolderConflictDecision d;
+            if (attempt == 1) {
+                // Force a FailedNoChanges on first attempt by returning invalid empty rename? Or simulate pre-publish error:
+                // Actually aborting gives Cancelled; instead use maxReplanRounds or fail in prePublishHook below.
+            }
+            d.accepted = true;
+            d.action = LocalMergeApprovedAction::Rename;
+            d.targetFolderName = QStringLiteral("Addon (2)");
+            return d;
+        };
+        req.executionJobConfigurator = [&](LocalMergeExecutionJob *execJob) {
+            if (attempt == 1) {
+                // Fail before any publish by setting an impossible-to-meet simulated error on first attempt
+                execJob->setSimulateUnsupportedOverwriteFs(true);
+                // Note: Rename doesn't hit overwrite; cancel/abort won't allow retry unless FailedNoChanges.
+            }
+            execJob->setPrePublishHook([&](const QString &, int) {
+                if (attempt >= 2) {
+                    QMetaObject::invokeMethod(&qc, [&] {
+                        if (!competingEnqueued) {
+                            competingEnqueued = true;
+                            TransferTaskDescriptor cdesc;
+                            cdesc.title = QStringLiteral("Retry Competing");
+                            cdesc.type = TransferOperationType::Copy;
+                            cdesc.backend = TransferBackendKind::LocalNative;
+                            cdesc.sources = {QUrl::fromLocalFile(compSrc)};
+                            cdesc.destination = QUrl::fromLocalFile(dst);
+                            cdesc.jobFactory = [&]() -> KJob * {
+                                return new LocalTransferJob({QUrl::fromLocalFile(compSrc)}, QUrl::fromLocalFile(dst), false);
+                            };
+                            const auto cenq = qc.enqueue(std::move(cdesc));
+                            QB_ASSERT(cenq.accepted());
+                            competingId = cenq.id;
+                            const auto csnap = qc.taskSnapshot(competingId);
+                            competingBlockedByRetry.store(
+                                csnap.has_value()
+                                && csnap->state == TransferTaskState::Queued
+                                && csnap->waitReason == TransferWaitReason::BlockedByReservation);
+                            releaseRetry.store(true);
+                        }
+                    }, Qt::QueuedConnection);
+                    for (int i = 0; i < 400 && !releaseRetry.load(); ++i) {
+                        QThread::msleep(5);
+                    }
+                }
+            });
+        };
+
+        // Use a missing source parent temporarily or forceRecoveryRequired on attempt 1?
+        // Actually, forceRecoveryRequired triggers RecoveryRequired (retry blocked). Instead, make attempt 1 fail with
+        // missing source directory right before execution? No, simplest: remove source file? Wait: Rename creates dir first.
+        // Easiest deterministic FailedNoChanges: run attempt 1 with a conflict holder that blocks Rename (as in test 36),
+        // then retry after holder finishes!
+        TransferTaskDescriptor holdDesc;
+        holdDesc.title = QStringLiteral("Initial Blocker");
+        holdDesc.type = TransferOperationType::Copy;
+        holdDesc.backend = TransferBackendKind::LocalNative;
+        holdDesc.sources = {QUrl::fromLocalFile(holdFile)};
+        holdDesc.destination = QUrl::fromLocalFile(dst);
+        holdDesc.jobFactory = [&]() -> KJob * {
+            return new LocalFileCopyJob(
+                QUrl::fromLocalFile(holdFile),
+                QUrl::fromLocalFile(dst + QStringLiteral("/Addon (2)")),
+                nullptr, 4096, 250);
+        };
+        const auto holdEnq = qc.enqueue(std::move(holdDesc));
+        QB_ASSERT(holdEnq.accepted());
+
+        const auto enq1 = LocalMergeQueueBridge::enqueueMerge(&qc, std::move(req), [&](LocalMergeQueueJob *job) {
+            auto recorded = std::make_shared<bool>(false);
+            job->setStateCallback([&observedJobTaskIds, job, recorded](LocalMergeOrchestratorState) {
+                if (!*recorded) {
+                    *recorded = true;
+                    observedJobTaskIds.append(job->queueTaskId());
+                }
+            });
+        });
+        QB_ASSERT(enq1.accepted());
+        QB_ASSERT(waitForTaskTerminal(qc, holdEnq.id) == TransferTaskState::Completed);
+        QB_ASSERT(waitForTaskTerminal(qc, enq1.id) == TransferTaskState::Failed);
+        // Remove Addon (2) created by Initial Blocker so retried Rename to Addon (2) succeeds
+        QFile::remove(dst + QStringLiteral("/Addon (2)"));
+
+        const auto retryEnq = qc.retryTask(enq1.id);
+        QB_ASSERT(retryEnq.accepted());
+        QB_ASSERT(retryEnq.id != enq1.id);
+        QB_ASSERT(waitForTaskTerminal(qc, retryEnq.id) == TransferTaskState::Completed);
+        QB_ASSERT(observedJobTaskIds.size() == 2);
+        QB_ASSERT(observedJobTaskIds[0] == enq1.id);
+        QB_ASSERT(observedJobTaskIds[1] == retryEnq.id);
+        QB_ASSERT(competingBlockedByRetry.load());
+        QB_ASSERT(waitForTaskTerminal(qc, competingId) == TransferTaskState::Completed);
+        QB_ASSERT(qc.snapshot().activeCount == 0);
+    }
+
     std::printf("PASS: local_merge_queue_bridge (%d assertions)\n", g_qbAssertions);
     return 0;
 }

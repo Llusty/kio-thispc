@@ -184,7 +184,8 @@ public:
             : PropertiesSymlinkPolicy::NotSymlink;
         result.posixModeReadable = PropertiesCapabilityState::Supported;
 
-        QStorageInfo storage(path);
+        const QString storagePath = S_ISDIR(entry.st_mode) ? path : QFileInfo(path).absolutePath();
+        QStorageInfo storage(storagePath);
         if (storage.isValid()) {
             result.fileSystemType = QString::fromLatin1(storage.fileSystemType()).toLower();
         }

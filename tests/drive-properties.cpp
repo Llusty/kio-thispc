@@ -914,6 +914,139 @@ int main(int argc, char **argv)
                "SidebarDriveButton(mtpDrive) tooltip omits fake capacity and local mount point");
     }
 
+    // 25. SEC-046-02: DriveFrame contextMenuEvent() lifetime, deferred rebuildGrid, stale-drive guard & window close
+    {
+        // 25a. Parentless QMenu + QPointer<DriveFrame> survives clearLayout()->deleteLater() inside menu.exec()
+        QWidget host;
+        auto *grid = new QGridLayout(&host);
+        DriveInfo d1;
+        d1.id = QStringLiteral("vol-1");
+        d1.udi = QStringLiteral("/org/freedesktop/UDisks2/block_devices/sdb1");
+        d1.name = QStringLiteral("USB Stick");
+        d1.mountPoint = QStringLiteral("/run/media/test/usb1");
+        d1.targetUrl = QUrl::fromLocalFile(d1.mountPoint);
+        d1.isMounted = true;
+        d1.isRemovable = true;
+
+        DriveFrame *card = makeDriveCard(d1, true, false, &host);
+        grid->addWidget(card, 0, 0);
+        QPointer<DriveFrame> cardGuard(card);
+        host.show();
+        QApplication::processEvents();
+
+        bool sawParentlessPopup = false;
+        QTimer::singleShot(15, &host, [&] {
+            if (QWidget *popup = QApplication::activePopupWidget()) {
+                sawParentlessPopup = (popup->parent() == nullptr);
+            }
+            clearLayout(grid); // posts deleteLater() at nested loopLevel == 2
+            QTimer::singleShot(15, &host, [] {
+                if (QWidget *popup = QApplication::activePopupWidget()) {
+                    popup->close();
+                }
+            });
+        });
+        QContextMenuEvent ctxEvt(QContextMenuEvent::Mouse, QPoint(10, 10), card->mapToGlobal(QPoint(10, 10)));
+        QApplication::sendEvent(card, &ctxEvt);
+        QCoreApplication::processEvents();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        verify(sawParentlessPopup, "SEC-046-02: DriveFrame QMenu is parentless");
+        verify(cardGuard.isNull(), "SEC-046-02: DriveFrame cleaned up cleanly after menu.exec() unwinds");
+
+        // 25b. ThisPcWindow Primary & Split View: defer rebuildDriveGrid(), coalesce refreshes, block stale action
+        DriveInfo d2;
+        d2.id = QStringLiteral("vol-2");
+        d2.udi = QStringLiteral("/org/freedesktop/UDisks2/block_devices/sda2");
+        d2.name = QStringLiteral("System");
+        d2.mountPoint = QStringLiteral("/");
+        d2.targetUrl = QUrl::fromLocalFile(QStringLiteral("/"));
+        d2.isMounted = true;
+
+        DriveInfo d3;
+        d3.id = QStringLiteral("vol-3");
+        d3.udi = QStringLiteral("/org/freedesktop/UDisks2/block_devices/sdc1");
+        d3.name = QStringLiteral("Backup SSD");
+        d3.mountPoint = QStringLiteral("/run/media/test/ssd");
+        d3.targetUrl = QUrl::fromLocalFile(d3.mountPoint);
+        d3.isMounted = true;
+        d3.isRemovable = true;
+
+        ThisPcWindow win(kThisPcUrl, true);
+        win.m_driveHomeCoordinator.setSnapshotForTesting({d1, d2});
+        win.show();
+        QApplication::processEvents();
+
+        auto *primaryCard = qobject_cast<DriveFrame *>(win.m_drivesGrid->itemAt(0)->widget());
+        verify(primaryCard != nullptr, "SEC-046-02: Primary home grid has DriveFrame");
+        QPointer<DriveFrame> primaryGuard(primaryCard);
+
+        bool deferredDuringMenu = false;
+        bool staleBlocked = false;
+        QTimer::singleShot(15, &win, [&] {
+            // Multiple refreshes while menu is open, removing d1 and adding d3
+            win.m_driveHomeCoordinator.setSnapshotForTesting({d2});
+            win.m_driveHomeCoordinator.setSnapshotForTesting({d2, d3});
+            deferredDuringMenu = win.m_driveGridRebuildPending
+                && win.m_activeDriveContextMenus == 1
+                && !primaryGuard.isNull();
+            staleBlocked = !win.isDriveStillPresent(d1) && win.isDriveStillPresent(d3);
+            if (QWidget *popup = QApplication::activePopupWidget()) {
+                popup->close();
+            }
+        });
+        QContextMenuEvent winEvt(QContextMenuEvent::Mouse, QPoint(10, 10), primaryCard->mapToGlobal(QPoint(10, 10)));
+        QApplication::sendEvent(primaryCard, &winEvt);
+        QCoreApplication::processEvents();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+        verify(deferredDuringMenu, "SEC-046-02: rebuildDriveGrid() deferred while Primary DriveFrame menu is open");
+        verify(staleBlocked, "SEC-046-02: removed drive d1 rejected as stale while d3 is present");
+        verify(win.m_activeDriveContextMenus == 0 && !win.m_driveGridRebuildPending,
+               "SEC-046-02: active menu count and pending flag reset after menu close");
+        const auto rebuiltPrimary = win.m_homePage->findChildren<DriveFrame *>();
+        const auto rebuiltSplit = win.m_splitHomePage->findChildren<DriveFrame *>();
+        verify(rebuiltPrimary.size() == 2 && rebuiltSplit.size() == 2,
+               "SEC-046-02: latest drive list {d2, d3} applied to Primary & Split without duplicates");
+
+        // 25c. Split View DriveFrame context menu deferral
+        auto *splitCard = qobject_cast<DriveFrame *>(win.m_splitDrivesGrid->itemAt(0)->widget());
+        verify(splitCard != nullptr, "SEC-046-02: Split home grid has DriveFrame");
+        bool splitDeferred = false;
+        QTimer::singleShot(15, &win, [&] {
+            win.m_driveHomeCoordinator.setSnapshotForTesting({d3});
+            splitDeferred = win.m_driveGridRebuildPending && win.m_activeDriveContextMenus == 1;
+            if (QWidget *popup = QApplication::activePopupWidget()) {
+                popup->close();
+            }
+        });
+        QContextMenuEvent splitEvt(QContextMenuEvent::Mouse, QPoint(10, 10), splitCard->mapToGlobal(QPoint(10, 10)));
+        QApplication::sendEvent(splitCard, &splitEvt);
+        QCoreApplication::processEvents();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        verify(splitDeferred && !win.m_driveGridRebuildPending
+               && win.m_splitHomePage->findChildren<DriveFrame *>().size() == 1,
+               "SEC-046-02: Split View DriveFrame menu defers and applies final drive list cleanly");
+
+        // 25d. Destroy ThisPcWindow while DriveFrame context menu is open (zero UAF)
+        auto *closingWin = new ThisPcWindow(kThisPcUrl, true);
+        closingWin->m_driveHomeCoordinator.setSnapshotForTesting({d2});
+        closingWin->show();
+        QApplication::processEvents();
+        auto *closingCard = qobject_cast<DriveFrame *>(closingWin->m_drivesGrid->itemAt(0)->widget());
+        verify(closingCard != nullptr, "SEC-046-02: closingWin has DriveFrame");
+        QPointer<DriveFrame> closingCardGuard(closingCard);
+        QTimer::singleShot(15, closingWin, [&] {
+            if (QWidget *popup = QApplication::activePopupWidget()) {
+                popup->close();
+            }
+            delete closingWin;
+            closingWin = nullptr;
+        });
+        QContextMenuEvent closeEvt(QContextMenuEvent::Mouse, QPoint(10, 10), closingCard->mapToGlobal(QPoint(10, 10)));
+        QApplication::sendEvent(closingCard, &closeEvt);
+        verify(closingCardGuard.isNull(), "SEC-046-02: DriveFrame destroyed with ThisPcWindow during menu.exec() without UAF");
+    }
+
     printf("PASS: %d DriveProperties assertions (%d pending MTP specs); data model, mountinfo, Solid capabilities, unmounted safety, removal, UI, MTP contract\n",
            checks, pendingMtpSpecs);
     return 0;

@@ -26,16 +26,46 @@ static QImage rendered(QWidget *widget)
     return image;
 }
 
+static int expectedButtonWidthInParent(const QWidget *button)
+{
+    if (!button || !button->parentWidget() || !button->parentWidget()->layout()) {
+        return -1;
+    }
+    const QMargins margins = button->parentWidget()->layout()->contentsMargins();
+    return button->parentWidget()->contentsRect().width() - margins.left() - margins.right();
+}
+
+template <typename Lookup, typename WidthPred>
+static SidebarButton *waitForButtonLaidOut(Lookup lookup, WidthPred widthPred, const char *description)
+{
+    verify(QTest::qWaitFor([&] {
+        QApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+        SidebarButton *btn = lookup();
+        if (!btn || !btn->isVisible()) {
+            return false;
+        }
+        const int targetWidth = expectedButtonWidthInParent(btn);
+        return targetWidth > 0 && btn->width() == targetWidth && widthPred(btn->width());
+    }, 2000), description);
+    SidebarButton *btn = lookup();
+    verify(btn != nullptr && btn->isVisible(), description);
+    return btn;
+}
+
 static void verifyButtonElision(SidebarButton *button, bool expectElision)
 {
+    verify(button != nullptr && button->isVisible(),
+           "sidebar button is visible before elision and pixel verification");
     QStyleOptionButton option;
     option.initFrom(button);
     option.features = QStyleOptionButton::Flat;
+    option.icon = button->icon();
+    option.iconSize = button->iconSize();
     const int available = button->style()->subElementRect(
         QStyle::SE_PushButtonContents, &option, button).width()
-        - (button->icon().isNull() ? 0 : button->iconSize().width() + 4);
-    const QString expected = button->fontMetrics().elidedText(
-        button->text(), Qt::ElideRight, available, Qt::TextShowMnemonic);
+        - (option.icon.isNull() ? 0 : option.icon.actualSize(option.iconSize).width() + 4);
+    const QString expected = option.fontMetrics.elidedText(
+        button->text(), Qt::ElideRight, std::max(0, available), Qt::TextShowMnemonic);
     verify(expectElision ? expected.endsWith(QChar(0x2026)) && expected != button->text()
                          : expected == button->text(),
            "label elides only when it exceeds the available text area");
@@ -45,14 +75,20 @@ static void verifyButtonElision(SidebarButton *button, bool expectElision)
     QPushButton reference(button->icon(), expected, button->parentWidget());
     reference.setObjectName(button->objectName());
     reference.setFlat(button->isFlat());
+    reference.setAutoDefault(button->autoDefault());
+    reference.setDefault(button->isDefault());
     reference.setFont(button->font());
     reference.setPalette(button->palette());
+    reference.setStyleSheet(button->styleSheet());
     reference.setIconSize(button->iconSize());
     reference.setLayoutDirection(button->layoutDirection());
+    reference.setFocusPolicy(button->focusPolicy());
     reference.setProperty("current", button->property("current"));
     reference.setProperty("dropActive", button->property("dropActive"));
     reference.setDown(button->isDown());
-    reference.resize(button->size());
+    reference.setGeometry(button->geometry());
+    reference.setAttribute(Qt::WA_DontShowOnScreen, true);
+    reference.setVisible(button->isVisible());
     reference.ensurePolished();
     verify(rendered(button) == rendered(&reference),
            "painted sidebar button contains the visible ellipsis and native styling");
@@ -117,9 +153,27 @@ static void testLongLabels()
     window.m_sidebar->setDrives({drive});
     settle();
 
-    auto *quick = window.m_sidebar->m_quickAccessButtons.first();
-    auto *recent = qobject_cast<SidebarButton *>(
-        window.m_sidebar->m_recentLocationsLayout->itemAt(0)->widget());
+    auto quickButton = [&]() -> QuickAccessSidebarButton * {
+        for (QuickAccessSidebarButton *button :
+             std::as_const(window.m_sidebar->m_quickAccessButtons)) {
+            if (sameLocation(button->url(), url)) return button;
+        }
+        return nullptr;
+    };
+    auto recentButton = [&]() -> SidebarButton * {
+        if (!window.m_sidebar->m_recentLocationsLayout
+            || window.m_sidebar->m_recentLocationsLayout->count() == 0) {
+            return nullptr;
+        }
+        return qobject_cast<SidebarButton *>(
+            window.m_sidebar->m_recentLocationsLayout->itemAt(0)->widget());
+    };
+
+    auto *quick = static_cast<QuickAccessSidebarButton *>(
+        waitForButtonLaidOut(quickButton, [&](int w) { return w <= selectedWidth; },
+                             "long Quick Access button is visible and laid out"));
+    auto *recent = waitForButtonLaidOut(recentButton, [&](int w) { return w <= selectedWidth; },
+                                        "long Recent button is visible and laid out");
     verify(quick->text() == fullName && recent && recent->text() == fullName,
            "rebuilt Quick Access and Recent entries retain the complete label");
     verifyButtonElision(quick, true);
@@ -151,6 +205,9 @@ static void testLongLabels()
     verify(rendered(name) == rendered(&referenceName),
            "drive name paints an ellipsis inside its available width");
 
+    quick = static_cast<QuickAccessSidebarButton *>(
+        waitForButtonLaidOut(quickButton, [&](int w) { return w <= selectedWidth; },
+                             "Quick Access button remains laid out before state checks"));
     quick->setCurrent(true);
     verifyButtonElision(quick, true);
     quick->setProperty("dropActive", true);
@@ -158,34 +215,45 @@ static void testLongLabels()
     verifyButtonElision(quick, true);
     quick->setDown(false);
 
+    const int expectedBtnWidth = quick->width();
     const QUrl mediumUrl = QUrl::fromLocalFile(
         files.filePath(QStringLiteral("Folder with a moderately long name for resize checks")));
     window.m_sidebar->pinQuickAccessLocation(mediumUrl);
     settle();
-    auto mediumButton = [&] {
+    auto mediumButton = [&]() -> QuickAccessSidebarButton * {
         for (QuickAccessSidebarButton *button :
              std::as_const(window.m_sidebar->m_quickAccessButtons)) {
             if (sameLocation(button->url(), mediumUrl)) return button;
         }
-        return static_cast<QuickAccessSidebarButton *>(nullptr);
+        return nullptr;
     };
-    verify(mediumButton() != nullptr, "medium Quick Access entry exists");
-    verifyButtonElision(mediumButton(), true);
+    verifyButtonElision(
+        waitForButtonLaidOut(mediumButton, [&](int w) { return w == expectedBtnWidth; },
+                             "medium Quick Access entry exists and is laid out"),
+        true);
     window.m_sidebarSplitter->setSizes({480, 615});
     window.m_sidebarSplitter->splitterMoved(480, 1);
     settle();
-    verifyButtonElision(mediumButton(), false);
+    verifyButtonElision(
+        waitForButtonLaidOut(mediumButton, [](int w) { return w >= 400; },
+                             "medium Quick Access entry expands with widened sidebar"),
+        false);
     verify(settings.value("sidebar/width").toInt() == 480,
            "divider remains resizable and persists its new width with long labels present");
     window.resize(500, 430);
     settle();
-    verifyButtonElision(mediumButton(), true);
+    verifyButtonElision(
+        waitForButtonLaidOut(mediumButton, [](int w) { return w < 300; },
+                             "medium Quick Access entry compresses with narrowed window"),
+        true);
     verify(settings.value("sidebar/width").toInt() == 480
                && window.m_sidebarScrollArea->horizontalScrollBar()->maximum() == 0,
            "window compression re-elides labels without overwriting the width preference");
 
     QSignalSpy activated(window.m_sidebar, &SidebarPanel::activated);
-    window.m_sidebar->m_quickAccessButtons.first()->click();
+    auto *activeQuick = waitForButtonLaidOut(quickButton, [](int w) { return w > 0; },
+                                             "Quick Access button ready for click activation");
+    activeQuick->click();
     verify(activated.count() == 1 && activated.first().first().toUrl() == url,
            "elided Quick Access button still activates the complete destination URL");
 }

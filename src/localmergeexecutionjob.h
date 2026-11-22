@@ -252,6 +252,40 @@ inline bool statIdentityExactMatch(const struct stat &a, const struct stat &b)
         && a.st_mtim.tv_nsec == b.st_mtim.tv_nsec;
 }
 
+// SEC-046-04: Never preserve SUID/SGID/sticky on newly copied regular files.
+// Ordinary owner/group/other rwx bits (including executable bits such as 0755) are preserved.
+inline mode_t sanitizeRegularFileMode(mode_t sourceMode)
+{
+    return sourceMode & static_cast<mode_t>(0777);
+}
+
+// SEC-046-04: Strip SUID/SGID (and sticky bit by explicit user-copy policy) from
+// newly created destination directories; preserve ordinary owner/group/other rwx bits.
+inline mode_t sanitizeDirectoryMode(mode_t sourceMode)
+{
+    return sourceMode & static_cast<mode_t>(0777);
+}
+
+// SEC-046-04: Always create newly populated directories restrictively (owner-only rwx 0700)
+// so private source trees are never exposed as 0755 during copy and read-only (0500)
+// source directories remain writable by the owner until postorder permission finalization.
+inline mode_t initialDirectoryCreationMode()
+{
+    return static_cast<mode_t>(0700);
+}
+
+inline bool isNonPosixPermissionFs(int fd)
+{
+    if (fd < 0) return false;
+    struct statfs sfs {};
+    if (::fstatfs(fd, &sfs) != 0) return false;
+    const unsigned long ftype = static_cast<unsigned long>(sfs.f_type);
+    return ftype == MSDOS_SUPER_MAGIC
+        || ftype == FUSE_SUPER_MAGIC
+        || ftype == NTFS3_SUPER_MAGIC
+        || ftype == NTFS_SB_MAGIC;
+}
+
 inline bool isSafeOverwriteFilesystem(int dirFd, bool simulateUnsupportedFs, QString *outReason = nullptr)
 {
     if (simulateUnsupportedFs) {
@@ -479,6 +513,10 @@ public Q_SLOTS:
 
         if (m_mode == Mode::OverwriteExisting) {
             m_transactionId = LocalMergeTxDetail::generateTxId();
+            if (m_transactionId.isEmpty() || !LocalMergeTxValidation::isValidTxId(m_transactionId)) {
+                Q_EMIT failed(KIO::ERR_CANNOT_MKDIR, tr("Could not generate secure transaction identifier."));
+                return;
+            }
             txDirName = QStringLiteral(".thispc-tx.%1").arg(m_transactionId);
             txDirEnc = QFile::encodeName(txDirName);
             journalName = QStringLiteral(".thispc-merge-tx.%1").arg(m_transactionId);
@@ -663,7 +701,16 @@ public Q_SLOTS:
             return;
         }
 
-        ::fchmod(stageFd.fd, actualSrc.st_mode & 07777);
+        const mode_t safeFileMode = LocalMergeExecDetail::sanitizeRegularFileMode(actualSrc.st_mode);
+        if (::fchmod(stageFd.fd, safeFileMode) != 0) {
+            const int chmodErr = errno;
+            if (!LocalMergeExecDetail::isNonPosixPermissionFs(m_destParentFd)
+                && chmodErr != ENOTSUP && chmodErr != EOPNOTSUPP && chmodErr != ENOSYS) {
+                cleanupStage();
+                Q_EMIT failed(KIO::ERR_CANNOT_CHMOD, tr("Could not apply safe permissions to staging file."));
+                return;
+            }
+        }
         const struct timespec times[2] = {actualSrc.st_atim, actualSrc.st_mtim};
         ::futimens(stageFd.fd, times);
 
@@ -1077,7 +1124,6 @@ public:
             finish(KJob::KilledJobError, tr("Copy cancelled."));
         });
         connect(m_worker, &LocalAnchoredFileCopyWorker::failed, this, &LocalAnchoredFileCopyJob::finish);
-        connect(&m_thread, &QThread::finished, m_worker, &QObject::deleteLater);
     }
 
     ~LocalAnchoredFileCopyJob() override
@@ -1085,6 +1131,8 @@ public:
         if (m_worker) m_worker->requestCancel();
         m_thread.quit();
         m_thread.wait();
+        delete m_worker;
+        m_worker = nullptr;
     }
 
     void start() override
@@ -1145,6 +1193,7 @@ private:
         }
         m_thread.quit();
         m_thread.wait();
+        delete m_worker;
         m_worker = nullptr;
         setError(err);
         setErrorText(text);
@@ -1461,12 +1510,14 @@ inline bool approveDirectoryRenameAndRevalidate(
     if (targetIdx < 0) return reject(QStringLiteral("Directory entry not found in plan."));
 
     LocalMergePlanEntry &target = plan.entries[targetIdx];
-    if ((target.classification != LocalMergeEntryClassification::MergeDirectoryCandidate
-         && target.classification != LocalMergeEntryClassification::SameObject)
+    if (target.classification == LocalMergeEntryClassification::SameObject) {
+        return reject(QStringLiteral("Refusing Rename on SameObject directory (source and destination are the same physical folder)."));
+    }
+    if (target.classification != LocalMergeEntryClassification::MergeDirectoryCandidate
         || target.sourceKind != LocalMergeObjectKind::Directory
         || !target.sourceStatValid
         || !S_ISDIR(target.sourceStat.st_mode)) {
-        return reject(QStringLiteral("Directory Rename is only permitted for directory entries."));
+        return reject(QStringLiteral("Directory Rename is only permitted for distinct MergeDirectoryCandidate entries."));
     }
 
     const QFileInfo srcInfo(target.sourcePath);
@@ -1480,6 +1531,11 @@ inline bool approveDirectoryRenameAndRevalidate(
         || curSrcSt.st_dev != target.sourceStat.st_dev
         || curSrcSt.st_ino != target.sourceStat.st_ino) {
         return reject(QStringLiteral("Source directory identity changed or became non-directory."));
+    }
+    if (target.destinationStatValid
+        && curSrcSt.st_dev == target.destinationStat.st_dev
+        && curSrcSt.st_ino == target.destinationStat.st_ino) {
+        return reject(QStringLiteral("Refusing Rename on SameObject directory (identical st_dev/st_ino)."));
     }
 
     const QFileInfo dstInfo(target.destinationPath);
@@ -1739,6 +1795,7 @@ public:
             anchored->requestCancelAsync();
             anchored->waitForThreadExit();
         }
+        m_createdDirsForFinalization.clear();
         m_srcDirFds.clear();
         m_destDirFds.clear();
         m_srcRoots.clear();
@@ -1751,9 +1808,15 @@ public:
         const QString &partName,
         const QString &backupName)>;
 
+    using PreDirPermFinalizeHook = std::function<void(const QString &relativePath, const QString &destinationPath, int dirFd)>;
+    using PreTopLevelAnchorHook = std::function<void(const QString &destRootPath, const QString &relativePath)>;
+
     void setCopyJobFactory(CopyJobFactory factory) { m_copyJobFactory = std::move(factory); }
     void setPrePublishHook(PrePublishHook hook) { m_prePublishHook = std::move(hook); }
     void setFaultPhaseHook(FaultPhaseHook hook) { m_faultPhaseHook = std::move(hook); }
+    void setPreDirPermFinalizeHook(PreDirPermFinalizeHook hook) { m_preDirPermFinalizeHook = std::move(hook); }
+    void setPreTopLevelAnchorHook(PreTopLevelAnchorHook hook) { m_preTopLevelAnchorHook = std::move(hook); }
+    void setSimulateDirChmodError(bool simulate) { m_simulateDirChmodError = simulate; }
     void setSimulateFsyncEio(bool simulate) { m_simulateFsyncEio = simulate; }
     void setSimulateOTmpfileUnsupported(bool simulate) { m_simulateOTmpfileUnsupported = simulate; }
     void setSimulateRenameExchangeUnsupported(bool simulate) { m_simulateRenameExchangeUnsupported = simulate; }
@@ -1925,20 +1988,41 @@ private:
         return true;
     }
 
+    bool verifyDestRootStillAnchored() const
+    {
+        if (!m_destRootFd.valid()) return false;
+        struct stat curRoot {};
+        if (::fstat(m_destRootFd.fd, &curRoot) != 0
+            || !S_ISDIR(curRoot.st_mode)
+            || curRoot.st_nlink == 0
+            || curRoot.st_dev != m_destRootStat.st_dev
+            || curRoot.st_ino != m_destRootStat.st_ino) {
+            return false;
+        }
+        // SEC-046-08: Verify m_destRootPath still resolves without symlinks to the exact
+        // same physical directory (st_dev, st_ino). A rename+replace leaves m_destRootFd
+        // open with st_nlink > 0, so pathname identity must also be revalidated.
+        LocalMergeExecDetail::UniqueFd pathFd =
+            LocalMergeExecDetail::openDirectoryNoSymlinks(m_destRootPath);
+        if (!pathFd.valid()) return false;
+        struct stat pathSt {};
+        if (::fstat(pathFd.fd, &pathSt) != 0
+            || !S_ISDIR(pathSt.st_mode)
+            || pathSt.st_nlink == 0
+            || pathSt.st_dev != m_destRootStat.st_dev
+            || pathSt.st_ino != m_destRootStat.st_ino) {
+            return false;
+        }
+        return true;
+    }
+
     bool verifyDirectoryChainStillAnchored(const QString &relDir, bool sourceSide) const
     {
         if (sourceSide) {
             // Destination calls use sourceSide=false; source calls should use verifySourceChainStillAnchored().
             return false;
         }
-        if (!m_destRootFd.valid()) return false;
-        struct stat curRoot {};
-        if (::fstat(m_destRootFd.fd, &curRoot) != 0
-            || curRoot.st_nlink == 0
-            || curRoot.st_dev != m_destRootStat.st_dev
-            || curRoot.st_ino != m_destRootStat.st_ino) {
-            return false;
-        }
+        if (!verifyDestRootStillAnchored()) return false;
         if (relDir.isEmpty()) return true;
 
         int curFd = m_destRootFd.fd;
@@ -2025,8 +2109,19 @@ private:
             ? QDir::cleanPath(m_plan.destinationRootPath)
             : stripRelativeComponents(m_plan.entries.first().destinationPath, m_plan.entries.first().relativePath);
         m_destRootFd = LocalMergeExecDetail::openDirectoryNoSymlinks(m_destRootPath);
-        if (!m_destRootFd.valid() || ::fstat(m_destRootFd.fd, &m_destRootStat) != 0) {
+        if (!m_destRootFd.valid()
+            || ::fstat(m_destRootFd.fd, &m_destRootStat) != 0
+            || !S_ISDIR(m_destRootStat.st_mode)
+            || m_destRootStat.st_nlink == 0) {
             finalizeFailure(KJob::UserDefinedError, tr("Merge destination root is invalid or symlinked."));
+            return;
+        }
+        // SEC-046-08: Reject if destination root identity changed between planning and execution.
+        if (m_plan.destinationRootStatValid
+            && (m_destRootStat.st_dev != m_plan.destinationRootStat.st_dev
+                || m_destRootStat.st_ino != m_plan.destinationRootStat.st_ino)) {
+            finalizeFailure(KJob::UserDefinedError,
+                            tr("Merge destination root identity changed after planning."));
             return;
         }
 
@@ -2153,6 +2248,9 @@ private:
         if (m_finished || m_cancelRequested || m_activeCopyJob) return;
 
         if (m_index >= m_plan.entries.size()) {
+            if (!finalizeCreatedDirectoryPermissions()) {
+                return;
+            }
             m_finished = true;
             m_report.completedFully = true;
             m_report.partialSuccess = false;
@@ -2219,7 +2317,9 @@ private:
 
         if (entry.classification == LocalMergeEntryClassification::SameObject) {
             if (entry.approvedAction == LocalMergeApprovedAction::Rename) {
-                handleRenameDirectory(entry);
+                m_report.failedOperations.append(entry.relativePath);
+                finalizeFailure(KJob::UserDefinedError,
+                                tr("Refusing unsafe Rename on SameObject directory: %1").arg(entry.relativePath));
                 return;
             }
             if (entry.approvedAction == LocalMergeApprovedAction::Skip) {
@@ -2331,23 +2431,41 @@ private:
         }
 
         const QString parentRel = parentRelativePath(relPath);
+        if (parentRel.isEmpty() && m_preTopLevelAnchorHook) {
+            m_preTopLevelAnchorHook(m_destRootPath, relPath);
+        }
+        if (m_cancelRequested || m_finished) {
+            return -1;
+        }
         if (!verifyDirectoryChainStillAnchored(parentRel, false)) {
             return -1;
         }
-        if (!parentRel.isEmpty()) {
-            auto it = m_destDirFds.constFind(parentRel);
-            if (it != m_destDirFds.constEnd() && it.value() && it.value()->valid()) {
-                return it.value()->fd;
-            }
+        if (parentRel.isEmpty()) {
+            // SEC-046-08: Never reopen the destination root by pathname without identity
+            // verification. Return the already-anchored m_destRootFd directly after
+            // verifyDirectoryChainStillAnchored("") has verified both FD and path identity.
+            return m_destRootFd.valid() ? m_destRootFd.fd : -1;
         }
-        auto fd = std::make_shared<LocalMergeExecDetail::UniqueFd>(
-            LocalMergeExecDetail::openDirectoryNoSymlinks(parentAbs));
-        if (!fd->valid()) return -1;
-        if (!parentRel.isEmpty()) {
-            m_destDirFds.insert(parentRel, fd);
-        } else {
-            m_destDirFds.insert(QStringLiteral("__root__:") + parentAbs, fd);
+        auto it = m_destDirFds.constFind(parentRel);
+        if (it != m_destDirFds.constEnd() && it.value() && it.value()->valid()) {
+            return it.value()->fd;
         }
+        // Walk nested parent from the anchored m_destRootFd using O_NOFOLLOW instead of
+        // reopening parentAbs from "/" by pathname.
+        int curFd = m_destRootFd.fd;
+        LocalMergeExecDetail::UniqueFd ownedStep;
+        const QStringList parts = parentRel.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+        for (const QString &part : parts) {
+            LocalMergeExecDetail::UniqueFd next(
+                ::openat(curFd, QFile::encodeName(part).constData(),
+                         O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
+            if (!next.valid()) return -1;
+            ownedStep = std::move(next);
+            curFd = ownedStep.fd;
+        }
+        if (!ownedStep.valid()) return -1;
+        auto fd = std::make_shared<LocalMergeExecDetail::UniqueFd>(std::move(ownedStep));
+        m_destDirFds.insert(parentRel, fd);
         return fd->fd;
     }
 
@@ -2535,7 +2653,7 @@ private:
             return;
         }
 
-        if (::mkdirat(dstParentFd, targetEnc.constData(), 0755) != 0) {
+        if (::mkdirat(dstParentFd, targetEnc.constData(), LocalMergeExecDetail::initialDirectoryCreationMode()) != 0) {
             const int err = errno;
             if (err == EEXIST) {
                 m_report.entriesNeedingReplan.append(entry.relativePath);
@@ -2552,11 +2670,23 @@ private:
 
         auto dstFd = std::make_shared<LocalMergeExecDetail::UniqueFd>(
             ::openat(dstParentFd, targetEnc.constData(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
-        if (!dstFd->valid()) {
+        struct stat createdDstSt {};
+        if (!dstFd->valid() || ::fstat(dstFd->fd, &createdDstSt) != 0 || !S_ISDIR(createdDstSt.st_mode)) {
             m_report.failedOperations.append(entry.relativePath);
             finalizeFailure(KJob::UserDefinedError,
                             tr("Newly created renamed directory could not be anchored: %1").arg(entry.destinationPath));
             return;
+        }
+
+        struct stat verifiedSrcSt {};
+        if (::fstat(srcFd->fd, &verifiedSrcSt) == 0 && S_ISDIR(verifiedSrcSt.st_mode)) {
+            recordCreatedDirectoryForFinalization(
+                entry.relativePath,
+                entry.destinationPath,
+                targetFolderName,
+                dstFd,
+                createdDstSt,
+                verifiedSrcSt);
         }
 
         m_srcDirFds.insert(QDir::cleanPath(entry.sourcePath), std::move(srcFd));
@@ -2858,8 +2988,9 @@ private:
             return;
         }
 
-        const QByteArray dstNameEnc = QFile::encodeName(QFileInfo(entry.destinationPath).fileName());
-        if (::mkdirat(dstParentFd, dstNameEnc.constData(), 0755) != 0) {
+        const QString dstLeafName = QFileInfo(entry.destinationPath).fileName();
+        const QByteArray dstNameEnc = QFile::encodeName(dstLeafName);
+        if (::mkdirat(dstParentFd, dstNameEnc.constData(), LocalMergeExecDetail::initialDirectoryCreationMode()) != 0) {
             m_report.failedOperations.append(entry.relativePath);
             finalizeFailure(KJob::UserDefinedError,
                             tr("Could not create destination directory: %1").arg(entry.destinationPath));
@@ -2868,11 +2999,23 @@ private:
 
         auto dstFd = std::make_shared<LocalMergeExecDetail::UniqueFd>(
             ::openat(dstParentFd, dstNameEnc.constData(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC));
-        if (!dstFd->valid()) {
+        struct stat createdDstSt {};
+        if (!dstFd->valid() || ::fstat(dstFd->fd, &createdDstSt) != 0 || !S_ISDIR(createdDstSt.st_mode)) {
             m_report.failedOperations.append(entry.relativePath);
             finalizeFailure(KJob::UserDefinedError,
                             tr("Newly created directory could not be anchored: %1").arg(entry.destinationPath));
             return;
+        }
+
+        struct stat verifiedSrcSt {};
+        if (::fstat(srcFd->fd, &verifiedSrcSt) == 0 && S_ISDIR(verifiedSrcSt.st_mode)) {
+            recordCreatedDirectoryForFinalization(
+                entry.relativePath,
+                entry.destinationPath,
+                dstLeafName,
+                dstFd,
+                createdDstSt,
+                verifiedSrcSt);
         }
 
         m_srcDirFds.insert(QDir::cleanPath(entry.sourcePath), std::move(srcFd));
@@ -3010,6 +3153,134 @@ private:
         copyJob->start();
     }
 
+    struct CreatedDirectoryPermRecord {
+        QString relativePath;
+        QString destinationPath;
+        QString leafName;
+        std::shared_ptr<LocalMergeExecDetail::UniqueFd> dirFd;
+        struct stat createdStat {};
+        mode_t targetMode = 0700;
+        struct timespec atim {};
+        struct timespec mtim {};
+        bool hasTimes = false;
+    };
+
+    void recordCreatedDirectoryForFinalization(
+        const QString &relativePath,
+        const QString &destinationPath,
+        const QString &leafName,
+        const std::shared_ptr<LocalMergeExecDetail::UniqueFd> &dirFd,
+        const struct stat &createdSt,
+        const struct stat &sourceSt)
+    {
+        CreatedDirectoryPermRecord rec;
+        rec.relativePath = relativePath;
+        rec.destinationPath = destinationPath;
+        rec.leafName = leafName;
+        rec.dirFd = dirFd;
+        rec.createdStat = createdSt;
+        rec.targetMode = LocalMergeExecDetail::sanitizeDirectoryMode(sourceSt.st_mode);
+        rec.atim = sourceSt.st_atim;
+        rec.mtim = sourceSt.st_mtim;
+        rec.hasTimes = true;
+        m_createdDirsForFinalization.append(std::move(rec));
+    }
+
+    // SEC-046-04: Finalize permissions on newly created directories in strict postorder
+    // (reverse creation order: deepest children first, then parents) using anchored FDs.
+    // Never touches pre-existing destination directories, never uses path-based chmod,
+    // and fails closed if a directory was replaced (e.g., symlink swap) or fchmod fails.
+    bool finalizeCreatedDirectoryPermissions()
+    {
+        for (qsizetype i = m_createdDirsForFinalization.size() - 1; i >= 0; --i) {
+            const CreatedDirectoryPermRecord &rec = m_createdDirsForFinalization.at(i);
+            if (!rec.dirFd || !rec.dirFd->valid()) {
+                m_report.failedOperations.append(rec.relativePath);
+                finalizeFailure(KIO::ERR_CANNOT_CHMOD,
+                                tr("Anchored descriptor unavailable for directory permission finalization: %1")
+                                    .arg(rec.destinationPath));
+                return false;
+            }
+
+            if (m_preDirPermFinalizeHook) {
+                m_preDirPermFinalizeHook(rec.relativePath, rec.destinationPath, rec.dirFd->fd);
+            }
+
+            // 1. Verify open FD identity and link count (detect unlink/replacement)
+            struct stat curFdSt {};
+            if (::fstat(rec.dirFd->fd, &curFdSt) != 0
+                || !S_ISDIR(curFdSt.st_mode)
+                || curFdSt.st_dev != rec.createdStat.st_dev
+                || curFdSt.st_ino != rec.createdStat.st_ino
+                || curFdSt.st_nlink == 0) {
+                m_report.failedOperations.append(rec.relativePath);
+                finalizeFailure(KIO::ERR_CANNOT_CHMOD,
+                                tr("Destination directory identity changed or was unlinked before permission finalization: %1")
+                                    .arg(rec.destinationPath));
+                return false;
+            }
+
+            // 2. Verify destination parent entry still points to this exact directory (AT_SYMLINK_NOFOLLOW)
+            const QString parentRel = parentRelativePath(rec.relativePath);
+            int parentFd = -1;
+            if (parentRel.isEmpty()) {
+                if (!verifyDestRootStillAnchored()) {
+                    m_report.failedOperations.append(rec.relativePath);
+                    finalizeFailure(KIO::ERR_CANNOT_CHMOD,
+                                    tr("Destination root identity changed before permission finalization: %1")
+                                        .arg(rec.destinationPath));
+                    return false;
+                }
+                parentFd = m_destRootFd.fd;
+            } else {
+                const auto pit = m_destDirFds.constFind(parentRel);
+                if (pit != m_destDirFds.cend() && pit.value() && pit.value()->valid()) {
+                    parentFd = pit.value()->fd;
+                }
+            }
+            if (parentFd < 0) {
+                m_report.failedOperations.append(rec.relativePath);
+                finalizeFailure(KIO::ERR_CANNOT_CHMOD,
+                                tr("Parent directory descriptor unavailable during permission finalization: %1")
+                                    .arg(rec.destinationPath));
+                return false;
+            }
+            struct stat pathSt {};
+            const QByteArray leafEnc = QFile::encodeName(rec.leafName);
+            if (::fstatat(parentFd, leafEnc.constData(), &pathSt, AT_SYMLINK_NOFOLLOW) != 0
+                || !S_ISDIR(pathSt.st_mode)
+                || pathSt.st_dev != rec.createdStat.st_dev
+                || pathSt.st_ino != rec.createdStat.st_ino) {
+                m_report.failedOperations.append(rec.relativePath);
+                finalizeFailure(KIO::ERR_CANNOT_CHMOD,
+                                tr("Destination directory path was replaced (possible symlink attack) before permission finalization: %1")
+                                    .arg(rec.destinationPath));
+                return false;
+            }
+
+            // 3. Apply sanitized mode via FD-anchored fchmod (never path-based chmod)
+            if (m_simulateDirChmodError || ::fchmod(rec.dirFd->fd, rec.targetMode) != 0) {
+                const int chmodErr = m_simulateDirChmodError ? EACCES : errno;
+                if (m_simulateDirChmodError
+                    || (!LocalMergeExecDetail::isNonPosixPermissionFs(rec.dirFd->fd)
+                        && chmodErr != ENOTSUP && chmodErr != EOPNOTSUPP && chmodErr != ENOSYS)) {
+                    m_report.failedOperations.append(rec.relativePath);
+                    finalizeFailure(KIO::ERR_CANNOT_CHMOD,
+                                    tr("Could not apply final permissions to destination directory: %1")
+                                        .arg(rec.destinationPath));
+                    return false;
+                }
+            }
+
+            // 4. Best-effort timestamp restoration via FD-anchored futimens
+            if (rec.hasTimes) {
+                const struct timespec times[2] = {rec.atim, rec.mtim};
+                ::futimens(rec.dirFd->fd, times);
+            }
+        }
+        return true;
+    }
+
     void finalizeFailure(int errorCode, const QString &errorText)
     {
         finalizeOutcome(
@@ -3040,10 +3311,14 @@ private:
     CopyJobFactory m_copyJobFactory;
     PrePublishHook m_prePublishHook;
     FaultPhaseHook m_faultPhaseHook;
+    PreDirPermFinalizeHook m_preDirPermFinalizeHook;
+    PreTopLevelAnchorHook m_preTopLevelAnchorHook;
     bool m_simulateFsyncEio = false;
     bool m_simulateOTmpfileUnsupported = false;
     bool m_simulateRenameExchangeUnsupported = false;
     bool m_simulateUnsupportedOverwriteFs = false;
+    bool m_simulateDirChmodError = false;
+    QList<CreatedDirectoryPermRecord> m_createdDirsForFinalization;
 
     QList<LocalMergeAnchoredDirectory> m_preApprovedDirectories;
     QString m_destRootPath;

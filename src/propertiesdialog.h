@@ -216,6 +216,13 @@ public:
     using RecordCopyJob = std::function<void(KIO::CopyJob *)>;
     using ShowStatus = std::function<void(const QString &, int)>;
     using RefreshView = std::function<void()>;
+    using AsyncAdminStatFactory = std::function<KJob *(const QUrl &, QObject *)>;
+
+    static AsyncAdminStatFactory &asyncAdminStatFactoryForTesting()
+    {
+        static AsyncAdminStatFactory factory;
+        return factory;
+    }
 
     static QDialog *show(
         QWidget *parent,
@@ -230,9 +237,15 @@ public:
         const ShowStatus &showStatus,
         const RefreshView &refreshView)
     {
-        KFileItem fileItem(
-            url,
-            KFileItem::NormalMimeTypeDetermination);
+        KFileItem::MimeTypeDetermination fileItemMimeMode = KFileItem::NormalMimeTypeDetermination;
+        if (!isDir && url.isLocalFile()) {
+            struct stat st {};
+            if (::stat(QFile::encodeName(url.toLocalFile()).constData(), &st) != 0
+                || !S_ISREG(st.st_mode)) {
+                fileItemMimeMode = KFileItem::SkipMimeTypeFromContent;
+            }
+        }
+        KFileItem fileItem(url, fileItemMimeMode);
 
         auto *dialog = new PropertiesWindow(parent);
         dialog->setAttribute(Qt::WA_DeleteOnClose);
@@ -251,6 +264,8 @@ public:
             QString workingName;
             bool canEditPermissions = false;
             bool adminUnlocked = false;
+            bool adminUnlockPending = false;
+            QPointer<KJob> pendingAdminUnlockJob;
             int currentMode = -1;
             QString permissionOwner;
             QString permissionGroup;
@@ -529,6 +544,7 @@ public:
                     "Odblokuj jako administrator",
                     "Unlock as administrator"),
                 permissionsPage);
+        adminUnlockButton->setObjectName(QStringLiteral("propertiesAdminUnlockButton"));
         adminUnlockButton->setVisible(false);
         permissionsLayout->addWidget(
             adminUnlockButton,
@@ -884,13 +900,32 @@ public:
                 "Permissions"));
 
         // --------------------------------------------------------------
-        // Administrator unlock
+        // Administrator unlock (asynchronous KIO::StatJob — no nested exec())
         // --------------------------------------------------------------
+        QObject::connect(
+            dialog,
+            &QObject::destroyed,
+            [st] {
+                st->adminUnlockPending = false;
+                if (KJob *pending = st->pendingAdminUnlockJob.data()) {
+                    st->pendingAdminUnlockJob.clear();
+                    QObject::disconnect(pending, nullptr, nullptr, nullptr);
+                    pending->kill(KJob::Quietly);
+                }
+            });
+
         QObject::connect(
             adminUnlockButton,
             &QPushButton::clicked,
             dialog,
             [=] {
+                if (!alive
+                    || st->adminUnlockPending
+                    || st->adminUnlocked
+                    || alive->property("propertiesTargetUnavailable").toBool()) {
+                    return;
+                }
+
                 if (!ensureAdminProtocol || !ensureAdminProtocol()) {
                     return;
                 }
@@ -907,53 +942,129 @@ public:
                     adminUrlForLocalPath(
                         localPath);
 
-                int elevatedMode = -1;
-                QString elevatedOwner;
-                QString elevatedGroup;
-                QString error;
-
-                // This stat is intentional: it verifies that the admin
-                // worker is available and triggers PolicyKit authorization.
-                if (!readKioPermissions(
-                        elevatedUrl,
-                        &elevatedMode,
-                        &elevatedOwner,
-                        &elevatedGroup,
-                        &error)) {
-                    QMessageBox::warning(
-                        dialog,
-                        trLocal(
-                            "Autoryzacja administratora",
-                            "Administrator authorization"),
-                        isPolish()
-                            ? QStringLiteral(
-                                "Nie udało się odblokować elementu przez admin://:\n%1")
-                                .arg(error)
-                            : QStringLiteral(
-                                "Could not unlock the item through admin://:\n%1")
-                                .arg(error));
+                if (!elevatedUrl.isValid()) {
                     return;
                 }
 
-                st->workingUrl = elevatedUrl;
-                st->adminUnlocked = true;
-                st->canEditPermissions = true;
-                st->currentMode = elevatedMode;
-                st->permissionOwner =
-                    elevatedOwner;
-                st->permissionGroup =
-                    elevatedGroup;
+                const auto &factory = asyncAdminStatFactoryForTesting();
+                KJob *job = factory
+                    ? factory(elevatedUrl, dialog)
+                    : static_cast<KJob *>(KIO::stat(elevatedUrl, KIO::HideProgressInfo));
+                if (!job) {
+                    return;
+                }
+                if (job->parent() != dialog) {
+                    job->setParent(dialog);
+                }
 
-                setPermissionBoxesFromMode(
-                    elevatedMode);
-                setPermissionBoxesEnabled(
-                    true);
-                adminUnlockButton->hide();
+                st->adminUnlockPending = true;
+                st->pendingAdminUnlockJob = job;
+                adminUnlockButton->setEnabled(false);
 
-                permissionsInfo->setText(
-                    trLocal(
-                        "Tryb administratora został odblokowany dla tego elementu. Zmiany zostaną wykonane przez KIO admin:// i zweryfikowane po zapisie.",
-                        "Administrator mode is unlocked for this item. Changes will be performed through KIO admin:// and verified after saving."));
+                // This stat is intentional: it verifies that the admin
+                // worker is available and triggers PolicyKit authorization.
+                QObject::connect(
+                    job,
+                    &KJob::result,
+                    dialog,
+                    [=](KJob *finishedJob) {
+                        if (!alive
+                            || !st->adminUnlockPending
+                            || st->pendingAdminUnlockJob.data() != finishedJob) {
+                            return;
+                        }
+                        st->adminUnlockPending = false;
+                        st->pendingAdminUnlockJob.clear();
+
+                        if (alive->property("propertiesTargetUnavailable").toBool()) {
+                            return;
+                        }
+
+                        if (finishedJob->error() != 0) {
+                            adminUnlockButton->setEnabled(true);
+                            if (finishedJob->error() != KJob::KilledJobError
+                                && finishedJob->error() != KIO::ERR_USER_CANCELED) {
+                                QMessageBox::warning(
+                                    alive.data(),
+                                    trLocal(
+                                        "Autoryzacja administratora",
+                                        "Administrator authorization"),
+                                    isPolish()
+                                        ? QStringLiteral(
+                                            "Nie udało się odblokować elementu przez admin://:\n%1")
+                                            .arg(finishedJob->errorString())
+                                        : QStringLiteral(
+                                            "Could not unlock the item through admin://:\n%1")
+                                            .arg(finishedJob->errorString()));
+                            }
+                            return;
+                        }
+
+                        int elevatedMode = -1;
+                        QString elevatedOwner;
+                        QString elevatedGroup;
+                        QString error;
+                        bool extracted = false;
+                        if (auto *statJob = qobject_cast<KIO::StatJob *>(finishedJob)) {
+                            extracted = extractKioPermissions(
+                                statJob->statResult(),
+                                &elevatedMode,
+                                &elevatedOwner,
+                                &elevatedGroup,
+                                &error);
+                        } else {
+                            const QVariant accessVar = finishedJob->property("thispcStatAccess");
+                            if (accessVar.isValid() && accessVar.toLongLong() >= 0) {
+                                KIO::UDSEntry mockEntry;
+                                mockEntry.fastInsert(KIO::UDSEntry::UDS_ACCESS, accessVar.toLongLong());
+                                mockEntry.fastInsert(KIO::UDSEntry::UDS_USER, finishedJob->property("thispcStatUser").toString());
+                                mockEntry.fastInsert(KIO::UDSEntry::UDS_GROUP, finishedJob->property("thispcStatGroup").toString());
+                                extracted = extractKioPermissions(
+                                    mockEntry,
+                                    &elevatedMode,
+                                    &elevatedOwner,
+                                    &elevatedGroup,
+                                    &error);
+                            } else {
+                                error = QStringLiteral("Permission bits were not returned by the KIO worker.");
+                            }
+                        }
+
+                        if (!extracted) {
+                            adminUnlockButton->setEnabled(true);
+                            QMessageBox::warning(
+                                alive.data(),
+                                trLocal(
+                                    "Autoryzacja administratora",
+                                    "Administrator authorization"),
+                                isPolish()
+                                    ? QStringLiteral(
+                                        "Nie udało się odblokować elementu przez admin://:\n%1")
+                                        .arg(error)
+                                    : QStringLiteral(
+                                        "Could not unlock the item through admin://:\n%1")
+                                        .arg(error));
+                            return;
+                        }
+
+                        st->workingUrl = elevatedUrl;
+                        st->adminUnlocked = true;
+                        st->canEditPermissions = true;
+                        st->currentMode = elevatedMode;
+                        st->permissionOwner = elevatedOwner;
+                        st->permissionGroup = elevatedGroup;
+
+                        setPermissionBoxesFromMode(elevatedMode);
+                        setPermissionBoxesEnabled(true);
+                        adminUnlockButton->hide();
+
+                        permissionsInfo->setText(
+                            trLocal(
+                                "Tryb administratora został odblokowany dla tego elementu. Zmiany zostaną wykonane przez KIO admin:// i zweryfikowane po zapisie.",
+                                "Administrator mode is unlocked for this item. Changes will be performed through KIO admin:// and verified after saving."));
+                    });
+
+                job->start();
             });
 
         // --------------------------------------------------------------
@@ -1662,6 +1773,16 @@ public:
     }
 
 private:
+    static QString storageQueryPath(const QString &path)
+    {
+        if (path.isEmpty()) return {};
+        struct stat st {};
+        if (::lstat(QFile::encodeName(path).constData(), &st) == 0 && S_ISDIR(st.st_mode)) {
+            return path;
+        }
+        return QFileInfo(path).absolutePath();
+    }
+
     static QString filesystemTypeForUrl(const QUrl &url)
     {
         const QString path =
@@ -1671,7 +1792,7 @@ private:
             return {};
         }
 
-        QStorageInfo storage(path);
+        QStorageInfo storage(storageQueryPath(path));
         if (!storage.isValid()) {
             return {};
         }
@@ -1689,7 +1810,7 @@ private:
             return false;
         }
 
-        QStorageInfo storage(path);
+        QStorageInfo storage(storageQueryPath(path));
         return storage.isValid()
             && storage.isReadOnly();
     }
@@ -1710,35 +1831,13 @@ private:
             || fs == QStringLiteral("msdos");
     }
 
-    static bool readKioPermissions(
-        const QUrl &url,
+    static bool extractKioPermissions(
+        const KIO::UDSEntry &entry,
         int *mode,
         QString *owner = nullptr,
         QString *group = nullptr,
         QString *error = nullptr)
     {
-        if (!url.isValid()) {
-            if (error) {
-                *error = QStringLiteral("Invalid URL");
-            }
-            return false;
-        }
-
-        KIO::StatJob *job =
-            KIO::stat(
-                url,
-                KIO::HideProgressInfo);
-
-        if (!job->exec()) {
-            if (error) {
-                *error = job->errorString();
-            }
-            return false;
-        }
-
-        const KIO::UDSEntry entry =
-            job->statResult();
-
         const qlonglong access =
             entry.numberValue(
                 KIO::UDSEntry::UDS_ACCESS,
@@ -1769,6 +1868,40 @@ private:
         }
 
         return true;
+    }
+
+    static bool readKioPermissions(
+        const QUrl &url,
+        int *mode,
+        QString *owner = nullptr,
+        QString *group = nullptr,
+        QString *error = nullptr)
+    {
+        if (!url.isValid()) {
+            if (error) {
+                *error = QStringLiteral("Invalid URL");
+            }
+            return false;
+        }
+
+        KIO::StatJob *job =
+            KIO::stat(
+                url,
+                KIO::HideProgressInfo);
+
+        if (!job->exec()) {
+            if (error) {
+                *error = job->errorString();
+            }
+            return false;
+        }
+
+        return extractKioPermissions(
+            job->statResult(),
+            mode,
+            owner,
+            group,
+            error);
     }
 
     static bool readKioFileItem(

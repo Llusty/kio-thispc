@@ -2,6 +2,22 @@
 
 # Changelog
 
+## 0.45.2 — Security & Stability Hotfix (`SEC-046`)
+
+### Fixed & Hardened
+- **Throttled Copy Cancellation & Cleanup Ordering (`SEC-046-05`):** Added asynchronous cancellation (`LocalFileCopyJob::requestCancelAsync()`) routed through `TransferQueueController::cancelTaskImpl()` with immediate `TransferBandwidthLimiter::cancelTask()` wake-up. Queue slots, target reservations, and terminal `Cancelled` state are now finalized strictly after `LocalFileCopyWorker` closes descriptors and removes its owned `.thispc-part` staging file. Also resolved sub-256 KiB/s token-bucket livelocks.
+- **Destination-Root Anchoring & Identity Protection (`SEC-046-08`):** `LocalMergePlan` captures destination-root identity (`st_dev`, `st_ino`), and `LocalMergeExecutionJob` re-verifies no-symlink root resolution and directory chains at execution start, before top-level/nested writes, and before permission finalization (`DR1–DR15`).
+- **FIFO & Special-File GUI Hang Prevention (`SEC-046-11` & GUI Hardening):** Prevented main-thread `wait_for_partner` hangs on unconnected FIFOs, symlinks to FIFOs, and broken symlinks across `AclController`/`AclProvider` (`O_NONBLOCK` + `fstat`), `QStorageInfo` parent-directory queries for non-directories in Properties/Permissions, `S_ISREG` guards before `QMimeDatabase::MatchContent` and `PreviewController` probing, `KFileItem::SkipMimeTypeFromContent` for non-regular files, and `O_NONBLOCK` in `MetadataProvider`/`ChecksumWorker`.
+- **KIO `thispc:/` Mount-Point Confinement (`SEC-046-17`):** Added `ThisPcConfinement` (`src/thispcconfinement.h`) with lexical traversal rejection, escaping-symlink rejection, and production mount-root `(st_dev, st_ino)` verification in `src/thispc.cpp`.
+- **Additional `SEC-046` Lifecycle & Security Hardening:** Hardened worker lifetime and thread affinity (`SEC-046-12`), async conflict-dialog cancellation/reopen lifecycle (`SEC-046-22A/B`), archive creation/extraction cancellation and safety, SameObject Rename handling, and merge transaction journal validation.
+
+### Known Limitations & Verification Scope
+- **`SEC-046-17` Residual TOCTOU:** Post-redirection KIO `file://` URL TOCTOU between `thispc:/` validation and downstream `kio_file` access is mitigated, not eliminated.
+- **Folder Merge Speed Limiter:** `LocalMergeQueueBridge` currently sets `supportsThrottling = false`; the shared Operations bandwidth limiter does not govern Folder Merge's internal copy worker (`LocalAnchoredFileCopyWorker`).
+- **Sanitizer / LeakSanitizer Baseline:** Automated ASan/UBSan verification (89/89 suites) runs with `ASAN_OPTIONS=detect_leaks=0:halt_on_error=1`; a pre-existing 1,552-byte `ChecksumJob::start()` / `QThread` exit leak remains unresolved, so full LeakSanitizer cleanliness is not claimed.
+- **Directory Refresh Contract Gaps:** Pre-existing `DR-058` (NTFS/FUSE inotify latency), `DR-059` (VFAT change detection), and `DR-062` (live search view update) remain unimplemented; `DR-009` and `DR-010` remain interactive desktop checks.
+- **Fail-Closed Fencing:** Existing `0.45.1` fail-closed restrictions (Folder Merge `Overwrite` restricted to Btrfs/ext4/XFS/tmpfs; Folder Merge Undo fenced) remain unchanged.
+
 ## 0.45.1 — Safe Recursive Folder Merge (`FOLDER-MERGE-01`)
 
 ### Added

@@ -69,7 +69,7 @@ public Q_SLOTS:
 #endif
 
         const QByteArray encoded = QFile::encodeName(m_path);
-        const int fd = ::open(encoded.constData(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+        const int fd = ::open(encoded.constData(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
         if (fd < 0) {
             finishOpenFailure(result, errno);
             return;

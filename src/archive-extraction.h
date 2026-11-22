@@ -25,6 +25,7 @@
 #include <atomic>
 #include <cerrno>
 #include <csignal>
+#include <functional>
 #include <fcntl.h>
 #include <linux/fs.h>
 #include <linux/landlock.h>
@@ -94,6 +95,22 @@ struct ThisPcArchiveEntry
     QByteArray hash;
 };
 
+inline bool safeTerminateIsolatedProcessGroup(
+    pid_t group,
+    pid_t callerPgrp,
+    const std::function<int(pid_t, int)> &signalNegativeFn = {})
+{
+    if (group <= 0 || group == callerPgrp) {
+        return false;
+    }
+    if (signalNegativeFn) {
+        signalNegativeFn(group, SIGKILL);
+    } else {
+        ::kill(-group, SIGKILL);
+    }
+    return true;
+}
+
 class ArchiveExtractionJob final : public KIO::Job
 {
 public:
@@ -128,6 +145,7 @@ public:
     }
 
     QUrl publishedUrl() const { return m_publishedUrl; } // Read after result only.
+    void setProcessGroupSignalFn(std::function<int(pid_t, int)> fn) { m_processGroupSignalFn = std::move(fn); }
 
 protected:
     bool doKill() override
@@ -306,9 +324,11 @@ private:
         if (!process.waitForStarted(10000))
             return trLocal("Nie można uruchomić Ark: %1", "Cannot start Ark: %1").arg(process.errorString());
         const auto group = static_cast<pid_t>(process.processId());
+        const pid_t callerPgrp = ::getpgrp();
+        const auto signalFn = m_processGroupSignalFn;
         // Reap the direct child and stop helpers even if Ark crashes first.
         const auto stop = qScopeGuard([&] {
-            ::kill(-group, SIGKILL);
+            safeTerminateIsolatedProcessGroup(group, callerPgrp, signalFn);
             if (process.state() != QProcess::NotRunning) { process.kill(); process.waitForFinished(5000); }
         });
         QByteArray diagnostics;
@@ -431,4 +451,5 @@ private:
     bool m_published = false;
     bool m_finished = false;
     QUrl m_publishedUrl;
+    std::function<int(pid_t, int)> m_processGroupSignalFn;
 };

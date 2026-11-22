@@ -1,6 +1,6 @@
 [English](README.md) | [Polski](README.pl.md)
 
-# kio-thispc (Ten komputer) 0.45.1
+# kio-thispc (Ten komputer) 0.45.2
 
 ThisPC to natywny menedżer plików dla środowiska KDE/Qt, łączący ergonomię inspirowaną Eksploratorem Windows z pracą dwupanelową (Split View), integracją KIO, bezpiecznymi lokalnymi operacjami plikowymi oraz natywną obsługą urządzeń w systemie Linux/KDE.
 
@@ -9,6 +9,18 @@ ThisPC to natywny menedżer plików dla środowiska KDE/Qt, łączący ergonomi�
 - **Licencja:** Licencja MIT
 
 ---
+
+## 0.45.2 — Hotfix bezpieczeństwa i stabilności (`SEC-046`)
+
+- **Anulowanie i czyszczenie kopiowania z limitem prędkości (`SEC-046-05`):** Asynchroniczne `LocalFileCopyJob::requestCancelAsync()` z natychmiastowym wybudzaniem `TransferBandwidthLimiter` gwarantuje usunięcie pliku tymczasowego `.thispc-part` przed zwolnieniem slotów/rezerwacji i raportowaniem stanu `Cancelled`; rozwiązano livelock limitera poniżej 256 KiB/s.
+- **Kotwiczenie katalogu docelowego (`SEC-046-08`):** `LocalMergePlan` oraz `LocalMergeExecutionJob` kotwiczą i ponownie weryfikują `(st_dev, st_ino)` katalogu docelowego bez symlinków w fazie planowania, wykonania i finalizacji uprawnień (`DR1–DR15`).
+- **Ochrona GUI przed zawieszaniem na FIFO i plikach specjalnych (`SEC-046-11`):** Wyeliminowano blokady `wait_for_partner` na niepodłączonych FIFO, symlinkach do FIFO i uszkodzonych symlinkach we Właściwościach (`QStorageInfo` na katalogu nadrzędnym), ACL (`O_NONBLOCK` + `fstat`), Metadanych, Sumach kontrolnych, Podglądzie, menu kontekstowym i wykrywaniu archiwów.
+- **Ograniczenie KIO `thispc:/` i cykl życia (`SEC-046-17`, `SEC-046-12`, `SEC-046-22A/B`):** Dodano `ThisPcConfinement` z weryfikacją tożsamości punktu montowania w `src/thispc.cpp`, wzmocniono czas życia workerów i cykl życia dialogów konfliktów.
+- **Znane ograniczenia:**
+  - Pozostałe okno TOCTOU w `SEC-046-17` po przekierowaniu `file://` do `kio_file` jest ograniczone, ale nie całkowicie wyeliminowane.
+  - Folder Merge (`LocalMergeQueueBridge`) nie integruje jeszcze współdzielonego limitera przepustowości z okna Operacji (`supportsThrottling = false`).
+  - Automatyczna regresja ASan/UBSan działa z `detect_leaks=0` (pozostaje wcześniejszy wyciek 1 552 bajtów w `ChecksumJob`/`QThread`; pełna czystość LeakSanitizer nie jest deklarowana).
+  - Wcześniejsze luki kontraktu Directory Refresh (`DR-058`, `DR-059`, `DR-062`) oraz testy interaktywne (`DR-009`, `DR-010`) pozostają bez zmian.
 
 ## 0.45.1 — Bezpieczne rekurencyjne scalanie folderów (`FOLDER-MERGE-01`)
 
@@ -499,8 +511,8 @@ Funkcje z 0.15.4 — kompaktowy popup operacji, dynamiczna wysokość, anulowani
 
 ```bash
 cd ~/Pobrane
-tar -xzf kio-thispc-0.45.1.tar.gz
-cd kio-thispc-0.45.1
+tar -xzf kio-thispc-0.45.2.tar.gz
+cd kio-thispc-0.45.2
 chmod +x install.sh
 ./install.sh
 ```

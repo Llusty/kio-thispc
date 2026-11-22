@@ -537,18 +537,49 @@ int main(int argc, char **argv)
             synthetic100k.append(fe);
         }
 
+#if defined(__SANITIZE_ADDRESS__)
+        constexpr bool kAsanBuild = true;
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+        constexpr bool kAsanBuild = true;
+#else
+        constexpr bool kAsanBuild = false;
+#endif
+#else
+        constexpr bool kAsanBuild = false;
+#endif
+        // Unoptimized ASan+UBSan instrumentation adds ~4.4x overhead on 100k/300k
+        // allocations; keep strict production gates (2000 ms / 5000 ms) unchanged
+        // for non-sanitized builds while using a bounded ASan budget (5000 ms / 12500 ms).
+        constexpr qint64 k100kBudgetMs = kAsanBuild ? 5000 : 2000;
+
         QElapsedTimer timer;
         timer.start();
         auto res = StorageAnalysisAccumulator::analyze(root, synthetic100k, {}, StorageScanState::Completed);
         const qint64 elapsedMs = timer.elapsed();
+        qInfo("storage_analysis 100k benchmark: %lld ms (budget %lld ms, asan=%d)",
+              static_cast<long long>(elapsedMs), static_cast<long long>(k100kBudgetMs), kAsanBuild ? 1 : 0);
 
         verify(res.filesByLogical.size() == 90000, "40. all 90k files ranked");
         verify(res.dirsByLogical.size() == 10000, "40. all 10k dirs ranked");
-        verify(elapsedMs < 2000, "40. 100k entries analyzed under 2000 ms");
+        verify(elapsedMs < k100kBudgetMs, "40. 100k entries analyzed within budget");
     }
 
     // 41. 300k synthetic metadata memory/performance sanity
     {
+#if defined(__SANITIZE_ADDRESS__)
+        constexpr bool kAsanBuild = true;
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+        constexpr bool kAsanBuild = true;
+#else
+        constexpr bool kAsanBuild = false;
+#endif
+#else
+        constexpr bool kAsanBuild = false;
+#endif
+        constexpr qint64 k300kBudgetMs = kAsanBuild ? 12500 : 5000;
+
         QList<StorageScanEntry> synthetic300k;
         synthetic300k.reserve(300000);
 
@@ -578,10 +609,12 @@ int main(int argc, char **argv)
         timer.start();
         auto res = StorageAnalysisAccumulator::analyze(root, synthetic300k, {}, StorageScanState::Completed);
         const qint64 elapsedMs = timer.elapsed();
+        qInfo("storage_analysis 300k benchmark: %lld ms (budget %lld ms, asan=%d)",
+              static_cast<long long>(elapsedMs), static_cast<long long>(k300kBudgetMs), kAsanBuild ? 1 : 0);
 
         verify(res.filesByLogical.size() == 270000, "41. all 270k files ranked");
         verify(res.dirsByLogical.size() == 30000, "41. all 30k dirs ranked");
-        verify(elapsedMs < 5000, "41. 300k entries analyzed under 5000 ms");
+        verify(elapsedMs < k300kBudgetMs, "41. 300k entries analyzed within budget");
     }
 
     // 42. No MIME/hash/thumbnail/ACL work triggered

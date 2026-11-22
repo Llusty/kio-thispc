@@ -143,19 +143,39 @@ public:
         return m_publishSystemError;
     }
 
-    bool requestCancel()
+    void setBeforeCancelCleanupHookForTest(std::function<void()> hook)
     {
         QMutexLocker locker(&m_mutex);
-        if (m_finished) return false;
-        m_cancelRequested = true;
-        m_pauseRequested = false;
-        m_stateChanged.wakeAll();
+        m_beforeCancelCleanupHook = std::move(hook);
+    }
+
+    bool requestCancel()
+    {
+        std::shared_ptr<TransferBandwidthLimiter> limiter;
+        quint64 taskId = 0;
+        {
+            QMutexLocker locker(&m_mutex);
+            if (m_finished) return false;
+            m_cancelRequested = true;
+            m_pauseRequested = false;
+            limiter = m_limiter;
+            taskId = m_taskId;
+            m_stateChanged.wakeAll();
+        }
+        if (limiter) {
+            limiter->cancelTask(taskId);
+        }
         return true;
     }
 
 public Q_SLOTS:
     void run()
     {
+        if (cancelRequested()) {
+            markFinished();
+            Q_EMIT cancelled();
+            return;
+        }
         QFile source(m_sourcePath);
         QFile destination(m_partialPath);
         const QFileInfo sourceInfo(m_sourcePath);
@@ -277,11 +297,19 @@ public Q_SLOTS:
                 QThread::msleep(
                     static_cast<unsigned long>(m_chunkDelayMilliseconds));
             }
-            if (m_limiter) {
-                THISPC_TRACE("LocalFileCopyWorker::run calling acquire: this=%p, m_taskId=%llu, size=%lld",
-                             static_cast<void*>(this), static_cast<unsigned long long>(m_taskId), static_cast<long long>(chunk.size()));
-                m_limiter->acquire(m_taskId, chunk.size(), [this]() {
-                    return cancelRequested() || m_pauseRequested;
+            std::shared_ptr<TransferBandwidthLimiter> limiter;
+            quint64 taskId = 0;
+            {
+                QMutexLocker locker(&m_mutex);
+                limiter = m_limiter;
+                taskId = m_taskId;
+            }
+            if (limiter) {
+                THISPC_TRACE("LocalFileCopyWorker::run calling acquire: this=%p, taskId=%llu, size=%lld",
+                             static_cast<void*>(this), static_cast<unsigned long long>(taskId), static_cast<long long>(chunk.size()));
+                limiter->acquire(taskId, chunk.size(), [this]() {
+                    QMutexLocker locker(&m_mutex);
+                    return m_cancelRequested || m_pauseRequested;
                 });
                 if (cancelRequested()) {
                     break;
@@ -297,6 +325,7 @@ public Q_SLOTS:
         if (cancelRequested()) {
             destination.close();
             source.close();
+            invokeBeforeCancelCleanupHook();
             removeVerifiedPartial(m_partialPath, partialIdentity);
             markFinished();
             Q_EMIT cancelled();
@@ -340,6 +369,7 @@ public Q_SLOTS:
                 ::close(stagingFd);
             }
             publicationLocker.unlock();
+            invokeBeforeCancelCleanupHook();
             removeVerifiedPartial(m_partialPath, partialIdentity);
             markFinished();
             Q_EMIT cancelled();
@@ -474,6 +504,18 @@ private:
         Q_EMIT failed(error, message, systemError);
     }
 
+    void invokeBeforeCancelCleanupHook()
+    {
+        std::function<void()> hook;
+        {
+            QMutexLocker locker(&m_mutex);
+            hook = m_beforeCancelCleanupHook;
+        }
+        if (hook) {
+            hook();
+        }
+    }
+
     QString m_sourcePath;
     QString m_destinationPath;
     QString m_partialPath;
@@ -495,6 +537,7 @@ private:
     int m_publishSystemError = 0;
     std::shared_ptr<TransferBandwidthLimiter> m_limiter;
     quint64 m_taskId = 0;
+    std::function<void()> m_beforeCancelCleanupHook;
 };
 
 
@@ -617,6 +660,28 @@ public:
         if (m_worker) {
             m_worker->setBandwidthLimiter(std::move(limiter), taskId);
         }
+    }
+
+    void setBeforeCancelCleanupHookForTest(std::function<void()> hook)
+    {
+        if (m_worker) {
+            m_worker->setBeforeCancelCleanupHookForTest(std::move(hook));
+        }
+    }
+
+    bool requestCancelAsync()
+    {
+        if (m_finished) {
+            return false;
+        }
+        if (!m_started) {
+            finish(true, LocalTransferError::Cancelled, {});
+            return true;
+        }
+        if (!m_thread.isRunning()) {
+            return false;
+        }
+        return m_worker->requestCancel();
     }
 
     bool commitOverwrite()

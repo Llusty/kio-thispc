@@ -415,8 +415,8 @@ public:
 
         m_subtitleLabel = new QLabel(
             m_isSelfCopy
-                ? trText("Źródło i cel wskazują ten sam folder. Zapisz kopię pod inną nazwą lub pomiń.",
-                         "Source and destination refer to the same folder. Copy under another name or skip.")
+                ? trText("Źródło i cel wskazują ten sam folder. Scalanie i zmiana nazwy są zablokowane — pomiń folder lub anuluj.",
+                         "Source and destination refer to the same folder. Merge and Rename are blocked — skip folder or cancel.")
                 : trText("Scalanie łączy zawartość folderów bez automatycznego zastępowania istniejących plików.",
                          "Merging combines folder contents without automatically replacing existing files."),
             this);
@@ -538,8 +538,16 @@ public:
 
         m_renameButton = new QPushButton(trText("Zmień nazwę", "Rename"), this);
         m_renameButton->setAutoDefault(false);
+        if (m_isSelfCopy) {
+            m_renameButton->setEnabled(false);
+            m_renameButton->setToolTip(trText(
+                "Zmiana nazwy folderu wskazującego samego siebie jest zablokowana, aby uniknąć utworzenia pustego folderu.",
+                "Renaming a self-copy folder is blocked to prevent creating an empty folder without its contents."));
+            m_renameEdit->setEnabled(false);
+            m_suggestButton->setEnabled(false);
+        }
         connect(m_renameButton, &QPushButton::clicked, this, [this] {
-            if (!validateRenameInput()) {
+            if (m_isSelfCopy || !validateRenameInput()) {
                 return;
             }
             m_decision.action = LocalMergeApprovedAction::Rename;
@@ -570,9 +578,9 @@ public:
         root->addLayout(btnRow);
 
         if (m_isSelfCopy) {
-            m_renameButton->setDefault(true);
-            m_renameButton->setAutoDefault(true);
-            m_renameButton->setFocus();
+            m_skipButton->setDefault(true);
+            m_skipButton->setAutoDefault(true);
+            m_skipButton->setFocus();
         } else if (mergePermitted) {
             m_mergeButton->setFocus();
         } else {
@@ -629,6 +637,11 @@ private:
 
     bool validateRenameInput()
     {
+        if (m_isSelfCopy) {
+            m_renameButton->setEnabled(false);
+            m_validationLabel->setVisible(false);
+            return false;
+        }
         const QString name = m_renameEdit->text();
         QString err;
         if (!LocalMergeDialogDetail::isSafeSingleComponent(name)) {
@@ -1081,100 +1094,70 @@ struct LocalMergeResolutionResult
     QStringList entriesRequiringStage3BRevalidation;
 };
 
-// Pure-plan, zero-I/O recursive conflict resolution coordinator for Stage 3A.
-class LocalMergeConflictResolver
+// Pure-plan, zero-I/O resumable conflict resolution session for Stage 3A.
+// Caller must keep `plan` alive for the lifetime of the session.
+class LocalMergeConflictSession
 {
 public:
-    using FolderPromptFn = std::function<LocalFolderConflictDecision(
-        const LocalMergePlanEntry &entry,
-        qsizetype remainingFolderConflicts,
-        LocalMergeConflictProgress progress)>;
-    using FilePromptFn = std::function<LocalFileConflictDecision(
-        const LocalMergePlanEntry &entry,
-        const LocalMergeBackendCapabilities &capabilities,
-        qsizetype remainingExactFileConflicts,
-        LocalMergeConflictProgress progress)>;
+    enum class State {
+        Ready,
+        WaitingFolderDecision,
+        WaitingFileDecision,
+        Completed,
+        Cancelled
+    };
 
-    static LocalMergeResolutionResult resolve(
-        LocalMergePlan &plan,
-        const LocalMergeBackendCapabilities &capabilities,
-        const FolderPromptFn &folderPrompt,
-        const FilePromptFn &filePrompt)
+    enum class StepKind {
+        NeedFolderDecision,
+        NeedFileDecision,
+        Completed,
+        Cancelled
+    };
+
+    struct Step {
+        StepKind kind = StepKind::Completed;
+        LocalMergePlanEntry entry;
+        qsizetype remainingConflicts = 0;
+        LocalMergeConflictProgress progress;
+    };
+
+    explicit LocalMergeConflictSession(
+        LocalMergePlan *plan,
+        LocalMergeBackendCapabilities capabilities = {})
+        : m_plan(plan)
+        , m_capabilities(capabilities)
     {
-        LocalMergeResolutionResult result;
+        if (!m_plan) {
+            m_state = State::Cancelled;
+            m_result.cancelled = true;
+            m_pendingStep = Step{StepKind::Cancelled, {}, 0, {}};
+        }
+    }
 
-        LocalMergeApplyPolicy folderPolicy = LocalMergeApplyPolicy::None;
-        LocalMergeApplyPolicy filePolicy = LocalMergeApplyPolicy::None;
-        QSet<QString> skippedFolderPrefixes;
-        struct RenamedSubtree {
-            QString oldRelPrefix;
-            QString newRelPrefix;
-            QString newDestPrefix;
-        };
-        QList<RenamedSubtree> renamedSubtrees;
-        qsizetype currentConflictIdx = 0;
+    State state() const { return m_state; }
+    bool isTerminal() const { return m_state == State::Completed || m_state == State::Cancelled; }
+    const LocalMergeResolutionResult &result() const { return m_result; }
 
-        auto hasSkippedAncestor = [&skippedFolderPrefixes](const QString &rel) {
-            for (const QString &pref : skippedFolderPrefixes) {
-                if (rel == pref || rel.startsWith(pref + QLatin1Char('/'))) {
-                    return true;
-                }
-            }
-            return false;
-        };
+    Step advance()
+    {
+        if (m_state == State::Completed) {
+            return Step{StepKind::Completed, {}, 0, {}};
+        }
+        if (m_state == State::Cancelled || !m_plan) {
+            return Step{StepKind::Cancelled, {}, 0, {}};
+        }
+        if (m_state == State::WaitingFolderDecision || m_state == State::WaitingFileDecision) {
+            return m_pendingStep;
+        }
 
-        auto countRemainingPromptableFrom = [&](qsizetype fromIndex) {
-            qsizetype rem = 0;
-            for (qsizetype j = fromIndex; j < plan.entries.size(); ++j) {
-                const auto &other = plan.entries.at(j);
-                if (hasSkippedAncestor(other.relativePath)) continue;
-                if (isFolderPromptCandidate(other) || isFilePromptCandidate(other)) {
-                    ++rem;
-                }
-            }
-            return rem;
-        };
-
-        auto findRenamedAncestor = [&renamedSubtrees](const QString &rel) -> const RenamedSubtree * {
-            const RenamedSubtree *best = nullptr;
-            for (const auto &rs : renamedSubtrees) {
-                if (rel.startsWith(rs.oldRelPrefix + QLatin1Char('/'))) {
-                    if (!best || rs.oldRelPrefix.size() > best->oldRelPrefix.size()) {
-                        best = &rs;
-                    }
-                }
-            }
-            return best;
-        };
-
-        auto countRemaining = [&](qsizetype fromIndex, bool folderSide) {
-            qsizetype rem = 0;
-            for (qsizetype j = fromIndex + 1; j < plan.entries.size(); ++j) {
-                const auto &other = plan.entries.at(j);
-                if (hasSkippedAncestor(other.relativePath)) continue;
-                if (folderSide) {
-                    if (other.classification == LocalMergeEntryClassification::MergeDirectoryCandidate
-                        && other.caseStatus == LocalMergeCaseStatus::ExactNameMatch) {
-                        ++rem;
-                    }
-                } else {
-                    if (other.classification == LocalMergeEntryClassification::FileConflict
-                        && other.caseStatus == LocalMergeCaseStatus::ExactNameMatch
-                        && other.sourceKind == LocalMergeObjectKind::RegularFile
-                        && other.destinationKind == LocalMergeObjectKind::RegularFile) {
-                        ++rem;
-                    }
-                }
-            }
-            return rem;
-        };
-
-        for (qsizetype i = 0; i < plan.entries.size(); ++i) {
-            LocalMergePlanEntry &entry = plan.entries[i];
+        while (m_index < m_plan->entries.size()) {
+            const qsizetype i = m_index;
+            LocalMergePlanEntry &entry = m_plan->entries[i];
 
             if (hasSkippedAncestor(entry.relativePath)) {
                 entry.approvedAction = LocalMergeApprovedAction::Skip;
                 entry.decisionBinding.reason = QStringLiteral("Parent folder skipped");
+                ++m_index;
                 continue;
             }
 
@@ -1185,8 +1168,9 @@ public:
                 entry.classification = LocalMergeEntryClassification::CreateNew;
                 entry.approvedAction = LocalMergeApprovedAction::Create;
                 entry.decisionBinding.reason = QStringLiteral("Remapped under renamed parent folder (requires Stage 3B revalidation)");
-                ++result.renamedSubtreeEntriesRemapped;
-                result.entriesRequiringStage3BRevalidation.append(entry.relativePath);
+                ++m_result.renamedSubtreeEntriesRemapped;
+                m_result.entriesRequiringStage3BRevalidation.append(entry.relativePath);
+                ++m_index;
                 continue;
             }
 
@@ -1196,12 +1180,14 @@ public:
                     || (entry.sourceKind == LocalMergeObjectKind::SymbolicLink
                         && !entry.symbolicLinkContents.isEmpty()))) {
                 entry.approvedAction = LocalMergeApprovedAction::Create;
-                ++result.nonConflictingAutoApproved;
+                ++m_result.nonConflictingAutoApproved;
+                ++m_index;
                 continue;
             }
             if (isAutoApprovableSourceSymlink(entry)) {
                 entry.approvedAction = LocalMergeApprovedAction::Create;
-                ++result.nonConflictingAutoApproved;
+                ++m_result.nonConflictingAutoApproved;
+                ++m_index;
                 continue;
             }
 
@@ -1209,61 +1195,34 @@ public:
                 const bool exactMerge =
                     entry.classification == LocalMergeEntryClassification::MergeDirectoryCandidate
                     && entry.caseStatus == LocalMergeCaseStatus::ExactNameMatch;
-                if (exactMerge && folderPolicy == LocalMergeApplyPolicy::MergeAllFolders) {
+                if (exactMerge && m_folderPolicy == LocalMergeApplyPolicy::MergeAllFolders) {
                     entry.approvedAction = LocalMergeApprovedAction::MergeDirectory;
                     entry.decisionBinding.policyScope = LocalMergeApplyPolicy::MergeAllFolders;
+                    ++m_index;
                     continue;
                 }
-                if (exactMerge && folderPolicy == LocalMergeApplyPolicy::SkipAllFolders) {
+                if (exactMerge && m_folderPolicy == LocalMergeApplyPolicy::SkipAllFolders) {
                     entry.approvedAction = LocalMergeApprovedAction::Skip;
                     entry.decisionBinding.policyScope = LocalMergeApplyPolicy::SkipAllFolders;
-                    skippedFolderPrefixes.insert(entry.relativePath);
-                    ++result.subtreesSkipped;
+                    m_skippedFolderPrefixes.insert(entry.relativePath);
+                    ++m_result.subtreesSkipped;
+                    ++m_index;
                     continue;
                 }
 
-                ++currentConflictIdx;
-                ++result.folderPromptsShown;
-                const qsizetype dynamicTotal = (currentConflictIdx - 1) + countRemainingPromptableFrom(i);
-                const LocalFolderConflictDecision dec = folderPrompt(
+                ++m_currentConflictIdx;
+                ++m_result.folderPromptsShown;
+                const qsizetype dynamicTotal = (m_currentConflictIdx - 1) + countRemainingPromptableFrom(i);
+                m_pendingEntryIndex = i;
+                m_pendingExact = exactMerge;
+                m_state = State::WaitingFolderDecision;
+                m_pendingStep = Step{
+                    StepKind::NeedFolderDecision,
                     entry,
                     countRemaining(i, true),
-                    LocalMergeConflictProgress{currentConflictIdx, dynamicTotal});
-                if (!dec.accepted || dec.action == LocalMergeApprovedAction::Abort) {
-                    entry.approvedAction = LocalMergeApprovedAction::Abort;
-                    result.cancelled = true;
-                    return result;
-                }
-                if (dec.action == LocalMergeApprovedAction::MergeDirectory) {
-                    entry.approvedAction = LocalMergeApprovedAction::MergeDirectory;
-                    if (exactMerge && dec.applyPolicy == LocalMergeApplyPolicy::MergeAllFolders) {
-                        folderPolicy = LocalMergeApplyPolicy::MergeAllFolders;
-                        entry.decisionBinding.policyScope = LocalMergeApplyPolicy::MergeAllFolders;
-                    }
-                } else if (dec.action == LocalMergeApprovedAction::Skip) {
-                    entry.approvedAction = LocalMergeApprovedAction::Skip;
-                    skippedFolderPrefixes.insert(entry.relativePath);
-                    ++result.subtreesSkipped;
-                    if (exactMerge && dec.applyPolicy == LocalMergeApplyPolicy::SkipAllFolders) {
-                        folderPolicy = LocalMergeApplyPolicy::SkipAllFolders;
-                        entry.decisionBinding.policyScope = LocalMergeApplyPolicy::SkipAllFolders;
-                    }
-                } else if (dec.action == LocalMergeApprovedAction::Rename) {
-                    const QString oldRel = entry.relativePath;
-                    const qsizetype slash = oldRel.lastIndexOf(QLatin1Char('/'));
-                    const QString newRel = slash > 0
-                        ? (oldRel.left(slash + 1) + dec.targetFolderName)
-                        : dec.targetFolderName;
-                    const QString newDest = QDir::cleanPath(
-                        QDir(QFileInfo(entry.destinationPath).path()).filePath(dec.targetFolderName));
-                    entry.approvedAction = LocalMergeApprovedAction::Rename;
-                    entry.decisionBinding.targetFileName = dec.targetFolderName;
-                    entry.relativePath = newRel;
-                    entry.destinationPath = newDest;
-                    renamedSubtrees.append(RenamedSubtree{oldRel, newRel, newDest});
-                    result.entriesRequiringStage3BRevalidation.append(newRel);
-                }
-                continue;
+                    LocalMergeConflictProgress{m_currentConflictIdx, dynamicTotal}
+                };
+                return m_pendingStep;
             }
 
             if (isFilePromptCandidate(entry)) {
@@ -1272,57 +1231,259 @@ public:
                     && entry.sourceKind == LocalMergeObjectKind::RegularFile
                     && entry.destinationKind == LocalMergeObjectKind::RegularFile
                     && entry.caseStatus == LocalMergeCaseStatus::ExactNameMatch;
-                if (exactRegular && filePolicy == LocalMergeApplyPolicy::SkipAllFileConflicts) {
+                if (exactRegular && m_filePolicy == LocalMergeApplyPolicy::SkipAllFileConflicts) {
                     entry.approvedAction = LocalMergeApprovedAction::Skip;
                     entry.decisionBinding.policyScope = LocalMergeApplyPolicy::SkipAllFileConflicts;
+                    ++m_index;
                     continue;
                 }
-                if (exactRegular && capabilities.canSafeOverwrite
-                    && filePolicy == LocalMergeApplyPolicy::OverwriteAllFileConflicts) {
+                if (exactRegular && m_capabilities.canSafeOverwrite
+                    && m_filePolicy == LocalMergeApplyPolicy::OverwriteAllFileConflicts) {
                     entry.approvedAction = LocalMergeApprovedAction::Overwrite;
                     entry.decisionBinding.policyScope = LocalMergeApplyPolicy::OverwriteAllFileConflicts;
+                    ++m_index;
                     continue;
                 }
 
-                ++currentConflictIdx;
-                ++result.filePromptsShown;
-                const qsizetype dynamicTotal = (currentConflictIdx - 1) + countRemainingPromptableFrom(i);
-                const LocalFileConflictDecision dec = filePrompt(
+                ++m_currentConflictIdx;
+                ++m_result.filePromptsShown;
+                const qsizetype dynamicTotal = (m_currentConflictIdx - 1) + countRemainingPromptableFrom(i);
+                m_pendingEntryIndex = i;
+                m_pendingExact = exactRegular;
+                m_state = State::WaitingFileDecision;
+                m_pendingStep = Step{
+                    StepKind::NeedFileDecision,
                     entry,
-                    capabilities,
                     countRemaining(i, false),
-                    LocalMergeConflictProgress{currentConflictIdx, dynamicTotal});
-                if (!dec.accepted || dec.action == LocalMergeApprovedAction::Abort) {
-                    entry.approvedAction = LocalMergeApprovedAction::Abort;
-                    result.cancelled = true;
-                    return result;
-                }
-                entry.approvedAction = dec.action;
-                if (dec.action == LocalMergeApprovedAction::Skip
-                    && entry.sourceKind == LocalMergeObjectKind::Directory) {
-                    skippedFolderPrefixes.insert(entry.relativePath);
-                    ++result.subtreesSkipped;
-                } else if (dec.action == LocalMergeApprovedAction::Rename) {
-                    entry.decisionBinding.targetFileName = dec.targetFileName;
-                } else if (exactRegular && dec.action == LocalMergeApprovedAction::Skip
-                           && dec.applyPolicy == LocalMergeApplyPolicy::SkipAllFileConflicts) {
-                    filePolicy = LocalMergeApplyPolicy::SkipAllFileConflicts;
-                    entry.decisionBinding.policyScope = LocalMergeApplyPolicy::SkipAllFileConflicts;
-                } else if (exactRegular && capabilities.canSafeOverwrite
-                           && dec.action == LocalMergeApprovedAction::Overwrite
-                           && dec.applyPolicy == LocalMergeApplyPolicy::OverwriteAllFileConflicts) {
-                    filePolicy = LocalMergeApplyPolicy::OverwriteAllFileConflicts;
-                    entry.decisionBinding.policyScope = LocalMergeApplyPolicy::OverwriteAllFileConflicts;
-                }
-                continue;
+                    LocalMergeConflictProgress{m_currentConflictIdx, dynamicTotal}
+                };
+                return m_pendingStep;
             }
+
+            ++m_index;
         }
 
-        result.completed = true;
-        return result;
+        m_state = State::Completed;
+        m_result.completed = true;
+        m_pendingEntryIndex = -1;
+        m_pendingExact = false;
+        m_pendingStep = Step{StepKind::Completed, {}, 0, {}};
+        return m_pendingStep;
+    }
+
+    bool submitFolderDecision(const LocalFolderConflictDecision &dec)
+    {
+        if (m_state != State::WaitingFolderDecision || !m_plan
+            || m_pendingEntryIndex < 0 || m_pendingEntryIndex >= m_plan->entries.size()) {
+            return false;
+        }
+
+        LocalMergePlanEntry &entry = m_plan->entries[m_pendingEntryIndex];
+        if (!dec.accepted || dec.action == LocalMergeApprovedAction::Abort) {
+            entry.approvedAction = LocalMergeApprovedAction::Abort;
+            m_result.cancelled = true;
+            m_state = State::Cancelled;
+            m_pendingEntryIndex = -1;
+            m_pendingExact = false;
+            m_pendingStep = Step{StepKind::Cancelled, {}, 0, {}};
+            return true;
+        }
+
+        // SEC-046-09: Fail closed if Rename or MergeDirectory is submitted for a SameObject
+        // directory (planner skips descendants of SameObject, so Rename would silently create
+        // an empty directory and report Completed). Only Skip or Abort is permitted.
+        if (entry.classification == LocalMergeEntryClassification::SameObject
+            && (dec.action == LocalMergeApprovedAction::Rename
+                || dec.action == LocalMergeApprovedAction::MergeDirectory)) {
+            entry.approvedAction = LocalMergeApprovedAction::Abort;
+            m_result.cancelled = true;
+            m_state = State::Cancelled;
+            m_pendingEntryIndex = -1;
+            m_pendingExact = false;
+            m_pendingStep = Step{StepKind::Cancelled, {}, 0, {}};
+            return false;
+        }
+
+        if (dec.action == LocalMergeApprovedAction::MergeDirectory) {
+            entry.approvedAction = LocalMergeApprovedAction::MergeDirectory;
+            if (m_pendingExact && dec.applyPolicy == LocalMergeApplyPolicy::MergeAllFolders) {
+                m_folderPolicy = LocalMergeApplyPolicy::MergeAllFolders;
+                entry.decisionBinding.policyScope = LocalMergeApplyPolicy::MergeAllFolders;
+            }
+        } else if (dec.action == LocalMergeApprovedAction::Skip) {
+            entry.approvedAction = LocalMergeApprovedAction::Skip;
+            m_skippedFolderPrefixes.insert(entry.relativePath);
+            ++m_result.subtreesSkipped;
+            if (m_pendingExact && dec.applyPolicy == LocalMergeApplyPolicy::SkipAllFolders) {
+                m_folderPolicy = LocalMergeApplyPolicy::SkipAllFolders;
+                entry.decisionBinding.policyScope = LocalMergeApplyPolicy::SkipAllFolders;
+            }
+        } else if (dec.action == LocalMergeApprovedAction::Rename) {
+            const QString oldRel = entry.relativePath;
+            const qsizetype slash = oldRel.lastIndexOf(QLatin1Char('/'));
+            const QString newRel = slash > 0
+                ? (oldRel.left(slash + 1) + dec.targetFolderName)
+                : dec.targetFolderName;
+            const QString newDest = QDir::cleanPath(
+                QDir(QFileInfo(entry.destinationPath).path()).filePath(dec.targetFolderName));
+            entry.approvedAction = LocalMergeApprovedAction::Rename;
+            entry.decisionBinding.targetFileName = dec.targetFolderName;
+            entry.relativePath = newRel;
+            entry.destinationPath = newDest;
+            m_renamedSubtrees.append(RenamedSubtree{oldRel, newRel, newDest});
+            m_result.entriesRequiringStage3BRevalidation.append(newRel);
+        }
+
+        m_index = m_pendingEntryIndex + 1;
+        m_pendingEntryIndex = -1;
+        m_pendingExact = false;
+        m_pendingStep = Step{};
+        m_state = State::Ready;
+        return true;
+    }
+
+    bool submitFileDecision(const LocalFileConflictDecision &dec)
+    {
+        if (m_state != State::WaitingFileDecision || !m_plan
+            || m_pendingEntryIndex < 0 || m_pendingEntryIndex >= m_plan->entries.size()) {
+            return false;
+        }
+
+        LocalMergePlanEntry &entry = m_plan->entries[m_pendingEntryIndex];
+        if (!dec.accepted || dec.action == LocalMergeApprovedAction::Abort) {
+            entry.approvedAction = LocalMergeApprovedAction::Abort;
+            m_result.cancelled = true;
+            m_state = State::Cancelled;
+            m_pendingEntryIndex = -1;
+            m_pendingExact = false;
+            m_pendingStep = Step{StepKind::Cancelled, {}, 0, {}};
+            return true;
+        }
+
+        // SEC-046-09: Fail closed if Rename or MergeDirectory is submitted for a SameObject
+        // directory (planner skips descendants of SameObject, so Rename would silently create
+        // an empty directory and report Completed). Only Skip or Abort is permitted.
+        if (entry.classification == LocalMergeEntryClassification::SameObject
+            && entry.sourceKind == LocalMergeObjectKind::Directory
+            && (dec.action == LocalMergeApprovedAction::Rename
+                || dec.action == LocalMergeApprovedAction::MergeDirectory)) {
+            entry.approvedAction = LocalMergeApprovedAction::Abort;
+            m_result.cancelled = true;
+            m_state = State::Cancelled;
+            m_pendingEntryIndex = -1;
+            m_pendingExact = false;
+            m_pendingStep = Step{StepKind::Cancelled, {}, 0, {}};
+            return false;
+        }
+
+        entry.approvedAction = dec.action;
+        if (dec.action == LocalMergeApprovedAction::Skip
+            && entry.sourceKind == LocalMergeObjectKind::Directory) {
+            m_skippedFolderPrefixes.insert(entry.relativePath);
+            ++m_result.subtreesSkipped;
+        } else if (dec.action == LocalMergeApprovedAction::Rename) {
+            entry.decisionBinding.targetFileName = dec.targetFileName;
+        } else if (m_pendingExact && dec.action == LocalMergeApprovedAction::Skip
+                   && dec.applyPolicy == LocalMergeApplyPolicy::SkipAllFileConflicts) {
+            m_filePolicy = LocalMergeApplyPolicy::SkipAllFileConflicts;
+            entry.decisionBinding.policyScope = LocalMergeApplyPolicy::SkipAllFileConflicts;
+        } else if (m_pendingExact && m_capabilities.canSafeOverwrite
+                   && dec.action == LocalMergeApprovedAction::Overwrite
+                   && dec.applyPolicy == LocalMergeApplyPolicy::OverwriteAllFileConflicts) {
+            m_filePolicy = LocalMergeApplyPolicy::OverwriteAllFileConflicts;
+            entry.decisionBinding.policyScope = LocalMergeApplyPolicy::OverwriteAllFileConflicts;
+        }
+
+        m_index = m_pendingEntryIndex + 1;
+        m_pendingEntryIndex = -1;
+        m_pendingExact = false;
+        m_pendingStep = Step{};
+        m_state = State::Ready;
+        return true;
+    }
+
+    void cancel()
+    {
+        if (isTerminal()) {
+            return;
+        }
+        if ((m_state == State::WaitingFolderDecision || m_state == State::WaitingFileDecision)
+            && m_plan && m_pendingEntryIndex >= 0 && m_pendingEntryIndex < m_plan->entries.size()) {
+            m_plan->entries[m_pendingEntryIndex].approvedAction = LocalMergeApprovedAction::Abort;
+        }
+        m_result.cancelled = true;
+        m_state = State::Cancelled;
+        m_pendingEntryIndex = -1;
+        m_pendingExact = false;
+        m_pendingStep = Step{StepKind::Cancelled, {}, 0, {}};
     }
 
 private:
+    struct RenamedSubtree {
+        QString oldRelPrefix;
+        QString newRelPrefix;
+        QString newDestPrefix;
+    };
+
+    bool hasSkippedAncestor(const QString &rel) const
+    {
+        for (const QString &pref : m_skippedFolderPrefixes) {
+            if (rel == pref || rel.startsWith(pref + QLatin1Char('/'))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    qsizetype countRemainingPromptableFrom(qsizetype fromIndex) const
+    {
+        qsizetype rem = 0;
+        for (qsizetype j = fromIndex; j < m_plan->entries.size(); ++j) {
+            const auto &other = m_plan->entries.at(j);
+            if (hasSkippedAncestor(other.relativePath)) continue;
+            if (isFolderPromptCandidate(other) || isFilePromptCandidate(other)) {
+                ++rem;
+            }
+        }
+        return rem;
+    }
+
+    const RenamedSubtree *findRenamedAncestor(const QString &rel) const
+    {
+        const RenamedSubtree *best = nullptr;
+        for (const auto &rs : m_renamedSubtrees) {
+            if (rel.startsWith(rs.oldRelPrefix + QLatin1Char('/'))) {
+                if (!best || rs.oldRelPrefix.size() > best->oldRelPrefix.size()) {
+                    best = &rs;
+                }
+            }
+        }
+        return best;
+    }
+
+    qsizetype countRemaining(qsizetype fromIndex, bool folderSide) const
+    {
+        qsizetype rem = 0;
+        for (qsizetype j = fromIndex + 1; j < m_plan->entries.size(); ++j) {
+            const auto &other = m_plan->entries.at(j);
+            if (hasSkippedAncestor(other.relativePath)) continue;
+            if (folderSide) {
+                if (other.classification == LocalMergeEntryClassification::MergeDirectoryCandidate
+                    && other.caseStatus == LocalMergeCaseStatus::ExactNameMatch) {
+                    ++rem;
+                }
+            } else {
+                if (other.classification == LocalMergeEntryClassification::FileConflict
+                    && other.caseStatus == LocalMergeCaseStatus::ExactNameMatch
+                    && other.sourceKind == LocalMergeObjectKind::RegularFile
+                    && other.destinationKind == LocalMergeObjectKind::RegularFile) {
+                    ++rem;
+                }
+            }
+        }
+        return rem;
+    }
+
     static bool isAutoApprovableSourceSymlink(const LocalMergePlanEntry &e)
     {
         return e.classification == LocalMergeEntryClassification::BrokenSymlink
@@ -1351,5 +1512,66 @@ private:
             || e.classification == LocalMergeEntryClassification::TypeConflictFileOverDir
             || e.classification == LocalMergeEntryClassification::TypeConflictDirOverFile
             || e.classification == LocalMergeEntryClassification::CaseInsensitiveCollision;
+    }
+
+    LocalMergePlan *m_plan = nullptr;
+    LocalMergeBackendCapabilities m_capabilities;
+    LocalMergeResolutionResult m_result;
+    LocalMergeApplyPolicy m_folderPolicy = LocalMergeApplyPolicy::None;
+    LocalMergeApplyPolicy m_filePolicy = LocalMergeApplyPolicy::None;
+    QSet<QString> m_skippedFolderPrefixes;
+    QList<RenamedSubtree> m_renamedSubtrees;
+    qsizetype m_currentConflictIdx = 0;
+    qsizetype m_index = 0;
+    qsizetype m_pendingEntryIndex = -1;
+    bool m_pendingExact = false;
+    State m_state = State::Ready;
+    Step m_pendingStep;
+};
+
+// Pure-plan, zero-I/O recursive conflict resolution coordinator for Stage 3A.
+class LocalMergeConflictResolver
+{
+public:
+    using FolderPromptFn = std::function<LocalFolderConflictDecision(
+        const LocalMergePlanEntry &entry,
+        qsizetype remainingFolderConflicts,
+        LocalMergeConflictProgress progress)>;
+    using FilePromptFn = std::function<LocalFileConflictDecision(
+        const LocalMergePlanEntry &entry,
+        const LocalMergeBackendCapabilities &capabilities,
+        qsizetype remainingExactFileConflicts,
+        LocalMergeConflictProgress progress)>;
+
+    static LocalMergeResolutionResult resolve(
+        LocalMergePlan &plan,
+        const LocalMergeBackendCapabilities &capabilities,
+        const FolderPromptFn &folderPrompt,
+        const FilePromptFn &filePrompt)
+    {
+        LocalMergeConflictSession session(&plan, capabilities);
+        while (!session.isTerminal()) {
+            const LocalMergeConflictSession::Step step = session.advance();
+            if (step.kind == LocalMergeConflictSession::StepKind::NeedFolderDecision) {
+                const LocalFolderConflictDecision dec = folderPrompt
+                    ? folderPrompt(step.entry, step.remainingConflicts, step.progress)
+                    : LocalFolderConflictDecision{};
+                if (!session.submitFolderDecision(dec)) {
+                    session.cancel();
+                    break;
+                }
+            } else if (step.kind == LocalMergeConflictSession::StepKind::NeedFileDecision) {
+                const LocalFileConflictDecision dec = filePrompt
+                    ? filePrompt(step.entry, capabilities, step.remainingConflicts, step.progress)
+                    : LocalFileConflictDecision{};
+                if (!session.submitFileDecision(dec)) {
+                    session.cancel();
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        return session.result();
     }
 };
