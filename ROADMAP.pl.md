@@ -570,13 +570,9 @@ Gdy zwykła operacja plikowa zakończy się błędem braku uprawnień (Permissio
 - **Etap 6 — Opcjonalne ograniczanie przepustowości:** ✅ FULL PASS — Wspólny limiter token-bucket (`TransferBandwidthLimiter`), opóźnianie bloków w `LocalFileCopyWorker`, dynamiczna zmiana limitów oraz rzetelne oznaczenia na kartach zadań.
 - **Etap 7 — Integracja produkcyjna, Zintegrowany Menedżer Operacji, bramka bezpieczeństwa MTP i końcowa regresja:** ✅ FULL PASS — Integracja end-to-end z widokami Primary/Split, Drag & Drop, Wklej, synchronizacją Split View, Zintegrowanym Menedżerem Operacji (`U1–U8.1`, `UX-A..D`), zapisem etapowym `.thispc-part`, kopiowaniem i hotplugiem MTP, blokadą wydaniową MTP Move (`BLOCK MOVE`), weryfikacją ASan/UBSan, pełną regresją (76/76 zestawów PASS, 2335 asercji `transfer_queue` PASS), odbiorem manualnym R3 (8/8 PASS), zweryfikowaną instalacją systemową (R6 6/6 PASS), commitami wydania `109106e` / `d515815`, tagiem `v0.44.0` oraz opublikowanym oficjalnym wydaniem na GitHubie.
 
----
+### 0.45.0 — Powiadomienia i rozbudowa historii operacji (Notifications + Operation History Extensions) ✅ ukończone, wydane (v0.45.0)
 
-## Planowane wydania
-
-**Zaplanowane:** przyjęte przyszłe prace przypisane do docelowych wersji (`0.45.0–0.48.0`), jeszcze niezaimplementowane.
-
-### 0.45.0 — Powiadomienia i rozbudowa historii operacji (Notifications + Operation History Extensions)
+**Stan wydania:** Wydane 2026-11-16 (`v0.45.0`, commit `f63c157f7aaf994b4b11867ffae358dce821c2ec`). Poniższe zapisy poszczególnych etapów zachowują historyczny rejestr audytu QA i bramki bezpieczeństwa sprzed wydania (w tym historyczne odniesienia do wcześniejszej wersji `0.44.0` i pośrednich stanów `BLOCKED` sprzed końcowego zamknięcia `0.45.0`).
 - **Etap 1 — Powiadomienia pulpitu KDE Plasma:** ✅ CLOSED / IMPLEMENTED / AUTOMATED PASS / MANUAL ACCEPTED (7/7)
   - Natywne powiadomienia pulpitu KDE Plasma przez `KF6::Notifications` (`TransferNotificationManager`) informujące o ukończonych lub zakończonych błędem operacjach Kopiuj/Przenieś działających w tle;
   - Precyzyjne wykrywanie obserwacji okna (`isUserObserving()`): powiadomienia sukcesu wyciszane przy aktywnym oknie ThisPC, wysyłane przy oknie nieaktywnym lub zminimalizowanym;
@@ -663,7 +659,7 @@ Gdy zwykła operacja plikowa zakończy się błędem braku uprawnień (Permissio
   - Integracja na żywo z `QFileSystemWatcher` w otwartym oknie `OperationWindow`, aktualizująca stan przycisku i podpowiedź (tooltip) po usunięciu lub przywróceniu pliku lub katalogu docelowego;
   - Weryfikacja automatyczna: Scenariusze A–L PASS (203 asercje `operations`), pełna regresja 77/77 zestawów PASS, izolacja środowiskowa XDG Stage 4 9/9 PASS;
   - Odbiór manualny użytkownika (8/8 PASS — 8 listopada 2026 r.): A (Completed Copy pojedynczego pliku), B (Completed Move pojedynczego pliku), C (historia po restarcie aplikacji), D (kopiowanie wielu plików z czystym zaznaczeniem), E (zniknięcie i przywrócenie pliku docelowego na żywo), F (zniknięcie i przywrócenie katalogu docelowego na żywo), G (niezależność Primary/Split View), H (H.1 Failed bez przycisku „Pokaż w folderze” + H.2 kontrolowany Cancelled 32 MiB bez przycisków „Pokaż w folderze” i „Ponów”, potwierdzona integralność dysku, brak pozostałości `.thispc-part` oraz zapisany rekord `Cancelled` w historii).
-- **Etap 5 — Audyt bezpieczeństwa, remediacja, szlif końcowy, pakietyzacja i wydanie 0.45.0:** (W toku)
+- **Etap 5 — Audyt bezpieczeństwa, remediacja, szlif końcowy, pakietyzacja i wydanie 0.45.0:** ✅ ukończone, wydane (`v0.45.0`, commit `f63c157`; poniżej zachowano historyczne zapisy QA sprzed wydania)
   - **Etap 5.1 — Kompleksowy audyt bezpieczeństwa (Comprehensive Security Audit):** ✅ UKOŃCZONY (`docs/SECURITY_AUDIT_045.md`) — Niezależny manualny i automatyczny audyt bezpieczeństwa (`GCC 16.2.1 -Wall -Wextra -Wformat=2 -Wundef`, `clang-tidy 23.1.4`, `ASan` + `UBSan`) całej bazy kodowej ThisPC (Obszary A–G) wraz z 9-punktowym modelem zagrożeń:
     - Potwierdzono **0 luk `CRITICAL`**, **0 luk `HIGH`** oraz **całkowity brak złośliwego kodu / backdoorów**;
     - Zidentyfikowano **2 znaleziska `MEDIUM`** (`SEC-045-01`: ryzyko `heap-use-after-free` w `OperationWindow::rebuild()` przy nałożeniu się nieanulowanego timera 120 ms z `scheduleRebuild()` na synchroniczne `rebuild()`; `SEC-045-02`: publikacja w trybie bez nadpisywania w `LocalFileCopyWorker` i `LocalFileMoveJob` używająca `QFile::rename` zamiast `RENAME_NOREPLACE`) oraz **6 usprawnień utwardzających `LOW`** (`SEC-045-03`..`SEC-045-08`);
@@ -918,10 +914,10 @@ Gdy zwykła operacja plikowa zakończy się błędem braku uprawnień (Permissio
       - **Ścisła izolacja GUI produkcyjnego:** `MoveSafetyPolicy::evaluate()`, `qualifyFastForPolicy()`, `qualifyFastForMixedBatchPolicy()`, `FileActions`, `Duplicate Finder` oraz domyślne zadania bez `setAllowExt4(true)` pozostają ściśle zablokowane do `BtrfsOnly` (fail-closed) aż do **H.2C.1B**;
       - **Zakres weryfikacji:** Regresja Btrfs H.2A / H.2B.1 / H.2B.2 oraz symulowane testy ext4 VFS (`#ifdef THISPC_TEST_HARNESS`) PASS (brak zamontowanego woluminu `ext4` na hoście; weryfikacja na fizycznym/loopback `ext4`, odblokowanie GUI oraz Manual Acceptance należą do **H.2C.1B**); **Security Release Gate:** `BLOCKED / FINAL RELEASE VERIFICATION PENDING` (wersja pozostaje `0.44.0`).
 
-### 0.45.0 — Bezpieczeństwo i bramka wydaniowa (Security Release Gate)
-- Przed oficjalnym wydaniem wymagany jest kompleksowy audyt bezpieczeństwa obejmujący: zabezpieczenie przed nieautoryzowanym wykonywaniem kodu, brak podatności typu backdoor, kontrolę uprawnień administracyjnych i brak ich nieuprawnionej eskalacji, weryfikację zależności zewnętrznych, integralność instalatora oraz bezpieczeństwo wszystkich operacji plikowych;
+#### Stała polityka bramki bezpieczeństwa (ustanowiona w 0.45.0)
+- Przed każdym oficjalnym wydaniem wymagany jest kompleksowy audyt bezpieczeństwa obejmujący: zabezpieczenie przed nieautoryzowanym wykonywaniem kodu, brak podatności typu backdoor, kontrolę uprawnień administracyjnych i brak ich nieuprawnionej eskalacji, weryfikację zależności zewnętrznych, integralność instalatora oraz bezpieczeństwo wszystkich operacji plikowych;
 - Wystąpienie jakiejkolwiek nierozwiązanej luki krytycznej lub wysokiego ryzyka bezwzględnie blokuje wydanie wersji;
-- Zasada obowiązuje bezwarunkowo dla wydania 0.45.0 oraz wszystkich przyszłych wydań.
+- Zasada została ustanowiona w wersji `0.45.0` i obowiązuje bezwarunkowo dla wszystkich kolejnych wydań.
 
 #### Rejestr zagadnień UX (zakres 0.45.0 — Domknięte w Etapie 5.3.1):
 - **Zagadnienie UX A — Domyślny rozmiar okna „Operacje plikowe”:** ✅ ZAMKNIĘTE / ZWERYFIKOWANE
@@ -937,20 +933,75 @@ Gdy zwykła operacja plikowa zakończy się błędem braku uprawnień (Permissio
 - **Nienumerowany kandydat UX (MA-H11-2) — Tytuł „Częściowy błąd” w Duplicate Finder przy 100% odrzuceniu:**
   Zaobserwowano tytuł „Częściowy błąd” (`Partial error`) w `DuplicateActionController` mimo odrzucenia 2/2 zaznaczonych plików i braku jakiegokolwiek przeniesienia. Zachowano do przyszłej analizy UX bez przydziału do wydania.
 
-#### Odroczone obserwacje cyklu życia aplikacji:
-- **LIFE-01 — Proces `thispc-view` pozostaje aktywny po zamknięciu okna:**
-  Zaobserwowano podczas odbioru ręcznego H.1.1 na lokalnym `build/bin/thispc-view` (`PID 16375`, `STAT=S<l`, czyste zakończenie przez `SIGTERM`). Audyt nieinwazyjny wykazał wywołanie `m_queueController->beginShutdown()` i zamknięcie okien podrzędnych `QDialog` w `closeEvent`; prawdopodobną przyczyną pozostawania pętli zdarzeń (bez zagrożenia dla integralności danych przy zatrzymanej kolejce) są m.in. nieosadzone instancje `KNotification` (`QEventLoopLocker`) lub inny uchwyt pętli. Odroczono do poprawki przed wydaniem 0.45.0.
+#### Historyczna obserwacja cyklu życia aplikacji (rozwiązana w 0.45.0):
+- **LIFE-01 — Proces `thispc-view` pozostawał aktywny po zamknięciu okna:** ✅ ROZWIĄZANE w `0.45.0` (`UndoController::startNativeHistoryJob()` wywołuje `completed->deleteLater()` na zakończonych zadaniach `KJob` z `setAutoDelete(false)`, zwalniając `QEventLoopLocker` i zapewniając czyste zakończenie procesu). Historyczna obserwacja z odbioru ręcznego H.1.1 (`PID 16375`) została zachowana do celów audytowych.
 
-### 0.46.0 — Niezależna architektura i audyt bezpieczeństwa (Standalone Architecture & Security Audit)
-- Kompleksowy audyt zależności od KDE Frameworks i bibliotek Qt;
-- Projekt koncepcyjny i architektoniczny niezależnego rdzenia ThisPC, odseparowanego od specyficznych wymagań konkretnego środowiska graficznego;
-- Opcjonalne, luźno powiązane integracje ze środowiskiem KDE Plasma;
-- Alternatywne backendy linuksowe dla środowisk wielopulpitowych;
-- Analiza kompatybilności ze środowiskami Linux Mint / Cinnamon, Pop!_OS / COSMIC, XFCE itp.;
-- Formalny model zagrożeń (threat model);
-- Bezpieczny model pakietowania, dystrybucji i weryfikacji aktualizacji;
-- Plan etapowej migracji architektonicznej bez utraty wypracowanych dotąd gwarancji bezpieczeństwa i integralności danych.
-*(Uwaga: Faza analityczno-projektowa; prace implementacyjne nie zostały jeszcze rozpoczęte.)*
+### 0.45.0.1 — Hotfix kolizji katalogów i autokopiowania ✅ ukończone, wydane (v0.45.0.1)
+- **Stan wydania:** Wydane 2026-11-16 (`v0.45.0.1`, commit `1a74f81678c591174061c15b3c59d6fee93796bf`).
+- **Routing kopiowania katalogów i kolizji (`FOLDER-COLLISION-01`):** Lokalne operacje kopiowania katalogów nie są już kierowane do `KioStagedTransferJob` (co eliminowało błędy stagingu `.thispc-part.*` przy kolizjach katalogów lub autokopiowaniu); autokopiowanie pojedynczego katalogu i kolizje katalogu docelowego są czysto odrzucane z czytelnym komunikatem, a poprawne kopie drzew lokalnych wykonuje `LocalTransferJob`.
+- **Ochrona katalogów w stagingu i autokopiowanie pliku (`C1`):** `KioStagedTransferJob` jawnie odrzuca źródła katalogowe (`KIO::ERR_IS_DIRECTORY`); kopiowanie zwykłego pliku do tego samego katalogu otwiera `KIO::RenameDialog` i realizuje kopię przez `LocalFileCopyJob`.
+
+### 0.45.1 — Bezpieczne rekurencyjne scalanie folderów (Folder Merge) ✅ ukończone, wydane (v0.45.1)
+- **Stan wydania:** Wydane 2026-11-19 (`v0.45.1`, commit `dc8ca91b16132c6357da21dc66714092592479d5`).
+- **Rekurencyjne scalanie folderów (`FOLDER-MERGE-01`):** Zintegrowano `LocalMergePlanJob`, `LocalMergeOrchestrator`, `LocalMergeExecutionJob` i `LocalMergeQueueBridge` z `FileActions` oraz `TransferQueueController`, z planowaniem przed wykonaniem, rezerwacjami `TransferReservationRegistry` oraz raportowaniem postępu w `OperationWindow` / `OperationPopup`.
+- **Niezależne dialogi konfliktów i odzyskiwanie po awarii:** Dodano `LocalFolderMergeConflictDialog` oraz `LocalFileConflictResolutionDialog` (niezależne polityki dla katalogów i plików, PL/EN, motyw jasny/ciemny, odroczone pokazywanie `OperationWindow`) oraz `LocalMergeTransaction` (`openat(O_NOFOLLOW)`, `RENAME_NOREPLACE`, dwufazowy `RENAME_EXCHANGE` z dziennikami `.thispc-tx.*` o uprawnieniach `0700`).
+- **Utrzymane ograniczenia fail-closed:** Atomowe nadpisywanie (`Overwrite`) jest dopuszczone wyłącznie na Btrfs, ext4, XFS i tmpfs (fail-closed na NTFS, VFAT i zdalnym KIO); Folder Merge nakłada barierę na `UndoController` (`Ctrl+Z` nieobsługiwane); pełne rekurencyjne przenoszenie (Move) pozostaje pracą na przyszłość.
+
+### 0.45.2 — Hotfix bezpieczeństwa i stabilności ✅ WYDANE / ZAINSTALOWANE / FINALNIE ZAAKCEPTOWANE MANUALNIE (9/9 PASS)
+- **Stan wydania:** **WYDANE / ZAINSTALOWANE / FINALNIE ZAAKCEPTOWANE MANUALNIE (9/9 PASS)** dnia 2026-11-22; tag `v0.45.2`, commit `5afa6a6cab0bf95efdff7609cdd367501d6c1cd1`, opublikowane na GitHubie (`https://github.com/Llusty/kio-thispc/releases/tag/v0.45.2`).
+- **Ukończony zakres bezpieczeństwa i stabilności (`SEC-046`):**
+  - **`SEC-046-05`:** Asynchroniczne anulowanie (`LocalFileCopyJob::requestCancelAsync()`) z natychmiastowym wybudzaniem `TransferBandwidthLimiter`, gwarantujące zamknięcie deskryptorów i usunięcie własnego pliku stagingowego `.thispc-part` przed zwolnieniem slotów/rezerwacji oraz raportowaniem stanu `Anulowano`; usunięto livelock limitera poniżej 256 KiB/s.
+  - **`SEC-046-08`:** Kotwiczenie tożsamości katalogu docelowego `(st_dev, st_ino)` bez symlinków i ponowna weryfikacja podczas planowania, wykonywania oraz finalizacji uprawnień w Folder Merge (`DR1–DR15`).
+  - **`SEC-046-11`:** Wyeliminowano zawieszanie głównego wątku GUI (`wait_for_partner`) na niepodłączonych FIFO, symlinkach do FIFO i uszkodzonych symlinkach we Właściwościach, ACL (`O_NONBLOCK` + `fstat`), Metadanych, Sumach kontrolnych, Podglądzie, menu kontekstowym i wykrywaniu archiwów.
+  - **`SEC-046-17`:** Dodano `ThisPcConfinement` (`src/thispcconfinement.h`) z odrzucaniem trawersowania ścieżek, uciekających symlinków oraz produkcyjną weryfikacją punktu montowania `(st_dev, st_ino)` w `src/thispc.cpp`.
+  - **`SEC-046-12` i `SEC-046-22A/B`:** Wzmocniono czas życia workerów, bezpieczeństwo anulowania, cykl życia asynchronicznych dialogów konfliktów, bezpieczeństwo archiwów, obsługę SameObject Rename oraz walidację dziennika transakcji scalania.
+  - **Deterministyczne usprawnienia testów:** Ustabilizowano bramkę czasową ASan w `storage_analysis` (z zachowaniem rygorystycznych progów bez ASan) oraz poprawiono asynchroniczną synchronizację testu `sidebar_layout` z zachowaniem dokładnego porównywania pikseli.
+- **Weryfikacja i odbiór:**
+  - Pełna nieprzerwana regresja ASan/UBSan (`detect_leaks=0`): **89/89 zestawów PASS**;
+  - Niezależny czysty build Release z wyodrębnionego `kio-thispc-0.45.2.tar.gz`, `ctest` (`1/1`) oraz testy CLI wersji (`6/6`): **PASS**;
+  - Integralność po aktualizacji systemu: **46/46 zainstalowanych plików zweryfikowanych**, integracja KIO (`thispc:/`) i KDE **PASS**, ustawienia i historia użytkownika zachowane;
+  - Końcowy odbiór manualny GUI użytkownika: **9/9 PASS** (uruchomienie i wersja, ustawienia i wygląd, dyski `thispc:/`, karty i Split View, trwała historia operacji, Quick Look, Kopiuj i Cofnij, Właściwości/ACL i dodatkowe funkcje, czyste zamknięcie aplikacji).
+- **Udokumentowane pozostałe ograniczenia (zachowane rzetelnie — nie wszystkie ryzyka zostały wyeliminowane):**
+  - `SEC-046-17`: Okno TOCTOU w `kio_file` po przekierowaniu adresu `file://` jest ograniczone (mitigated), nie całkowicie wyeliminowane.
+  - Ograniczanie prędkości Folder Merge: `LocalMergeQueueBridge` zachowuje `supportsThrottling = false`; integracja Folder Merge ze współdzielonym limiterem przepustowości pozostaje odroczona (bez automatycznego przypisania do `0.46.0`).
+  - Poziom bazowy LeakSanitizer: testy ASan/UBSan działają z `detect_leaks=0`; wcześniejszy wyciek 1552 B w `ChecksumJob::start()` / `QThread` pozostaje nierozwiązany.
+  - Kontrakt odświeżania katalogów: wcześniejsze pozycje `DR-058`, `DR-059` i `DR-062` pozostają niezaimplementowane, a `DR-009` / `DR-010` wymagają ręcznej weryfikacji na pulpicie.
+  - Dotychczasowe reguły fail-closed z `0.45.1` dla Folder Merge (allowlista atomowego `Overwrite` oraz bariera Undo) pozostają w mocy.
+
+---
+
+## Planowane wydania
+
+**Zaplanowane:** przyjęte przyszłe prace przypisane do docelowych wersji (`0.46.0–0.48.0`), jeszcze niezaimplementowane.
+
+### 0.46.0 — Niezależność od środowiska graficznego i dystrybucji Linuksa (Obowiązkowa bramka architektoniczna)
+
+**To NIE jest wydanie wyłącznie analityczne.** Wersja `0.46.0` stanowi bezwzględną bramkę architektoniczną wymagającą zarówno kompleksowego audytu tylko do odczytu, jak i pełnej implementacji, testów automatycznych, odbioru manualnego oraz wydania przenośnej aplikacji niezależnej od KDE.
+
+#### Faza 1 — Kompleksowy audyt architektury i zależności
+- Pierwszy duży audyt architektury i zależności zostanie skoordynowany przez **Antigravity Orchestrator** w ścisłym trybie **TYLKO DO ODCZYTU (READ-ONLY)**;
+- Audyt wszystkich istotnych modułów, zależności od KDE Frameworks, interfejsów platformowych i ścieżek integracji z pulpitem;
+- Opracowanie pełnej inwentaryzacji zależności, docelowej propozycji architektonicznej, formalnego rejestru ryzyk, etapowego planu migracji oraz mierzalnych kryteriów akceptacji;
+- Wymagana jawna akceptacja właściciela wydania przed rozpoczęciem jakiejkolwiek implementacji architektonicznej.
+
+#### Faza 2 — Rzeczywista implementacja i walidacja (w ramach wersji 0.46.0)
+- Wdrożenie zatwierdzonych zmian architektonicznych w ramach wersji `0.46.0`;
+- Usunięcie obowiązkowych zależności uruchomieniowych KDE Frameworks / KDE Plasma z przenośnej aplikacji ThisPC;
+- Zachowanie Qt jako wspólnego wieloplatformowego fundamentu UI;
+- Wprowadzenie działających alternatyw niezależnych od KDE dla funkcji obecnie zależnych od KDE (operacje plikowe, miniatury, powiadomienia, wykrywanie dysków/montowań, kosz, MIME/uruchamianie, dostęp sieciowy/zdalny itp., zgodnie z zatwierdzonym audytem);
+- Pełne zachowanie obecnej funkcjonalności użytkownika, gwarancji bezpieczeństwa operacji plikowych oraz obsługi błędów fail-closed bez cichego wyłączania funkcji na niewspieranych pulpitach;
+- Zachowanie działającej, opcjonalnej/luźno powiązanej integracji z KDE Plasma objętej testami regresyjnymi;
+- Przeprowadzenie rzeczywistych testów kompilacji i uruchomienia w środowiskach innych niż KDE, w tym w reprezentatywnych konfiguracjach **GNOME**, **Cinnamon** oraz **XFCE**;
+- Weryfikacja na wielu dystrybucjach Linuksa oraz w sesjach **X11** i **Wayland**;
+- Jawne udokumentowanie wymagań specyficznych dla dystrybucji, opcjonalnych adapterów integracji oraz wsparcia pakietowania i instalacji.
+
+#### Założenia dotyczące przyszłego wsparcia Windows
+- Wyznaczenie granic abstrakcji platformowych z myślą o przyszłej przenośności na system Windows;
+- **Nie** implementować portu na Windows w wersji `0.46.0` bez osobnej autoryzacji właściciela wydania.
+
+#### Bezwzględna bramka wydaniowa i granice zakresu
+- **Nie przechodzić do wersji `0.47.0` przed pełną implementacją, testami automatycznymi, odbiorem manualnym i wydaniem wersji `0.46.0`.** Raport architektoniczny nie może zastąpić ukończonej implementacji.
+- Niezwiązane odroczone funkcje **nie mogą** być automatycznie przypisywane do `0.46.0` (w tym współdzielony limiter prędkości dla Folder Merge, usprawnienia UX czasu trwania transferów, opcjonalny ekosystem wtyczek/dodatków, dodatkowe funkcje łączności mobilnej poza istniejącą obsługą MTP oraz inne odroczone ulepszenia UI).
 
 ### 0.47.0 — Zaawansowana synchronizacja paneli (Advanced Split Sync)
 - Opcjonalne rekurencyjne porównywanie i synchronizacja katalogów w Split View;
@@ -973,9 +1024,13 @@ Gdy zwykła operacja plikowa zakończy się błędem braku uprawnień (Permissio
 
 ---
 
-## Backlog bez przypisanej wersji
+## Backlog bez przypisanej wersji (po 0.48.0)
 
-Wartościowe funkcje do rozważenia, bez przypisanej wersji ani ustalonego terminu realizacji.
+Wartościowe odroczone funkcje do rozważenia po wersji `0.48.0`, bez przypisanej wersji ani ustalonego terminu realizacji (bez automatycznego przypisania do `0.46.0`).
+
+### Odroczone usprawnienia transferów i Folder Merge — bez przypisanej wersji
+- Współdzielone ograniczanie przepustowości dla Folder Merge (integracja `LocalMergeQueueBridge` z `TransferBandwidthLimiter`);
+- Usprawnienia UX prezentacji czasu trwania transferów.
 
 ### Dalszy rozwój wyszukiwania — bez przypisanej wersji
 - Zapisane wyszukiwania (odłożony Etap 4 z pierwotnego planu 0.41): trwały zapis zwalidowanych definicji zapytania, filtrów, zakresu i sortowania z jawnym ponownym uruchamianiem oraz obsługą niedostępnych lokalizacji.
@@ -985,7 +1040,7 @@ Wartościowe funkcje do rozważenia, bez przypisanej wersji ani ustalonego termi
 - Zaawansowana logika zapytań AND/OR/NOT: osobna od prostego łączenia aktywnych filtrów przez AND oraz alternatyw wewnątrz jednego filtra wydanych w 0.41.0.
 
 ### Rozszerzenia i akcje usług (Extensions / Service Actions) — bez przypisanej wersji
-- Preferować wykorzystanie KDE Service Actions i prostego kontraktu rozszerzeń zamiast budowania pełnego własnego ekosystemu wtyczek bez konkretnej potrzeby;
+- Opcjonalna architektura wtyczek/rozszerzeń lub opcjonalny adapter KDE Service Actions (odroczone po `0.48.0`; nie stanowi obowiązkowego wymagania `0.46.0` i nie może wprowadzać obowiązkowych zależności KDE do przenośnego rdzenia);
 - Pozwolić dodawać nowe akcje menu kontekstowego i integracje bez edycji kodu źródłowego głównego okna.
 
 ### Interoperacyjność przeciągania i upuszczania Ark → ThisPC — audyt i plan
@@ -1017,7 +1072,7 @@ Wartościowe funkcje do rozważenia, bez przypisanej wersji ani ustalonego termi
 
 ## Pomysły do rozważenia w przyszłości
 
-Luźne, niewiążące propozycje (**OPTIONAL / UNASSIGNED / NOT COMMITTED**), które mogą nigdy nie zostać zaimplementowane. Punkty w tej sekcji nie stanowią zobowiązania do wdrożenia ani przypisania do konkretnej wersji (nie są przypisane do wydań 0.44–0.48 ani do żadnego nowego wydania). Podczas kolejnych przeglądów planu rozwoju należy ponownie ocenić ich przydatność:
+Luźne, niewiążące propozycje (**OPTIONAL / UNASSIGNED / NOT COMMITTED**), które mogą nigdy nie zostać zaimplementowane. Punkty w tej sekcji nie stanowią zobowiązania do wdrożenia ani przypisania do konkretnej wersji (nie są przypisane do wydań 0.46–0.48 ani do żadnego nowego wydania). Podczas kolejnych przeglądów planu rozwoju należy ponownie ocenić ich przydatność:
 
 - Kandydat dotyczący wyglądu: regulacja poziomu przyciemnienia widocznych ukrytych elementów (obecny poziom domyślny: 0.40). W razie wdrożenia preferować proste predefiniowane poziomy zamiast suwaka w menu Widok.
 - Opcjonalne efekty dźwiękowe akcji i zdarzeń: dyskretne sygnały dźwiękowe dla długotrwałych zadań, błędów lub zakończenia operacji (wyłącznie niezobowiązujący kandydat w przyszłości).
@@ -1051,7 +1106,7 @@ Luźne, niewiążące propozycje (**OPTIONAL / UNASSIGNED / NOT COMMITTED**), kt
   - Ustawienia osobno dla kontekstów: pliki, foldery, dyski, puste tło.
   - Ukrycie pozycji nie może wyłączyć samej funkcji ani jej skrótu klawiaturowego.
   - Zapamiętywanie ustawień i przywracanie domyślnych pozycji.
-  - Rozróżnić tę funkcjonalność od planowanego w 0.46 wsparcia KDE Service Actions — dotyczą różnych aspektów menu (rozszerzenia zewnętrznych akcji usług a widoczność pozycji menu kontekstowego).
+  - Rozróżnić tę funkcjonalność od opcjonalnego/odroczonego wsparcia KDE Service Actions lub adapterów rozszerzeń (po `0.48.0`, nie jest to obowiązkowe wymaganie `0.46.0`) — dotyczą różnych aspektów menu (rozszerzenia zewnętrznych akcji usług a widoczność pozycji menu kontekstowego).
 - **Konfigurowalne skróty klawiaturowe (`OPTIONAL / UNASSIGNED / NOT COMMITTED`):**
   - Możliwość zmiany i usunięcia skrótu dla danej funkcji.
   - Wymagana obsługa konfliktów, wyszukiwanie poleceń, zapis ustawień, przywracanie pojedynczych lub wszystkich skrótów domyślnych oraz synchronizacja prezentowanych etykiet w całym interfejsie.
@@ -1074,8 +1129,9 @@ Luźne, niewiążące propozycje (**OPTIONAL / UNASSIGNED / NOT COMMITTED**), kt
     - Bez zmiany bieżących katalogów, zaznaczeń i stanu wewnętrznego paneli;
     - Ścisłe poszanowanie minimalnych dopuszczalnych szerokości paneli;
     - Zachowanie istniejącej możliwości ręcznego przeciągania separatora.
-- **Integracja z telefonem — KDE Connect (`OPTIONAL / UNASSIGNED / NOT COMMITTED`):**
-  - Opcjonalna przyszła integracja telefonu:
+- **Integracja z telefonem — łączność mobilna poza istniejącym MTP (`OPTIONAL / UNASSIGNED / NOT COMMITTED`):**
+  - Odrębna od istniejącej obsługi urządzeń `mtp:/` wydanej w `0.41.1` / `0.41.2` / `0.44.0`;
+  - Opcjonalna przyszła szersza integracja telefonu (np. przez KDE Connect lub wielopulpitowe adaptery mobilne po `0.48.0`):
     - Bezprzewodowe przeglądanie pamięci telefonu;
     - Kopiowanie plików telefon ↔ komputer;
     - Osobny interfejs SMS/MMS i powiadomień;
