@@ -882,12 +882,32 @@ public:
         }
     }
 
-    void cancelAll()
+    int nonKillableActiveCount() const
+    {
+        int count = 0;
+        for (const FileOperationItem *item : m_items) {
+            if (item && !item->finished()) {
+                const bool killable = item->job && item->job->capabilities().testFlag(KJob::Killable);
+                if (!killable || !item->cancelRequested) {
+                    ++count;
+                }
+            }
+        }
+        return count;
+    }
+
+    // Cancels only direct OperationManager KJobs without touching TransferQueueController.
+    void cancelDirectOperations()
     {
         const QList<FileOperationItem *> items = m_items;
         for (FileOperationItem *item : items) {
             cancelItem(item, false);
         }
+    }
+
+    void cancelAll()
+    {
+        cancelDirectOperations();
         if (m_queueController) {
             m_queueController->cancelAll();
         }

@@ -1,6 +1,7 @@
 /* Lazy asynchronous KFileMetaData extraction for local regular files. */
 #pragma once
 
+#include "applicationlifecycle.h"
 #include "browsercommon.h"
 #include "metadatadata.h"
 
@@ -10,17 +11,19 @@
 #include <KFileMetaData/UserMetaData>
 
 #include <QFile>
+#include <QFutureWatcher>
 #include <QLocale>
 #include <QMimeDatabase>
 #include <QObject>
 #include <QPointer>
-#include <QThread>
 
+#include <atomic>
 #include <cerrno>
 #include <cstring>
 #include <exception>
 #include <fcntl.h>
 #include <functional>
+#include <memory>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -37,21 +40,6 @@ Q_DECLARE_METATYPE(MetadataExtractionResult)
 
 using MetadataExtractor = std::function<MetadataExtractionResult(const QString &)>;
 
-class MetadataWorker final : public QObject
-{
-    Q_OBJECT
-public:
-    MetadataWorker(QString path, MetadataExtractor extractor)
-        : m_path(std::move(path)), m_extractor(std::move(extractor)) {}
-public Q_SLOTS:
-    void run() { Q_EMIT finished(m_extractor(m_path)); }
-Q_SIGNALS:
-    void finished(const MetadataExtractionResult &result);
-private:
-    QString m_path;
-    MetadataExtractor m_extractor;
-};
-
 class MetadataProvider final : public QObject
 {
     Q_OBJECT
@@ -64,6 +52,18 @@ public:
         qRegisterMetaType<MetadataExtractionResult>();
         m_data.url = url;
         m_data.capability = capabilityForUrl(url);
+    }
+
+    ~MetadataProvider() override
+    {
+        cancel();
+    }
+
+    void cancel()
+    {
+        if (m_cancelled) {
+            m_cancelled->store(true, std::memory_order_release);
+        }
     }
 
     const MetadataData &data() const { return m_data; }
@@ -95,16 +95,25 @@ public:
     bool start()
     {
         if (m_started || m_data.capability != MetadataCapability::SupportedLocalFile) return false;
+        auto *pools = ApplicationWorkerPools::forApplication();
+        if (pools && pools->isShuttingDown()) return false;
+
         m_started = true;
         ++m_startCount;
+        m_cancelled = std::make_shared<std::atomic<bool>>(false);
         m_data.state = MetadataState::Loading;
         Q_EMIT dataChanged(m_data);
 
-        auto *thread = new QThread;
-        auto *worker = new MetadataWorker(m_url.toLocalFile(), m_extractor);
-        worker->moveToThread(thread);
-        connect(thread, &QThread::started, worker, &MetadataWorker::run);
-        connect(worker, &MetadataWorker::finished, this, [this](const MetadataExtractionResult &raw) {
+        auto *watcher = new QFutureWatcher<MetadataExtractionResult>(this);
+        const auto cancelled = m_cancelled;
+        connect(watcher, &QFutureWatcher<MetadataExtractionResult>::finished, this, [this, watcher, cancelled] {
+            const bool valid = !watcher->isCanceled() && watcher->future().resultCount() > 0;
+            if (!valid || cancelled->load(std::memory_order_acquire)) {
+                watcher->deleteLater();
+                return;
+            }
+            const auto raw = watcher->result();
+            watcher->deleteLater();
             if (raw.disappeared) {
                 m_data.state = MetadataState::Disappeared;
             } else if (!raw.errorMessage.isEmpty()) {
@@ -115,11 +124,21 @@ public:
                 m_data.state = m_data.rows.isEmpty() ? MetadataState::NoMetadata : MetadataState::Available;
             }
             Q_EMIT dataChanged(m_data);
-        }, Qt::QueuedConnection);
-        connect(worker, &MetadataWorker::finished, thread, &QThread::quit);
-        connect(worker, &MetadataWorker::finished, worker, &QObject::deleteLater);
-        connect(thread, &QThread::finished, thread, &QObject::deleteLater);
-        thread->start();
+        });
+
+        const QString path = m_url.toLocalFile();
+        const MetadataExtractor extractor = m_extractor;
+        auto work = [path, extractor, cancelled]() -> MetadataExtractionResult {
+            if (cancelled->load(std::memory_order_acquire)) {
+                return {};
+            }
+            return extractor(path);
+        };
+        if (pools) {
+            watcher->setFuture(pools->runMetadataTask(std::move(work)));
+        } else {
+            watcher->setFuture(QtConcurrent::run(QThreadPool::globalInstance(), std::move(work)));
+        }
         return true;
     }
 
@@ -223,4 +242,5 @@ private:
     MetadataData m_data;
     bool m_started = false;
     int m_startCount = 0;
+    std::shared_ptr<std::atomic<bool>> m_cancelled;
 };

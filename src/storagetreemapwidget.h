@@ -249,21 +249,36 @@ protected:
         m_selectedIndex = idx;
         update();
 
-        QMenu menu(this);
-        auto *showAction = menu.addAction(tr("Pokaż w folderze"));
-        connect(showAction, &QAction::triggered, this, [this, node] {
-            const QString parentDir = node->isDirectory() ? node->path : node->path.section(QLatin1Char('/'), 0, -2);
+        const QString nodePath = node->path;
+        const bool isDirectory = node->isDirectory();
+        const bool isMountBoundary = node->isMountBoundary;
+
+        if (m_activeContextMenu) {
+            m_activeContextMenu->close();
+        }
+        auto *menu = new QMenu(this);
+        m_activeContextMenu = menu;
+        menu->setAttribute(Qt::WA_DeleteOnClose);
+        auto *showAction = menu->addAction(tr("Pokaż w folderze"));
+        connect(showAction, &QAction::triggered, this, [this, nodePath, isDirectory] {
+            const QString parentDir = isDirectory ? nodePath : nodePath.section(QLatin1Char('/'), 0, -2);
             Q_EMIT navigateRequested(QUrl::fromLocalFile(parentDir.isEmpty() ? QStringLiteral("/") : parentDir));
         });
 
-        if (node->isDirectory() && !node->isMountBoundary) {
-            auto *drillAction = menu.addAction(tr("Ustaw jako katalog główny mapy"));
-            connect(drillAction, &QAction::triggered, this, [this, node] {
-                Q_EMIT drillDownRequested(node);
+        if (isDirectory && !isMountBoundary) {
+            auto *drillAction = menu->addAction(tr("Ustaw jako katalog główny mapy"));
+            connect(drillAction, &QAction::triggered, this, [this, nodePath] {
+                for (const auto &lr : m_rects) {
+                    if (lr.node && lr.node->path == nodePath
+                        && lr.node->isDirectory() && !lr.node->isMountBoundary) {
+                        Q_EMIT drillDownRequested(lr.node);
+                        return;
+                    }
+                }
             });
         }
 
-        menu.exec(e->globalPos());
+        menu->popup(e->globalPos());
     }
 
     bool event(QEvent *e) override
@@ -337,6 +352,7 @@ private:
     QList<StorageTreemapLayoutRect> m_rects;
     int m_hoverIndex = -1;
     int m_selectedIndex = -1;
+    QPointer<QMenu> m_activeContextMenu;
 };
 
 class StorageTreemapWidget final : public QWidget

@@ -123,7 +123,15 @@ public:
             if(!exists) return false;
         }
         m_keepSelection=name; m_provider->cancel();
-        return m_controller->submit(m_capabilities,operation,name,value);
+        if (!m_controller->submit(m_capabilities,operation,name,value)) {
+            m_writeError = trLocal(
+                "Nie udało się zlecić zapisu atrybutu (operacja odrzucona lub aplikacja jest zamykana).",
+                "Could not submit attribute change (rejected or application is closing).");
+            m_error->setText(m_writeError);
+            m_error->show();
+            return false;
+        }
+        return true;
     }
 private:
     bool canWrite() const {

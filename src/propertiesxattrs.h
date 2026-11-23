@@ -1,5 +1,6 @@
 /* Bounded, read-only EntryNoFollow extended attribute snapshots. */
 #pragma once
+#include "applicationlifecycle.h"
 #include "propertiescapabilities.h"
 #include <QFutureWatcher>
 #include <QThreadPool>
@@ -130,19 +131,27 @@
     explicit PropertiesXattrProvider(QObject *parent = nullptr, Reader reader = {}) : QObject(parent), m_reader(reader ? std::move(reader) : Reader([](const QUrl &u,const PropertiesObjectIdentity &i) { return PropertiesXattrReader::read(u,i); })) {}
     void cancel() { ++m_generation; }
     void load(const QUrl &url, const PropertiesObjectIdentity &identity = {}) {
+        auto *pools = ApplicationWorkerPools::forApplication();
+        if (pools && pools->isShuttingDown()) return;
         const quint64 generation = ++m_generation;
         auto *watcher = new QFutureWatcher<PropertiesXattrSnapshot>(this);
         connect(watcher, &QFutureWatcher<PropertiesXattrSnapshot>::finished, this, [this,watcher,generation] {
+            const bool valid = !watcher->isCanceled() && watcher->future().resultCount() > 0;
+            if (!valid) { watcher->deleteLater(); return; }
             const auto result = watcher->result(); watcher->deleteLater();
             if (generation == m_generation) Q_EMIT ready(result);
         });
         const auto reader = m_reader;
-        watcher->setFuture(QtConcurrent::run(pool(), [reader,url,identity] { return reader(url,identity); }));
+        auto work = [reader,url,identity] { return reader(url,identity); };
+        if (pools) {
+            watcher->setFuture(pools->runXattrRead(std::move(work)));
+        } else {
+            watcher->setFuture(QtConcurrent::run(QThreadPool::globalInstance(), std::move(work)));
+        }
     }
  Q_SIGNALS:
     void ready(const PropertiesXattrSnapshot &snapshot);
  private:
-    static QThreadPool *pool() { static QThreadPool p; static const bool initialized = [] { p.setMaxThreadCount(2); return true; }(); Q_UNUSED(initialized); return &p; }
     Reader m_reader;
     quint64 m_generation = 0;
  };

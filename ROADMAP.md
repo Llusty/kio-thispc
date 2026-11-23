@@ -876,13 +876,17 @@ When standard operations receive permission denied errors, provide targeted `adm
 
 **This is NOT an analysis-only release.** Version `0.46.0` is an absolute architecture gate requiring both a comprehensive read-only audit and full implementation, automated testing, manual acceptance, and release of KDE-independent Linux operation.
 
-#### Phase 1 — Comprehensive Architecture & Dependency Audit
-- The first large-scale architecture and dependency audit will be coordinated by **Antigravity Orchestrator** in **strict READ-ONLY** mode;
-- Audit all relevant modules, KDE Frameworks dependencies, platform interfaces, and desktop integration paths;
-- Produce a complete dependency inventory, target architecture proposal, formal risk register, staged migration plan, and measurable acceptance criteria;
-- Require explicit release-owner approval before any architectural implementation begins.
+#### Phase 1 — Comprehensive Architecture & Dependency Audit ✅ completed
+- The first large-scale architecture and dependency audit was coordinated by **Antigravity Orchestrator** in **strict READ-ONLY** mode (Stage 0 + Stage 0A);
+- Audited all relevant modules, KDE Frameworks dependencies, platform interfaces, and desktop integration paths;
+- Produced a complete dependency inventory, target architecture proposal, formal risk register, staged migration plan, and measurable acceptance criteria;
+- Approved by the release owner (Decision B: incorporate all required fixes into the single `0.46.0` modernization release).
 
-#### Phase 2 — Actual Implementation & Validation (Within 0.46.0)
+#### Phase 2 — Actual Implementation & Validation (Within 0.46.0 — In Progress)
+- **Stage 1A — Lifecycle Hygiene, Safe Shutdown and Thread Ownership ✅ COMPLETED & ACCEPTED (internal checkpoint, not a public release):**
+  - Implemented `ApplicationWorkerPools` and `ShutdownCoordinator` in `src/applicationlifecycle.h`, `ChecksumJob` thread/cancellation ownership fixes (`src/checksumjob.h`), `MetadataProvider` & xattr managed pools (`src/metadataprovider.h`, `src/propertiesxattrs.h`, `src/propertiesxattrwriter.h`, `src/propertiesxattrwidget.h`), asynchronous non-blocking `StorageScanDialog` / `StorageTreemapCanvas` context menus (`src/storagescandialog.h`, `src/storagetreemapwidget.h`), `closeEvent` reentrancy guard, and R1/R2 remediation (`AUD-1A-01`–`AUD-1A-07`, `AUD-1A-R1-NOTE-01`);
+  - Verified in isolated workspace: **90/90** ASan/UBSan suites PASS, **11/11** targeted ASan/UBSan/LSan suites PASS (0 leaks, 190/190 `lifecycle_hygiene` checks, 5/5 real `QApplication::exec()` subprocesses PASS), and **10/10** owner manual GUI acceptance PASS (8/8 Stage 1A + 2/2 Stage 1A-R2);
+  - Deferred / assigned to future stages: unresolved pre-existing LSan ownership in `transfer_queue` and `operations` (→ Stage 2), intermittent pre-existing `trash` test flake (`empty-trash.cpp`, → future investigation), historical `directory-refresh` pending contracts (`DR-058/059/062`), and `PreviewPane` / PDF worker-pool changes (→ Stage 5A). See [docs/STAGE1A_LIFECYCLE_CHECKPOINT_046.md](docs/STAGE1A_LIFECYCLE_CHECKPOINT_046.md).
 - Implement the approved architecture changes within version `0.46.0`;
 - Remove mandatory KDE Frameworks / KDE Plasma runtime requirements from the portable ThisPC application;
 - Retain Qt as the shared cross-platform UI foundation;

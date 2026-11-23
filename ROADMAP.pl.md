@@ -978,13 +978,17 @@ Gdy zwykła operacja plikowa zakończy się błędem braku uprawnień (Permissio
 
 **To NIE jest wydanie wyłącznie analityczne.** Wersja `0.46.0` stanowi bezwzględną bramkę architektoniczną wymagającą zarówno kompleksowego audytu tylko do odczytu, jak i pełnej implementacji, testów automatycznych, odbioru manualnego oraz wydania przenośnej aplikacji niezależnej od KDE.
 
-#### Faza 1 — Kompleksowy audyt architektury i zależności
-- Pierwszy duży audyt architektury i zależności zostanie skoordynowany przez **Antigravity Orchestrator** w ścisłym trybie **TYLKO DO ODCZYTU (READ-ONLY)**;
-- Audyt wszystkich istotnych modułów, zależności od KDE Frameworks, interfejsów platformowych i ścieżek integracji z pulpitem;
-- Opracowanie pełnej inwentaryzacji zależności, docelowej propozycji architektonicznej, formalnego rejestru ryzyk, etapowego planu migracji oraz mierzalnych kryteriów akceptacji;
-- Wymagana jawna akceptacja właściciela wydania przed rozpoczęciem jakiejkolwiek implementacji architektonicznej.
+#### Faza 1 — Kompleksowy audyt architektury i zależności ✅ ukończone
+- Pierwszy duży audyt architektury i zależności został skoordynowany przez **Antigravity Orchestrator** w ścisłym trybie **TYLKO DO ODCZYTU (READ-ONLY)** (Stage 0 + Stage 0A);
+- Przeprowadzono audyt wszystkich istotnych modułów, zależności od KDE Frameworks, interfejsów platformowych i ścieżek integracji z pulpitem;
+- Opracowano pełną inwentaryzację zależności, docelową propozycję architektoniczną, formalny rejestr ryzyk, etapowy plan migracji oraz mierzalne kryteria akceptacji;
+- Zatwierdzone przez właściciela wydania (Decyzja B: włączenie wszystkich niezbędnych poprawek do jednego wydania modernizacyjnego `0.46.0`).
 
-#### Faza 2 — Rzeczywista implementacja i walidacja (w ramach wersji 0.46.0)
+#### Faza 2 — Rzeczywista implementacja i walidacja (w ramach wersji 0.46.0 — w trakcie realizacji)
+- **Stage 1A — Higiena cyklu życia, bezpieczne zamykanie i własność wątków ✅ UKOŃCZONE I ZAAKCEPTOWANE (wewnętrzny punkt kontrolny, nie wydanie publiczne):**
+  - Wdrożono `ApplicationWorkerPools` i `ShutdownCoordinator` w `src/applicationlifecycle.h`, poprawki własności wątków i anulowania w `ChecksumJob` (`src/checksumjob.h`), zarządzane pule dla `MetadataProvider` i xattr (`src/metadataprovider.h`, `src/propertiesxattrs.h`, `src/propertiesxattrwriter.h`, `src/propertiesxattrwidget.h`), asynchroniczne nieblokujące menu kontekstowe w `StorageScanDialog` / `StorageTreemapCanvas` (`src/storagescandialog.h`, `src/storagetreemapwidget.h`), strażnik reentrancji `closeEvent` oraz poprawki R1/R2 (`AUD-1A-01`–`AUD-1A-07`, `AUD-1A-R1-NOTE-01`);
+  - Zweryfikowano w odizolowanym środowisku: **90/90** pakietów ASan/UBSan PASS, **11/11** celowanych pakietów ASan/UBSan/LSan PASS (0 wycieków, 190/190 asercji `lifecycle_hygiene`, 5/5 podprocesów z rzeczywistą pętlą `QApplication::exec()` PASS) oraz **10/10** odbioru manualnego GUI właściciela (8/8 Stage 1A + 2/2 Stage 1A-R2);
+  - Odłożone / przypisane do przyszłych etapów: nierozstrzygnięta historyczna własność LSan w `transfer_queue` i `operations` (→ Stage 2), przejściowy historyczny flake testu `trash` (`empty-trash.cpp`, → przyszła analiza), historyczne kontrakty oczekujące `directory-refresh` (`DR-058/059/062`) oraz zmiany puli wątków `PreviewPane` / PDF (→ Stage 5A). Szczegóły w [docs/STAGE1A_LIFECYCLE_CHECKPOINT_046.md](docs/STAGE1A_LIFECYCLE_CHECKPOINT_046.md).
 - Wdrożenie zatwierdzonych zmian architektonicznych w ramach wersji `0.46.0`;
 - Usunięcie obowiązkowych zależności uruchomieniowych KDE Frameworks / KDE Plasma z przenośnej aplikacji ThisPC;
 - Zachowanie Qt jako wspólnego wieloplatformowego fundamentu UI;

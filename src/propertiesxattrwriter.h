@@ -118,26 +118,34 @@ public:
     // Invalidation discards delivery, never promises to undo an in-flight syscall.
     void invalidate() { ++m_generation; }
     bool submit(const PropertiesTargetCapabilities &target,PropertiesXattrOperation op,const QByteArray &name,const QByteArray &value={}) {
-        if(m_busy || !PropertiesXattrWriter::validName(name)
+        auto *pools = ApplicationWorkerPools::forApplication();
+        if(m_busy || (pools && pools->isShuttingDown()) || !PropertiesXattrWriter::validName(name)
             || (op!=PropertiesXattrOperation::Remove && value.size()>PropertiesXattrWriter::ValueLimit)
             || !target.requestedUrl.isLocalFile()) return false;
         m_busy=true; Q_EMIT busyChanged(true);
         const auto generation=m_generation;
         auto *watcher=new QFutureWatcher<PropertiesXattrWriteResult>(this);
         connect(watcher,&QFutureWatcher<PropertiesXattrWriteResult>::finished,this,[this,watcher,generation] {
-            const auto result=watcher->result(); watcher->deleteLater(); m_busy=false;
+            const auto result = (!watcher->isCanceled() && watcher->future().resultCount() > 0)
+                ? watcher->result()
+                : PropertiesXattrWriteResult{PropertiesXattrWriteStatus::Error, 0};
+            watcher->deleteLater(); m_busy=false;
             // Keep controls locked through completion delivery and its fresh read.
             if(generation==m_generation) Q_EMIT completed(result);
             Q_EMIT busyChanged(false);
         });
         const auto writer=m_writer;
-        watcher->setFuture(QtConcurrent::run(pool(),[writer,target,op,name,value] { return writer(target,op,name,value); }));
+        auto work = [writer,target,op,name,value] { return writer(target,op,name,value); };
+        if (pools) {
+            watcher->setFuture(pools->runXattrWrite(std::move(work)));
+        } else {
+            watcher->setFuture(QtConcurrent::run(QThreadPool::globalInstance(), std::move(work)));
+        }
         return true;
     }
 Q_SIGNALS:
     void completed(const PropertiesXattrWriteResult &result);
     void busyChanged(bool busy);
 private:
-    static QThreadPool *pool() { static QThreadPool p; static const bool initialized=[] { p.setMaxThreadCount(2); return true; }(); Q_UNUSED(initialized); return &p; }
     Writer m_writer; bool m_busy=false; quint64 m_generation=0;
 };

@@ -63,6 +63,7 @@ install(
 add_executable(thispc-view
     src/actionstatecontroller.cpp
     src/actionstatecontroller.h
+    src/applicationlifecycle.h
     src/applicationstyle.cpp
     src/applicationstyle.h
     src/appwidgets.cpp
@@ -236,6 +237,7 @@ endif()
 add_executable(thispc-view-stage3c1-test EXCLUDE_FROM_ALL
     src/actionstatecontroller.cpp
     src/actionstatecontroller.h
+    src/applicationlifecycle.h
     src/applicationstyle.cpp
     src/applicationstyle.h
     src/appwidgets.cpp

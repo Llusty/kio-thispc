@@ -425,13 +425,19 @@ private:
             if (!entry) {
                 return;
             }
-            QMenu menu(this);
-            auto *showAction = menu.addAction(trLocal("Pokaż w folderze", "Show in folder"));
-            connect(showAction, &QAction::triggered, this, [this, entry] {
-                const QString parentDir = entry->path.section(QLatin1Char('/'), 0, -2);
+            const QString entryPath = entry->path;
+            if (m_activeContextMenu) {
+                m_activeContextMenu->close();
+            }
+            auto *menu = new QMenu(this);
+            m_activeContextMenu = menu;
+            menu->setAttribute(Qt::WA_DeleteOnClose);
+            auto *showAction = menu->addAction(trLocal("Pokaż w folderze", "Show in folder"));
+            connect(showAction, &QAction::triggered, this, [this, entryPath] {
+                const QString parentDir = entryPath.section(QLatin1Char('/'), 0, -2);
                 Q_EMIT navigateRequested(QUrl::fromLocalFile(parentDir.isEmpty() ? QStringLiteral("/") : parentDir));
             });
-            menu.exec(m_filesTableView->viewport()->mapToGlobal(pos));
+            menu->popup(m_filesTableView->viewport()->mapToGlobal(pos));
         });
 
         m_tabWidget->addTab(filesTab, trLocal("Największe pliki", "Largest Files"));
@@ -500,18 +506,25 @@ private:
             if (!entry) {
                 return;
             }
-            QMenu menu(this);
-            auto *showAction = menu.addAction(trLocal("Pokaż w folderze", "Show in folder"));
-            connect(showAction, &QAction::triggered, this, [this, entry] {
-                Q_EMIT navigateRequested(QUrl::fromLocalFile(entry->path));
+            const QString dirPath = entry->path;
+            const bool isMountBoundary = entry->isMountBoundary;
+            if (m_activeContextMenu) {
+                m_activeContextMenu->close();
+            }
+            auto *menu = new QMenu(this);
+            m_activeContextMenu = menu;
+            menu->setAttribute(Qt::WA_DeleteOnClose);
+            auto *showAction = menu->addAction(trLocal("Pokaż w folderze", "Show in folder"));
+            connect(showAction, &QAction::triggered, this, [this, dirPath] {
+                Q_EMIT navigateRequested(QUrl::fromLocalFile(dirPath));
             });
-            if (!entry->isMountBoundary) {
-                auto *drillAction = menu.addAction(trLocal("Analizuj ten folder", "Analyze this folder"));
-                connect(drillAction, &QAction::triggered, this, [this, entry] {
-                    Q_EMIT drillDownRequested(QUrl::fromLocalFile(entry->path));
+            if (!isMountBoundary) {
+                auto *drillAction = menu->addAction(trLocal("Analizuj ten folder", "Analyze this folder"));
+                connect(drillAction, &QAction::triggered, this, [this, dirPath] {
+                    Q_EMIT drillDownRequested(QUrl::fromLocalFile(dirPath));
                 });
             }
-            menu.exec(m_dirsTableView->viewport()->mapToGlobal(pos));
+            menu->popup(m_dirsTableView->viewport()->mapToGlobal(pos));
         });
 
         m_tabWidget->addTab(dirsTab, trLocal("Największe katalogi", "Largest Directories"));
@@ -668,13 +681,19 @@ private:
             if (!file) {
                 return;
             }
-            QMenu menu(this);
-            auto *showAction = menu.addAction(trLocal("Pokaż w folderze", "Show in folder"));
-            connect(showAction, &QAction::triggered, this, [this, file] {
-                const QString parentDir = file->canonicalPath.section(QLatin1Char('/'), 0, -2);
+            const QString canonicalPath = file->canonicalPath;
+            if (m_activeContextMenu) {
+                m_activeContextMenu->close();
+            }
+            auto *menu = new QMenu(this);
+            m_activeContextMenu = menu;
+            menu->setAttribute(Qt::WA_DeleteOnClose);
+            auto *showAction = menu->addAction(trLocal("Pokaż w folderze", "Show in folder"));
+            connect(showAction, &QAction::triggered, this, [this, canonicalPath] {
+                const QString parentDir = canonicalPath.section(QLatin1Char('/'), 0, -2);
                 Q_EMIT navigateRequested(QUrl::fromLocalFile(parentDir.isEmpty() ? QStringLiteral("/") : parentDir));
             });
-            menu.exec(m_dupTreeView->viewport()->mapToGlobal(pos));
+            menu->popup(m_dupTreeView->viewport()->mapToGlobal(pos));
         });
 
         m_tabWidget->addTab(dupTab, trLocal("Duplikaty", "Duplicates"));
@@ -892,4 +911,5 @@ private:
 
     QPushButton *m_cancelButton = nullptr;
     QPushButton *m_closeButton = nullptr;
+    QPointer<QMenu> m_activeContextMenu;
 };

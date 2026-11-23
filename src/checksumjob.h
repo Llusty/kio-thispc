@@ -12,9 +12,11 @@
 #include <QPointer>
 #include <QThread>
 
+#include <atomic>
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
+#include <memory>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -41,15 +43,12 @@ class ChecksumWorker final : public QObject
     Q_OBJECT
 
 public:
-    ChecksumWorker(QString path, ChecksumJobOptions options)
+    ChecksumWorker(QString path, ChecksumJobOptions options,
+                   std::shared_ptr<std::atomic<bool>> cancelToken)
         : m_path(std::move(path))
         , m_options(options)
+        , m_cancelToken(std::move(cancelToken))
     {
-    }
-
-    void requestCancel()
-    {
-        m_cancelled.storeRelease(true);
     }
 
 public Q_SLOTS:
@@ -67,6 +66,12 @@ public Q_SLOTS:
             return;
         }
 #endif
+
+        if (isCancelled()) {
+            result.state = ChecksumState::Cancelled;
+            Q_EMIT finished(result);
+            return;
+        }
 
         const QByteArray encoded = QFile::encodeName(m_path);
         const int fd = ::open(encoded.constData(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK);
@@ -112,7 +117,7 @@ public Q_SLOTS:
         bool readFailed = false;
         int readError = 0;
         while (true) {
-            if (m_cancelled.loadAcquire()) {
+            if (isCancelled()) {
                 ::close(fd);
                 result.state = ChecksumState::Cancelled;
                 Q_EMIT finished(result);
@@ -146,7 +151,7 @@ public Q_SLOTS:
             || !S_ISREG(afterPath.st_mode)
             || (!readFailed && result.bytesProcessed != static_cast<quint64>(before.st_size));
 
-        if (m_cancelled.loadAcquire()) {
+        if (isCancelled()) {
             result.state = ChecksumState::Cancelled;
         } else if (changed) {
             result.state = ChecksumState::ChangedDuringHash;
@@ -198,9 +203,14 @@ private:
         Q_EMIT finished(result);
     }
 
+    bool isCancelled() const
+    {
+        return m_cancelToken && m_cancelToken->load(std::memory_order_acquire);
+    }
+
     QString m_path;
     ChecksumJobOptions m_options;
-    QAtomicInteger<bool> m_cancelled = false;
+    std::shared_ptr<std::atomic<bool>> m_cancelToken;
 };
 
 class ChecksumJob final : public QObject
@@ -223,12 +233,19 @@ public:
     ~ChecksumJob() override
     {
         cancel();
-        if (m_thread) {
-            disconnect(m_thread, nullptr, this, nullptr);
-            if (m_thread->isRunning()) {
-                m_thread->quit();
-                m_thread->wait();
+        const auto threads = std::move(m_threads);
+        m_threads.clear();
+        for (const QPointer<QThread> &guard : threads) {
+            QThread *thread = guard.data();
+            if (!thread) {
+                continue;
             }
+            disconnect(thread, nullptr, this, nullptr);
+            if (thread->isRunning()) {
+                thread->quit();
+                thread->wait();
+            }
+            delete thread;
         }
         QCoreApplication::removePostedEvents(this);
     }
@@ -254,6 +271,9 @@ public:
     {
         if (isRunning() || m_data.capability != ChecksumCapability::SupportedLocalFile)
             return false;
+        const bool preCancelled = (m_runId == 0) && m_cancelled.loadAcquire();
+        const quint64 runId = ++m_runId;
+        m_cancelled.storeRelease(preCancelled);
         m_data.state = ChecksumState::Running;
         m_data.algorithm = m_options.algorithm;
         m_data.digest.clear();
@@ -263,37 +283,47 @@ public:
         m_data.totalBytes = 0;
         Q_EMIT stateChanged(m_data);
 
+        auto cancelToken = std::make_shared<std::atomic<bool>>(preCancelled);
+        m_cancelToken = cancelToken;
+
         auto *thread = new QThread(nullptr);
-        auto *worker = new ChecksumWorker(m_url.toLocalFile(), m_options);
-        m_thread = thread;
-        m_worker = worker;
+        auto *worker = new ChecksumWorker(m_url.toLocalFile(), m_options, std::move(cancelToken));
+        m_threads.append(thread);
         worker->moveToThread(thread);
         connect(thread, &QThread::started, worker, &ChecksumWorker::run);
-        connect(worker, &ChecksumWorker::totalBytesKnown, this, [this](quint64 total) {
+        connect(worker, &ChecksumWorker::totalBytesKnown, this, [this, runId](quint64 total) {
+            if (runId != m_runId) {
+                return;
+            }
             m_data.totalBytes = total;
             Q_EMIT progress(0, total);
         });
-        connect(worker, &ChecksumWorker::progress, this, [this](quint64 done, quint64 total) {
+        connect(worker, &ChecksumWorker::progress, this, [this, runId](quint64 done, quint64 total) {
+            if (runId != m_runId) {
+                return;
+            }
             m_data.bytesProcessed = done;
             m_data.totalBytes = total;
             Q_EMIT progress(done, total);
         });
-        if (m_cancelled.loadAcquire()) {
-            worker->requestCancel();
-        }
-        connect(worker, &ChecksumWorker::finished, this, [this, thread](const ChecksumData &result) {
+        // Thread and worker teardown are owned directly by worker/thread signals,
+        // never dependent on ChecksumJob remaining alive until thread->finished.
+        connect(worker, &ChecksumWorker::finished, thread, &QThread::quit);
+        connect(worker, &ChecksumWorker::finished, worker, &QObject::deleteLater);
+        connect(thread, &QThread::finished, worker, &QObject::deleteLater);
+        connect(thread, &QThread::finished, thread, &QObject::deleteLater);
+        connect(thread, &QThread::finished, this, [this, thread] {
+            m_threads.removeIf([thread](const QPointer<QThread> &entry) {
+                return entry.isNull() || entry.data() == thread;
+            });
+        });
+        connect(worker, &ChecksumWorker::finished, this, [this, runId](const ChecksumData &result) {
+            if (runId != m_runId) {
+                return;
+            }
             m_data = result;
             m_cancelled.storeRelease(false);
             Q_EMIT stateChanged(m_data);
-            thread->quit();
-        });
-        connect(worker, &ChecksumWorker::finished, worker, &QObject::deleteLater);
-        connect(thread, &QThread::finished, this, [this, thread] {
-            if (m_thread == thread) {
-                m_thread = nullptr;
-                m_worker = nullptr;
-            }
-            thread->deleteLater();
         });
         thread->start();
         return true;
@@ -301,8 +331,12 @@ public:
 
     void cancel()
     {
-        m_cancelled.storeRelease(true);
-        if (m_worker) m_worker->requestCancel();
+        if (isRunning() || m_runId == 0) {
+            m_cancelled.storeRelease(true);
+        }
+        if (m_cancelToken) {
+            m_cancelToken->store(true, std::memory_order_release);
+        }
     }
 
 Q_SIGNALS:
@@ -313,7 +347,8 @@ private:
     QUrl m_url;
     ChecksumJobOptions m_options;
     ChecksumData m_data;
+    quint64 m_runId = 0;
     QAtomicInteger<bool> m_cancelled = false;
-    QPointer<QThread> m_thread;
-    QPointer<ChecksumWorker> m_worker;
+    std::shared_ptr<std::atomic<bool>> m_cancelToken;
+    QList<QPointer<QThread>> m_threads;
 };

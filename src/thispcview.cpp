@@ -12,6 +12,7 @@
 #include "archive-detection.h"
 #include "archive-extraction.h"
 #include "actionstatecontroller.h"
+#include "applicationlifecycle.h"
 #include "applicationstyle.h"
 #include "appwidgets.h"
 #include "devicemountcontroller.h"
@@ -745,48 +746,100 @@ public:
 #ifdef THISPC_TEST_HARNESS
 public:
     DirectoryWatchController *watchControllerForTesting() const { return m_watchController; }
+    ShutdownCoordinator *shutdownCoordinatorForTesting() const { return m_shutdownCoordinator; }
+    void setCloseConfirmationHandlerForTesting(std::function<bool(int)> handler)
+    {
+        m_closeConfirmationHandlerForTesting = std::move(handler);
+    }
 #else
 protected:
 #endif
+    void showEvent(QShowEvent *event) override
+    {
+        QMainWindow::showEvent(event);
+        if (m_shutdownCoordinator && m_shutdownCoordinator->isCompleted()) {
+            m_shutdownCoordinator->resetToIdle();
+        }
+        if (auto *pools = ApplicationWorkerPools::forApplication()) {
+            pools->registerWindow(this);
+        }
+    }
+
     void closeEvent(QCloseEvent *event) override
     {
-        if (BatchRenameRecoveryGate::instance().unjournaledSwapRunning()) {
-            statusBar()->showMessage(trLocal(
-                "Trwa zamiana nazw bez produkcyjnego dziennika recovery. Poczekaj na jej zakończenie przed zamknięciem okna.",
-                "A name exchange without production crash recovery is in progress. Wait for completion before closing."), 0);
+        ensureShutdownCoordinator();
+        if (m_shutdownCoordinator->isConfirming() || m_shutdownCoordinator->isDraining()) {
             event->ignore();
             return;
         }
-        if (PropertiesLifecycle::instance().deferCloseFor(this)) {
+        if (m_shutdownCoordinator->isCompleted()) {
+            if (m_operationManager && m_operationManager->detailedWindow()) {
+                m_operationManager->detailedWindow()->close();
+            }
+            QMainWindow::closeEvent(event);
+            return;
+        }
+        auto checkSafetyGates = [this]() -> bool {
+            if (BatchRenameRecoveryGate::instance().unjournaledSwapRunning()) {
+                if (statusBar()) {
+                    statusBar()->showMessage(trLocal(
+                        "Trwa zamiana nazw bez produkcyjnego dziennika recovery. Poczekaj na jej zakończenie przed zamknięciem okna.",
+                        "A name exchange without production crash recovery is in progress. Wait for completion before closing."), 0);
+                }
+                return false;
+            }
+            if (PropertiesLifecycle::instance().deferCloseFor(this)) {
+                return false;
+            }
+            return true;
+        };
+        if (!checkSafetyGates()) {
             event->ignore();
             return;
         }
-        const int queueActive = m_queueController ? m_queueController->activeCount() : 0;
+        const int queuePending = m_queueController
+            ? (m_queueController->activeCount() + m_queueController->queuedCount())
+            : 0;
         const int activeOperations =
-            (m_operationManager ? m_operationManager->activeCount() : 0) + queueActive;
+            (m_operationManager ? m_operationManager->activeCount() : 0) + queuePending;
         if (activeOperations > 0) {
-            const QString question =
-                isPolish()
-                    ? QStringLiteral(
-                        "Trwa %1 operacji plikowych. Zamknięcie aplikacji przerwie aktywne zadania.\n\nCzy na pewno zamknąć?")
-                        .arg(activeOperations)
-                    : QStringLiteral(
-                        "%1 file operations are still running. Closing the application will stop active tasks.\n\nClose anyway?")
-                        .arg(activeOperations);
+            ShutdownCoordinator::ConfirmationScope confirmScope(m_shutdownCoordinator);
+            if (!confirmScope.entered()) {
+                event->ignore();
+                return;
+            }
+            bool confirmed = false;
+#ifdef THISPC_TEST_HARNESS
+            if (m_closeConfirmationHandlerForTesting) {
+                confirmed = m_closeConfirmationHandlerForTesting(activeOperations);
+            } else
+#endif
+            {
+                const QString question =
+                    isPolish()
+                        ? QStringLiteral(
+                            "Trwa %1 operacji plikowych. Zamknięcie aplikacji przerwie aktywne zadania.\n\nCzy na pewno zamknąć?")
+                            .arg(activeOperations)
+                        : QStringLiteral(
+                            "%1 file operations are still running. Closing the application will stop active tasks.\n\nClose anyway?")
+                            .arg(activeOperations);
 
-            if (QMessageBox::question(
+                confirmed = QMessageBox::question(
                     this,
                     trLocal("Aktywne operacje", "Active operations"),
                     question,
                     QMessageBox::Yes | QMessageBox::No,
-                    QMessageBox::No)
-                != QMessageBox::Yes) {
+                    QMessageBox::No) == QMessageBox::Yes;
+            }
+            if (!confirmed) {
                 event->ignore();
                 return;
             }
-
-            if (m_operationManager) {
-                m_operationManager->cancelAll();
+            // Re-validate safety gates that could have become active during the
+            // modal QMessageBox nested event loop (AUD-1A-07).
+            if (!checkSafetyGates()) {
+                event->ignore();
+                return;
             }
         }
 
@@ -816,7 +869,6 @@ protected:
             if (m_queueController->historyManager()) {
                 m_queueController->historyManager()->flushSync();
             }
-            m_queueController->beginShutdown();
         }
 
         saveSessionState();
@@ -831,7 +883,46 @@ protected:
                 m_splitPane->isHidden() ? m_splitterState : m_contentSplitter->saveState());
         }
 
-        QMainWindow::closeEvent(event);
+        // Only drain process-wide ApplicationWorkerPools when this is the last
+        // active main window so surviving windows retain full pool access (AUD-1A-02).
+        auto *pools = ApplicationWorkerPools::forApplication();
+        bool drainProcessPools = true;
+        if (pools) {
+            pools->unregisterWindow(this);
+            drainProcessPools = !pools->hasOtherActiveWindows(this);
+        }
+
+        // Begin coordinated shutdown (acquires QEventLoopLocker, cancels direct
+        // operations and transfer queue without duplicate queue cancellation,
+        // drains application worker pools when last window closes).
+        m_inCloseEvent = true;
+        m_shutdownCoordinator->beginShutdown(drainProcessPools);
+        m_inCloseEvent = false;
+
+        if (m_shutdownCoordinator->isCompleted()) {
+            if (m_operationManager && m_operationManager->detailedWindow()) {
+                m_operationManager->detailedWindow()->close();
+            }
+            QMainWindow::closeEvent(event);
+            return;
+        }
+
+        // Draining asynchronously: keep the window visible with clear status so
+        // an active/non-killable operation never becomes a hidden ghost process
+        // (AUD-1A-03). The shutdownCompleted() slot will finish closing the window.
+        if (statusBar()) {
+            const int nonKillable = m_operationManager ? m_operationManager->nonKillableActiveCount() : 0;
+            statusBar()->showMessage(
+                nonKillable > 0
+                    ? trLocal(
+                        "Zamykanie aplikacji — oczekiwanie na zakończenie operacji, których nie można przerwać…",
+                        "Closing application — waiting for non-cancellable operations to finish…")
+                    : trLocal(
+                        "Zamykanie aplikacji — kończenie aktywnych operacji…",
+                        "Closing application — finishing active operations…"),
+                0);
+        }
+        event->ignore();
     }
 
 #ifdef THISPC_TEST_HARNESS
@@ -1659,6 +1750,9 @@ private:
             &QAction::triggered,
             this,
             [this] {
+                if (!ensureNotShuttingDown()) {
+                    return;
+                }
                 if (m_undoController) {
                     m_undoController->undo();
                 }
@@ -1675,6 +1769,9 @@ private:
             &QAction::triggered,
             this,
             [this] {
+                if (!ensureNotShuttingDown()) {
+                    return;
+                }
                 if (m_undoController) {
                     m_undoController->redo();
                 }
@@ -2409,7 +2506,7 @@ private:
         connect(m_splitPane, &SplitBrowserPane::selectionChanged,
                 this, [this] { updateFileActionStates(); updatePreviewAndQuickLook(); });
         const auto splitRename = [this](const QUrl &source, const QString &name) {
-            if (m_fileActions) m_fileActions->renameTo(source, name);
+            if (ensureNotShuttingDown() && m_fileActions) m_fileActions->renameTo(source, name);
         };
         m_splitPane->listView()->setRenameRequestHandler(splitRename);
         m_splitPane->detailsView()->setRenameRequestHandler(splitRename);
@@ -2594,6 +2691,108 @@ private:
             if (isTransferQueueDemoMode() && !isTransferQueueProductionDispatchConnected()) {
                 enqueueDemoTasks(m_queueController);
             }
+        }
+        ensureShutdownCoordinator();
+    }
+
+    bool isShutdownDraining() const
+    {
+        return m_shutdownCoordinator
+            && (m_shutdownCoordinator->isDraining() || m_shutdownCoordinator->isCompleted());
+    }
+
+    bool ensureNotShuttingDown()
+    {
+        if (!isShutdownDraining()) {
+            return true;
+        }
+        if (statusBar()) {
+            statusBar()->showMessage(
+                trLocal("Trwa zamykanie okna — nowe operacje plikowe są zablokowane.",
+                        "Window is closing — new file operations are blocked."),
+                0);
+        }
+        return false;
+    }
+
+    void applyShutdownInteractionState()
+    {
+        const bool locked = isShutdownDraining();
+        if (centralWidget()) {
+            centralWidget()->setEnabled(!locked);
+        }
+        if (locked) {
+            if (m_undoAction) {
+                m_undoAction->setEnabled(false);
+            }
+            if (m_redoAction) {
+                m_redoAction->setEnabled(false);
+            }
+        } else if (m_undoController && m_undoAction && m_redoAction) {
+            m_undoController->setActions(m_undoAction, m_redoAction);
+        }
+        updateFileActionStates();
+    }
+
+    void ensureShutdownCoordinator()
+    {
+        if (!m_shutdownCoordinator) {
+            m_shutdownCoordinator = new ShutdownCoordinator(this);
+            connect(m_shutdownCoordinator, &ShutdownCoordinator::stateChanged,
+                    this, [this](ShutdownCoordinator::State) {
+                        applyShutdownInteractionState();
+                    });
+            connect(m_shutdownCoordinator, &ShutdownCoordinator::shutdownCompleted, this, [this]() {
+                if (m_operationManager && m_operationManager->detailedWindow()) {
+                    m_operationManager->detailedWindow()->close();
+                }
+                if (!m_inCloseEvent && isVisible()) {
+                    QMainWindow::close();
+                }
+            });
+            connect(m_shutdownCoordinator, &ShutdownCoordinator::shutdownDelayed, this, [this](const QStringList &) {
+                if (statusBar()) {
+                    statusBar()->showMessage(
+                        trLocal("Zamykanie aplikacji trwa dłużej — oczekiwanie na zakończenie aktywnych zadań…",
+                                "Application shutdown is taking longer — waiting for active tasks to finish…"),
+                        0);
+                }
+            });
+        }
+        auto *pools = ApplicationWorkerPools::forApplication();
+        if (pools && m_shutdownCoordinator->isIdle()) {
+            pools->registerWindow(this);
+        }
+        m_shutdownCoordinator->setWorkerPools(pools);
+        if (m_operationManager && !m_shutdownOpsWired) {
+            m_shutdownOpsWired = true;
+            m_shutdownCoordinator->setOperationsHooks(
+                [this]() { return m_operationManager ? m_operationManager->activeCount() : 0; },
+                [this]() {
+                    if (m_operationManager) {
+                        m_operationManager->cancelDirectOperations();
+                    }
+                },
+                [this]() { return m_operationManager ? m_operationManager->nonKillableActiveCount() : 0; });
+            connect(m_operationManager, &OperationManager::operationsChanged,
+                    m_shutdownCoordinator, &ShutdownCoordinator::notifyOperationsChanged);
+        }
+        if (m_queueController && !m_shutdownQueueWired) {
+            m_shutdownQueueWired = true;
+            m_shutdownCoordinator->setQueueHooks(
+                [this]() { return !m_queueController || m_queueController->isShutdownComplete(); },
+                [this]() {
+                    if (m_queueController) {
+                        m_queueController->beginShutdown();
+                    }
+                },
+                [this]() {
+                    return m_queueController ? m_queueController->shutdownDiagnostics() : QStringList{};
+                });
+            connect(m_queueController, &TransferQueueController::shutdownCompleted,
+                    m_shutdownCoordinator, &ShutdownCoordinator::notifyQueueShutdownCompleted);
+            connect(m_queueController, &TransferQueueController::shutdownDelayed,
+                    m_shutdownCoordinator, &ShutdownCoordinator::notifyQueueShutdownDelayed);
         }
     }
 
@@ -3038,7 +3237,7 @@ private:
             &ThisPcWindow::handleDroppedUrls);
 
         const auto primaryRename = [this](const QUrl &source, const QString &name) {
-            if (m_fileActions) m_fileActions->renameTo(source, name);
+            if (ensureNotShuttingDown() && m_fileActions) m_fileActions->renameTo(source, name);
         };
         m_directoryList->setRenameRequestHandler(primaryRename);
         m_directoryDetails->setRenameRequestHandler(primaryRename);
@@ -3840,6 +4039,9 @@ private:
 
     void compareSplitPanes()
     {
+        if (!ensureNotShuttingDown()) {
+            return;
+        }
         if (!m_splitPane || !m_splitPane->isVisible()) {
             return;
         }
@@ -4870,6 +5072,9 @@ private:
 
     void copySelectionToDirectory(const QList<QUrl> &urls, const QString &directory, const QString &successMessage)
     {
+        if (!ensureNotShuttingDown()) {
+            return;
+        }
         m_fileActions->copySelectionToDirectory(urls, directory, successMessage);
     }
 
@@ -4992,6 +5197,9 @@ private:
 
     void pasteClipboardInto(const QUrl &destination)
     {
+        if (!ensureNotShuttingDown()) {
+            return;
+        }
         m_fileActions->pasteClipboardInto(destination);
     }
 
@@ -5292,6 +5500,9 @@ public:
 
     void showPaneContextMenu(PaneId pane, bool details, const QPoint &pos)
     {
+        if (!ensureNotShuttingDown()) {
+            return;
+        }
         auto *list = pane == PaneId::Split ? m_splitPane->listView() : m_directoryList;
         auto *tree = pane == PaneId::Split ? m_splitPane->detailsView() : m_directoryDetails;
         QAbstractItemView *view = details ? static_cast<QAbstractItemView *>(tree) : list;
@@ -5616,6 +5827,26 @@ public:
             }
         }
 
+        if (isShutdownDraining()) {
+            m_copyAction->setEnabled(false);
+            m_cutAction->setEnabled(false);
+            m_pasteAction->setEnabled(false);
+            m_renameAction->setEnabled(false);
+            m_batchRenameAction->setEnabled(false);
+            if (m_propertiesAction) m_propertiesAction->setEnabled(false);
+            m_trashAction->setEnabled(false);
+            if (m_emptyTrashAction) m_emptyTrashAction->setEnabled(false);
+            m_newFolderAction->setEnabled(false);
+            if (m_newTextFileAction) m_newTextFileAction->setEnabled(false);
+            if (m_newMarkdownAction) m_newMarkdownAction->setEnabled(false);
+            if (m_newEmptyFileAction) m_newEmptyFileAction->setEnabled(false);
+            if (m_templateMenu) m_templateMenu->menuAction()->setEnabled(false);
+            if (m_newButton) m_newButton->setEnabled(false);
+            if (m_undoAction) m_undoAction->setEnabled(false);
+            if (m_redoAction) m_redoAction->setEnabled(false);
+            return;
+        }
+
         const ActionAvailability state =
             ActionStateController::compute(actionStateInput());
         updateRecoveryFencePresentation();
@@ -5665,6 +5896,9 @@ public:
 
     void putSelectionOnClipboard(bool cut)
     {
+        if (!ensureNotShuttingDown()) {
+            return;
+        }
         const QList<QUrl> urls = selectedUrls();
 
         if (urls.isEmpty()) {
@@ -5701,30 +5935,35 @@ public:
 
     void pasteClipboard()
     {
+        if (!ensureNotShuttingDown()) return;
         const QUrl destination = paneContext().directory;
         if (canPasteHere()) pasteClipboardInto(destination);
     }
 
     void createNewFile(const QString &suggestedName, const QByteArray &contents)
     {
+        if (!ensureNotShuttingDown()) return;
         if (canModifyCurrentDirectory())
             m_fileActions->createNewFile(paneContext().directory, suggestedName, contents);
     }
 
     void createFromTemplate(const QUrl &source)
     {
+        if (!ensureNotShuttingDown()) return;
         if (canModifyCurrentDirectory())
             m_fileActions->createFromTemplate(paneContext().directory, source);
     }
 
     void createNewFolder()
     {
+        if (!ensureNotShuttingDown()) return;
         if (canModifyCurrentDirectory())
             m_fileActions->createNewFolder(paneContext().directory);
     }
 
     void renameSelected()
     {
+        if (!ensureNotShuttingDown()) return;
         const auto context = paneContext();
         if (context.items.size() != 1 || !context.view) return;
         QModelIndex index = context.view->currentIndex();
@@ -5740,6 +5979,7 @@ public:
 
     void batchRenameSelected()
     {
+        if (!ensureNotShuttingDown()) return;
         const PaneContext context = paneContext();
         QList<QUrl> urls;
         for (const PaneItem &item : context.items) urls.push_back(item.url);
@@ -5748,6 +5988,7 @@ public:
 
     void trashSelected()
     {
+        if (!ensureNotShuttingDown()) return;
         if (KeyboardNavigationRouter::isTextInput(QApplication::focusWidget())) {
             return;
         }
@@ -5756,6 +5997,7 @@ public:
 
     void deletePermanentlySelected()
     {
+        if (!ensureNotShuttingDown()) return;
         if (KeyboardNavigationRouter::isTextInput(QApplication::focusWidget())) {
             return;
         }
@@ -5764,6 +6006,7 @@ public:
 
     void emptyTrashAt(const QUrl &directory)
     {
+        if (!ensureNotShuttingDown()) return;
         if (m_emptyTrashAction) m_emptyTrashAction->setEnabled(false);
         m_fileActions->emptyTrash(directory, [this] { refreshTrashViews(); });
         updateFileActionStates();
@@ -6313,6 +6556,9 @@ public:
         const QPoint &globalPosition,
         Qt::KeyboardModifiers modifiers)
     {
+        if (!ensureNotShuttingDown()) {
+            return;
+        }
         if (urls.isEmpty() || !destination.isValid()) {
             return;
         }
@@ -6373,6 +6619,9 @@ public:
                 : Qt::CopyAction;
         }
 
+        if (!ensureNotShuttingDown()) {
+            return;
+        }
         m_fileActions->transfer(urls, destination, action);
     }
 
@@ -6988,6 +7237,9 @@ private:
 
     bool mutationAllowedByRecoveryGate()
     {
+        if (!ensureNotShuttingDown()) {
+            return false;
+        }
         auto &gate = BatchRenameRecoveryGate::instance();
         gate.refresh();
         if (!gate.mutationsBlocked()) {
@@ -7538,6 +7790,13 @@ private:
 
     OperationManager *m_operationManager = nullptr;
     TransferQueueController *m_queueController = nullptr;
+    ShutdownCoordinator *m_shutdownCoordinator = nullptr;
+    bool m_shutdownOpsWired = false;
+    bool m_shutdownQueueWired = false;
+    bool m_inCloseEvent = false;
+#ifdef THISPC_TEST_HARNESS
+    std::function<bool(int)> m_closeConfirmationHandlerForTesting;
+#endif
     AdminRetryController *m_adminRetryController = nullptr;
     QLabel *m_versionLabel = nullptr;
     QLabel *m_recoveryStatusLabel = nullptr;
@@ -7650,6 +7909,7 @@ int main(int argc, char **argv)
     }
 
     activateTransferQueueProductionDispatchByDefault();
+    ApplicationWorkerPools::forApplication();
 
     ThisPcWindow window(
         initialUrl,
