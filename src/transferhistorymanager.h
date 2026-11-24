@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "browsercommon.h"
+#include "portablecommon.h"
 #include "portablepaths.h"
 #include "transfertaskdescriptor.h"
 

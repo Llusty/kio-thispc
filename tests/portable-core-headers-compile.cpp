@@ -19,6 +19,8 @@
 #include "aggregatepropertiesscan.h"
 #include "localfileoverwrite.h"
 #include "localmergetransaction.h"
+#include "portablecommon.h"
+#include "portabletransferjob.h"
 
 #include <QByteArray>
 #include <QString>
@@ -48,6 +50,17 @@ bool verifyPortableCoreHeaderOnlyContracts()
 
     // localfileoverwrite.h (pure string helper — zero filesystem I/O)
     ok = ok && !moveContainmentErrorMessage().isEmpty();
+
+    // portablecommon.h (pure Qt6 Core helpers — zero filesystem I/O)
+    ok = ok && validNewName(QStringLiteral("report.txt"));
+    ok = ok && !validNewName(QStringLiteral(".."));
+    ok = ok && !formatFileSize(1024, false).isEmpty();
+    ok = ok && (formatFileSize(0, true) == QStringLiteral("—"));
+
+    // portabletransferjob.h (value types & flags)
+    static_assert(std::is_default_constructible_v<TransferOutcomeFlags>);
+    ok = ok && isTerminalTransferJobState(TransferJobState::Completed);
+    ok = ok && !isTerminalTransferJobState(TransferJobState::Cancelling);
 
     return ok;
 }

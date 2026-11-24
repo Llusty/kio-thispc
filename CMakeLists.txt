@@ -49,8 +49,11 @@ endif()
 set(THISPC_PORTABLE_CORE_SOURCES
     src/applicationstyle.cpp
     src/applicationstyle.h
+    src/portablecommon.h
     src/portablepaths.cpp
     src/portablepaths.h
+    src/portabletransferjob.cpp
+    src/portabletransferjob.h
     src/remoteurlhelper.cpp
     src/remoteurlhelper.h
     src/savedremotelocation.cpp
@@ -140,6 +143,12 @@ if(BUILD_TESTING)
     )
     target_link_libraries(thispc-core-smoke PRIVATE thispc-core)
     add_test(NAME thispc-core-smoke COMMAND thispc-core-smoke)
+
+    add_executable(thispc-portable-transfer-job-test
+        tests/portable-transfer-job-test.cpp
+    )
+    target_link_libraries(thispc-portable-transfer-job-test PRIVATE thispc-core)
+    add_test(NAME thispc-portable-transfer-job-test COMMAND thispc-portable-transfer-job-test)
 
     find_package(Python3 COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)

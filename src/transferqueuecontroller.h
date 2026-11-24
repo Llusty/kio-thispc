@@ -34,7 +34,6 @@
 #pragma once
 
 #include "batchrenamerecovery.h"
-#include "kiostagedtransferjob.h"
 #include "localfilecopyjob.h"
 #include "transferbandwidthlimiter.h"
 #include "transferhistorymanager.h"

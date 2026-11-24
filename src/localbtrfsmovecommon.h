@@ -7,7 +7,6 @@
 
 #pragma once
 
-#include "browsercommon.h"
 #include "localfileoverwrite.h"
 
 #include <QCryptographicHash>

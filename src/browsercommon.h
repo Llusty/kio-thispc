@@ -10,6 +10,7 @@
 #pragma once
 
 #include <KIO/UDSEntry>
+#include "portablecommon.h"
 #include "remoteurlhelper.h"
 
 #include <QCollator>
@@ -70,38 +71,6 @@ inline QUrl adminUrlForLocalPath(const QString &path)
     url.setScheme(QStringLiteral("admin"));
     url.setPath(QDir::cleanPath(path));
     return url;
-}
-
-inline QUrl siblingUrlWithName(const QUrl &source, const QString &name)
-{
-    QUrl destination = source;
-    QString path = destination.path();
-
-    while (path.size() > 1 && path.endsWith(QLatin1Char('/'))) {
-        path.chop(1);
-    }
-
-    const int slash = path.lastIndexOf(QLatin1Char('/'));
-
-    QString parentPath;
-    if (slash < 0) {
-        parentPath = QStringLiteral("/");
-    } else {
-        parentPath = path.left(slash + 1);
-    }
-
-    destination.setPath(parentPath + name);
-    return destination;
-}
-
-inline bool validNewName(const QString &name)
-{
-    const QString trimmed = name.trimmed();
-
-    return !trimmed.isEmpty()
-        && trimmed != QStringLiteral(".")
-        && trimmed != QStringLiteral("..")
-        && !trimmed.contains(QLatin1Char('/'));
 }
 
 struct FileInfo
@@ -233,52 +202,6 @@ inline bool operator!=(const DriveInfo &a, const DriveInfo &b)
 }
 
 
-inline bool isPolish()
-{
-    return QLocale().language() == QLocale::Polish;
-}
-
-
-inline QString trLocal(const char *polish, const char *english)
-{
-    return isPolish()
-        ? QString::fromUtf8(polish)
-        : QString::fromUtf8(english);
-}
-
-
-inline QString formatFileSize(qint64 bytes, bool isDirectory)
-{
-    if (isDirectory || bytes < 0) {
-        return QStringLiteral("—");
-    }
-
-    static const char *units[] = {
-        "B", "KiB", "MiB", "GiB", "TiB", "PiB"
-    };
-
-    double value = static_cast<double>(bytes);
-    int unit = 0;
-
-    while (value >= 1024.0 && unit < 5) {
-        value /= 1024.0;
-        ++unit;
-    }
-
-    int precision = 0;
-    if (unit > 0 && value < 10.0) {
-        precision = 2;
-    } else if (unit > 0 && value < 100.0) {
-        precision = 1;
-    }
-
-    return QStringLiteral("%1 %2")
-        .arg(
-            QLocale().toString(value, 'f', precision),
-            QString::fromLatin1(units[unit]));
-}
-
-
 inline QString formatModificationTime(qint64 seconds)
 {
     if (seconds <= 0) {
@@ -357,30 +280,6 @@ inline QString fileTypeLabel(
 }
 
 
-inline QUrl normalizedUrl(QUrl url)
-{
-    url = RemoteUrlHelper::sanitizeUrl(url);
-    if (RemoteUrlHelper::isRemoteUrl(url) && url.path().isEmpty())
-        url.setPath(QStringLiteral("/"));
-    if (url.isLocalFile()) {
-        url = QUrl::fromLocalFile(QDir::cleanPath(url.toLocalFile()));
-        return url;
-    }
-
-    QString path = url.path();
-    while (path.size() > 1 && path.endsWith(QLatin1Char('/'))) {
-        path.chop(1);
-    }
-    url.setPath(path);
-    return url;
-}
-
-
-inline bool sameLocation(const QUrl &a, const QUrl &b)
-{
-    return normalizedUrl(a) == normalizedUrl(b);
-}
-
 inline bool isDeletableMtpUrl(const QUrl &url)
 {
     if (url.scheme().compare(QStringLiteral("mtp"), Qt::CaseInsensitive) != 0) {
@@ -409,56 +308,6 @@ inline bool isProtectedRootUrl(const QUrl &url)
     const QString path = QDir::cleanPath(url.path());
     return path.isEmpty() || path == QStringLiteral("/");
 }
-
-inline QUrl parentDirectoryUrl(const QUrl &url)
-{
-    const QUrl norm = normalizedUrl(url);
-    if (norm.isLocalFile()) {
-        const QString path = norm.toLocalFile();
-        const QString parentPath = QFileInfo(path).path();
-        return QUrl::fromLocalFile(parentPath);
-    }
-    return norm.adjusted(QUrl::RemoveFilename | QUrl::StripTrailingSlash);
-}
-
-enum class FileOperationType {
-    Copy,
-    Move,
-    Rename,
-    Trash,
-    Restore,
-    CreateFolder,
-    CreateFile,
-    EmptyTrash,
-    Delete,
-    Custom
-};
-
-struct FileOperationContext {
-    FileOperationType type = FileOperationType::Custom;
-    QList<QUrl> sources;
-    QSet<QUrl> sourceParentDirectories;
-    QUrl destinationDirectory;
-    QList<QUrl> destinationUrls;
-
-    static FileOperationContext create(FileOperationType opType,
-                                       const QList<QUrl> &srcs,
-                                       const QUrl &destDir = QUrl())
-    {
-        FileOperationContext ctx;
-        ctx.type = opType;
-        ctx.sources = srcs;
-        ctx.destinationDirectory = destDir;
-        for (const QUrl &u : srcs) {
-            if (!u.isValid()) continue;
-            const QUrl parent = parentDirectoryUrl(u);
-            if (parent.isValid()) {
-                ctx.sourceParentDirectories.insert(normalizedUrl(parent));
-            }
-        }
-        return ctx;
-    }
-};
 
 inline QString sysfsPathForSolidUdi(const QString &udi)
 {
