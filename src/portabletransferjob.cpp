@@ -9,12 +9,34 @@
 
 #include <QPointer>
 
-PortableTransferJob::PortableTransferJob(QObject *parent)
+PortableTransferCleanupHandle::PortableTransferCleanupHandle(QObject *parent)
     : QObject(parent)
 {
 }
 
-PortableTransferJob::~PortableTransferJob() = default;
+PortableTransferCleanupHandle::~PortableTransferCleanupHandle() = default;
+
+void PortableTransferCleanupHandle::markCleanupComplete()
+{
+    if (m_complete) {
+        return;
+    }
+    m_complete = true;
+    Q_EMIT cleanupCompleted();
+}
+
+PortableTransferJob::PortableTransferJob(QObject *parent)
+    : QObject(parent)
+    , m_cleanupHandle(std::make_shared<PortableTransferCleanupHandle>())
+{
+}
+
+PortableTransferJob::~PortableTransferJob()
+{
+    if (!m_cleanupDetached && m_cleanupHandle) {
+        m_cleanupHandle->markCleanupComplete();
+    }
+}
 
 void PortableTransferJob::start()
 {
@@ -40,7 +62,7 @@ bool PortableTransferJob::requestCancel()
     if (m_state == TransferJobState::Cancelling) {
         return true;
     }
-    if (m_state == TransferJobState::NotStarted) {
+    if (m_state == TransferJobState::NotStarted && !hasActiveBackendBeforeStart()) {
         m_cancelRequested = true;
         finishCancelled();
         return true;
@@ -134,6 +156,38 @@ bool PortableTransferJob::doSuspend()
 bool PortableTransferJob::doResume()
 {
     return false;
+}
+
+bool PortableTransferJob::hasActiveBackendBeforeStart() const
+{
+    return false;
+}
+
+void PortableTransferJob::syncSuspendedState(bool suspended)
+{
+    if (isTerminal()) {
+        return;
+    }
+    if (suspended && m_state == TransferJobState::Running) {
+        QPointer<PortableTransferJob> self(this);
+        transitionState(TransferJobState::Paused);
+        if (self && self->m_state == TransferJobState::Paused) {
+            Q_EMIT suspendedChanged(this, true);
+        }
+    } else if (!suspended && m_state == TransferJobState::Paused) {
+        QPointer<PortableTransferJob> self(this);
+        transitionState(TransferJobState::Running);
+        if (self && self->m_state == TransferJobState::Running) {
+            Q_EMIT suspendedChanged(this, false);
+        }
+    }
+}
+
+void PortableTransferJob::markBackendCleanupComplete()
+{
+    if (m_cleanupHandle) {
+        m_cleanupHandle->markCleanupComplete();
+    }
 }
 
 void PortableTransferJob::setCapabilities(TransferJobCapabilities capabilities)

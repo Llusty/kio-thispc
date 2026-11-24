@@ -36,6 +36,26 @@
 
 class TransferBandwidthLimiter;
 
+// Lightweight Qt6 Core-only handle tracking actual backend/worker cleanup
+// completion independently of PortableTransferJob destruction (Stage 2A.2-1-R1).
+class PortableTransferCleanupHandle final : public QObject
+{
+    Q_OBJECT
+
+public:
+    explicit PortableTransferCleanupHandle(QObject *parent = nullptr);
+    ~PortableTransferCleanupHandle() override;
+
+    bool isCleanupComplete() const { return m_complete; }
+    void markCleanupComplete();
+
+Q_SIGNALS:
+    void cleanupCompleted();
+
+private:
+    bool m_complete = false;
+};
+
 enum class TransferJobCapability : unsigned int {
     None             = 0u,
     Killable         = 1u << 0,
@@ -155,6 +175,12 @@ public:
     bool autoDelete() const { return m_autoDelete; }
     void setAutoDelete(bool enabled) { m_autoDelete = enabled; }
 
+    std::shared_ptr<PortableTransferCleanupHandle> cleanupHandle() const { return m_cleanupHandle; }
+    bool isBackendCleanupComplete() const
+    {
+        return m_cleanupHandle ? m_cleanupHandle->isCleanupComplete() : true;
+    }
+
     void start();
     bool requestCancel();
     bool suspend();
@@ -183,6 +209,7 @@ protected:
     virtual bool doCancel();
     virtual bool doSuspend();
     virtual bool doResume();
+    virtual bool hasActiveBackendBeforeStart() const;
 
     void setCapabilities(TransferJobCapabilities capabilities);
     void setTotalBytes(qulonglong bytes);
@@ -193,6 +220,9 @@ protected:
     void emitSpeed(unsigned long bytesPerSecond);
     void setCurrentItem(const QUrl &source, const QUrl &destination);
     void setInDecisionPhase(bool inDecisionPhase);
+    void syncSuspendedState(bool suspended);
+    void setCleanupDetached(bool detached) { m_cleanupDetached = detached; }
+    void markBackendCleanupComplete();
 
     void setOutcomeFlags(const TransferOutcomeFlags &flags);
 
@@ -228,6 +258,8 @@ private:
     bool m_autoDelete = true;
     bool m_finalizing = false;
     bool m_deleteScheduled = false;
+    bool m_cleanupDetached = false;
+    std::shared_ptr<PortableTransferCleanupHandle> m_cleanupHandle;
 };
 
 Q_DECLARE_METATYPE(TransferJobCapability)

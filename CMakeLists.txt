@@ -279,6 +279,8 @@ set(THISPC_VIEW_KDE_SOURCES
     src/localmergeexecutionjob.h
     src/localtransferjob.h
     src/kiostagedtransferjob.h
+    src/kjobtransferadapter.cpp
+    src/kjobtransferadapter.h
     src/localtreehistory.h
     src/transfertaskdescriptor.h
     src/transferreservationregistry.h
@@ -412,6 +414,24 @@ add_executable(thispc-merge-preview
 )
 target_include_directories(thispc-merge-preview PRIVATE src)
 target_link_libraries(thispc-merge-preview PRIVATE thispc-core Qt6::Core Qt6::Gui Qt6::Widgets KF6::KIOCore)
+
+# Stage 2A.2-1 isolated KDE compatibility adapter tests (KDE-compatible builds only)
+if(BUILD_TESTING)
+    add_executable(thispc-kjob-transfer-adapter-test
+        tests/kjob-transfer-adapter-test.cpp
+        src/kjobtransferadapter.cpp
+        src/kjobtransferadapter.h
+        src/localfilecopyjob.h
+    )
+    target_include_directories(thispc-kjob-transfer-adapter-test PRIVATE src)
+    target_link_libraries(thispc-kjob-transfer-adapter-test PRIVATE
+        thispc-core
+        Qt6::Core
+        KF6::CoreAddons
+        KF6::KIOCore
+    )
+    add_test(NAME thispc-kjob-transfer-adapter-test COMMAND thispc-kjob-transfer-adapter-test)
+endif()
 
 # Stage 3B.3B-2 isolated developer GUI binary for manual Folder Merge acceptance (never installed)
 add_executable(thispc-view-merge-dev EXCLUDE_FROM_ALL ${THISPC_VIEW_KDE_SOURCES})
