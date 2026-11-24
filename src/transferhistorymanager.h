@@ -17,6 +17,7 @@
 #pragma once
 
 #include "browsercommon.h"
+#include "portablepaths.h"
 #include "transfertaskdescriptor.h"
 
 #include <QDateTime>
@@ -854,16 +855,7 @@ public:
 
     static QString defaultHistoryDirectory()
     {
-        QString stateDir = QStandardPaths::writableLocation(QStandardPaths::StateLocation);
-        if (stateDir.isEmpty()) {
-            QString generic = QStandardPaths::writableLocation(QStandardPaths::GenericStateLocation);
-            if (!generic.isEmpty()) {
-                stateDir = generic + QStringLiteral("/kio-thispc/thispc-view");
-            } else {
-                stateDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-            }
-        }
-        return stateDir;
+        return ThisPc::PortablePaths::appStateLocation(QStringLiteral("kio-thispc/thispc-view"));
     }
 
     static QString defaultHistoryFilePath()

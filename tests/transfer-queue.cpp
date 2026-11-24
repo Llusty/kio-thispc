@@ -4,9 +4,9 @@
  * TransferQueueSettings.
  *
  * Deterministic: every backend is a fake KJob driven by the test. No test
- * depends on disk speed. Tests that touch files run only inside a sandbox
- * under ~/Pobrane/Testy/ThisPC-0.44.0-Transfer-Queue/ (override the base with
- * THISPC_QUEUE_SANDBOX; the path must still contain that directory name).
+ * depends on disk speed. Tests that touch files run only inside an isolated
+ * sandbox under THISPC_QUEUE_SANDBOX, <THISPC_TEST_WORK_DIR>/transfer_queue,
+ * or a safely owned QTemporaryDir under QDir::tempPath() when no override is set.
  *
  * SPDX-FileCopyrightText: 2026 Sebastian Harasim
  * SPDX-License-Identifier: MIT
@@ -19,6 +19,10 @@
 #include <QApplication>
 #include <QCryptographicHash>
 #include <QProcess>
+#include <QStandardPaths>
+#include <cerrno>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #define TQ_S(text) QStringLiteral(text)
 
@@ -232,21 +236,372 @@ struct QueueHarness {
     TransferTaskSnapshot snap(quint64 id) const { return *ctl.taskSnapshot(id); }
 };
 
+static constexpr const char *kQueueSandboxMarkerName = ".thispc-transfer-queue-sandbox";
+
+static bool hasNoSymlinkInExistingHierarchy(const QString &cleanPath)
+{
+    if (cleanPath.isEmpty() || !cleanPath.startsWith(QLatin1Char('/'))) {
+        return false;
+    }
+    const QStringList parts = cleanPath.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    QString prefix;
+    for (int i = 0; i < parts.size(); ++i) {
+        prefix += QLatin1Char('/') + parts.at(i);
+        struct stat st {};
+        if (::lstat(QFile::encodeName(prefix).constData(), &st) == 0) {
+            if (S_ISLNK(st.st_mode)) {
+                return false;
+            }
+            if (!S_ISDIR(st.st_mode)) {
+                return false;
+            }
+        } else if (errno == ENOENT) {
+            break;
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool hasGitRepoInAncestors(const QString &cleanPath)
+{
+    const QStringList parts = cleanPath.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    for (const QString &part : parts) {
+        if (part == TQ_S(".git")) {
+            return true;
+        }
+    }
+    QString prefix;
+    for (const QString &part : parts) {
+        prefix += QLatin1Char('/') + part;
+        struct stat st {};
+        if (::lstat(QFile::encodeName(prefix).constData(), &st) != 0) {
+            if (errno == ENOENT) {
+                break;
+            }
+            return true;
+        }
+        if (S_ISDIR(st.st_mode)) {
+            struct stat gitSt {};
+            if (::lstat(QFile::encodeName(prefix + TQ_S("/.git")).constData(), &gitSt) == 0) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static bool isProtectedSystemOrUserDataPath(const QString &cleaned)
+{
+    if (cleaned == TQ_S("/") || cleaned == TQ_S("/home")) {
+        return true;
+    }
+    const QString homeClean = QDir::cleanPath(QDir::homePath());
+    if (!homeClean.isEmpty() && cleaned == homeClean) {
+        return true;
+    }
+    for (const char *forbiddenRoot : {
+             "/bin", "/boot", "/dev", "/etc", "/lib", "/lib64",
+             "/media", "/mnt", "/opt", "/proc", "/root", "/run",
+             "/sbin", "/srv", "/sys", "/usr"}) {
+        const QString prefix = QString::fromLatin1(forbiddenRoot);
+        if (cleaned == prefix || cleaned.startsWith(prefix + QLatin1Char('/'))) {
+            return true;
+        }
+    }
+    if (cleaned == TQ_S("/var")
+        || (cleaned.startsWith(TQ_S("/var/"))
+            && cleaned != TQ_S("/var/tmp")
+            && !cleaned.startsWith(TQ_S("/var/tmp/")))) {
+        return true;
+    }
+    if (!homeClean.isEmpty()) {
+        for (const char *relProtected : {"/.config", "/.local", "/.cache"}) {
+            const QString prefix = homeClean + QString::fromLatin1(relProtected);
+            if (cleaned == prefix || cleaned.startsWith(prefix + QLatin1Char('/'))) {
+                return true;
+            }
+        }
+    }
+    for (const QStandardPaths::StandardLocation loc : {
+             QStandardPaths::DocumentsLocation,
+             QStandardPaths::DesktopLocation,
+             QStandardPaths::PicturesLocation,
+             QStandardPaths::MusicLocation,
+             QStandardPaths::MoviesLocation}) {
+        const QString dir = QDir::cleanPath(QStandardPaths::writableLocation(loc));
+        if (!dir.isEmpty() && dir != homeClean && dir != TQ_S("/")
+            && (cleaned == dir || cleaned.startsWith(dir + QLatin1Char('/')))) {
+            return true;
+        }
+    }
+    const QString downloadsDir = QDir::cleanPath(
+        QStandardPaths::writableLocation(QStandardPaths::DownloadLocation));
+    if (!downloadsDir.isEmpty() && downloadsDir != homeClean && cleaned == downloadsDir) {
+        return true;
+    }
+    return false;
+}
+
+static bool isOwnedOrEmptySandboxDir(const QString &cleanBase)
+{
+    struct stat st {};
+    if (::lstat(QFile::encodeName(cleanBase).constData(), &st) != 0) {
+        return errno == ENOENT;
+    }
+    if (!S_ISDIR(st.st_mode) || st.st_uid != ::geteuid()) {
+        return false;
+    }
+    const QStringList entries = QDir(cleanBase).entryList(
+        QDir::NoDotAndDotDot | QDir::AllEntries | QDir::Hidden | QDir::System);
+    if (entries.isEmpty()) {
+        return true;
+    }
+    struct stat markerSt {};
+    const QString markerPath = cleanBase + QLatin1Char('/') + QString::fromLatin1(kQueueSandboxMarkerName);
+    if (::lstat(QFile::encodeName(markerPath).constData(), &markerSt) != 0) {
+        return false;
+    }
+    return S_ISREG(markerSt.st_mode) && markerSt.st_uid == ::geteuid();
+}
+
+static bool isSafeAbsoluteSandboxOverride(const QString &rawPath,
+                                          bool requireEmptyOrOwned = true,
+                                          QString *outCleaned = nullptr)
+{
+    if (rawPath.isEmpty() || !rawPath.startsWith(QLatin1Char('/')) || rawPath.contains(QChar(u'\0'))) {
+        return false;
+    }
+    const QStringList rawParts = rawPath.split(QLatin1Char('/'), Qt::KeepEmptyParts);
+    for (const QString &part : rawParts) {
+        if (part == TQ_S(".") || part == TQ_S("..")) {
+            return false;
+        }
+    }
+    const QString cleaned = QDir::cleanPath(rawPath);
+    if (!cleaned.startsWith(QLatin1Char('/')) || cleaned == TQ_S("/")) {
+        return false;
+    }
+    if (cleaned.contains(TQ_S("ThisPC-0.44.0-Transfer-Queue"))) {
+        return false;
+    }
+    if (isProtectedSystemOrUserDataPath(cleaned)) {
+        return false;
+    }
+    if (hasGitRepoInAncestors(cleaned)) {
+        return false;
+    }
+    if (!hasNoSymlinkInExistingHierarchy(cleaned)) {
+        return false;
+    }
+    if (!TransferReservation::resolveLocal(QUrl::fromLocalFile(cleaned)).ok) {
+        return false;
+    }
+    if (requireEmptyOrOwned && !isOwnedOrEmptySandboxDir(cleaned)) {
+        return false;
+    }
+    if (outCleaned) {
+        *outCleaned = cleaned;
+    }
+    return true;
+}
+
+static bool resolveQueueSandboxBase(const QString &queueSandboxEnv,
+                                    const QString &testWorkDirEnv,
+                                    QString &outBase,
+                                    bool &outUseTempFallback)
+{
+    outBase.clear();
+    outUseTempFallback = false;
+
+    if (!queueSandboxEnv.isEmpty()) {
+        QString cleaned;
+        if (!isSafeAbsoluteSandboxOverride(queueSandboxEnv, /*requireEmptyOrOwned=*/true, &cleaned)) {
+            return false;
+        }
+        outBase = cleaned;
+        return true;
+    }
+
+    if (!testWorkDirEnv.isEmpty()) {
+        QString cleanedParent;
+        if (!isSafeAbsoluteSandboxOverride(testWorkDirEnv, /*requireEmptyOrOwned=*/false, &cleanedParent)) {
+            return false;
+        }
+        const QString candidateBase = cleanedParent + TQ_S("/transfer_queue");
+        QString cleanedBase;
+        if (!isSafeAbsoluteSandboxOverride(candidateBase, /*requireEmptyOrOwned=*/true, &cleanedBase)) {
+            return false;
+        }
+        outBase = cleanedBase;
+        return true;
+    }
+
+    outUseTempFallback = true;
+    return true;
+}
+
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
 
-    QString base = qEnvironmentVariable("THISPC_QUEUE_SANDBOX");
-    if (base.isEmpty()) {
-        base = QDir::homePath()
-            + TQ_S("/Pobrane/Testy/ThisPC-0.44.0-Transfer-Queue/Stage3/sandbox");
+    // Self-check sandbox path resolution, ownership, symlink and containment guards
+    // using only pure validation calls and disposable synthetic fixtures.
+    {
+        QTemporaryDir synthRoot(QDir::tempPath() + TQ_S("/thispc-tq-guard-XXXXXX"));
+        verify(synthRoot.isValid(), "synthetic guard fixture root created");
+        const QString synth = QDir::cleanPath(synthRoot.path());
+
+        QString resolved;
+        bool useTemp = false;
+
+        // 1. Valid absolute workspace override
+        const QString validWork = synth + TQ_S("/stage1b-work");
+        verify(QDir().mkpath(validWork), "synthetic valid workspace created");
+        verify(resolveQueueSandboxBase(QString(), validWork, resolved, useTemp)
+               && !useTemp && resolved == validWork + TQ_S("/transfer_queue"),
+               "absolute THISPC_TEST_WORK_DIR resolves to dedicated transfer_queue subdir");
+
+        // 2. THISPC_QUEUE_SANDBOX precedence over THISPC_TEST_WORK_DIR
+        const QString explicitSandbox = synth + TQ_S("/explicit-sandbox");
+        verify(resolveQueueSandboxBase(explicitSandbox, validWork, resolved, useTemp)
+               && !useTemp && resolved == explicitSandbox,
+               "THISPC_QUEUE_SANDBOX takes precedence over THISPC_TEST_WORK_DIR");
+
+        // 3. Missing both overrides selects isolated temp fallback
+        verify(resolveQueueSandboxBase(QString(), QString(), resolved, useTemp)
+               && useTemp && resolved.isEmpty(),
+               "missing override selects safe temporary fallback");
+
+        // 4. Relative workspace paths rejected
+        verify(!resolveQueueSandboxBase(QString(), TQ_S("relative/work/dir"), resolved, useTemp),
+               "relative THISPC_TEST_WORK_DIR is rejected");
+        verify(!resolveQueueSandboxBase(TQ_S("relative/sandbox"), QString(), resolved, useTemp),
+               "relative THISPC_QUEUE_SANDBOX is rejected");
+
+        // 5. '.' and '..' path components rejected
+        verify(!resolveQueueSandboxBase(QString(), synth + TQ_S("/./sub"), resolved, useTemp),
+               "dot segment in THISPC_TEST_WORK_DIR is rejected");
+        verify(!resolveQueueSandboxBase(QString(), TQ_S("/tmp/../etc"), resolved, useTemp),
+               "traversal THISPC_TEST_WORK_DIR is rejected");
+
+        // 6. Filesystem root '/' and direct system root '/etc' rejected
+        verify(!resolveQueueSandboxBase(QString(), TQ_S("/"), resolved, useTemp),
+               "root THISPC_TEST_WORK_DIR is rejected");
+        verify(!resolveQueueSandboxBase(TQ_S("/etc"), QString(), resolved, useTemp),
+               "direct /etc THISPC_QUEUE_SANDBOX is rejected");
+
+        // 7. Home directory and XDG user-data directory rejected
+        verify(!resolveQueueSandboxBase(QString(), QDir::homePath(), resolved, useTemp),
+               "home root THISPC_TEST_WORK_DIR is rejected");
+        const QString docsDir = QDir::cleanPath(
+            QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation));
+        if (!docsDir.isEmpty() && docsDir != QDir::cleanPath(QDir::homePath())) {
+            verify(!resolveQueueSandboxBase(docsDir, QString(), resolved, useTemp),
+                   "user Documents directory is rejected as THISPC_QUEUE_SANDBOX");
+        }
+
+        // 8. Existing nonempty directory without test ownership rejected (simulated user data)
+        const QString fakeDocs = synth + TQ_S("/Dokumenty");
+        verify(QDir().mkpath(fakeDocs), "synthetic Dokumenty created");
+        const QString keepFile = fakeDocs + TQ_S("/user_important.txt");
+        {
+            QFile f(keepFile);
+            verify(f.open(QIODevice::WriteOnly) && f.write("keep") == 4, "synthetic user file created");
+        }
+        verify(!resolveQueueSandboxBase(fakeDocs, QString(), resolved, useTemp),
+               "existing nonempty directory without ownership is rejected");
+        verify(QFileInfo::exists(keepFile), "rejected nonempty directory remains untouched");
+
+        // 9. Symlink at the selected root rejected before any mkpath
+        const QString linkTarget = synth + TQ_S("/real-target");
+        verify(QDir().mkpath(linkTarget), "synthetic symlink target created");
+        const QString rootSymlink = synth + TQ_S("/symlink-root");
+        verify(QFile::link(linkTarget, rootSymlink), "synthetic root symlink created");
+        verify(!resolveQueueSandboxBase(rootSymlink, QString(), resolved, useTemp),
+               "symlink at selected sandbox root is rejected");
+
+        // 10. Symlink in an existing parent component rejected before any mkpath
+        const QString parentSymlink = synth + TQ_S("/symlink-parent");
+        verify(QFile::link(linkTarget, parentSymlink), "synthetic parent symlink created");
+        verify(!resolveQueueSandboxBase(parentSymlink + TQ_S("/child"), QString(), resolved, useTemp),
+               "symlink in existing parent component is rejected");
+        verify(!resolveQueueSandboxBase(QString(), parentSymlink + TQ_S("/work"), resolved, useTemp),
+               "symlink in existing parent component of THISPC_TEST_WORK_DIR is rejected");
+
+        // 11. Repository / protected directory rejected
+        const QString fakeRepo = synth + TQ_S("/fake-repo");
+        verify(QDir().mkpath(fakeRepo + TQ_S("/.git")), "synthetic .git created");
+        verify(QDir().mkpath(fakeRepo + TQ_S("/build")), "synthetic repo build dir created");
+        verify(!resolveQueueSandboxBase(fakeRepo, QString(), resolved, useTemp),
+               "git repository root is rejected");
+        verify(!resolveQueueSandboxBase(QString(), fakeRepo + TQ_S("/build"), resolved, useTemp),
+               "subdirectory inside git repository is rejected");
+
+        // 12. Cleanup of owned QTemporaryDir leaves parent workspace untouched
+        const QString parentWs = synth + TQ_S("/parent-ws");
+        verify(QDir().mkpath(parentWs), "synthetic parent workspace created");
+        const QString siblingFile = parentWs + TQ_S("/parent_keep.txt");
+        {
+            QFile f(siblingFile);
+            verify(f.open(QIODevice::WriteOnly) && f.write("stay") == 4, "synthetic parent file created");
+        }
+        QString childRunPath;
+        {
+            QTemporaryDir ownedChild(parentWs + TQ_S("/run-XXXXXX"));
+            verify(ownedChild.isValid(), "owned child QTemporaryDir created");
+            childRunPath = ownedChild.path();
+            QFile f(childRunPath + TQ_S("/artifact.txt"));
+            verify(f.open(QIODevice::WriteOnly) && f.write("tmp") == 3, "child artifact created");
+        }
+        verify(!QFileInfo::exists(childRunPath), "owned child QTemporaryDir removed on destruction");
+        verify(QFileInfo::exists(siblingFile), "parent workspace sibling file untouched by cleanup");
     }
-    verify(base.contains(TQ_S("ThisPC-0.44.0-Transfer-Queue")),
-           "sandbox lives under the dedicated 0.44 test directory");
+
+    QString base;
+    bool useTempFallback = false;
+    verify(resolveQueueSandboxBase(qEnvironmentVariable("THISPC_QUEUE_SANDBOX"),
+                                   qEnvironmentVariable("THISPC_TEST_WORK_DIR"),
+                                   base,
+                                   useTempFallback),
+           "sandbox override path is valid and safe");
+
+    std::unique_ptr<QTemporaryDir> fallbackRoot;
+    if (useTempFallback) {
+        fallbackRoot = std::make_unique<QTemporaryDir>(QDir::tempPath() + TQ_S("/thispc-transfer-queue-XXXXXX"));
+        verify(fallbackRoot->isValid(), "safe temporary fallback sandbox root created");
+        base = QDir::cleanPath(fallbackRoot->path() + TQ_S("/transfer_queue"));
+    }
+
+    verify(!base.contains(TQ_S("ThisPC-0.44.0-Transfer-Queue")),
+           "sandbox does not use legacy 0.44 directory");
+    verify(hasNoSymlinkInExistingHierarchy(base),
+           "sandbox base hierarchy is free of symlinks before creation");
+    verify(TransferReservation::resolveLocal(QUrl::fromLocalFile(base)).ok,
+           "sandbox base passes resolveLocal before creation");
     verify(QDir().mkpath(base), "sandbox base exists");
+    verify(hasNoSymlinkInExistingHierarchy(base),
+           "sandbox base remains free of symlinks after creation");
+    {
+        const QString markerPath = base + QLatin1Char('/') + QString::fromLatin1(kQueueSandboxMarkerName);
+        if (!QFileInfo::exists(markerPath)) {
+            QFile marker(markerPath);
+            verify(marker.open(QIODevice::WriteOnly | QIODevice::Truncate)
+                   && marker.write("thispc-transfer-queue-sandbox\n") > 0,
+                   "sandbox ownership marker written");
+        }
+    }
+
     QTemporaryDir temporary(base + TQ_S("/run-XXXXXX"));
     verify(temporary.isValid(), "isolated sandbox directory is created");
-    const QString root = QFileInfo(temporary.path()).canonicalFilePath();
+    const QString root = QDir::cleanPath(temporary.path());
+    verify(root.startsWith(base + QLatin1Char('/')),
+           "owned temporary root is strictly contained inside sandbox base");
+    verify(hasNoSymlinkInExistingHierarchy(root),
+           "owned temporary root hierarchy is free of symlinks");
+    verify(QFileInfo(root).canonicalFilePath() == root,
+           "owned temporary root is already canonical without symlink masking");
     verify(TransferReservation::resolveLocal(QUrl::fromLocalFile(root + TQ_S("/x"))).ok,
            "sandbox path itself is free of symlink components");
 
@@ -5397,7 +5752,7 @@ int main(int argc, char **argv)
 
     // S6-14: Serializacja QSettings — zapis i odczyt konfiguracji
     {
-        const QString path = QDir::tempPath() + TQ_S("/thispc-stage6-settings-test.ini");
+        const QString path = root + TQ_S("/thispc-stage6-settings-test.ini");
         QFile::remove(path);
         {
             QSettings s(path, QSettings::IniFormat);
@@ -6333,7 +6688,7 @@ int main(int argc, char **argv)
 
     // S7-19: Production queue routing end-to-end (Stage 7D.1 regression)
     {
-        const QString s719Dir = base + TQ_S("/s719_routing");
+        const QString s719Dir = root + TQ_S("/s719_routing");
         QDir(s719Dir).removeRecursively();
         QDir().mkpath(s719Dir);
         const QString srcFile1 = s719Dir + TQ_S("/source_prod.bin");
@@ -6427,7 +6782,7 @@ int main(int argc, char **argv)
         const bool origIntercept = interceptFileJobs;
         interceptFileJobs = false;
 
-        const QString s720Dir = base + TQ_S("/s720_routing");
+        const QString s720Dir = root + TQ_S("/s720_routing");
         QDir(s720Dir).removeRecursively();
         QDir().mkpath(s720Dir + TQ_S("/dest"));
 
@@ -6588,7 +6943,7 @@ int main(int argc, char **argv)
 
     // S7-21: MTP Disconnect and staging safety at 0%, 20%, 50%, 95%
     {
-        const QString s721Dir = base + TQ_S("/s7_21_mtp_disconnect");
+        const QString s721Dir = root + TQ_S("/s7_21_mtp_disconnect");
         QDir(s721Dir).removeRecursively();
         QDir().mkpath(s721Dir);
 
@@ -6628,7 +6983,7 @@ int main(int argc, char **argv)
 
     // S7-22: Cancellation during transfer & Preservation of pre-existing target file
     {
-        const QString s722Dir = base + TQ_S("/s7_22_preexisting");
+        const QString s722Dir = root + TQ_S("/s7_22_preexisting");
         QDir(s722Dir).removeRecursively();
         QDir().mkpath(s722Dir);
 
@@ -6713,7 +7068,7 @@ int main(int argc, char **argv)
 
     // S7-23: Retry semantics — Disconnected vs Reconnected with SHA-256 verification
     {
-        const QString s723Dir = base + TQ_S("/s7_23_retry_reconnect");
+        const QString s723Dir = root + TQ_S("/s7_23_retry_reconnect");
         QDir(s723Dir).removeRecursively();
         QDir().mkpath(s723Dir);
 
@@ -6804,7 +7159,7 @@ int main(int argc, char **argv)
 
     // S7-24: Queue reservation conflict and release on MTP failure
     {
-        const QString s724Dir = base + TQ_S("/s7_24_queue_reservation");
+        const QString s724Dir = root + TQ_S("/s7_24_queue_reservation");
         QDir(s724Dir).removeRecursively();
         QDir().mkpath(s724Dir);
 
@@ -6881,7 +7236,7 @@ int main(int argc, char **argv)
 
     // S7-25: Multi-file staged transfer: 1st file succeeds, 2nd file disconnects
     {
-        const QString s725Dir = base + TQ_S("/s7_25_multifile_partial");
+        const QString s725Dir = root + TQ_S("/s7_25_multifile_partial");
         QDir(s725Dir).removeRecursively();
         QDir().mkpath(s725Dir);
 
@@ -6928,7 +7283,7 @@ int main(int argc, char **argv)
 
     // S7-26: Alien staging protection and symlink safety
     {
-        const QString s726Dir = base + TQ_S("/s7_26_alien_protection");
+        const QString s726Dir = root + TQ_S("/s7_26_alien_protection");
         QDir(s726Dir).removeRecursively();
         QDir().mkpath(s726Dir);
         QDir().mkpath(s726Dir + TQ_S("/vault"));
@@ -7010,7 +7365,7 @@ int main(int argc, char **argv)
 
     // S7-27: Two concurrent jobs do not share or delete each other's staging
     {
-        const QString s727Dir = base + TQ_S("/s7_27_concurrent_staging");
+        const QString s727Dir = root + TQ_S("/s7_27_concurrent_staging");
         QDir(s727Dir).removeRecursively();
         QDir().mkpath(s727Dir);
 
@@ -7064,7 +7419,7 @@ int main(int argc, char **argv)
 
     // S7-28: Atomic publication TOCTOU collision defense
     {
-        const QString s728Dir = base + TQ_S("/s7_28_toctou_collision");
+        const QString s728Dir = root + TQ_S("/s7_28_toctou_collision");
         QDir(s728Dir).removeRecursively();
         QDir().mkpath(s728Dir);
 
@@ -7114,7 +7469,7 @@ int main(int argc, char **argv)
 
     // S7-29: Rejection of remote Move in staged path
     {
-        const QString s729Dir = base + TQ_S("/s7_29_reject_move");
+        const QString s729Dir = root + TQ_S("/s7_29_reject_move");
         QDir(s729Dir).removeRecursively();
         QDir().mkpath(s729Dir);
 
@@ -7136,7 +7491,7 @@ int main(int argc, char **argv)
 
     // S7-30: Destructor and shutdown cleanup safety
     {
-        const QString s730Dir = base + TQ_S("/s7_30_destructor_cleanup");
+        const QString s730Dir = root + TQ_S("/s7_30_destructor_cleanup");
         QDir(s730Dir).removeRecursively();
         QDir().mkpath(s730Dir);
 
@@ -7171,7 +7526,7 @@ int main(int argc, char **argv)
         qputenv("THISPC_TRANSFER_QUEUE_PRODUCTION", "1");
         verify(isTransferQueueProductionDispatchConnected(), "S7-D7: production mode active");
 
-        const QString d7Dir = base + TQ_S("/stage7d7_unified");
+        const QString d7Dir = root + TQ_S("/stage7d7_unified");
         QDir(d7Dir).removeRecursively();
         QDir().mkpath(d7Dir);
 
@@ -7580,7 +7935,7 @@ int main(int argc, char **argv)
     // S7-D7-HIST: Operations History Management (Stage 7D.7)
     {
         qputenv("THISPC_TRANSFER_QUEUE_PRODUCTION", "1");
-        const QString histDir = base + TQ_S("/hist_test");
+        const QString histDir = root + TQ_S("/hist_test");
         QueueHarness h(histDir);
         h.ctl.setCloseWindowOnComplete(false);
         h.ctl.setConcurrencyLimit(2);
@@ -8316,7 +8671,7 @@ int main(int argc, char **argv)
         qputenv("THISPC_TRANSFER_QUEUE_PRODUCTION", "1");
         setTransferQueueProductionDispatchConnected(true);
 
-        QueueHarness h(base + TQ_S("/ux_d"));
+        QueueHarness h(root + TQ_S("/ux_d"));
         QMainWindow win;
         QToolBar tb(&win);
         OperationManager opMgr(&win, &tb, &win);
@@ -8496,7 +8851,7 @@ int main(int argc, char **argv)
     //        clipboard & files preserved, MTP Copy and Local Move unaffected.
     {
         qputenv("THISPC_TRANSFER_QUEUE_PRODUCTION", "1");
-        const QString s731Dir = base + TQ_S("/s7_31_routing");
+        const QString s731Dir = root + TQ_S("/s7_31_routing");
         QDir(s731Dir).removeRecursively();
         QDir().mkpath(s731Dir);
 
@@ -8729,7 +9084,7 @@ int main(int argc, char **argv)
     //        and verification that MTP -> Local Move on colliding target is refused BEFORE conflict dialog
     {
         qputenv("THISPC_TRANSFER_QUEUE_PRODUCTION", "1");
-        const QString s732Dir = base + TQ_S("/s7_32_conflicts");
+        const QString s732Dir = root + TQ_S("/s7_32_conflicts");
         QDir(s732Dir).removeRecursively();
         QDir().mkpath(s732Dir);
 
@@ -8841,7 +9196,7 @@ int main(int argc, char **argv)
     // S7-33: Job-level protection — Direct KioStagedTransferJob(move=true) immediately rejected,
     //        and MTP -> Local Copy disconnect/cancel at 0%/25%/50%/95% preserves destination
     {
-        const QString s733Dir = base + TQ_S("/s7_33_failure_disconnect");
+        const QString s733Dir = root + TQ_S("/s7_33_failure_disconnect");
         QDir(s733Dir).removeRecursively();
         QDir().mkpath(s733Dir);
 
@@ -9028,7 +9383,7 @@ int main(int argc, char **argv)
 
     // S7-34: Identity & Queue reservations — source or target changes while queued, no double start
     {
-        const QString s734Dir = base + TQ_S("/s7_34_identity_queue");
+        const QString s734Dir = root + TQ_S("/s7_34_identity_queue");
         QDir(s734Dir).removeRecursively();
         QDir().mkpath(s734Dir);
 
@@ -9139,7 +9494,7 @@ int main(int argc, char **argv)
     //        and MTP -> Local Overwrite Copy fences Undo to prevent destructive target deletion
     {
         qputenv("THISPC_TRANSFER_QUEUE_PRODUCTION", "1");
-        const QString s735Dir = base + TQ_S("/s7_35_post_publish_undo");
+        const QString s735Dir = root + TQ_S("/s7_35_post_publish_undo");
         QDir(s735Dir).removeRecursively();
         QDir().mkpath(s735Dir);
 
@@ -9239,7 +9594,7 @@ int main(int argc, char **argv)
         // R3-P4: Settings persistence round-trip in default production mode without env var
         qunsetenv("THISPC_TRANSFER_QUEUE_PRODUCTION");
         activateTransferQueueProductionDispatchByDefault();
-        const QString r3SettingsFile = base + TQ_S("/s7_36_r3_settings.ini");
+        const QString r3SettingsFile = root + TQ_S("/s7_36_r3_settings.ini");
         QFile::remove(r3SettingsFile);
         {
             QSettings store(r3SettingsFile, QSettings::IniFormat);
@@ -9274,7 +9629,7 @@ int main(int argc, char **argv)
     // 26 Safety Verification Scenarios
     // ==================================================================
     {
-        const QString s3Base = base + TQ_S("/stage3_safe_retry");
+        const QString s3Base = root + TQ_S("/stage3_safe_retry");
         QDir().mkpath(s3Base + TQ_S("/src"));
         QDir().mkpath(s3Base + TQ_S("/dst"));
 
@@ -9729,8 +10084,8 @@ int main(int argc, char **argv)
         verify(secWin.isVisible(), "SEC-045-01.3: OperationWindow survives overlapping rebuild timer and toggle clicks without UAF");
 
         // Also verify TransferQueueViewWidget::rebuildTasks() safe deferred deletion
-        const QString secSrc1 = base + TQ_S("/sec_q1.bin");
-        const QString secDst1 = base + TQ_S("/sec_dst1");
+        const QString secSrc1 = root + TQ_S("/sec_q1.bin");
+        const QString secDst1 = root + TQ_S("/sec_dst1");
         QDir().mkpath(secDst1);
         {
             QFile f(secSrc1);
@@ -9770,8 +10125,8 @@ int main(int argc, char **argv)
         TransferQueueController prioCtl;
         prioCtl.setDispatchPaused(true);
         auto makePrioDesc = [&](const QString &name, TransferPriority prio) {
-            const QString pSrc = base + TQ_S("/") + name;
-            const QString pDst = base + TQ_S("/prio_dst_") + name;
+            const QString pSrc = root + TQ_S("/") + name;
+            const QString pDst = root + TQ_S("/prio_dst_") + name;
             QDir().mkpath(pDst);
             QFile f(pSrc);
             if (f.open(QIODevice::WriteOnly)) {
@@ -9993,8 +10348,22 @@ int main(int argc, char **argv)
         verify(checks > 2180, "S7-15: Stage 7 verification checks augmented");
     }
 
-    verify(!QDir(base).entryList(QDir::NoDotAndDotDot | QDir::AllEntries).isEmpty(),
-           "sandbox was used");
+    verify(!QDir(root).entryList(QDir::NoDotAndDotDot | QDir::AllEntries).isEmpty(),
+           "owned temporary sandbox root was used");
+    {
+        const QString ownedRunName = QFileInfo(root).fileName();
+        const QString markerName = QString::fromLatin1(kQueueSandboxMarkerName);
+        const QStringList baseEntries = QDir(base).entryList(
+            QDir::NoDotAndDotDot | QDir::AllEntries | QDir::Hidden | QDir::System);
+        bool allContained = true;
+        for (const QString &entry : baseEntries) {
+            if (entry != ownedRunName && entry != markerName) {
+                allContained = false;
+                break;
+            }
+        }
+        verify(allContained, "all test artifacts remain contained within owned temporary root");
+    }
     qInfo("transfer queue stage 7: %d checks passed", checks);
     return 0;
 }
